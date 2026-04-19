@@ -1,1 +1,92 @@
-# simple-browser-plugin
+# 간편 브라우저 도우미 (Simple Browser Plugin)
+
+Chrome Side Panel에 탑재되는 Gemini 기반 채팅 에이전트입니다. 현재 탭의 페이지를 이해하고, 사용자의 자연어 요청을 ReAct 패턴으로 해석해 번역·폼 채우기·이미지 다운로드·링크 클릭 등 실제 동작을 수행합니다.
+
+## 주요 기능
+
+- **채팅 기반 ReAct 에이전트** — 요청을 받으면 `describe_page`로 먼저 페이지를 관측하고, 필요한 도구를 체인 호출한 뒤 결과를 답변
+- **페이지 조작 도구**
+  - `describe_page` — 랜드마크(main/article/nav/aside/header/footer)별 텍스트 미리보기·대표 링크 스냅샷
+  - `get_page_content` — Readability 스타일 본문 추출
+  - `translate_page` — 가시 텍스트 노드 단위 번역 교체 + MutationObserver 동적 재번역
+  - `find_form_fields` / `fill_form_fields` — 입력 필드 탐색·자동 입력 (승인 카드)
+  - `list_page_images` / `download_images` — 이미지 URL 수집·일괄 저장 (승인 카드)
+  - `find_clickables` / `click_element` — 링크·버튼 탐색·클릭 (승인 카드)
+  - `query_dom` — CSS 선택자 기반 DOM 조회
+- **민감 작업 승인 UI** — 폼 입력·다운로드·클릭 같은 페이지 상태 변경은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
+- **Gemini 3 계열 모델 지원** — Flash(기본) / Pro / Flash Lite preview 선택 가능, `thinkingConfig` 활성화로 모델의 사고 과정을 실시간 스트리밍
+- **Shadow DOM + 동일 출처 iframe 커버리지** — 모든 툴이 shadow root와 iframe 내부까지 순회
+- **디버그 타임라인** — 사이드 패널에서 🐞 버튼으로 BG·content·panel 이벤트를 실시간 추적, 복사 버튼으로 공유 가능
+
+## 설치
+
+1. 의존성 설치 및 빌드
+   ```bash
+   npm install
+   npm run build
+   ```
+2. Chrome에서 `chrome://extensions` 열기 → 개발자 모드 활성화
+3. "압축해제된 확장 프로그램 로드" 클릭 → `dist/` 폴더 선택
+4. 최초 실행 시 설정(⚙)에서 [Google AI Studio](https://aistudio.google.com/)에서 발급한 Gemini API 키 입력 후 저장
+
+## 사용 예시
+
+- "이 페이지 번역해줘"
+- "빈 입력칸 채워줘. 이름: 홍길동, 이메일: test@example.com"
+- "이미지 전부 다운받아줘"
+- "첫 번째 아티클로 이동해줘"
+- "이 페이지 요약해줘"
+- "PXG 골프공 검색해서 가장 싼 스토어로 이동해줘"
+
+## 개발
+
+```bash
+npm run dev          # Vite 개발 서버 (HMR)
+npm run build        # 프로덕션 빌드 → dist/
+npm run typecheck    # 타입 체크만
+```
+
+### 기여 워크플로
+
+`main` 브랜치는 보호되어 있으며 직접 push가 불가능합니다. 모든 변경은 feature branch + Pull Request로 반영합니다.
+
+```bash
+git checkout -b feat/your-change
+# ... 작업 ...
+git commit -m "feat: ..."
+git push -u origin feat/your-change
+gh pr create --base main --title "..." --body "..."
+```
+
+## 아키텍처
+
+```
+[Side Panel React UI] ⇄ long-lived port ⇄ [Background Service Worker] ⇄ tabs.sendMessage ⇄ [Content Script]
+                                                    │
+                                                    ├── Gemini SDK (@google/genai)
+                                                    ├── ReAct stream loop (thoughtSignature 보존)
+                                                    ├── Tool dispatcher (zod 인자 검증)
+                                                    └── webNavigation 통합 (settle 대기)
+```
+
+### 주요 구성
+
+- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation` 권한 + `host_permissions: ["<all_urls>"]`
+- **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
+- **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
+- **webNavigation 기반 settle 대기** — 클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록
+
+## 보안 / 프라이버시
+
+- API 키는 `chrome.storage.local`에 평문 저장 (외부 전송 없음; v1 트레이드오프)
+- 키는 BG 서비스 워커에서만 읽히며 content script나 페이지 DOM에 전달되지 않음
+- 민감 툴 실행 전 사용자 승인 필수
+- 다운로드 URL은 `http(s):`만 허용, `javascript:` / 제어문자 차단
+
+## 스택
+
+Vite · TypeScript · React 18 · zustand · zod · `@google/genai` · `@crxjs/vite-plugin`
+
+## 라이선스
+
+MIT
