@@ -10,12 +10,28 @@ export type ToolName =
   | "download_images"
   | "query_dom"
   | "find_clickables"
-  | "click_element";
+  | "click_element"
+  | "google_sheets_list"
+  | "google_sheets_read_range"
+  | "google_sheets_write_range"
+  | "google_sheets_append_rows"
+  | "google_sheets_write_markdown_table"
+  | "google_docs_read"
+  | "google_docs_append"
+  | "google_docs_replace"
+  | "google_drive_search"
+  | "google_drive_list_recent"
+  | "google_drive_export";
 
 export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "fill_form_fields",
   "download_images",
   "click_element",
+  "google_sheets_write_range",
+  "google_sheets_append_rows",
+  "google_sheets_write_markdown_table",
+  "google_docs_append",
+  "google_docs_replace",
 ]);
 
 export type PageRegion = "main" | "article" | "nav" | "aside" | "header" | "footer" | "other";
@@ -132,7 +148,14 @@ export interface Settings {
   translationTargetLang: string;
   downloadFolderPrefix: string;
   maxToolHops: number;
+  googleClientId: string;
 }
+
+export const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/drive",
+] as const;
 
 export const DEFAULT_MAX_TOOL_HOPS = 8;
 export const MIN_MAX_TOOL_HOPS = 1;

@@ -3,6 +3,11 @@ import { ChatAgent } from "./gemini";
 import { invalidateSettingsCache } from "./storage";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";
+import {
+  clearGoogleToken,
+  connectGoogle,
+  getGoogleConnectionState,
+} from "./google/auth";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
@@ -74,6 +79,42 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   if (m.kind === "settings_updated") {
     invalidateSettingsCache();
     sendResponse({ ok: true });
+    return true;
+  }
+
+  if (m.kind === "google_connect") {
+    connectGoogle()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    return true;
+  }
+
+  if (m.kind === "google_disconnect") {
+    clearGoogleToken()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    return true;
+  }
+
+  if (m.kind === "google_status") {
+    getGoogleConnectionState()
+      .then((state) => sendResponse({ ok: true, data: state }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
     return true;
   }
 

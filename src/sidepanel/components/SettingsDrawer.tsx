@@ -13,28 +13,85 @@ interface Props {
   onClose: () => void;
 }
 
+const clampHops = (n: number) =>
+  Math.min(
+    MAX_MAX_TOOL_HOPS,
+    Math.max(MIN_MAX_TOOL_HOPS, Number.isFinite(n) ? Math.floor(n) : DEFAULT_MAX_TOOL_HOPS),
+  );
+
+interface GoogleStatus {
+  configured: boolean;
+  connected: boolean;
+  expiresAt: number | null;
+  clientId: string;
+}
+
 export function SettingsDrawer({ open, onClose }: Props) {
   const { settings, loaded, save } = useSettings();
   const [draft, setDraft] = useState(settings);
   const [showKey, setShowKey] = useState(false);
+  const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
+  const [googleBusy, setGoogleBusy] = useState<"connect" | "disconnect" | null>(null);
+  const [googleError, setGoogleError] = useState<string | null>(null);
 
   useEffect(() => {
     if (loaded) setDraft(settings);
   }, [loaded, settings]);
 
-  // When drawer opens, reset draft to current saved settings so a previous
-  // unsaved change doesn't leak across open/close cycles.
   useEffect(() => {
     if (open) setDraft(settings);
   }, [open, settings]);
 
+  const refreshGoogleStatus = async () => {
+    try {
+      const res = (await chrome.runtime.sendMessage({ kind: "google_status" })) as {
+        ok: boolean;
+        data?: GoogleStatus;
+      };
+      if (res?.ok && res.data) setGoogleStatus(res.data);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  useEffect(() => {
+    if (open) refreshGoogleStatus();
+  }, [open]);
+
+  const connectGoogle = async () => {
+    setGoogleBusy("connect");
+    setGoogleError(null);
+    try {
+      await save({ ...draft, maxToolHops: clampHops(draft.maxToolHops) });
+      const res = (await chrome.runtime.sendMessage({ kind: "google_connect" })) as {
+        ok: boolean;
+        error?: string;
+      };
+      if (!res?.ok) throw new Error(res?.error ?? "알 수 없는 오류");
+      await refreshGoogleStatus();
+    } catch (err) {
+      setGoogleError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGoogleBusy(null);
+    }
+  };
+
+  const disconnectGoogle = async () => {
+    setGoogleBusy("disconnect");
+    setGoogleError(null);
+    try {
+      await chrome.runtime.sendMessage({ kind: "google_disconnect" });
+      await refreshGoogleStatus();
+    } catch (err) {
+      setGoogleError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGoogleBusy(null);
+    }
+  };
+
   if (!open) return null;
 
-  const clampHops = (n: number) =>
-    Math.min(
-      MAX_MAX_TOOL_HOPS,
-      Math.max(MIN_MAX_TOOL_HOPS, Number.isFinite(n) ? Math.floor(n) : DEFAULT_MAX_TOOL_HOPS),
-    );
+  // noop — hoisted above
 
   const handleSave = async () => {
     await save({ ...draft, maxToolHops: clampHops(draft.maxToolHops) });
@@ -123,6 +180,51 @@ export function SettingsDrawer({ open, onClose }: Props) {
             />
             <span className="field-help">{KO.maxToolHopsHelp}</span>
           </label>
+
+          <div className="field">
+            <span className="field-label">Google Workspace (Sheets / Docs / Drive)</span>
+            <input
+              type="text"
+              value={draft.googleClientId}
+              onChange={(e) => setDraft({ ...draft, googleClientId: e.target.value })}
+              placeholder="xxxxx.apps.googleusercontent.com"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <span className="field-help">
+              Google Cloud 콘솔에서 OAuth 2.0 클라이언트 ID (웹 애플리케이션)를 만들고, 승인된 리디렉션 URI에
+              <code> https://&lt;확장 ID&gt;.chromiumapp.org/</code> 를 추가한 뒤 여기에 client_id만 붙여넣으세요.
+              Sheets·Docs·Drive API를 활성화해야 합니다.
+            </span>
+            <div className="google-status-row">
+              {googleStatus?.connected ? (
+                <span className="tag-ok">● 연결됨</span>
+              ) : googleStatus?.configured ? (
+                <span className="tag-warn">● 연결 필요</span>
+              ) : (
+                <span className="tag-off">● 미설정</span>
+              )}
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={googleBusy !== null || !draft.googleClientId.trim()}
+                onClick={connectGoogle}
+              >
+                {googleBusy === "connect" ? "연결 중…" : "Google 연결"}
+              </button>
+              {googleStatus?.connected && (
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  disabled={googleBusy !== null}
+                  onClick={disconnectGoogle}
+                >
+                  {googleBusy === "disconnect" ? "해제 중…" : "연결 해제"}
+                </button>
+              )}
+            </div>
+            {googleError && <span className="field-error">{googleError}</span>}
+          </div>
         </div>
         <div className="drawer-footer">
           <button type="button" className="ghost-btn" onClick={handleCancel}>

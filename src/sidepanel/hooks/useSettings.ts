@@ -14,6 +14,7 @@ const DEFAULTS: Settings = {
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
+  googleClientId: "",
 };
 
 function normalizeMaxHops(v: unknown): number {
@@ -34,6 +35,8 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
         ? raw.downloadFolderPrefix
         : DEFAULTS.downloadFolderPrefix,
     maxToolHops: normalizeMaxHops(raw?.maxToolHops),
+    googleClientId:
+      typeof raw?.googleClientId === "string" ? raw.googleClientId.trim() : "",
   };
 }
 

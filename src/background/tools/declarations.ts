@@ -151,6 +151,165 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "google_sheets_list",
+    description:
+      "Google Sheets 스프레드시트의 모든 시트(탭) 목록과 크기를 반환한다. 쓰기·읽기 전 구조 파악에 사용. 현재 탭 URL이 docs.google.com/spreadsheets/d/{ID}면 그 ID를 사용.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        spreadsheetId: { type: Type.STRING, description: "스프레드시트 ID (URL /d/{ID}/...)" },
+      },
+      required: ["spreadsheetId"],
+    },
+  },
+  {
+    name: "google_sheets_read_range",
+    description:
+      "Google Sheets의 특정 A1 표기 범위 값을 읽어온다. 예: 'Sheet1!A1:C20'. 시트 이름에 공백이 있으면 작은따옴표로 감싼다: \"'내 시트'!A1:B10\".",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        spreadsheetId: { type: Type.STRING },
+        range: { type: Type.STRING, description: "A1 표기 (예: Sheet1!A1:D50)" },
+      },
+      required: ["spreadsheetId", "range"],
+    },
+  },
+  {
+    name: "google_sheets_write_range",
+    description:
+      "민감. 사용자 승인 후 Google Sheets의 지정 범위에 2차원 배열을 덮어쓴다. 수식 허용(USER_ENTERED). 기존 값이 있으면 지워진다. 쓰기 전에 반드시 google_sheets_read_range 또는 google_sheets_list로 구조를 확인한다.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        spreadsheetId: { type: Type.STRING },
+        range: { type: Type.STRING },
+        values: {
+          type: Type.ARRAY,
+          description: "행의 배열. 각 행은 문자열 배열.",
+          items: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+      },
+      required: ["spreadsheetId", "range", "values"],
+    },
+  },
+  {
+    name: "google_sheets_append_rows",
+    description:
+      "민감. 사용자 승인 후 Google Sheets의 지정 범위 테이블 끝에 행을 추가한다. 수식 허용.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        spreadsheetId: { type: Type.STRING },
+        range: { type: Type.STRING, description: "기준 범위 (보통 'Sheet1!A:Z')" },
+        values: {
+          type: Type.ARRAY,
+          items: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+      },
+      required: ["spreadsheetId", "range", "values"],
+    },
+  },
+  {
+    name: "google_sheets_write_markdown_table",
+    description:
+      "민감. markdown 표(헤더 + --- 구분 + 데이터 행)를 파싱해 Google Sheets 지정 범위에 쓴다. 모델이 자연어로 구상한 표를 한 번에 시트에 반영할 때 사용.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        spreadsheetId: { type: Type.STRING },
+        range: { type: Type.STRING, description: "좌상단 기준 셀 (예: 'Sheet1!A1')" },
+        markdownTable: {
+          type: Type.STRING,
+          description: "markdown 파이프 표. 예: '| col1 | col2 |\\n|---|---|\\n| a | b |'",
+        },
+      },
+      required: ["spreadsheetId", "range", "markdownTable"],
+    },
+  },
+  {
+    name: "google_docs_read",
+    description:
+      "Google Docs 문서의 제목, 본문 텍스트, 표제(h1~h3) 목록, 끝 인덱스를 반환한다. 현재 탭이 docs.google.com/document/d/{ID}면 그 ID 사용.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        documentId: { type: Type.STRING },
+      },
+      required: ["documentId"],
+    },
+  },
+  {
+    name: "google_docs_append",
+    description:
+      "민감. 사용자 승인 후 Google Docs 문서 끝에 일반 텍스트를 추가한다. markdown 서식은 적용되지 않고 그대로 삽입된다.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        documentId: { type: Type.STRING },
+        text: { type: Type.STRING },
+      },
+      required: ["documentId", "text"],
+    },
+  },
+  {
+    name: "google_docs_replace",
+    description:
+      "민감. 사용자 승인 후 Google Docs 문서 내 모든 일치 문자열을 교체한다. matchCase=true면 대소문자 구분.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        documentId: { type: Type.STRING },
+        find: { type: Type.STRING },
+        replace: { type: Type.STRING },
+        matchCase: { type: Type.BOOLEAN },
+      },
+      required: ["documentId", "find", "replace"],
+    },
+  },
+  {
+    name: "google_drive_search",
+    description:
+      "Google Drive 검색. query는 Drive API의 q 문법을 그대로 따른다. 예: \"name contains 'Report' and mimeType='application/vnd.google-apps.document'\". 결과는 수정일 역순.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: { type: Type.STRING },
+        maxResults: { type: Type.NUMBER, description: "기본 20, 최대 50" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "google_drive_list_recent",
+    description:
+      "Drive에서 최근 수정된 파일을 반환. mimeType으로 필터 가능 (예: 'application/vnd.google-apps.spreadsheet').",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        mimeType: { type: Type.STRING },
+        maxResults: { type: Type.NUMBER },
+      },
+    },
+  },
+  {
+    name: "google_drive_export",
+    description:
+      "Drive 파일을 지정 포맷으로 export해 텍스트(또는 바이너리 메타)를 반환. Docs → txt/pdf/md/docx, Sheets → csv/tsv/xlsx 등. 바이너리 포맷은 미리보기 없이 크기만 반환.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        fileId: { type: Type.STRING },
+        format: {
+          type: Type.STRING,
+          enum: ["pdf", "txt", "csv", "tsv", "html", "md", "docx", "xlsx"],
+        },
+        maxChars: { type: Type.NUMBER, description: "텍스트 포맷 최대 글자 (기본 20000)" },
+      },
+      required: ["fileId", "format"],
+    },
+  },
+  {
     name: "click_element",
     description:
       "사용자 승인 후 find_clickables가 반환한 id의 요소를 클릭한다. 링크면 해당 링크로 이동, 버튼이면 동작 실행. 민감 작업이라 실행 전 승인 카드가 표시된다. id는 반드시 find_clickables에서 얻은 값이어야 한다.",

@@ -33,6 +33,7 @@ export default defineManifest({
     "tabs",
     "alarms",
     "webNavigation",
+    "identity",
   ],
   host_permissions: ["<all_urls>"],
   minimum_chrome_version: "116",

@@ -71,6 +71,86 @@ export const clickElementArgs = z
   })
   .strict();
 
+const spreadsheetIdSchema = z.string().min(20).max(200);
+const documentIdSchema = z.string().min(20).max(200);
+
+export const googleSheetsListArgs = z
+  .object({ spreadsheetId: spreadsheetIdSchema })
+  .strict();
+
+export const googleSheetsReadRangeArgs = z
+  .object({
+    spreadsheetId: spreadsheetIdSchema,
+    range: z.string().min(1).max(200),
+  })
+  .strict();
+
+export const googleSheetsWriteRangeArgs = z
+  .object({
+    spreadsheetId: spreadsheetIdSchema,
+    range: z.string().min(1).max(200),
+    values: z.array(z.array(z.string())).min(1).max(10_000),
+  })
+  .strict();
+
+export const googleSheetsAppendRowsArgs = z
+  .object({
+    spreadsheetId: spreadsheetIdSchema,
+    range: z.string().min(1).max(200),
+    values: z.array(z.array(z.string())).min(1).max(10_000),
+  })
+  .strict();
+
+export const googleSheetsWriteMarkdownTableArgs = z
+  .object({
+    spreadsheetId: spreadsheetIdSchema,
+    range: z.string().min(1).max(200),
+    markdownTable: z.string().min(5).max(100_000),
+  })
+  .strict();
+
+export const googleDocsReadArgs = z
+  .object({ documentId: documentIdSchema })
+  .strict();
+
+export const googleDocsAppendArgs = z
+  .object({
+    documentId: documentIdSchema,
+    text: z.string().min(1).max(50_000),
+  })
+  .strict();
+
+export const googleDocsReplaceArgs = z
+  .object({
+    documentId: documentIdSchema,
+    find: z.string().min(1).max(500),
+    replace: z.string().max(2000),
+    matchCase: z.boolean().optional(),
+  })
+  .strict();
+
+export const googleDriveSearchArgs = z
+  .object({
+    query: z.string().min(1).max(500),
+    maxResults: z.number().int().positive().max(50).optional(),
+  })
+  .strict();
+
+export const googleDriveListRecentArgs = z
+  .object({
+    mimeType: z.string().max(120).optional(),
+    maxResults: z.number().int().positive().max(50).optional(),
+  })
+  .strict();
+
+export const googleDriveExportArgs = z
+  .object({
+    fileId: z.string().min(10).max(200),
+    format: z.enum(["pdf", "txt", "csv", "tsv", "html", "md", "docx", "xlsx"]),
+    maxChars: z.number().int().positive().max(200_000).optional(),
+  })
+  .strict();
+
 export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
@@ -82,6 +162,17 @@ export const toolArgsSchemas = {
   query_dom: queryDomArgs,
   find_clickables: findClickablesArgs,
   click_element: clickElementArgs,
+  google_sheets_list: googleSheetsListArgs,
+  google_sheets_read_range: googleSheetsReadRangeArgs,
+  google_sheets_write_range: googleSheetsWriteRangeArgs,
+  google_sheets_append_rows: googleSheetsAppendRowsArgs,
+  google_sheets_write_markdown_table: googleSheetsWriteMarkdownTableArgs,
+  google_docs_read: googleDocsReadArgs,
+  google_docs_append: googleDocsAppendArgs,
+  google_docs_replace: googleDocsReplaceArgs,
+  google_drive_search: googleDriveSearchArgs,
+  google_drive_list_recent: googleDriveListRecentArgs,
+  google_drive_export: googleDriveExportArgs,
 } as const;
 
 export type ToolArgs = {
