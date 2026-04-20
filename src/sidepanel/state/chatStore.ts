@@ -30,7 +30,8 @@ export type ChatMessage =
       ok: boolean;
       summary: string;
     }
-  | { id: string; type: "error"; message: string };
+  | { id: string; type: "error"; message: string }
+  | { id: string; type: "info"; title: string; message: string };
 
 interface ChatState {
   conversationId: string;
@@ -47,6 +48,7 @@ interface ChatState {
   resolveToolPending: (callId: string, state: "approved" | "cancelled") => void;
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string) => void;
+  addInfo: (title: string, message: string) => void;
   setStatus: (text: string | null) => void;
   abortLocal: () => void;
   reset: () => void;
@@ -157,6 +159,12 @@ export const useChatStore = create<ChatState>((set) => ({
       msgs.push({ id: mid(), type: "error", message });
       return { ...s, messages: msgs, streaming: false, statusText: null };
     }),
+
+  addInfo: (title, message) =>
+    set((s) => ({
+      ...s,
+      messages: [...s.messages, { id: mid(), type: "info", title, message }],
+    })),
 
   abortLocal: () =>
     set((s) => {

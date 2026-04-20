@@ -109,6 +109,7 @@ export type BgToPanel =
       summary: string;
     }
   | { kind: "error"; message: string }
+  | { kind: "info"; title: string; message: string }
   | { kind: "settings_warning"; message: string };
 
 export type BgToContent =
@@ -138,5 +139,10 @@ export const MIN_MAX_TOOL_HOPS = 1;
 export const MAX_MAX_TOOL_HOPS = 30;
 
 export const SETTINGS_KEY = "settings";
+export const FLAGS_KEY = "flags";
 
 export const PORT_NAME = "chat";
+
+export interface Flags {
+  pdfGuidanceShown?: boolean;
+}

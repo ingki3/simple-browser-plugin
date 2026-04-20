@@ -161,6 +161,27 @@ body,
   border-radius: 8px;
 }
 
+.bubble-info {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--fg);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-width: 92%;
+}
+
+.info-title {
+  font-weight: 600;
+  color: var(--primary);
+  margin-bottom: 6px;
+}
+
+.info-body {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .streaming-text .caret {
   display: inline-block;
   width: 2px;

@@ -68,6 +68,9 @@ export function useChatSession() {
         case "error":
           s.addError(msg.message);
           return;
+        case "info":
+          s.addInfo(msg.title, msg.message);
+          return;
         case "settings_warning":
           s.addError(msg.message);
           return;

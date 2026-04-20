@@ -1,9 +1,11 @@
 import { DEFAULT_MODEL, isModelId } from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
+  FLAGS_KEY,
   MAX_MAX_TOOL_HOPS,
   MIN_MAX_TOOL_HOPS,
   SETTINGS_KEY,
+  type Flags,
   type Settings,
 } from "@/lib/messages";
 
@@ -59,3 +61,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
     cache = null;
   }
 });
+
+export async function readFlags(): Promise<Flags> {
+  const obj = await chrome.storage.local.get(FLAGS_KEY);
+  return (obj[FLAGS_KEY] as Flags | undefined) ?? {};
+}
+
+export async function setFlag<K extends keyof Flags>(key: K, value: Flags[K]): Promise<void> {
+  const current = await readFlags();
+  const next: Flags = { ...current, [key]: value };
+  await chrome.storage.local.set({ [FLAGS_KEY]: next });
+}
