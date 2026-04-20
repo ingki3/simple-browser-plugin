@@ -6,6 +6,7 @@ import { buildToolPreview, executeTool, parseToolArgs } from "./tools/dispatcher
 import { getSettings } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
+import { detectPdfAtActiveTab, fetchPdfAsBase64 } from "./pdf";
 
 const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 탭을 돕는 한국어 에이전트다.
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
@@ -48,7 +49,13 @@ describe_page 결과를 읽는 법:
 
 일반 규칙:
 - 페이지와 무관한 잡담·일반 번역·개념 질문은 툴 없이 바로 답한다.
-- 한국어 우선. 간결하게. 마크다운을 과도하게 쓰지 않는다.`;
+- 한국어 우선. 간결하게. 마크다운을 과도하게 쓰지 않는다.
+
+PDF 모드:
+- 사용자 턴에 PDF가 inlineData로 첨부되어 있거나 "[현재 탭: PDF 문서]" 문구가 있으면, 현재 화면은 Chrome의 내장 PDF 뷰어다.
+- 이 경우 describe_page·find_clickables·fill_form_fields·translate_page 등 페이지 조작 도구는 동작하지 않거나 의미가 없다. 이런 도구를 호출하지 말고, 첨부된 PDF 내용을 직접 읽어 답한다.
+- 사용자가 "번역해줘" 같은 요청을 하면 PDF 본문 텍스트를 한국어로 정리해 답변으로 제공한다 (실제 PDF를 수정할 수 없음).
+- PDF가 로드 실패 문구가 있으면 그 사실을 알리고 수동 업로드나 다른 방법을 제안한다.`;
 
 export class ChatAgent {
   private history: Content[] = [];
@@ -56,6 +63,7 @@ export class ChatAgent {
   private model: ModelId | null = null;
   private aborted = false;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
+  private lastAttachedPdfUrl: string | null = null;
 
   constructor(private readonly port: chrome.runtime.Port) {}
 
@@ -76,6 +84,7 @@ export class ChatAgent {
   reset(): void {
     this.history = [];
     this.aborted = false;
+    this.lastAttachedPdfUrl = null;
   }
 
   private send(msg: BgToPanel): void {
@@ -112,6 +121,50 @@ export class ChatAgent {
     }
   }
 
+  private async buildUserParts(userText: string): Promise<Part[]> {
+    const pdfInfo = await detectPdfAtActiveTab();
+
+    if (pdfInfo?.isPdf) {
+      const alreadyAttached = pdfInfo.url === this.lastAttachedPdfUrl;
+      if (alreadyAttached) {
+        debugLog("pdf:already_attached", pdfInfo.url);
+        return [
+          {
+            text: `[현재 탭: 첨부된 PDF — ${pdfInfo.url}]\n\n[사용자 요청]\n${userText}`,
+          },
+        ];
+      }
+      debugLog("pdf:fetch", pdfInfo.url);
+      this.send({ kind: "status", text: "PDF 문서 불러오는 중…" });
+      const endFetch = timeSpan("pdf:fetch");
+      try {
+        const { data, bytes } = await fetchPdfAsBase64(pdfInfo.url);
+        endFetch(`${Math.round(bytes / 1024)}KB`);
+        this.lastAttachedPdfUrl = pdfInfo.url;
+        return [
+          { inlineData: { mimeType: "application/pdf", data } },
+          {
+            text: `[현재 탭: PDF 문서 — ${pdfInfo.url}]\n이 대화에서는 페이지 조작 도구(translate_page, find_clickables 등)는 사용할 수 없고, 첨부된 PDF 내용을 직접 읽고 답한다.\n\n[사용자 요청]\n${userText}`,
+          },
+        ];
+      } catch (err) {
+        endFetch("fail");
+        const msg = err instanceof Error ? err.message : String(err);
+        debugLog("pdf:error", msg, "warn");
+        return [
+          {
+            text: `[현재 탭: PDF ${pdfInfo.url} — 자동 로드 실패: ${msg}]\n\n[사용자 요청]\n${userText}`,
+          },
+        ];
+      }
+    }
+
+    // Normal web page
+    const header = await this.fetchTabHeader();
+    const composed = header ? `${header}\n\n[사용자 요청]\n${userText}` : userText;
+    return [{ text: composed }];
+  }
+
   async sendUserTurn(userText: string): Promise<void> {
     this.aborted = false;
     beginKeepalive();
@@ -119,12 +172,9 @@ export class ChatAgent {
     try {
       const { ai, model } = await this.ensureCredentials();
       debugLog("turn:model", model);
-      const header = await this.fetchTabHeader();
-      const composed = header
-        ? `${header}\n\n[사용자 요청]\n${userText}`
-        : userText;
 
-      this.history.push({ role: "user", parts: [{ text: composed }] });
+      const userParts = await this.buildUserParts(userText);
+      this.history.push({ role: "user", parts: userParts });
 
       await this.streamLoop(ai, model);
       endTurn("ok");
