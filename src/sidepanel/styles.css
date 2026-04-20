@@ -603,6 +603,48 @@ body,
   gap: 4px;
 }
 
+.setup-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg-alt);
+  border-left: 3px solid var(--primary);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.setup-card strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--primary);
+}
+
+.setup-card ol {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+
+.setup-card li {
+  margin-bottom: 4px;
+}
+
+.setup-card a {
+  color: var(--primary);
+}
+
+.setup-card code {
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.setup-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
 .diag-body {
   margin: 0;
   padding: 8px;

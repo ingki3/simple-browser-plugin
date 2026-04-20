@@ -15,7 +15,6 @@ export const DEFAULT_SETTINGS: Settings = {
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
-  googleClientId: "",
 };
 
 function normalizeMaxHops(v: unknown): number {
@@ -38,8 +37,6 @@ export async function readSettings(): Promise<Settings> {
         ? raw.downloadFolderPrefix
         : DEFAULT_SETTINGS.downloadFolderPrefix,
     maxToolHops: normalizeMaxHops(raw.maxToolHops),
-    googleClientId:
-      typeof raw.googleClientId === "string" ? raw.googleClientId.trim() : "",
   };
 }
 

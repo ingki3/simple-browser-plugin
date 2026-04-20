@@ -148,14 +148,7 @@ export interface Settings {
   translationTargetLang: string;
   downloadFolderPrefix: string;
   maxToolHops: number;
-  googleClientId: string;
 }
-
-export const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets",
-  "https://www.googleapis.com/auth/documents",
-  "https://www.googleapis.com/auth/drive",
-] as const;
 
 export const DEFAULT_MAX_TOOL_HOPS = 8;
 export const MIN_MAX_TOOL_HOPS = 1;

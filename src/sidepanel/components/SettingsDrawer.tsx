@@ -22,7 +22,6 @@ const clampHops = (n: number) =>
 interface GoogleStatus {
   configured: boolean;
   connected: boolean;
-  expiresAt: number | null;
   clientId: string;
 }
 
@@ -64,11 +63,6 @@ export function SettingsDrawer({ open, onClose }: Props) {
     setGoogleBusy("connect");
     setGoogleError(null);
     try {
-      if (!draft.googleClientId.trim()) {
-        throw new Error(
-          "먼저 Google OAuth 클라이언트 ID를 입력해 주세요.",
-        );
-      }
       await save({ ...draft, maxToolHops: clampHops(draft.maxToolHops) });
       let res: { ok: boolean; error?: string } | undefined;
       try {
@@ -82,7 +76,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
       }
       if (!res) {
         throw new Error(
-          "BG에서 응답이 없습니다. 서비스 워커 콘솔(chrome://extensions 의 'Service worker' 링크)에서 에러를 확인해 주세요.",
+          "BG에서 응답이 없습니다. 서비스 워커 콘솔에서 에러를 확인해 주세요.",
         );
       }
       if (!res.ok) throw new Error(res.error ?? "알 수 없는 오류");
@@ -109,7 +103,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
               }
             })()
           : "(panel에서도 chrome.identity 없음)",
-      panelDraftClientIdLen: draft.googleClientId.trim().length,
+      panelChromeRuntimeId: chrome.runtime?.id ?? "(none)",
     };
     let bg: unknown = "(no response)";
     let bgError: string | null = null;
@@ -254,31 +248,18 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
           <div className="field">
             <span className="field-label">Google Workspace (Sheets / Docs / Drive)</span>
-            <input
-              type="text"
-              value={draft.googleClientId}
-              onChange={(e) => setDraft({ ...draft, googleClientId: e.target.value })}
-              placeholder="xxxxx.apps.googleusercontent.com"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <span className="field-help">
-              Google Cloud 콘솔에서 OAuth 2.0 클라이언트 ID (웹 애플리케이션)를 만들고, 승인된 리디렉션 URI에
-              <code> https://&lt;확장 ID&gt;.chromiumapp.org/</code> 를 추가한 뒤 여기에 client_id만 붙여넣으세요.
-              Sheets·Docs·Drive API를 활성화해야 합니다.
-            </span>
             <div className="google-status-row">
               {googleStatus?.connected ? (
                 <span className="tag-ok">● 연결됨</span>
               ) : googleStatus?.configured ? (
                 <span className="tag-warn">● 연결 필요</span>
               ) : (
-                <span className="tag-off">● 미설정</span>
+                <span className="tag-off">● manifest 설정 필요</span>
               )}
               <button
                 type="button"
                 className="ghost-btn"
-                disabled={googleBusy !== null || !draft.googleClientId.trim()}
+                disabled={googleBusy !== null || !googleStatus?.configured}
                 onClick={connectGoogle}
               >
                 {googleBusy === "connect" ? "연결 중…" : "Google 연결"}
@@ -302,6 +283,20 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 {diagBusy ? "진단 중…" : "연결 진단"}
               </button>
             </div>
+            {!googleStatus?.configured && (
+              <div className="setup-card">
+                <strong>OAuth 설정 4단계 (1회성)</strong>
+                <ol>
+                  <li><a href="https://console.cloud.google.com/apis/library" target="_blank" rel="noopener">Google Cloud 콘솔</a>에서 Sheets · Docs · Drive API 활성화</li>
+                  <li>"OAuth 동의 화면" 구성 → 본인 이메일을 테스터 등록</li>
+                  <li>"사용자 인증 정보" → "OAuth 클라이언트 ID" 생성<br />
+                    → 유형 <strong>"Chrome 확장 프로그램"</strong><br />
+                    → Application ID: <code className="copy-hint">이 확장의 ID</code> (chrome://extensions에서 복사)</li>
+                  <li>발급된 client_id를 <code>manifest.config.ts</code>의 <code>GOOGLE_OAUTH_CLIENT_ID</code>에 붙여넣기 → <code>npm run build</code> → 확장 재설치</li>
+                </ol>
+                <p className="setup-note">redirect URI 등록은 필요 없습니다 (Chrome이 내부 처리).</p>
+              </div>
+            )}
             {googleError && <span className="field-error">{googleError}</span>}
             {diag && (
               <div className="diag-box">

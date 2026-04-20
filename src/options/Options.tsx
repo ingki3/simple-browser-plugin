@@ -15,7 +15,6 @@ const DEFAULTS: Settings = {
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
-  googleClientId: "",
 };
 
 export function Options() {
@@ -37,8 +36,6 @@ export function Options() {
           typeof raw.maxToolHops === "number" && Number.isFinite(raw.maxToolHops)
             ? Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, Math.floor(raw.maxToolHops)))
             : DEFAULTS.maxToolHops,
-        googleClientId:
-          typeof raw.googleClientId === "string" ? raw.googleClientId.trim() : "",
       });
     });
   }, []);

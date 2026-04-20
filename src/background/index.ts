@@ -149,23 +149,22 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
         state.clientId.length > 18
           ? state.clientId.slice(0, 8) + "…" + state.clientId.slice(-10)
           : state.clientId;
+      const oauth2 = (mf as typeof mf & {
+        oauth2?: { client_id?: string; scopes?: string[] };
+      }).oauth2;
       return {
         extensionId: chrome.runtime.id,
         extensionVersion: mf.version,
         manifestPermissions: mf.permissions ?? [],
         hostPermissions: mf.host_permissions ?? [],
+        manifestOauth2Present: !!oauth2,
+        manifestOauth2Scopes: oauth2?.scopes ?? [],
         identityApiPresent: hasIdentity,
         identityApiError: identityCallError,
         redirectUrlFromIdentity: redirectUrl,
-        expectedGoogleRedirectUri: redirectUrl
-          ? redirectUrl
-          : `(identity API 없음)`,
         googleClientIdConfigured: state.configured,
         googleClientIdPreview: masked || "(비어 있음)",
         googleTokenCached: state.connected,
-        googleTokenExpiresAt: state.expiresAt
-          ? new Date(state.expiresAt).toISOString()
-          : null,
         timestamp: new Date().toISOString(),
       };
     })()
