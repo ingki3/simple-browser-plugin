@@ -581,6 +581,39 @@ body,
   margin-bottom: 3px;
 }
 
+.diag-box {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-alt);
+  font-size: 11.5px;
+}
+
+.diag-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.diag-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.diag-body {
+  margin: 0;
+  padding: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow: auto;
+  color: var(--fg);
+}
+
 .debug-drawer .drawer-header {
   flex-wrap: wrap;
   gap: 6px;

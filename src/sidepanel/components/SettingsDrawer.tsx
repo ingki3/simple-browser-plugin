@@ -33,6 +33,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
   const [googleBusy, setGoogleBusy] = useState<"connect" | "disconnect" | null>(null);
   const [googleError, setGoogleError] = useState<string | null>(null);
+  const [diag, setDiag] = useState<string | null>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
 
   useEffect(() => {
     if (loaded) setDraft(settings);
@@ -89,6 +91,53 @@ export function SettingsDrawer({ open, onClose }: Props) {
       setGoogleError(err instanceof Error ? err.message : String(err));
     } finally {
       setGoogleBusy(null);
+    }
+  };
+
+  const runDiag = async () => {
+    setDiagBusy(true);
+    setGoogleError(null);
+    const panelSide: Record<string, unknown> = {
+      panelChromeIdentity: typeof chrome.identity !== "undefined",
+      panelRedirectUrl:
+        typeof chrome.identity !== "undefined"
+          ? (() => {
+              try {
+                return chrome.identity.getRedirectURL();
+              } catch (e) {
+                return `error: ${e instanceof Error ? e.message : String(e)}`;
+              }
+            })()
+          : "(panel에서도 chrome.identity 없음)",
+      panelDraftClientIdLen: draft.googleClientId.trim().length,
+    };
+    let bg: unknown = "(no response)";
+    let bgError: string | null = null;
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        kind: "google_diag",
+      })) as { ok: boolean; data?: unknown; error?: string } | undefined;
+      if (!res) bgError = "BG 응답 없음 (서비스 워커 기동 실패 가능)";
+      else if (!res.ok) bgError = res.error ?? "알 수 없는 BG 에러";
+      else bg = res.data;
+    } catch (err) {
+      bgError = err instanceof Error ? err.message : String(err);
+    }
+    const out = JSON.stringify(
+      { panel: panelSide, bg, bgError, capturedAt: new Date().toISOString() },
+      null,
+      2,
+    );
+    setDiag(out);
+    setDiagBusy(false);
+  };
+
+  const copyDiag = async () => {
+    if (!diag) return;
+    try {
+      await navigator.clipboard.writeText(diag);
+    } catch {
+      /* ignore */
     }
   };
 
@@ -244,8 +293,36 @@ export function SettingsDrawer({ open, onClose }: Props) {
                   {googleBusy === "disconnect" ? "해제 중…" : "연결 해제"}
                 </button>
               )}
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={diagBusy}
+                onClick={runDiag}
+              >
+                {diagBusy ? "진단 중…" : "연결 진단"}
+              </button>
             </div>
             {googleError && <span className="field-error">{googleError}</span>}
+            {diag && (
+              <div className="diag-box">
+                <div className="diag-header">
+                  <span>진단 결과</span>
+                  <div className="diag-actions">
+                    <button type="button" className="ghost-btn" onClick={copyDiag}>
+                      복사
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => setDiag(null)}
+                    >
+                      닫기
+                    </button>
+                  </div>
+                </div>
+                <pre className="diag-body">{diag}</pre>
+              </div>
+            )}
           </div>
         </div>
         <div className="drawer-footer">

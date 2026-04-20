@@ -131,6 +131,54 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
     return true;
   }
 
+  if (m.kind === "google_diag") {
+    (async () => {
+      const mf = chrome.runtime.getManifest();
+      const state = await getGoogleConnectionState();
+      const hasIdentity = typeof chrome.identity !== "undefined";
+      let redirectUrl = "";
+      let identityCallError = "";
+      if (hasIdentity) {
+        try {
+          redirectUrl = chrome.identity.getRedirectURL();
+        } catch (err) {
+          identityCallError = err instanceof Error ? err.message : String(err);
+        }
+      }
+      const masked =
+        state.clientId.length > 18
+          ? state.clientId.slice(0, 8) + "…" + state.clientId.slice(-10)
+          : state.clientId;
+      return {
+        extensionId: chrome.runtime.id,
+        extensionVersion: mf.version,
+        manifestPermissions: mf.permissions ?? [],
+        hostPermissions: mf.host_permissions ?? [],
+        identityApiPresent: hasIdentity,
+        identityApiError: identityCallError,
+        redirectUrlFromIdentity: redirectUrl,
+        expectedGoogleRedirectUri: redirectUrl
+          ? redirectUrl
+          : `(identity API 없음)`,
+        googleClientIdConfigured: state.configured,
+        googleClientIdPreview: masked || "(비어 있음)",
+        googleTokenCached: state.connected,
+        googleTokenExpiresAt: state.expiresAt
+          ? new Date(state.expiresAt).toISOString()
+          : null,
+        timestamp: new Date().toISOString(),
+      };
+    })()
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    return true;
+  }
+
   if (m.kind === "translate_text_batch") {
     const payload = msg as { kind: "translate_text_batch"; texts: string[]; targetLang: string };
     if (!Array.isArray(payload.texts) || typeof payload.targetLang !== "string") {
