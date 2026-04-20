@@ -3,7 +3,7 @@ import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import type { ModelId } from "@/lib/models";
 import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs } from "./tools/dispatcher";
-import { getSettings } from "./storage";
+import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtActiveTab, fetchPdfAsBase64 } from "./pdf";
@@ -121,10 +121,30 @@ export class ChatAgent {
     }
   }
 
+  private async maybeShowPdfGuidance(): Promise<void> {
+    const flags = await readFlags();
+    if (flags.pdfGuidanceShown) return;
+    this.send({
+      kind: "info",
+      title: "PDF 문서 분석 안내",
+      message: [
+        "처음 PDF 탭을 분석합니다. 몇 가지 제한을 참고해 주세요:",
+        "",
+        "• 파일 크기: 20MB까지만 지원됩니다. 더 큰 파일은 에러로 떨어집니다.",
+        "• 로컬 PDF(file:// URL): Chrome의 확장 설정에서 '파일 URL에 대한 액세스 허용'을 켜야 읽을 수 있습니다.",
+        "  chrome://extensions → 이 확장의 '세부 정보' → '파일 URL에 대한 액세스 허용' 토글 ON",
+        "",
+        "이 안내는 처음 한 번만 표시됩니다.",
+      ].join("\n"),
+    });
+    await setFlag("pdfGuidanceShown", true);
+  }
+
   private async buildUserParts(userText: string): Promise<Part[]> {
     const pdfInfo = await detectPdfAtActiveTab();
 
     if (pdfInfo?.isPdf) {
+      await this.maybeShowPdfGuidance();
       const alreadyAttached = pdfInfo.url === this.lastAttachedPdfUrl;
       if (alreadyAttached) {
         debugLog("pdf:already_attached", pdfInfo.url);

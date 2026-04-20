@@ -51,5 +51,14 @@ export function MessageBubble({ message, onApprove, onCancel }: Props) {
           <div className="bubble bubble-error">⚠ {message.message}</div>
         </div>
       );
+    case "info":
+      return (
+        <div className="msg msg-info">
+          <div className="bubble bubble-info">
+            <div className="info-title">ℹ {message.title}</div>
+            <div className="info-body">{message.message}</div>
+          </div>
+        </div>
+      );
   }
 }
