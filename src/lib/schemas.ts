@@ -72,7 +72,6 @@ export const clickElementArgs = z
   .strict();
 
 const spreadsheetIdSchema = z.string().min(20).max(200);
-const documentIdSchema = z.string().min(20).max(200);
 
 export const googleSheetsListArgs = z
   .object({ spreadsheetId: spreadsheetIdSchema })
@@ -106,26 +105,6 @@ export const googleSheetsWriteMarkdownTableArgs = z
     spreadsheetId: spreadsheetIdSchema,
     range: z.string().min(1).max(200),
     markdownTable: z.string().min(5).max(100_000),
-  })
-  .strict();
-
-export const googleDocsReadArgs = z
-  .object({ documentId: documentIdSchema })
-  .strict();
-
-export const googleDocsAppendArgs = z
-  .object({
-    documentId: documentIdSchema,
-    text: z.string().min(1).max(50_000),
-  })
-  .strict();
-
-export const googleDocsReplaceArgs = z
-  .object({
-    documentId: documentIdSchema,
-    find: z.string().min(1).max(500),
-    replace: z.string().max(2000),
-    matchCase: z.boolean().optional(),
   })
   .strict();
 
@@ -167,9 +146,6 @@ export const toolArgsSchemas = {
   google_sheets_write_range: googleSheetsWriteRangeArgs,
   google_sheets_append_rows: googleSheetsAppendRowsArgs,
   google_sheets_write_markdown_table: googleSheetsWriteMarkdownTableArgs,
-  google_docs_read: googleDocsReadArgs,
-  google_docs_append: googleDocsAppendArgs,
-  google_docs_replace: googleDocsReplaceArgs,
   google_drive_search: googleDriveSearchArgs,
   google_drive_list_recent: googleDriveListRecentArgs,
   google_drive_export: googleDriveExportArgs,

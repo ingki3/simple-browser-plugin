@@ -107,7 +107,6 @@ export function parseActiveDocIds(url: string): {
   spreadsheetId?: string;
   gid?: string;
   range?: string;
-  documentId?: string;
   driveFileId?: string;
 } {
   try {
@@ -122,8 +121,6 @@ export function parseActiveDocIds(url: string): {
           range: frag.get("range") ?? undefined,
         };
       }
-      const docMatch = /\/document\/d\/([^/]+)/.exec(u.pathname);
-      if (docMatch) return { documentId: docMatch[1] };
     }
     if (u.hostname === "drive.google.com") {
       const m = /\/file\/d\/([^/]+)/.exec(u.pathname);

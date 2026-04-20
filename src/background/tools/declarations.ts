@@ -228,46 +228,6 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
-    name: "google_docs_read",
-    description:
-      "Google Docs 문서의 제목, 본문 텍스트, 표제(h1~h3) 목록, 끝 인덱스를 반환한다. 현재 탭이 docs.google.com/document/d/{ID}면 그 ID 사용.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        documentId: { type: Type.STRING },
-      },
-      required: ["documentId"],
-    },
-  },
-  {
-    name: "google_docs_append",
-    description:
-      "민감. 사용자 승인 후 Google Docs 문서 끝에 일반 텍스트를 추가한다. markdown 서식은 적용되지 않고 그대로 삽입된다.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        documentId: { type: Type.STRING },
-        text: { type: Type.STRING },
-      },
-      required: ["documentId", "text"],
-    },
-  },
-  {
-    name: "google_docs_replace",
-    description:
-      "민감. 사용자 승인 후 Google Docs 문서 내 모든 일치 문자열을 교체한다. matchCase=true면 대소문자 구분.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        documentId: { type: Type.STRING },
-        find: { type: Type.STRING },
-        replace: { type: Type.STRING },
-        matchCase: { type: Type.BOOLEAN },
-      },
-      required: ["documentId", "find", "replace"],
-    },
-  },
-  {
     name: "google_drive_search",
     description:
       "Google Drive 검색. query는 Drive API의 q 문법을 그대로 따른다. 예: \"name contains 'Report' and mimeType='application/vnd.google-apps.document'\". 결과는 수정일 역순.",

@@ -16,9 +16,6 @@ export type ToolName =
   | "google_sheets_write_range"
   | "google_sheets_append_rows"
   | "google_sheets_write_markdown_table"
-  | "google_docs_read"
-  | "google_docs_append"
-  | "google_docs_replace"
   | "google_drive_search"
   | "google_drive_list_recent"
   | "google_drive_export";
@@ -30,8 +27,6 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "google_sheets_write_range",
   "google_sheets_append_rows",
   "google_sheets_write_markdown_table",
-  "google_docs_append",
-  "google_docs_replace",
 ]);
 
 export type PageRegion = "main" | "article" | "nav" | "aside" | "header" | "footer" | "other";

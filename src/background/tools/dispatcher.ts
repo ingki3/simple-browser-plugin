@@ -18,7 +18,6 @@ import {
   readRange,
   writeRange,
 } from "../google/sheets";
-import { appendText, readDoc, replaceText } from "../google/docs";
 import { exportFile, listRecent, searchFiles } from "../google/drive";
 
 export interface ToolExecResult {
@@ -95,20 +94,6 @@ export async function buildToolPreview(
       return {
         summary: `Google Sheets '${args.range}'에 markdown 표 기록.`,
         details: args.markdownTable.slice(0, 400),
-      };
-    }
-    case "google_docs_append": {
-      const args = parsedArgs as ToolArgs["google_docs_append"];
-      return {
-        summary: `Google Docs 문서 끝에 ${args.text.length}자 추가.`,
-        details: `문서 ID: ${args.documentId}\n\n추가할 텍스트:\n${truncate(args.text, 400)}`,
-      };
-    }
-    case "google_docs_replace": {
-      const args = parsedArgs as ToolArgs["google_docs_replace"];
-      return {
-        summary: `Google Docs '${truncate(args.find, 30)}' → '${truncate(args.replace, 30)}' 전체 치환.`,
-        details: `문서 ID: ${args.documentId}\n대소문자 구분: ${args.matchCase ? "예" : "아니오"}`,
       };
     }
     default:
@@ -305,38 +290,6 @@ export async function executeTool(
       return {
         ok: true,
         summary: `markdown 표 (${values.length}행) → ${args.range}, ${data.updatedCells}셀 기록`,
-        data,
-      };
-    }
-    case "google_docs_read": {
-      const args = parsedArgs as ToolArgs["google_docs_read"];
-      const data = await readDoc(args.documentId);
-      return {
-        ok: true,
-        summary: `'${truncate(data.title, 50)}' · ${data.text.length}자 · 표제 ${data.headings.length}개`,
-        data,
-      };
-    }
-    case "google_docs_append": {
-      const args = parsedArgs as ToolArgs["google_docs_append"];
-      const data = await appendText(args.documentId, args.text);
-      return {
-        ok: true,
-        summary: `${data.insertedChars}자 추가`,
-        data,
-      };
-    }
-    case "google_docs_replace": {
-      const args = parsedArgs as ToolArgs["google_docs_replace"];
-      const data = await replaceText(
-        args.documentId,
-        args.find,
-        args.replace,
-        args.matchCase ?? false,
-      );
-      return {
-        ok: true,
-        summary: `${data.replacedCount}회 치환`,
         data,
       };
     }
