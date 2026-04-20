@@ -566,6 +566,21 @@ body,
   width: min(100%, 560px);
 }
 
+.drawer-alert {
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  border-left: 3px solid var(--error);
+  color: var(--error);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.drawer-alert strong {
+  display: block;
+  margin-bottom: 3px;
+}
+
 .debug-drawer .drawer-header {
   flex-wrap: wrap;
   gap: 6px;

@@ -62,12 +62,28 @@ export function SettingsDrawer({ open, onClose }: Props) {
     setGoogleBusy("connect");
     setGoogleError(null);
     try {
+      if (!draft.googleClientId.trim()) {
+        throw new Error(
+          "먼저 Google OAuth 클라이언트 ID를 입력해 주세요.",
+        );
+      }
       await save({ ...draft, maxToolHops: clampHops(draft.maxToolHops) });
-      const res = (await chrome.runtime.sendMessage({ kind: "google_connect" })) as {
-        ok: boolean;
-        error?: string;
-      };
-      if (!res?.ok) throw new Error(res?.error ?? "알 수 없는 오류");
+      let res: { ok: boolean; error?: string } | undefined;
+      try {
+        res = (await chrome.runtime.sendMessage({ kind: "google_connect" })) as
+          | { ok: boolean; error?: string }
+          | undefined;
+      } catch (sendErr) {
+        throw new Error(
+          `BG로 메시지를 보낼 수 없습니다: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}. 확장을 재설치해 보세요.`,
+        );
+      }
+      if (!res) {
+        throw new Error(
+          "BG에서 응답이 없습니다. 서비스 워커 콘솔(chrome://extensions 의 'Service worker' 링크)에서 에러를 확인해 주세요.",
+        );
+      }
+      if (!res.ok) throw new Error(res.error ?? "알 수 없는 오류");
       await refreshGoogleStatus();
     } catch (err) {
       setGoogleError(err instanceof Error ? err.message : String(err));
@@ -109,6 +125,12 @@ export function SettingsDrawer({ open, onClose }: Props) {
         <div className="drawer-header">
           <h2>{KO.settingsTitle}</h2>
         </div>
+        {googleError && (
+          <div className="drawer-alert">
+            <strong>Google 연결 실패</strong>
+            <div>{googleError}</div>
+          </div>
+        )}
         <div className="drawer-body">
           <label className="field">
             <span className="field-label">{KO.apiKeyLabel}</span>

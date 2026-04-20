@@ -83,20 +83,33 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   }
 
   if (m.kind === "google_connect") {
+    debugLog("google:connect:received");
+    if (typeof chrome.identity === "undefined") {
+      const msg =
+        "chrome.identity API를 사용할 수 없습니다. 확장에 'identity' 권한이 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 '삭제' 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.";
+      debugLog("google:connect:no_identity", msg, "error");
+      sendResponse({ ok: false, error: msg });
+      return true;
+    }
     connectGoogle()
-      .then(() => sendResponse({ ok: true }))
-      .catch((err: unknown) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
+      .then(() => {
+        debugLog("google:connect:ok");
+        sendResponse({ ok: true });
+      })
+      .catch((err: unknown) => {
+        const e = err instanceof Error ? err.message : String(err);
+        debugLog("google:connect:error", e, "error");
+        sendResponse({ ok: false, error: e });
+      });
     return true;
   }
 
   if (m.kind === "google_disconnect") {
     clearGoogleToken()
-      .then(() => sendResponse({ ok: true }))
+      .then(() => {
+        debugLog("google:disconnect:ok");
+        sendResponse({ ok: true });
+      })
       .catch((err: unknown) =>
         sendResponse({
           ok: false,
