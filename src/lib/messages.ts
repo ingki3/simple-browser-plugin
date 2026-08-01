@@ -10,12 +10,23 @@ export type ToolName =
   | "download_images"
   | "query_dom"
   | "find_clickables"
-  | "click_element";
+  | "click_element"
+  | "google_sheets_list"
+  | "google_sheets_read_range"
+  | "google_sheets_write_range"
+  | "google_sheets_append_rows"
+  | "google_sheets_write_markdown_table"
+  | "google_drive_search"
+  | "google_drive_list_recent"
+  | "google_drive_export";
 
 export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "fill_form_fields",
   "download_images",
   "click_element",
+  "google_sheets_write_range",
+  "google_sheets_append_rows",
+  "google_sheets_write_markdown_table",
 ]);
 
 export type PageRegion = "main" | "article" | "nav" | "aside" | "header" | "footer" | "other";
@@ -127,7 +138,7 @@ export type RuntimeMsg =
   | { kind: "translate_text_batch"; texts: string[]; targetLang: string };
 
 export interface Settings {
-  apiKey: string;
+  openRouterApiKey: string;
   model: ModelId;
   translationTargetLang: string;
   downloadFolderPrefix: string;

@@ -1,8 +1,13 @@
 import { PORT_NAME, type PanelToBg } from "@/lib/messages";
-import { ChatAgent } from "./gemini";
+import { ChatAgent } from "./openrouter";
 import { invalidateSettingsCache } from "./storage";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";
+import {
+  clearGoogleToken,
+  connectGoogle,
+  getGoogleConnectionState,
+} from "./google/auth";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
@@ -74,6 +79,102 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   if (m.kind === "settings_updated") {
     invalidateSettingsCache();
     sendResponse({ ok: true });
+    return true;
+  }
+
+  if (m.kind === "google_connect") {
+    debugLog("google:connect:received");
+    if (typeof chrome.identity === "undefined") {
+      const msg =
+        "chrome.identity API를 사용할 수 없습니다. 확장에 'identity' 권한이 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 '삭제' 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.";
+      debugLog("google:connect:no_identity", msg, "error");
+      sendResponse({ ok: false, error: msg });
+      return true;
+    }
+    connectGoogle()
+      .then(() => {
+        debugLog("google:connect:ok");
+        sendResponse({ ok: true });
+      })
+      .catch((err: unknown) => {
+        const e = err instanceof Error ? err.message : String(err);
+        debugLog("google:connect:error", e, "error");
+        sendResponse({ ok: false, error: e });
+      });
+    return true;
+  }
+
+  if (m.kind === "google_disconnect") {
+    clearGoogleToken()
+      .then(() => {
+        debugLog("google:disconnect:ok");
+        sendResponse({ ok: true });
+      })
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    return true;
+  }
+
+  if (m.kind === "google_status") {
+    getGoogleConnectionState()
+      .then((state) => sendResponse({ ok: true, data: state }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    return true;
+  }
+
+  if (m.kind === "google_diag") {
+    (async () => {
+      const mf = chrome.runtime.getManifest();
+      const state = await getGoogleConnectionState();
+      const hasIdentity = typeof chrome.identity !== "undefined";
+      let redirectUrl = "";
+      let identityCallError = "";
+      if (hasIdentity) {
+        try {
+          redirectUrl = chrome.identity.getRedirectURL();
+        } catch (err) {
+          identityCallError = err instanceof Error ? err.message : String(err);
+        }
+      }
+      const masked =
+        state.clientId.length > 18
+          ? state.clientId.slice(0, 8) + "…" + state.clientId.slice(-10)
+          : state.clientId;
+      const oauth2 = (mf as typeof mf & {
+        oauth2?: { client_id?: string; scopes?: string[] };
+      }).oauth2;
+      return {
+        extensionId: chrome.runtime.id,
+        extensionVersion: mf.version,
+        manifestPermissions: mf.permissions ?? [],
+        hostPermissions: mf.host_permissions ?? [],
+        manifestOauth2Present: !!oauth2,
+        manifestOauth2Scopes: oauth2?.scopes ?? [],
+        identityApiPresent: hasIdentity,
+        identityApiError: identityCallError,
+        redirectUrlFromIdentity: redirectUrl,
+        googleClientIdConfigured: state.configured,
+        googleClientIdPreview: masked || "(비어 있음)",
+        googleTokenCached: state.connected,
+        timestamp: new Date().toISOString(),
+      };
+    })()
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
     return true;
   }
 

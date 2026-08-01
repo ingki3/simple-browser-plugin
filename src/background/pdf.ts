@@ -1,4 +1,4 @@
-const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20MB inlineData limit
+const MAX_PDF_BYTES = 20 * 1024 * 1024; // Keep extension messaging/request payloads bounded.
 
 export interface PdfTabInfo {
   isPdf: boolean;

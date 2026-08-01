@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
-import { GoogleGenAI } from "@google/genai";
-import { MODEL_IDS, MODEL_LABELS, type ModelId } from "@/lib/models";
+import {
+  DEFAULT_MODEL,
+  MODEL_IDS,
+  MODEL_LABELS,
+  normalizeModelId,
+} from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
@@ -10,8 +14,8 @@ import {
 } from "@/lib/messages";
 
 const DEFAULTS: Settings = {
-  apiKey: "",
-  model: "gemini-3-flash-preview",
+  openRouterApiKey: "",
+  model: DEFAULT_MODEL,
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
@@ -28,8 +32,8 @@ export function Options() {
     chrome.storage.local.get(SETTINGS_KEY).then((obj) => {
       const raw = (obj[SETTINGS_KEY] ?? {}) as Partial<Settings>;
       setDraft({
-        apiKey: raw.apiKey ?? DEFAULTS.apiKey,
-        model: (raw.model ?? DEFAULTS.model) as ModelId,
+        openRouterApiKey: raw.openRouterApiKey ?? DEFAULTS.openRouterApiKey,
+        model: normalizeModelId(raw.model),
         translationTargetLang: raw.translationTargetLang ?? DEFAULTS.translationTargetLang,
         downloadFolderPrefix: raw.downloadFolderPrefix ?? DEFAULTS.downloadFolderPrefix,
         maxToolHops:
@@ -64,16 +68,28 @@ export function Options() {
     setTesting(true);
     setTestResult(null);
     try {
-      const ai = new GoogleGenAI({ apiKey: draft.apiKey });
-      const res = await ai.models.generateContent({
-        model: draft.model,
-        contents: "hi",
-        config: { maxOutputTokens: 5 },
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${draft.openRouterApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: draft.model,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 5,
+        }),
       });
-      if (res.text !== undefined) {
+      if (res.ok) {
         setTestResult({ ok: true, msg: "연결 확인됨" });
       } else {
-        setTestResult({ ok: false, msg: "응답 없음" });
+        const body = (await res.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        setTestResult({
+          ok: false,
+          msg: body?.error?.message ?? `OpenRouter HTTP ${res.status}`,
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -87,18 +103,20 @@ export function Options() {
     <div className="options">
       <h1>간편 도우미 설정</h1>
       <p className="intro">
-        Gemini API 키와 모델을 설정합니다. API 키는 이 기기의 chrome.storage.local에 평문으로
+        OpenRouter API 키와 모델을 설정합니다. API 키는 이 기기의 chrome.storage.local에 평문으로
         저장되며, 외부로 전송되지 않습니다.
       </p>
 
       <label className="field">
-        <span className="field-label">Gemini API 키</span>
+        <span className="field-label">OpenRouter API 키</span>
         <div className="key-row">
           <input
             type={showKey ? "text" : "password"}
-            value={draft.apiKey}
-            onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-            placeholder="AIza..."
+            value={draft.openRouterApiKey}
+            onChange={(e) =>
+              setDraft({ ...draft, openRouterApiKey: e.target.value })
+            }
+            placeholder="sk-or-v1-..."
             autoComplete="off"
             spellCheck={false}
           />
@@ -107,22 +125,28 @@ export function Options() {
           </button>
         </div>
         <span className="field-help">
-          키는 Google AI Studio(aistudio.google.com)에서 발급할 수 있습니다.
+          키는 openrouter.ai/keys에서 발급할 수 있습니다.
         </span>
       </label>
 
       <label className="field">
         <span className="field-label">모델</span>
-        <select
+        <input
+          type="text"
+          list="openrouter-models"
           value={draft.model}
-          onChange={(e) => setDraft({ ...draft, model: e.target.value as ModelId })}
-        >
+          onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+          placeholder="provider/model"
+          spellCheck={false}
+        />
+        <datalist id="openrouter-models">
           {MODEL_IDS.map((id) => (
-            <option key={id} value={id}>
-              {MODEL_LABELS[id]}
-            </option>
+            <option key={id} value={id} label={MODEL_LABELS[id]} />
           ))}
-        </select>
+        </datalist>
+        <span className="field-help">
+          OpenRouter 모델 ID를 입력합니다. 에이전트 기능에는 tool calling 지원 모델이 필요합니다.
+        </span>
       </label>
 
       <label className="field">
@@ -173,7 +197,7 @@ export function Options() {
         <button
           className="ghost-btn"
           onClick={testKey}
-          disabled={testing || !draft.apiKey}
+          disabled={testing || !draft.openRouterApiKey || !draft.model}
         >
           {testing ? "확인 중…" : "연결 테스트"}
         </button>

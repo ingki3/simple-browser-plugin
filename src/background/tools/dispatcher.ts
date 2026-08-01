@@ -11,6 +11,14 @@ import { getSettings } from "../storage";
 import { callContentTool, getActiveTabId } from "./handlers";
 import { startImageDownloads } from "./downloads";
 import { markOptimisticNavigation } from "../navigation";
+import {
+  appendRows,
+  listSheets,
+  parseMarkdownTable,
+  readRange,
+  writeRange,
+} from "../google/sheets";
+import { exportFile, listRecent, searchFiles } from "../google/drive";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -61,6 +69,33 @@ export async function buildToolPreview(
         details: `대상 id: ${args.id}\n\nfind_clickables 결과의 id로 매핑된 요소가 클릭됩니다. 링크면 해당 페이지로 이동합니다.`,
       };
     }
+    case "google_sheets_write_range": {
+      const args = parsedArgs as ToolArgs["google_sheets_write_range"];
+      const rowCount = args.values.length;
+      const colCount = Math.max(...args.values.map((r) => r.length));
+      const preview = args.values
+        .slice(0, 5)
+        .map((r) => r.slice(0, 5).map((c) => truncate(c, 40)).join(" | "))
+        .join("\n");
+      return {
+        summary: `Google Sheets '${args.range}' 범위에 ${rowCount}×${colCount} 값 덮어쓰기.`,
+        details: `스프레드시트: ${args.spreadsheetId}\n범위: ${args.range}\n\n미리보기 (최대 5×5):\n${preview}`,
+      };
+    }
+    case "google_sheets_append_rows": {
+      const args = parsedArgs as ToolArgs["google_sheets_append_rows"];
+      return {
+        summary: `Google Sheets '${args.range}' 끝에 ${args.values.length}행 추가.`,
+        details: `스프레드시트: ${args.spreadsheetId}\n기준 범위: ${args.range}`,
+      };
+    }
+    case "google_sheets_write_markdown_table": {
+      const args = parsedArgs as ToolArgs["google_sheets_write_markdown_table"];
+      return {
+        summary: `Google Sheets '${args.range}'에 markdown 표 기록.`,
+        details: args.markdownTable.slice(0, 400),
+      };
+    }
     default:
       return { summary: `도구 ${toolName} 실행` };
   }
@@ -109,6 +144,8 @@ export async function executeTool(
     case "translate_page": {
       const data = await callContentTool<{
         translatedNodes: number;
+        scheduledNodes?: number;
+        inProgress?: boolean;
         perRoot?: Array<{ name: string; collected: number }>;
         totalCollected?: number;
       }>(toolName, parsedArgs, callId);
@@ -124,9 +161,12 @@ export async function executeTool(
         typeof data.totalCollected === "number" && data.totalCollected !== data.translatedNodes
           ? ` (수집 ${data.totalCollected})`
           : "";
+      const progressSummary = data.inProgress
+        ? `첫 배치 ${data.translatedNodes}개 적용, 나머지 ${data.scheduledNodes ?? 0}개 백그라운드 번역 중`
+        : `페이지 내 ${data.translatedNodes}개 텍스트 노드 번역 완료`;
       return {
         ok: true,
-        summary: `페이지 내 ${data.translatedNodes}개 텍스트 노드 번역 완료${collectedHint}.${breakdown}`,
+        summary: `${progressSummary}${collectedHint}.${breakdown}`,
         data,
       };
     }
@@ -207,6 +247,85 @@ export async function executeTool(
       return {
         ok: data.clicked,
         summary: `클릭 완료: "${truncate(data.text, 60) || "(텍스트 없음)"}"${hint}`,
+        data,
+      };
+    }
+    case "google_sheets_list": {
+      const args = parsedArgs as ToolArgs["google_sheets_list"];
+      const data = await listSheets(args.spreadsheetId);
+      return {
+        ok: true,
+        summary: `'${truncate(data.title, 50)}' — 시트 ${data.sheets.length}개`,
+        data,
+      };
+    }
+    case "google_sheets_read_range": {
+      const args = parsedArgs as ToolArgs["google_sheets_read_range"];
+      const data = await readRange(args.spreadsheetId, args.range);
+      const rows = data.values.length;
+      const cols = Math.max(0, ...data.values.map((r) => r.length));
+      return {
+        ok: true,
+        summary: `${data.range} 읽음 · ${rows}×${cols}`,
+        data,
+      };
+    }
+    case "google_sheets_write_range": {
+      const args = parsedArgs as ToolArgs["google_sheets_write_range"];
+      const data = await writeRange(args.spreadsheetId, args.range, args.values);
+      return {
+        ok: true,
+        summary: `${args.range}에 ${data.updatedCells}개 셀 기록`,
+        data,
+      };
+    }
+    case "google_sheets_append_rows": {
+      const args = parsedArgs as ToolArgs["google_sheets_append_rows"];
+      const data = await appendRows(args.spreadsheetId, args.range, args.values);
+      return {
+        ok: true,
+        summary: `${data.appendedRows}행 추가 (${data.updatedRange})`,
+        data,
+      };
+    }
+    case "google_sheets_write_markdown_table": {
+      const args = parsedArgs as ToolArgs["google_sheets_write_markdown_table"];
+      const values = parseMarkdownTable(args.markdownTable);
+      const data = await writeRange(args.spreadsheetId, args.range, values);
+      return {
+        ok: true,
+        summary: `markdown 표 (${values.length}행) → ${args.range}, ${data.updatedCells}셀 기록`,
+        data,
+      };
+    }
+    case "google_drive_search": {
+      const args = parsedArgs as ToolArgs["google_drive_search"];
+      const data = await searchFiles(args.query, args.maxResults ?? 20);
+      return {
+        ok: true,
+        summary: `검색 결과 ${data.length}개`,
+        data,
+      };
+    }
+    case "google_drive_list_recent": {
+      const args = parsedArgs as ToolArgs["google_drive_list_recent"];
+      const data = await listRecent(args.mimeType, args.maxResults ?? 20);
+      return {
+        ok: true,
+        summary: `최근 파일 ${data.length}개`,
+        data,
+      };
+    }
+    case "google_drive_export": {
+      const args = parsedArgs as ToolArgs["google_drive_export"];
+      const data = await exportFile(
+        args.fileId,
+        args.format,
+        args.maxChars ?? 20_000,
+      );
+      return {
+        ok: true,
+        summary: `${args.format} export · ${data.bytes} bytes${data.truncated ? " · 잘림" : ""}`,
         data,
       };
     }

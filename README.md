@@ -1,6 +1,6 @@
 # 간편 브라우저 도우미 (Simple Browser Plugin)
 
-Chrome Side Panel에 탑재되는 Gemini 기반 채팅 에이전트입니다. 현재 탭의 페이지를 이해하고, 사용자의 자연어 요청을 ReAct 패턴으로 해석해 번역·폼 채우기·이미지 다운로드·링크 클릭 등 실제 동작을 수행합니다.
+Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다. 현재 탭의 페이지를 이해하고, 사용자의 자연어 요청을 ReAct 패턴으로 해석해 번역·폼 채우기·이미지 다운로드·링크 클릭 등 실제 동작을 수행합니다.
 
 ## 주요 기능
 
@@ -14,9 +14,10 @@ Chrome Side Panel에 탑재되는 Gemini 기반 채팅 에이전트입니다. �
   - `find_clickables` / `click_element` — 링크·버튼 탐색·클릭 (승인 카드)
   - `query_dom` — CSS 선택자 기반 DOM 조회
 - **민감 작업 승인 UI** — 폼 입력·다운로드·클릭 같은 페이지 상태 변경은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
-- **Gemini 3 계열 모델 지원** — Flash(기본) / Pro / Flash Lite preview 선택 가능, `thinkingConfig` 활성화로 모델의 사고 과정을 실시간 스트리밍
+- **OpenRouter 모델 지원** — `provider/model` 형식의 모델 ID를 직접 선택하며, reasoning과 tool calling 결과를 실시간 스트리밍
+- **고속 페이지 번역 경로** — 처리량 우선 provider routing, 대형 배치·중복 제거·메모리 캐시 적용
 - **Shadow DOM + 동일 출처 iframe 커버리지** — 모든 툴이 shadow root와 iframe 내부까지 순회
-- **PDF 네이티브 이해** — 현재 탭이 PDF면 자동으로 문서를 내려받아 Gemini의 inlineData로 붙여 내용 기반 질의응답 가능 (최대 20MB)
+- **PDF 이해** — 현재 탭이 PDF면 자동으로 내려받아 OpenRouter의 PDF file input으로 붙여 내용 기반 질의응답 가능 (최대 20MB)
 - **디버그 타임라인** — 사이드 패널에서 🐞 버튼으로 BG·content·panel 이벤트를 실시간 추적, 복사 버튼으로 공유 가능
 
 ## 설치
@@ -28,7 +29,7 @@ Chrome Side Panel에 탑재되는 Gemini 기반 채팅 에이전트입니다. �
    ```
 2. Chrome에서 `chrome://extensions` 열기 → 개발자 모드 활성화
 3. "압축해제된 확장 프로그램 로드" 클릭 → `dist/` 폴더 선택
-4. 최초 실행 시 설정(⚙)에서 [Google AI Studio](https://aistudio.google.com/)에서 발급한 Gemini API 키 입력 후 저장
+4. 최초 실행 시 설정(⚙)에서 [OpenRouter Keys](https://openrouter.ai/keys)에서 발급한 API 키와 사용할 모델 ID 입력 후 저장
 
 ## 사용 예시
 
@@ -65,8 +66,8 @@ gh pr create --base main --title "..." --body "..."
 ```
 [Side Panel React UI] ⇄ long-lived port ⇄ [Background Service Worker] ⇄ tabs.sendMessage ⇄ [Content Script]
                                                     │
-                                                    ├── Gemini SDK (@google/genai)
-                                                    ├── ReAct stream loop (thoughtSignature 보존)
+                                                    ├── OpenRouter Chat Completions API
+                                                    ├── ReAct stream loop (reasoning_details 보존)
                                                     ├── Tool dispatcher (zod 인자 검증)
                                                     └── webNavigation 통합 (settle 대기)
 ```
@@ -80,14 +81,14 @@ gh pr create --base main --title "..." --body "..."
 
 ## 보안 / 프라이버시
 
-- API 키는 `chrome.storage.local`에 평문 저장 (외부 전송 없음; v1 트레이드오프)
+- OpenRouter API 키는 `chrome.storage.local`에 평문 저장 (OpenRouter API 호출에만 사용; v1 트레이드오프)
 - 키는 BG 서비스 워커에서만 읽히며 content script나 페이지 DOM에 전달되지 않음
 - 민감 툴 실행 전 사용자 승인 필수
 - 다운로드 URL은 `http(s):`만 허용, `javascript:` / 제어문자 차단
 
 ## 스택
 
-Vite · TypeScript · React 18 · zustand · zod · `@google/genai` · `@crxjs/vite-plugin`
+Vite · TypeScript · React 18 · zustand · zod · OpenRouter API · `@crxjs/vite-plugin`
 
 ## 라이선스
 

@@ -1,4 +1,4 @@
-const ALARM_NAME = "gemini-heartbeat";
+const ALARM_NAME = "openrouter-heartbeat";
 let refCount = 0;
 
 chrome.alarms.onAlarm.addListener((alarm) => {
