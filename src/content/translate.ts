@@ -2,15 +2,20 @@ import { describeRoot, getAccessibleRoots, type Root } from "./docs";
 
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE", "TEMPLATE"]);
 const MAX_NODES_PER_PAGE = 2000;
-const BATCH_NODE_LIMIT = 40;
-const BATCH_CHAR_LIMIT = 1800;
+const BATCH_NODE_LIMIT = 60;
+const BATCH_CHAR_LIMIT = 2000;
+const INITIAL_CONCURRENCY = 6;
+const OBSERVER_FLUSH_MS = 300;
+const BISECT_MAX_DEPTH = 6;
 
 interface PendingNode {
   node: Text;
   original: string;
 }
 
-const translatedNodes = new WeakSet<Text>();
+// node → 마지막으로 우리가 적용한 텍스트.
+// "이미 번역됨" 표시 + characterData 옵저버의 self-write 감지용.
+const translatedNodes = new WeakMap<Text, string>();
 
 function isMeaningfulText(s: string): boolean {
   const t = s.trim();
@@ -28,10 +33,30 @@ function isVisible(el: Element | null): boolean {
   return true;
 }
 
+function isInViewport(node: Text): boolean {
+  const el = node.parentElement;
+  if (!el) return false;
+  const win = el.ownerDocument.defaultView ?? window;
+  const rect = el.getBoundingClientRect();
+  return (
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.bottom >= 0 &&
+    rect.right >= 0 &&
+    rect.top <= win.innerHeight &&
+    rect.left <= win.innerWidth
+  );
+}
+
 function ownerDocOf(root: Node): Document {
   if (root.nodeType === Node.DOCUMENT_NODE) return root as Document;
   if (root instanceof ShadowRoot) return root.ownerDocument;
   return (root as Element).ownerDocument;
+}
+
+function isAlreadyTranslated(node: Text): boolean {
+  const applied = translatedNodes.get(node);
+  return applied !== undefined && applied === node.data;
 }
 
 function collectTextNodes(root: Node): PendingNode[] {
@@ -40,7 +65,7 @@ function collectTextNodes(root: Node): PendingNode[] {
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) => {
       const text = node as Text;
-      if (translatedNodes.has(text)) return NodeFilter.FILTER_REJECT;
+      if (isAlreadyTranslated(text)) return NodeFilter.FILTER_REJECT;
       const parent = text.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
       if (SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
@@ -106,68 +131,136 @@ async function runConcurrent<T, R>(
   return results;
 }
 
-let observer: MutationObserver | null = null;
-let activeTargetLang: string | null = null;
-
 function applyTranslation(batch: PendingNode[], translated: string[]): number {
   let swapped = 0;
   batch.forEach((p, i) => {
     const t = translated[i];
-    if (typeof t !== "string" || !t) return;
-    translatedNodes.add(p.node);
-    if (t === p.original) return;
+    if (typeof t !== "string") return;
+    // 빈 응답: 원문 유지하되 "처리 완료"로 마킹해야 재큐잉/무한 재시도를 막음.
+    if (!t) {
+      translatedNodes.set(p.node, p.node.data);
+      return;
+    }
+    if (t === p.original) {
+      translatedNodes.set(p.node, p.node.data);
+      return;
+    }
+    // WeakMap을 write 이전에 갱신해야 observer가 self-write를 판별할 수 있음.
+    translatedNodes.set(p.node, t);
     p.node.data = t;
     swapped += 1;
   });
   return swapped;
 }
 
+// 배치가 실패하면 반으로 쪼개서 재시도.
+// 하나의 나쁜 응답(길이 불일치, 파싱 실패, 거대한 항목 하나)으로 큰 배치가
+// 통째로 유실되는 걸 막는 게 목적.
+async function translateBatchWithRetry(
+  batch: PendingNode[],
+  targetLang: string,
+  depth = 0,
+): Promise<number> {
+  if (!batch.length) return 0;
+  const texts = batch.map((p) => p.original);
+  try {
+    const translated = await requestTranslation(texts, targetLang);
+    return applyTranslation(batch, translated);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const responseShapeError = /JSON 파싱|응답 길이 불일치/.test(message);
+    if (!responseShapeError) throw err;
+    if (batch.length > 1 && depth < BISECT_MAX_DEPTH) {
+      const mid = Math.floor(batch.length / 2);
+      const [a, b] = await Promise.all([
+        translateBatchWithRetry(batch.slice(0, mid), targetLang, depth + 1),
+        translateBatchWithRetry(batch.slice(mid), targetLang, depth + 1),
+      ]);
+      return a + b;
+    }
+    console.warn(
+      "[translate batch fail]",
+      err,
+      batch.map((p) => p.original.slice(0, 40)),
+    );
+    return 0;
+  }
+}
+
+let observers: MutationObserver[] = [];
+let activeTargetLang: string | null = null;
+
 function scheduleObserver(targetLang: string): void {
-  if (observer) observer.disconnect();
+  for (const obs of observers) obs.disconnect();
+  observers = [];
   activeTargetLang = targetLang;
   let queue: PendingNode[] = [];
+  let queuedNodes = new WeakSet<Text>();
   let timer: number | null = null;
 
   const flush = async () => {
     timer = null;
     if (!queue.length || activeTargetLang !== targetLang) return;
-    const pending = queue;
+    // flush 시점에 이미 번역된 노드는 제외 (중복 enqueue 방어).
+    const pending = queue.filter((p) => !isAlreadyTranslated(p.node));
     queue = [];
+    queuedNodes = new WeakSet<Text>();
+    if (!pending.length) return;
     const batches = batchNodes(pending);
     try {
-      await runConcurrent(batches, 2, async (batch) => {
-        const texts = batch.map((p) => p.original);
-        const translated = await requestTranslation(texts, targetLang);
-        applyTranslation(batch, translated);
-      });
+      await runConcurrent(batches, 2, (batch) => translateBatchWithRetry(batch, targetLang));
     } catch (err) {
       console.warn("[translate observer]", err);
     }
   };
 
-  observer = new MutationObserver((mutations) => {
+  const schedule = () => {
+    if (timer === null && queue.length) timer = window.setTimeout(flush, OBSERVER_FLUSH_MS);
+  };
+
+  const enqueueText = (node: Text) => {
+    if (isAlreadyTranslated(node) || queuedNodes.has(node)) return;
+    const parent = node.parentElement;
+    if (!parent || SKIP_TAGS.has(parent.tagName)) return;
+    if (parent.closest("[aria-hidden='true']")) return;
+    if (!isMeaningfulText(node.data)) return;
+    queuedNodes.add(node);
+    queue.push({ node, original: node.data });
+  };
+
+  const handleMutations = (mutations: MutationRecord[]) => {
     for (const m of mutations) {
+      if (m.type === "characterData") {
+        const target = m.target as Text;
+        const applied = translatedNodes.get(target);
+        // 우리가 방금 쓴 값이면 무시 (무한 루프 방지).
+        if (applied !== undefined && applied === target.data) continue;
+        // 페이지 쪽에서 텍스트를 바꿨으면 번역 상태를 무효화하고 재큐잉.
+        translatedNodes.delete(target);
+        enqueueText(target);
+        continue;
+      }
       m.addedNodes.forEach((added) => {
         if (added.nodeType === Node.TEXT_NODE) {
-          const parent = added.parentElement;
-          if (parent && !SKIP_TAGS.has(parent.tagName)) {
-            const text = (added as Text).data;
-            if (isMeaningfulText(text)) {
-              queue.push({ node: added as Text, original: text });
-            }
-          }
+          enqueueText(added as Text);
         } else if (added.nodeType === Node.ELEMENT_NODE) {
           const fresh = collectTextNodes(added as Element);
-          queue.push(...fresh);
+          fresh.forEach((item) => enqueueText(item.node));
         }
       });
     }
-    if (queue.length && timer === null) {
-      timer = window.setTimeout(flush, 300);
-    }
-  });
+    schedule();
+  };
 
-  observer.observe(document.body, { childList: true, subtree: true, characterData: false });
+  // 초기 수집이 훑은 모든 루트(top doc + iframe docs + shadow roots)에 옵저버 부착.
+  // 예전엔 document.body 하나만 감시해서 iframe/shadow 내부 변경을 놓쳤음.
+  for (const root of getAccessibleRoots()) {
+    const target = root instanceof ShadowRoot ? root : root.body;
+    if (!target) continue;
+    const obs = new MutationObserver(handleMutations);
+    obs.observe(target, { childList: true, subtree: true, characterData: true });
+    observers.push(obs);
+  }
 }
 
 function rootScanTarget(root: Root): Node | null {
@@ -175,7 +268,16 @@ function rootScanTarget(root: Root): Node | null {
   return root.body ?? null;
 }
 
-export async function translatePage(args: { targetLang: string; scope?: "visible" | "article" }): Promise<{ translatedNodes: number; perRoot: Array<{ name: string; collected: number }>; totalCollected: number }> {
+export async function translatePage(args: {
+  targetLang: string;
+  scope?: "visible" | "article";
+}): Promise<{
+  translatedNodes: number;
+  scheduledNodes: number;
+  inProgress: boolean;
+  perRoot: Array<{ name: string; collected: number }>;
+  totalCollected: number;
+}> {
   const allNodes: PendingNode[] = [];
   const perRoot: Array<{ name: string; collected: number }> = [];
   for (const root of getAccessibleRoots()) {
@@ -190,20 +292,40 @@ export async function translatePage(args: { targetLang: string; scope?: "visible
     perRoot.push({ name: describeRoot(root), collected: added });
     if (allNodes.length >= MAX_NODES_PER_PAGE) break;
   }
-  const nodes = allNodes.slice(0, MAX_NODES_PER_PAGE);
+  const nodes = allNodes
+    .slice(0, MAX_NODES_PER_PAGE)
+    .map((node, index) => ({ node, index, inViewport: isInViewport(node.node) }))
+    .sort((a, b) => Number(b.inViewport) - Number(a.inViewport) || a.index - b.index)
+    .map(({ node }) => node);
   const batches = batchNodes(nodes);
-  let total = 0;
-
-  await runConcurrent(batches, 4, async (batch) => {
-    const texts = batch.map((p) => p.original);
-    try {
-      const translated = await requestTranslation(texts, args.targetLang);
-      total += applyTranslation(batch, translated);
-    } catch (err) {
-      console.warn("[translate batch]", err);
-    }
-  });
-
+  const [firstBatch, ...remainingBatches] = batches;
+  const firstCount = firstBatch
+    ? await translateBatchWithRetry(firstBatch, args.targetLang)
+    : 0;
   scheduleObserver(args.targetLang);
-  return { translatedNodes: total, perRoot, totalCollected: nodes.length };
+  const scheduledNodes = remainingBatches.reduce((sum, batch) => sum + batch.length, 0);
+  if (remainingBatches.length > 0) {
+    void runConcurrent(remainingBatches, INITIAL_CONCURRENCY, (batch) =>
+      translateBatchWithRetry(batch, args.targetLang),
+    )
+      .then((counts) => {
+        const translated = counts.reduce((sum, count) => sum + count, 0);
+        console.info(
+          `[translate background] ${translated}/${scheduledNodes}개 노드 번역 완료`,
+        );
+      })
+      .catch((err: unknown) => {
+        console.warn(
+          "[translate background]",
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+  }
+  return {
+    translatedNodes: firstCount,
+    scheduledNodes,
+    inProgress: scheduledNodes > 0,
+    perRoot,
+    totalCollected: nodes.length,
+  };
 }

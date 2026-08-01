@@ -1,6 +1,12 @@
-import { GoogleGenAI, type Content, type FunctionCall, type Part } from "@google/genai";
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import type { ModelId } from "@/lib/models";
+import {
+  openRouterRequest,
+  readOpenRouterStream,
+  type OpenRouterContentPart,
+  type OpenRouterMessage,
+  type OpenRouterToolCall,
+} from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs } from "./tools/dispatcher";
 import { getSettings, readFlags, setFlag } from "./storage";
@@ -51,6 +57,8 @@ describe_page 결과를 읽는 법:
 일반 규칙:
 - 페이지와 무관한 잡담·일반 번역·개념 질문은 툴 없이 바로 답한다.
 - 한국어 우선. 간결하게. 마크다운을 과도하게 쓰지 않는다.
+- translate_page 결과의 inProgress가 true면 첫 화면 번역이 적용됐고 나머지는 백그라운드에서 진행 중이라는 뜻이다. 성공 직후 get_page_content로 번역 여부를 재검사하지 말고, 사용자에게 번역이 시작됐으며 순차 적용 중이라고 알린다.
+- translate_page가 타임아웃 또는 일부 실패한 뒤 get_page_content에서 대상 언어 텍스트가 보이면, 확장이 완료한 일부 배치일 수 있다. 이를 Medium·브라우저 자동 번역이라고 근거 없이 단정하지 않는다.
 
 Google Workspace 모드:
 - 탭 URL이 docs.google.com/spreadsheets/d/{ID}면 {ID}가 spreadsheetId. URL hash의 gid·range로 현재 시트와 선택 범위도 추출 가능. drive.google.com이면 Drive UI.
@@ -62,7 +70,7 @@ Google Workspace 모드:
 - 공유된 시트/문서에 대해 사용자 권한이 없으면 API가 403을 반환한다. 이 경우 권한 문제임을 간결히 설명한다.
 
 PDF 모드:
-- 사용자 턴에 PDF가 inlineData로 첨부되어 있거나 "[현재 탭: PDF 문서]" 문구가 있으면, 현재 화면은 Chrome의 내장 PDF 뷰어다.
+- 사용자 턴에 PDF 파일이 첨부되어 있거나 "[현재 탭: PDF 문서]" 문구가 있으면, 현재 화면은 Chrome의 내장 PDF 뷰어다.
 - 이 경우 describe_page·find_clickables·fill_form_fields·translate_page 등 페이지 조작 도구는 동작하지 않거나 의미가 없다. 이런 도구를 호출하지 말고, 첨부된 PDF 내용을 직접 읽어 답한다.
 - 사용자가 "번역해줘" 같은 요청을 하면 PDF 본문 텍스트를 한국어로 정리해 답변으로 제공한다 (실제 PDF를 수정할 수 없음).
 - PDF "자동 로드 실패" 메시지가 포함되어 있으면 자동 로드가 불가능한 상태다. 실패 이유를 사용자에게 간결히 설명하고, 오직 이 확장이 실제로 지원하는 대응책만 제시한다. 없는 기능(예: "파일 첨부 버튼/클립 아이콘/이 채팅에 파일 업로드")을 지어내서 안내하면 안 된다.
@@ -77,10 +85,11 @@ PDF 모드:
 - 탭 조작(새 탭 열기/닫기), 스크롤, 셀 병합 같은 툴은 제공되지 않는다. 요청받으면 지원 범위 밖임을 밝힌다.`;
 
 export class ChatAgent {
-  private history: Content[] = [];
+  private history: OpenRouterMessage[] = [];
   private apiKey: string | null = null;
   private model: ModelId | null = null;
   private aborted = false;
+  private activeRequest: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
   private lastAttachedPdfUrl: string | null = null;
 
@@ -88,6 +97,8 @@ export class ChatAgent {
 
   abort(): void {
     this.aborted = true;
+    this.activeRequest?.abort();
+    this.activeRequest = null;
     for (const resolve of this.pendingApprovals.values()) resolve(false);
     this.pendingApprovals.clear();
   }
@@ -114,17 +125,17 @@ export class ChatAgent {
     }
   }
 
-  private async ensureCredentials(): Promise<{ ai: GoogleGenAI; model: ModelId }> {
+  private async ensureCredentials(): Promise<{ apiKey: string; model: ModelId }> {
     const settings = await getSettings();
-    if (!settings.apiKey) {
-      throw new Error("API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.");
+    if (!settings.openRouterApiKey) {
+      throw new Error("OpenRouter API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.");
     }
-    if (this.apiKey !== settings.apiKey || this.model !== settings.model) {
-      this.apiKey = settings.apiKey;
+    if (this.apiKey !== settings.openRouterApiKey || this.model !== settings.model) {
+      this.apiKey = settings.openRouterApiKey;
       this.model = settings.model;
       this.history = [];
     }
-    return { ai: new GoogleGenAI({ apiKey: settings.apiKey }), model: settings.model };
+    return { apiKey: settings.openRouterApiKey, model: settings.model };
   }
 
   private async fetchTabHeader(): Promise<string> {
@@ -162,7 +173,9 @@ export class ChatAgent {
     await setFlag("pdfGuidanceShown", true);
   }
 
-  private async buildUserParts(userText: string): Promise<Part[]> {
+  private async buildUserContent(
+    userText: string,
+  ): Promise<string | OpenRouterContentPart[]> {
     const pdfInfo = await detectPdfAtActiveTab();
 
     if (pdfInfo?.isPdf) {
@@ -170,11 +183,7 @@ export class ChatAgent {
       const alreadyAttached = pdfInfo.url === this.lastAttachedPdfUrl;
       if (alreadyAttached) {
         debugLog("pdf:already_attached", pdfInfo.url);
-        return [
-          {
-            text: `[현재 탭: 첨부된 PDF — ${pdfInfo.url}]\n\n[사용자 요청]\n${userText}`,
-          },
-        ];
+        return `[현재 탭: 첨부된 PDF — ${pdfInfo.url}]\n\n[사용자 요청]\n${userText}`;
       }
       debugLog("pdf:fetch", pdfInfo.url);
       this.send({ kind: "status", text: "PDF 문서 불러오는 중…" });
@@ -184,27 +193,30 @@ export class ChatAgent {
         endFetch(`${Math.round(bytes / 1024)}KB`);
         this.lastAttachedPdfUrl = pdfInfo.url;
         return [
-          { inlineData: { mimeType: "application/pdf", data } },
           {
+            type: "text",
             text: `[현재 탭: PDF 문서 — ${pdfInfo.url}]\n이 대화에서는 페이지 조작 도구(translate_page, find_clickables 등)는 사용할 수 없고, 첨부된 PDF 내용을 직접 읽고 답한다.\n\n[사용자 요청]\n${userText}`,
+          },
+          {
+            type: "file",
+            file: {
+              filename: "current-tab.pdf",
+              file_data: `data:application/pdf;base64,${data}`,
+            },
           },
         ];
       } catch (err) {
         endFetch("fail");
         const msg = err instanceof Error ? err.message : String(err);
         debugLog("pdf:error", msg, "warn");
-        return [
-          {
-            text: `[현재 탭: PDF ${pdfInfo.url} — 자동 로드 실패: ${msg}]\n\n[사용자 요청]\n${userText}`,
-          },
-        ];
+        return `[현재 탭: PDF ${pdfInfo.url} — 자동 로드 실패: ${msg}]\n\n[사용자 요청]\n${userText}`;
       }
     }
 
     // Normal web page
     const header = await this.fetchTabHeader();
     const composed = header ? `${header}\n\n[사용자 요청]\n${userText}` : userText;
-    return [{ text: composed }];
+    return composed;
   }
 
   async sendUserTurn(userText: string): Promise<void> {
@@ -212,13 +224,13 @@ export class ChatAgent {
     beginKeepalive();
     const endTurn = timeSpan("turn");
     try {
-      const { ai, model } = await this.ensureCredentials();
+      const { apiKey, model } = await this.ensureCredentials();
       debugLog("turn:model", model);
 
-      const userParts = await this.buildUserParts(userText);
-      this.history.push({ role: "user", parts: userParts });
+      const userContent = await this.buildUserContent(userText);
+      this.history.push({ role: "user", content: userContent });
 
-      await this.streamLoop(ai, model);
+      await this.streamLoop(apiKey, model);
       endTurn("ok");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -230,131 +242,142 @@ export class ChatAgent {
     }
   }
 
-  private async streamLoop(ai: GoogleGenAI, model: ModelId): Promise<void> {
+  private async streamLoop(apiKey: string, model: ModelId): Promise<void> {
     const { maxToolHops } = await getSettings();
     for (let hop = 0; hop < maxToolHops; hop += 1) {
       if (this.aborted) return;
       debugLog("hop:start", `#${hop + 1}/${maxToolHops}`);
 
       const CONNECT_TIMEOUT_MS = 20_000;
-      const streamPromise = ai.models.generateContentStream({
-        model,
-        contents: this.history,
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          tools: [{ functionDeclarations }],
-          thinkingConfig: {
-            includeThoughts: true,
-            thinkingBudget: -1,
+      const INACTIVITY_MS = 60_000;
+      const controller = new AbortController();
+      this.activeRequest = controller;
+      let connectTimedOut = false;
+      const connectTimer = setTimeout(() => {
+        connectTimedOut = true;
+        controller.abort();
+      }, CONNECT_TIMEOUT_MS);
+      let stream: Response;
+      try {
+        stream = await openRouterRequest(
+          apiKey,
+          {
+            model,
+            messages: [
+              { role: "system", content: SYSTEM_PROMPT },
+              ...this.history,
+            ],
+            tools: functionDeclarations.map((fn) => ({
+              type: "function",
+              function: fn,
+            })),
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            reasoning: { enabled: true },
+            stream: true,
           },
-        },
-      });
-      const stream = await Promise.race([
-        streamPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `Gemini 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
-                ),
-              ),
-            CONNECT_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+          controller.signal,
+        );
+      } catch (err) {
+        if (connectTimedOut) {
+          throw new Error(
+            `OpenRouter 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
+          );
+        }
+        if (this.aborted) return;
+        throw err;
+      } finally {
+        clearTimeout(connectTimer);
+      }
 
       debugLog("stream:connected");
-      const aggregatedParts: Part[] = [];
-      const functionCalls: FunctionCall[] = [];
+      let assistantText = "";
+      let assistantReasoning = "";
+      const reasoningDetails: unknown[] = [];
+      const functionCallParts = new Map<number, OpenRouterToolCall>();
       let chunkCount = 0;
       let textChars = 0;
       let thoughtChars = 0;
       let finishReason: string | undefined;
-
-      const INACTIVITY_MS = 60_000;
-      const iter = stream[Symbol.asyncIterator]();
-
-      while (true) {
-        if (this.aborted) return;
-
-        const timeoutMarker = Symbol("inactivity");
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
-          timer = setTimeout(() => resolve(timeoutMarker), INACTIVITY_MS);
-        });
-
-        let step: IteratorResult<unknown> | typeof timeoutMarker;
-        try {
-          step = await Promise.race([iter.next(), timeoutPromise]);
-        } finally {
-          if (timer !== undefined) clearTimeout(timer);
-        }
-
-        if (step === timeoutMarker) {
-          try {
-            await iter.return?.(undefined);
-          } catch {
-            /* ignore */
-          }
-          throw new Error(
-            `Gemini 응답이 ${Math.round(INACTIVITY_MS / 1000)}초 동안 오지 않아 중단했습니다. 네트워크 상태나 Gemini 서버 상태를 확인하고 다시 시도해 주세요.`,
-          );
-        }
-
-        const result = step as IteratorResult<Awaited<ReturnType<typeof iter.next>>["value"]>;
-        if (result.done) break;
-        const chunk = result.value as {
-          candidates?: Array<{ content?: { parts?: Part[] }; finishReason?: string }>;
-        };
-
-        chunkCount += 1;
-        const content = chunk.candidates?.[0]?.content;
-        if (content?.parts) {
-          for (const part of content.parts) {
-            aggregatedParts.push(part);
-            if (part.functionCall) {
-              functionCalls.push(part.functionCall as FunctionCall);
-              const argsStr = (() => {
-                try {
-                  const s = JSON.stringify(part.functionCall.args ?? {});
-                  return s.length > 200 ? s.slice(0, 197) + "…" : s;
-                } catch {
-                  return "<unserializable>";
-                }
-              })();
-              debugLog(
-                "stream:functionCall",
-                `${part.functionCall.name ?? "?"} ${argsStr}`,
-              );
-              this.send({
-                kind: "status",
-                text: `도구 호출: ${part.functionCall.name}`,
-              });
+      try {
+        await readOpenRouterStream(
+          stream,
+          (chunk) => {
+            chunkCount += 1;
+            const choice = chunk.choices?.[0];
+            const delta = choice?.delta;
+            if (typeof delta?.content === "string" && delta.content) {
+              assistantText += delta.content;
+              textChars += delta.content.length;
+              this.send({ kind: "assistant_chunk", text: delta.content });
             }
-            if (typeof part.text === "string" && part.text.length > 0) {
-              if (part.thought) {
-                thoughtChars += part.text.length;
-                this.send({ kind: "thought_chunk", text: part.text });
-              } else {
-                textChars += part.text.length;
-                this.send({ kind: "assistant_chunk", text: part.text });
+            if (typeof delta?.reasoning === "string" && delta.reasoning) {
+              assistantReasoning += delta.reasoning;
+              if (!delta.reasoning_details?.length) {
+                thoughtChars += delta.reasoning.length;
+                this.send({ kind: "thought_chunk", text: delta.reasoning });
               }
             }
-          }
-        }
-
-        const fr = chunk.candidates?.[0]?.finishReason;
-        if (fr) finishReason = String(fr);
+            for (const detail of delta?.reasoning_details ?? []) {
+              reasoningDetails.push(detail);
+              if (!detail || typeof detail !== "object") continue;
+              const item = detail as { text?: unknown; summary?: unknown };
+              const visible =
+                typeof item.text === "string"
+                  ? item.text
+                  : typeof item.summary === "string"
+                    ? item.summary
+                    : "";
+              if (visible) {
+                thoughtChars += visible.length;
+                this.send({ kind: "thought_chunk", text: visible });
+              }
+            }
+            for (const part of delta?.tool_calls ?? []) {
+              const current = functionCallParts.get(part.index) ?? {
+                id: "",
+                type: "function" as const,
+                function: { name: "", arguments: "" },
+              };
+              if (part.id) current.id += part.id;
+              if (part.function?.name) current.function.name += part.function.name;
+              if (part.function?.arguments) {
+                current.function.arguments += part.function.arguments;
+              }
+              functionCallParts.set(part.index, current);
+            }
+            if (choice?.finish_reason) finishReason = choice.finish_reason;
+          },
+          INACTIVITY_MS,
+        );
+      } catch (err) {
+        controller.abort();
+        if (this.aborted) return;
+        throw err;
+      } finally {
+        if (this.activeRequest === controller) this.activeRequest = null;
       }
+      const functionCalls = [...functionCallParts.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([, call]) => ({
+          ...call,
+          id: call.id || crypto.randomUUID(),
+        }));
       debugLog(
         "stream:done",
         `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
       );
 
-      if (aggregatedParts.length > 0) {
-        this.history.push({ role: "model", parts: aggregatedParts });
-      }
+      this.history.push({
+        role: "assistant",
+        content: assistantText || null,
+        ...(functionCalls.length ? { tool_calls: functionCalls } : {}),
+        ...(reasoningDetails.length
+          ? { reasoning_details: reasoningDetails }
+          : assistantReasoning
+            ? { reasoning: assistantReasoning }
+            : {}),
+      });
 
       if (functionCalls.length === 0) {
         this.send({ kind: "status", text: null });
@@ -362,19 +385,21 @@ export class ChatAgent {
         return;
       }
 
-      const responseParts: Part[] = [];
       for (const fc of functionCalls) {
-        const toolName = fc.name as ToolName;
-        const callId = crypto.randomUUID();
+        const toolName = fc.function.name as ToolName;
+        const callId = fc.id;
 
         let parsedArgs: unknown;
         try {
-          parsedArgs = parseToolArgs(toolName, fc.args as unknown);
+          parsedArgs = parseToolArgs(toolName, JSON.parse(fc.function.arguments || "{}"));
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-          responseParts.push({
-            functionResponse: { name: toolName, response: { error: msg } },
+          this.history.push({
+            role: "tool",
+            tool_call_id: callId,
+            name: toolName,
+            content: JSON.stringify({ error: msg }),
           });
           continue;
         }
@@ -407,11 +432,11 @@ export class ChatAgent {
               ok: false,
               summary: "사용자가 취소했습니다.",
             });
-            responseParts.push({
-              functionResponse: {
-                name: toolName,
-                response: { error: "user_cancelled" },
-              },
+            this.history.push({
+              role: "tool",
+              tool_call_id: callId,
+              name: toolName,
+              content: JSON.stringify({ error: "user_cancelled" }),
             });
             continue;
           }
@@ -430,22 +455,23 @@ export class ChatAgent {
             ok: result.ok,
             summary: result.summary,
           });
-          responseParts.push({
-            functionResponse: {
-              name: toolName,
-              response: { result: result.data },
-            },
+          this.history.push({
+            role: "tool",
+            tool_call_id: callId,
+            name: toolName,
+            content: JSON.stringify({ result: result.data }),
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-          responseParts.push({
-            functionResponse: { name: toolName, response: { error: msg } },
+          this.history.push({
+            role: "tool",
+            tool_call_id: callId,
+            name: toolName,
+            content: JSON.stringify({ error: msg }),
           });
         }
       }
-
-      this.history.push({ role: "user", parts: responseParts });
     }
 
     this.send({

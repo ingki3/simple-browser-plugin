@@ -1,4 +1,4 @@
-import { DEFAULT_MODEL, isModelId } from "@/lib/models";
+import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
   FLAGS_KEY,
@@ -10,7 +10,7 @@ import {
 } from "@/lib/messages";
 
 export const DEFAULT_SETTINGS: Settings = {
-  apiKey: "",
+  openRouterApiKey: "",
   model: DEFAULT_MODEL,
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
@@ -26,8 +26,9 @@ export async function readSettings(): Promise<Settings> {
   const obj = await chrome.storage.local.get(SETTINGS_KEY);
   const raw = (obj[SETTINGS_KEY] ?? {}) as Partial<Settings>;
   return {
-    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
-    model: isModelId(raw.model) ? raw.model : DEFAULT_MODEL,
+    openRouterApiKey:
+      typeof raw.openRouterApiKey === "string" ? raw.openRouterApiKey : "",
+    model: normalizeModelId(raw.model),
     translationTargetLang:
       typeof raw.translationTargetLang === "string" && raw.translationTargetLang.length >= 2
         ? raw.translationTargetLang

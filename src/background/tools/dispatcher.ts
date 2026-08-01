@@ -144,6 +144,8 @@ export async function executeTool(
     case "translate_page": {
       const data = await callContentTool<{
         translatedNodes: number;
+        scheduledNodes?: number;
+        inProgress?: boolean;
         perRoot?: Array<{ name: string; collected: number }>;
         totalCollected?: number;
       }>(toolName, parsedArgs, callId);
@@ -159,9 +161,12 @@ export async function executeTool(
         typeof data.totalCollected === "number" && data.totalCollected !== data.translatedNodes
           ? ` (수집 ${data.totalCollected})`
           : "";
+      const progressSummary = data.inProgress
+        ? `첫 배치 ${data.translatedNodes}개 적용, 나머지 ${data.scheduledNodes ?? 0}개 백그라운드 번역 중`
+        : `페이지 내 ${data.translatedNodes}개 텍스트 노드 번역 완료`;
       return {
         ok: true,
-        summary: `페이지 내 ${data.translatedNodes}개 텍스트 노드 번역 완료${collectedHint}.${breakdown}`,
+        summary: `${progressSummary}${collectedHint}.${breakdown}`,
         data,
       };
     }

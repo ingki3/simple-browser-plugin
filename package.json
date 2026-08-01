@@ -2,7 +2,7 @@
   "name": "simple-browser-plugin",
   "version": "0.1.0",
   "private": true,
-  "description": "Chrome Side Panel LLM 채팅 에이전트 (Gemini)",
+  "description": "OpenRouter 기반 Chrome Side Panel LLM 채팅 에이전트",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,9 +11,10 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^1.50.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "zod": "^3.23.8",
     "zustand": "^4.5.5"
   },

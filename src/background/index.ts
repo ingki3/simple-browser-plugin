@@ -1,5 +1,5 @@
 import { PORT_NAME, type PanelToBg } from "@/lib/messages";
-import { ChatAgent } from "./gemini";
+import { ChatAgent } from "./openrouter";
 import { invalidateSettingsCache } from "./storage";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";

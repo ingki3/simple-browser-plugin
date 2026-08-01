@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MODEL_IDS, MODEL_LABELS, type ModelId } from "@/lib/models";
+import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
@@ -180,9 +180,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
             <div className="key-row">
               <input
                 type={showKey ? "text" : "password"}
-                value={draft.apiKey}
-                onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-                placeholder="AIza..."
+                value={draft.openRouterApiKey}
+                onChange={(e) =>
+                  setDraft({ ...draft, openRouterApiKey: e.target.value })
+                }
+                placeholder="sk-or-v1-..."
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -195,16 +197,22 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
           <label className="field">
             <span className="field-label">{KO.modelLabel}</span>
-            <select
+            <input
+              type="text"
+              list="openrouter-models"
               value={draft.model}
-              onChange={(e) => setDraft({ ...draft, model: e.target.value as ModelId })}
-            >
+              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+              placeholder="provider/model"
+              spellCheck={false}
+            />
+            <datalist id="openrouter-models">
               {MODEL_IDS.map((id) => (
-                <option key={id} value={id}>
-                  {MODEL_LABELS[id]}
-                </option>
+                <option key={id} value={id} label={MODEL_LABELS[id]} />
               ))}
-            </select>
+            </datalist>
+            <span className="field-help">
+              OpenRouter 모델 ID를 입력합니다. 모델은 tool calling을 지원해야 합니다.
+            </span>
           </label>
 
           <label className="field">

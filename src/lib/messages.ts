@@ -138,7 +138,7 @@ export type RuntimeMsg =
   | { kind: "translate_text_batch"; texts: string[]; targetLang: string };
 
 export interface Settings {
-  apiKey: string;
+  openRouterApiKey: string;
   model: ModelId;
   translationTargetLang: string;
   downloadFolderPrefix: string;

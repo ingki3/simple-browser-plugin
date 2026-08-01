@@ -6,10 +6,10 @@ import {
   SETTINGS_KEY,
   type Settings,
 } from "@/lib/messages";
-import { DEFAULT_MODEL, isModelId } from "@/lib/models";
+import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
 
 const DEFAULTS: Settings = {
-  apiKey: "",
+  openRouterApiKey: "",
   model: DEFAULT_MODEL,
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
@@ -23,8 +23,11 @@ function normalizeMaxHops(v: unknown): number {
 
 function normalize(raw: Partial<Settings> | undefined): Settings {
   return {
-    apiKey: typeof raw?.apiKey === "string" ? raw.apiKey : DEFAULTS.apiKey,
-    model: isModelId(raw?.model) ? raw.model : DEFAULTS.model,
+    openRouterApiKey:
+      typeof raw?.openRouterApiKey === "string"
+        ? raw.openRouterApiKey
+        : DEFAULTS.openRouterApiKey,
+    model: normalizeModelId(raw?.model),
     translationTargetLang:
       typeof raw?.translationTargetLang === "string" && raw.translationTargetLang.length >= 2
         ? raw.translationTargetLang
