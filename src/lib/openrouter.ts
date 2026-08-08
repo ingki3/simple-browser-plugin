@@ -99,13 +99,14 @@ export async function readOpenRouterStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  const processEvent = (event: string) => {
+  const processEvent = (event: string): boolean => {
     const data = event
       .split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n");
-    if (!data || data === "[DONE]") return;
+    if (!data) return false;
+    if (data === "[DONE]") return true;
     let parsed: OpenRouterStreamChunk;
     try {
       parsed = JSON.parse(data) as OpenRouterStreamChunk;
@@ -116,6 +117,7 @@ export async function readOpenRouterStream(
       throw new Error(parsed.error.message ?? "OpenRouter 스트리밍 오류");
     }
     onChunk(parsed);
+    return false;
   };
 
   while (true) {
@@ -136,7 +138,12 @@ export async function readOpenRouterStream(
     buffer += decoder.decode(result.value, { stream: true });
     const events = buffer.split(/\r?\n\r?\n/);
     buffer = events.pop() ?? "";
-    for (const event of events) processEvent(event);
+    for (const event of events) {
+      if (processEvent(event)) {
+        await reader.cancel().catch(() => undefined);
+        return;
+      }
+    }
   }
 
   buffer += decoder.decode();

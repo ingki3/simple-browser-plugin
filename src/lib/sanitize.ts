@@ -1,14 +1,31 @@
 const ALLOWED_SCHEMES = new Set(["http:", "https:"]);
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
-export function isDownloadSafeUrl(raw: string): boolean {
+function parseSafeHttpUrl(raw: string): URL | null {
+  if (CONTROL_CHARACTERS.test(raw)) return null;
   try {
     const url = new URL(raw);
-    if (!ALLOWED_SCHEMES.has(url.protocol)) return false;
-    if (/[\u0000-\u001f\u007f]/.test(raw)) return false;
-    return true;
+    return ALLOWED_SCHEMES.has(url.protocol) ? url : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function isDownloadSafeUrl(raw: string): boolean {
+  return parseSafeHttpUrl(raw) !== null;
+}
+
+export function isNavigationSafeUrl(raw: string): boolean {
+  const url = parseSafeHttpUrl(raw);
+  return url !== null && url.username === "" && url.password === "";
+}
+
+export function normalizeNavigationUrl(raw: string): string {
+  const url = parseSafeHttpUrl(raw);
+  if (!url || url.username || url.password) {
+    throw new Error("이동 주소는 사용자 정보가 없는 유효한 http/https URL이어야 합니다.");
+  }
+  return url.href;
 }
 
 export function sanitizeDownloadUrls(urls: string[]): string[] {

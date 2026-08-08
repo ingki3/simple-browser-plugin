@@ -3,6 +3,7 @@ import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
+  MAX_SYSTEM_PROMPT_LENGTH,
   MIN_MAX_TOOL_HOPS,
 } from "@/lib/messages";
 import { useSettings } from "../hooks/useSettings";
@@ -193,6 +194,18 @@ export function SettingsDrawer({ open, onClose }: Props) {
               </button>
             </div>
             <span className="field-help">{KO.apiKeyHelp}</span>
+          </label>
+
+          <label className="field">
+            <span className="field-label">{KO.systemPromptLabel}</span>
+            <textarea
+              value={draft.systemPrompt}
+              onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
+              placeholder="예: 모든 출력은 한글로 작성해줘."
+              maxLength={MAX_SYSTEM_PROMPT_LENGTH}
+              rows={5}
+            />
+            <span className="field-help">{KO.systemPromptHelp}</span>
           </label>
 
           <label className="field">

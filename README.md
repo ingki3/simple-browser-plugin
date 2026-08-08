@@ -1,6 +1,6 @@
 # 간편 브라우저 도우미 (Simple Browser Plugin)
 
-Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다. 현재 탭의 페이지를 이해하고, 사용자의 자연어 요청을 ReAct 패턴으로 해석해 번역·폼 채우기·이미지 다운로드·링크 클릭 등 실제 동작을 수행합니다.
+Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다. 현재 탭의 페이지를 이해하고, 사용자의 자연어 요청을 ReAct 패턴으로 해석해 사이트 이동·번역·폼 채우기·이미지 다운로드·링크 클릭 등 실제 동작을 수행합니다.
 
 ## 주요 기능
 
@@ -12,9 +12,12 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `find_form_fields` / `fill_form_fields` — 입력 필드 탐색·자동 입력 (승인 카드)
   - `list_page_images` / `download_images` — 이미지 URL 수집·일괄 저장 (승인 카드)
   - `find_clickables` / `click_element` — 링크·버튼 탐색·클릭 (승인 카드)
+  - `navigate_to_url` — 현재 탭을 지정한 URL이나 사이트 홈으로 직접 이동 (승인 카드)
   - `query_dom` — CSS 선택자 기반 DOM 조회
-- **민감 작업 승인 UI** — 폼 입력·다운로드·클릭 같은 페이지 상태 변경은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
+- **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
 - **OpenRouter 모델 지원** — `provider/model` 형식의 모델 ID를 직접 선택하며, reasoning과 tool calling 결과를 실시간 스트리밍
+- **사용자 기본 지침** — "모든 출력은 한글로" 같은 시스템 지침을 설정해 모든 대화에 적용
+- **모델별 reasoning 호환성** — Gemini 3 계열의 필수 effort와 gpt-oss 출력 제한·스트림 종료 처리
 - **고속 페이지 번역 경로** — 처리량 우선 provider routing, 대형 배치·중복 제거·메모리 캐시 적용
 - **Shadow DOM + 동일 출처 iframe 커버리지** — 모든 툴이 shadow root와 iframe 내부까지 순회
 - **PDF 이해** — 현재 탭이 PDF면 자동으로 내려받아 OpenRouter의 PDF file input으로 붙여 내용 기반 질의응답 가능 (최대 20MB)
@@ -34,6 +37,7 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
 ## 사용 예시
 
 - "이 페이지 번역해줘"
+- "네이버 홈으로 이동해줘"
 - "빈 입력칸 채워줘. 이름: 홍길동, 이메일: test@example.com"
 - "이미지 전부 다운받아줘"
 - "첫 번째 아티클로 이동해줘"
@@ -77,14 +81,14 @@ gh pr create --base main --title "..." --body "..."
 - **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation` 권한 + `host_permissions: ["<all_urls>"]`
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
-- **webNavigation 기반 settle 대기** — 클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록
+- **webNavigation 기반 settle 대기** — URL 이동·클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록
 
 ## 보안 / 프라이버시
 
 - OpenRouter API 키는 `chrome.storage.local`에 평문 저장 (OpenRouter API 호출에만 사용; v1 트레이드오프)
 - 키는 BG 서비스 워커에서만 읽히며 content script나 페이지 DOM에 전달되지 않음
 - 민감 툴 실행 전 사용자 승인 필수
-- 다운로드 URL은 `http(s):`만 허용, `javascript:` / 제어문자 차단
+- 다운로드·탐색 URL은 `http(s):`만 허용, `javascript:` / 제어문자 차단
 
 ## 스택
 

@@ -29,6 +29,8 @@ async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
       return clickElement(args as { id: string });
     case "download_images":
       throw new Error("download_images는 백그라운드에서 실행해야 합니다.");
+    case "navigate_to_url":
+      throw new Error("navigate_to_url은 백그라운드에서 실행해야 합니다.");
   }
 }
 

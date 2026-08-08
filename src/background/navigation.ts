@@ -1,6 +1,7 @@
 interface PendingNav {
   resolvers: Array<() => void>;
   hardTimer: ReturnType<typeof setTimeout>;
+  started: boolean;
 }
 
 const pending = new Map<number, PendingNav>();
@@ -15,10 +16,14 @@ function resolveTab(tabId: number): void {
 
 chrome.webNavigation.onBeforeNavigate.addListener((details) => {
   if (details.frameId !== 0) return;
-  if (!pending.has(details.tabId)) {
+  const existing = pending.get(details.tabId);
+  if (existing) {
+    existing.started = true;
+  } else {
     pending.set(details.tabId, {
       resolvers: [],
       hardTimer: setTimeout(() => resolveTab(details.tabId), 15_000),
+      started: true,
     });
   }
 });
@@ -44,13 +49,14 @@ export function markOptimisticNavigation(tabId: number): void {
   const entry: PendingNav = {
     resolvers: [],
     hardTimer: setTimeout(() => resolveTab(tabId), 15_000),
+    started: false,
   };
   pending.set(tabId, entry);
   // If no actual navigation begins within 500ms, revoke the optimistic mark so
   // non-navigation clicks don't stall subsequent tool calls.
   setTimeout(() => {
     const current = pending.get(tabId);
-    if (current === entry && current.resolvers.length === 0) {
+    if (current === entry && !current.started && current.resolvers.length === 0) {
       resolveTab(tabId);
     }
   }, 500);

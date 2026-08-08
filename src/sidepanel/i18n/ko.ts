@@ -17,6 +17,8 @@ export const KO = {
   apiKeyShow: "표시",
   apiKeyHide: "숨김",
   modelLabel: "모델",
+  systemPromptLabel: "기본 시스템 지침",
+  systemPromptHelp: "모든 대화에 적용됩니다. 내부 안전 규칙과 도구 사용 규칙은 변경하지 않습니다.",
   translationLangLabel: "번역 대상 언어 (BCP-47)",
   downloadFolderLabel: "다운로드 폴더 접두사",
   maxToolHopsLabel: "도구 호출 순환 한도",

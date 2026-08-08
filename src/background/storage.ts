@@ -4,6 +4,7 @@ import {
   FLAGS_KEY,
   MAX_MAX_TOOL_HOPS,
   MIN_MAX_TOOL_HOPS,
+  MAX_SYSTEM_PROMPT_LENGTH,
   SETTINGS_KEY,
   type Flags,
   type Settings,
@@ -12,6 +13,7 @@ import {
 export const DEFAULT_SETTINGS: Settings = {
   openRouterApiKey: "",
   model: DEFAULT_MODEL,
+  systemPrompt: "",
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
@@ -29,6 +31,10 @@ export async function readSettings(): Promise<Settings> {
     openRouterApiKey:
       typeof raw.openRouterApiKey === "string" ? raw.openRouterApiKey : "",
     model: normalizeModelId(raw.model),
+    systemPrompt:
+      typeof raw.systemPrompt === "string"
+        ? raw.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH)
+        : DEFAULT_SETTINGS.systemPrompt,
     translationTargetLang:
       typeof raw.translationTargetLang === "string" && raw.translationTargetLang.length >= 2
         ? raw.translationTargetLang
@@ -42,7 +48,13 @@ export async function readSettings(): Promise<Settings> {
 }
 
 export async function writeSettings(next: Settings): Promise<void> {
-  await chrome.storage.local.set({ [SETTINGS_KEY]: next });
+  await chrome.storage.local.set({
+    [SETTINGS_KEY]: {
+      ...next,
+      systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
+      maxToolHops: normalizeMaxHops(next.maxToolHops),
+    },
+  });
 }
 
 let cache: Settings | null = null;

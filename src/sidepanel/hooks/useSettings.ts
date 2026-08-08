@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
+  MAX_SYSTEM_PROMPT_LENGTH,
   MIN_MAX_TOOL_HOPS,
   SETTINGS_KEY,
   type Settings,
@@ -11,6 +12,7 @@ import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
 const DEFAULTS: Settings = {
   openRouterApiKey: "",
   model: DEFAULT_MODEL,
+  systemPrompt: "",
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
@@ -28,6 +30,10 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
         ? raw.openRouterApiKey
         : DEFAULTS.openRouterApiKey,
     model: normalizeModelId(raw?.model),
+    systemPrompt:
+      typeof raw?.systemPrompt === "string"
+        ? raw.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH)
+        : DEFAULTS.systemPrompt,
     translationTargetLang:
       typeof raw?.translationTargetLang === "string" && raw.translationTargetLang.length >= 2
         ? raw.translationTargetLang
@@ -62,7 +68,11 @@ export function useSettings() {
   }, []);
 
   const save = useCallback(async (next: Settings) => {
-    await chrome.storage.local.set({ [SETTINGS_KEY]: next });
+    const normalized = {
+      ...next,
+      systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
+    };
+    await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
     await chrome.runtime.sendMessage({ kind: "settings_updated" }).catch(() => {
       /* ignore */
     });

@@ -3,11 +3,13 @@ import {
   DEFAULT_MODEL,
   MODEL_IDS,
   MODEL_LABELS,
+  agentReasoningConfig,
   normalizeModelId,
 } from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
+  MAX_SYSTEM_PROMPT_LENGTH,
   MIN_MAX_TOOL_HOPS,
   SETTINGS_KEY,
   type Settings,
@@ -16,6 +18,7 @@ import {
 const DEFAULTS: Settings = {
   openRouterApiKey: "",
   model: DEFAULT_MODEL,
+  systemPrompt: "",
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
@@ -34,6 +37,10 @@ export function Options() {
       setDraft({
         openRouterApiKey: raw.openRouterApiKey ?? DEFAULTS.openRouterApiKey,
         model: normalizeModelId(raw.model),
+        systemPrompt:
+          typeof raw.systemPrompt === "string"
+            ? raw.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH)
+            : DEFAULTS.systemPrompt,
         translationTargetLang: raw.translationTargetLang ?? DEFAULTS.translationTargetLang,
         downloadFolderPrefix: raw.downloadFolderPrefix ?? DEFAULTS.downloadFolderPrefix,
         maxToolHops:
@@ -47,6 +54,7 @@ export function Options() {
   const save = async () => {
     const normalized: Settings = {
       ...draft,
+      systemPrompt: draft.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
       maxToolHops: Math.min(
         MAX_MAX_TOOL_HOPS,
         Math.max(
@@ -77,6 +85,7 @@ export function Options() {
         body: JSON.stringify({
           model: draft.model,
           messages: [{ role: "user", content: "hi" }],
+          reasoning: agentReasoningConfig(draft.model),
           max_tokens: 5,
         }),
       });
@@ -146,6 +155,20 @@ export function Options() {
         </datalist>
         <span className="field-help">
           OpenRouter 모델 ID를 입력합니다. 에이전트 기능에는 tool calling 지원 모델이 필요합니다.
+        </span>
+      </label>
+
+      <label className="field">
+        <span className="field-label">기본 시스템 지침</span>
+        <textarea
+          value={draft.systemPrompt}
+          onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
+          placeholder="예: 모든 출력은 한글로 작성해줘."
+          maxLength={MAX_SYSTEM_PROMPT_LENGTH}
+          rows={5}
+        />
+        <span className="field-help">
+          모든 대화에 적용됩니다. 내부 안전 규칙과 도구 사용 규칙은 변경하지 않습니다.
         </span>
       </label>
 

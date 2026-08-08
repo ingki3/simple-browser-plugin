@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isNavigationSafeUrl } from "./sanitize";
 
 export const describePageArgs = z.object({}).strict();
 
@@ -51,6 +52,17 @@ export const queryDomArgs = z
     selector: z.string().min(1).max(300),
     attr: z.string().max(100).optional(),
     limit: z.number().int().positive().max(200).optional(),
+  })
+  .strict();
+
+export const navigateToUrlArgs = z
+  .object({
+    url: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2048)
+      .refine(isNavigationSafeUrl, "유효한 http/https URL을 입력해야 합니다."),
   })
   .strict();
 
@@ -139,6 +151,7 @@ export const toolArgsSchemas = {
   list_page_images: listPageImagesArgs,
   download_images: downloadImagesArgs,
   query_dom: queryDomArgs,
+  navigate_to_url: navigateToUrlArgs,
   find_clickables: findClickablesArgs,
   click_element: clickElementArgs,
   google_sheets_list: googleSheetsListArgs,

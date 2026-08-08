@@ -7,6 +7,7 @@ import type {
   ToolName,
 } from "@/lib/messages";
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
+import { normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
 import { callContentTool, getActiveTabId } from "./handlers";
 import { startImageDownloads } from "./downloads";
@@ -67,6 +68,15 @@ export async function buildToolPreview(
       return {
         summary: `페이지 요소를 클릭합니다 (id: ${args.id}).`,
         details: `대상 id: ${args.id}\n\nfind_clickables 결과의 id로 매핑된 요소가 클릭됩니다. 링크면 해당 페이지로 이동합니다.`,
+      };
+    }
+    case "navigate_to_url": {
+      const args = parsedArgs as ToolArgs["navigate_to_url"];
+      const url = normalizeNavigationUrl(args.url);
+      const destination = new URL(url);
+      return {
+        summary: `현재 탭을 ${destination.hostname}(으)로 이동합니다.`,
+        details: url,
       };
     }
     case "google_sheets_write_range": {
@@ -219,6 +229,18 @@ export async function executeTool(
         ok: true,
         summary: `선택자 결과 ${data.length}개.`,
         data,
+      };
+    }
+    case "navigate_to_url": {
+      const args = parsedArgs as ToolArgs["navigate_to_url"];
+      const url = normalizeNavigationUrl(args.url);
+      const tabId = await getActiveTabId();
+      markOptimisticNavigation(tabId);
+      await chrome.tabs.update(tabId, { url });
+      return {
+        ok: true,
+        summary: `현재 탭 이동 시작: ${truncate(url, 100)}`,
+        data: { url },
       };
     }
     case "find_clickables": {
