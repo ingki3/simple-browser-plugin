@@ -1,5 +1,7 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
+import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
+import { agentReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
   readOpenRouterStream,
@@ -18,13 +20,14 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
 
 절대 규칙:
-1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다.
+1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다. 단, 사용자가 현재 페이지와 무관하게 특정 URL이나 사이트 홈으로 이동해 달라고 명시한 경우에는 describe_page 없이 navigate_to_url을 바로 호출한다.
 2. 모든 툴 호출 직전에 짧은 Thought를 텍스트로 먼저 말한다. Thought는 다음을 포함한다:
    (a) 관측 결과에 근거한 현재 페이지의 성격(어떤 종류의 사이트/화면으로 보이는지, 주요 랜드마크는 무엇인지).
    (b) 사용자의 요청이 이 페이지 맥락에서 구체적으로 무엇을 가리키는지.
    (c) 다음에 부를 툴과 그 이유.
+   navigate_to_url을 바로 호출하는 예외에서는 현재 페이지 관측 대신 사용자가 요청한 목적지와 사용할 공식 URL을 밝힌다.
 3. 관측 결과가 예상과 다르거나 후보가 여러 개면 바로 행동하지 말고, Thought에서 이유를 밝힌 뒤 다른 필터/도구로 재관측하거나 사용자에게 되묻는다.
-4. 민감 툴(click_element, fill_form_fields, download_images)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다.
+4. 민감 툴(navigate_to_url, click_element, fill_form_fields, download_images)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다.
 5. 페이지 내용을 지어내지 않는다. 모르면 관측 후 말하거나 "확실하지 않다"고 말한다.
 6. 툴이 ok:false로 실패하거나 에러를 반환하면:
    - 같은 툴을 같은 인자로 재시도하지 않는다.
@@ -46,6 +49,7 @@ describe_page 결과를 읽는 법:
 툴 카탈로그:
 - describe_page: 페이지 관측. 상호작용 전 1차 툴.
 - get_page_content: 본문 텍스트 전체 추출 (요약·질의응답 근거 보강).
+- navigate_to_url(url): 민감. 현재 탭을 신뢰할 수 있는 전체 http/https URL로 직접 이동. 현재 페이지 관측 불필요.
 - find_clickables(query?, region?, onlyViewport?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
 - click_element(id): 민감. id는 반드시 find_clickables에서 얻은 값.
 - find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감).
@@ -56,6 +60,7 @@ describe_page 결과를 읽는 법:
 
 일반 규칙:
 - 페이지와 무관한 잡담·일반 번역·개념 질문은 툴 없이 바로 답한다.
+- 사용자가 "네이버 홈으로 이동해줘"라고 하면 navigate_to_url에 https://www.naver.com/ 을, "구글로 가줘"라고 하면 https://www.google.com/ 을 사용한다. 사용자가 전체 URL을 제공하면 그 주소를 사용한다. 잘 알려진 공식 도메인을 확신할 수 없는 사이트 이름은 유사 도메인을 추측하지 말고 URL을 묻는다.
 - 한국어 우선. 간결하게. 마크다운을 과도하게 쓰지 않는다.
 - translate_page 결과의 inProgress가 true면 첫 화면 번역이 적용됐고 나머지는 백그라운드에서 진행 중이라는 뜻이다. 성공 직후 get_page_content로 번역 여부를 재검사하지 말고, 사용자에게 번역이 시작됐으며 순차 적용 중이라고 알린다.
 - translate_page가 타임아웃 또는 일부 실패한 뒤 get_page_content에서 대상 언어 텍스트가 보이면, 확장이 완료한 일부 배치일 수 있다. 이를 Medium·브라우저 자동 번역이라고 근거 없이 단정하지 않는다.
@@ -82,12 +87,17 @@ PDF 모드:
 
 지원하지 않는 기능에 대한 규칙:
 - 이 확장에는 채팅 첨부 파일 버튼, 클립 아이콘, 파일 업로드 다이얼로그가 없다. 모델이 임의로 "업로드해 주세요"라고 안내하지 말 것.
-- 탭 조작(새 탭 열기/닫기), 스크롤, 셀 병합 같은 툴은 제공되지 않는다. 요청받으면 지원 범위 밖임을 밝힌다.`;
+- 새 탭 열기·탭 닫기, 스크롤, 셀 병합 같은 툴은 제공되지 않는다. 현재 탭의 URL 이동은 navigate_to_url로 지원한다. 그 외 지원하지 않는 작업을 요청받으면 지원 범위 밖임을 밝힌다.`;
+
+export function composeSystemPrompt(customPrompt: string): string {
+  return appendCustomSystemPrompt(SYSTEM_PROMPT, customPrompt);
+}
 
 export class ChatAgent {
   private history: OpenRouterMessage[] = [];
   private apiKey: string | null = null;
   private model: ModelId | null = null;
+  private customSystemPrompt: string | null = null;
   private aborted = false;
   private activeRequest: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -125,17 +135,30 @@ export class ChatAgent {
     }
   }
 
-  private async ensureCredentials(): Promise<{ apiKey: string; model: ModelId }> {
+  private async ensureCredentials(): Promise<{
+    apiKey: string;
+    model: ModelId;
+    systemPrompt: string;
+  }> {
     const settings = await getSettings();
     if (!settings.openRouterApiKey) {
       throw new Error("OpenRouter API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.");
     }
-    if (this.apiKey !== settings.openRouterApiKey || this.model !== settings.model) {
+    if (
+      this.apiKey !== settings.openRouterApiKey ||
+      this.model !== settings.model ||
+      this.customSystemPrompt !== settings.systemPrompt
+    ) {
       this.apiKey = settings.openRouterApiKey;
       this.model = settings.model;
+      this.customSystemPrompt = settings.systemPrompt;
       this.history = [];
     }
-    return { apiKey: settings.openRouterApiKey, model: settings.model };
+    return {
+      apiKey: settings.openRouterApiKey,
+      model: settings.model,
+      systemPrompt: composeSystemPrompt(settings.systemPrompt),
+    };
   }
 
   private async fetchTabHeader(): Promise<string> {
@@ -224,13 +247,13 @@ export class ChatAgent {
     beginKeepalive();
     const endTurn = timeSpan("turn");
     try {
-      const { apiKey, model } = await this.ensureCredentials();
+      const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);
 
       const userContent = await this.buildUserContent(userText);
       this.history.push({ role: "user", content: userContent });
 
-      await this.streamLoop(apiKey, model);
+      await this.streamLoop(apiKey, model, systemPrompt);
       endTurn("ok");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -242,7 +265,11 @@ export class ChatAgent {
     }
   }
 
-  private async streamLoop(apiKey: string, model: ModelId): Promise<void> {
+  private async streamLoop(
+    apiKey: string,
+    model: ModelId,
+    systemPrompt: string,
+  ): Promise<void> {
     const { maxToolHops } = await getSettings();
     for (let hop = 0; hop < maxToolHops; hop += 1) {
       if (this.aborted) return;
@@ -264,7 +291,7 @@ export class ChatAgent {
           {
             model,
             messages: [
-              { role: "system", content: SYSTEM_PROMPT },
+              { role: "system", content: systemPrompt },
               ...this.history,
             ],
             tools: functionDeclarations.map((fn) => ({
@@ -273,7 +300,8 @@ export class ChatAgent {
             })),
             tool_choice: "auto",
             parallel_tool_calls: false,
-            reasoning: { enabled: true },
+            reasoning: agentReasoningConfig(model),
+            max_tokens: 8192,
             stream: true,
           },
           controller.signal,

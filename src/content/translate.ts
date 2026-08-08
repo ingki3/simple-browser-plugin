@@ -172,10 +172,8 @@ async function translateBatchWithRetry(
     if (!responseShapeError) throw err;
     if (batch.length > 1 && depth < BISECT_MAX_DEPTH) {
       const mid = Math.floor(batch.length / 2);
-      const [a, b] = await Promise.all([
-        translateBatchWithRetry(batch.slice(0, mid), targetLang, depth + 1),
-        translateBatchWithRetry(batch.slice(mid), targetLang, depth + 1),
-      ]);
+      const a = await translateBatchWithRetry(batch.slice(0, mid), targetLang, depth + 1);
+      const b = await translateBatchWithRetry(batch.slice(mid), targetLang, depth + 1);
       return a + b;
     }
     console.warn(

@@ -9,6 +9,7 @@ export type ToolName =
   | "list_page_images"
   | "download_images"
   | "query_dom"
+  | "navigate_to_url"
   | "find_clickables"
   | "click_element"
   | "google_sheets_list"
@@ -23,6 +24,7 @@ export type ToolName =
 export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "fill_form_fields",
   "download_images",
+  "navigate_to_url",
   "click_element",
   "google_sheets_write_range",
   "google_sheets_append_rows",
@@ -140,10 +142,13 @@ export type RuntimeMsg =
 export interface Settings {
   openRouterApiKey: string;
   model: ModelId;
+  systemPrompt: string;
   translationTargetLang: string;
   downloadFolderPrefix: string;
   maxToolHops: number;
 }
+
+export const MAX_SYSTEM_PROMPT_LENGTH = 4000;
 
 export const DEFAULT_MAX_TOOL_HOPS = 8;
 export const MIN_MAX_TOOL_HOPS = 1;

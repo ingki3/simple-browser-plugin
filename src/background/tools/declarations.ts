@@ -128,6 +128,21 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "navigate_to_url",
+    description:
+      "사용자 승인 후 현재 활성 탭을 지정한 웹 주소로 직접 이동한다. 사용자가 특정 URL이나 잘 알려진 사이트의 홈(예: 네이버, 구글)으로 이동해 달라고 명시적으로 요청했을 때 사용한다. 현재 페이지를 관측하거나 링크를 찾을 필요가 없다. 반드시 신뢰할 수 있는 완전한 http/https URL을 사용하고, 사이트 이름이 모호하거나 공식 도메인을 확신할 수 없으면 추측하지 말고 사용자에게 URL을 묻는다.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "이동할 전체 http/https URL. 예: https://www.naver.com/",
+        },
+      },
+      required: ["url"],
+    },
+  },
+  {
     name: "find_clickables",
     description:
       "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link)를 문서 순서로 반환한다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다.",
