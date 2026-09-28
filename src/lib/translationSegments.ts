@@ -8,14 +8,16 @@ export function encodeSegments(texts: string[]): string {
 }
 
 // 세그먼트가 하나라도 빠지면 null. 호출부가 폴백 방식을 고른다.
+// 모델이 태그를 새로 만들거나(단일 노드 조각을 배열 순번 태그로 감싸는 경우) 중첩시키면
+// 남은 태그가 화면에 그대로 드러나므로, 각 결과에서 태그는 모두 걷어낸다.
 export function decodeSegments(raw: string, count: number): string[] | null {
-  if (count === 1) return [raw];
+  if (count === 1) return [stripSegmentTags(raw)];
   const out: Array<string | undefined> = new Array(count);
   const re = /<s(\d+)>([\s\S]*?)<\/s\1>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw))) {
     const idx = Number(m[1]);
-    if (idx < count && out[idx] === undefined) out[idx] = m[2];
+    if (idx < count && out[idx] === undefined) out[idx] = stripSegmentTags(m[2]);
   }
   for (let i = 0; i < count; i += 1) if (out[i] === undefined) return null;
   return out as string[];
@@ -65,6 +67,8 @@ export function segmentCount(source: string): number {
 // 확정·캐시해도 되는 번역 결과인지. 아니면 다시 요청할 가치가 있다.
 export function isUsableTranslation(source: string, output: string, targetLang: string): boolean {
   if (!output.trim()) return true;
+  // 원문에 없던 태그가 붙어 왔으면 형식을 오해한 응답이라 캐시하지 않는다.
+  if (!/<s\d+>/.test(source) && /<\/?s\d+>/.test(output)) return false;
   if (decodeSegments(output, segmentCount(source)) === null) return false;
   return !looksUntranslated(source, output, targetLang);
 }
