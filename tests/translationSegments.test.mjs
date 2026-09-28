@@ -52,3 +52,17 @@ test("usable translation requires intact segments and a real translation", () =>
   assert.equal(isUsableTranslation(src, src, "ko"), false);
   assert.equal(isUsableTranslation(src, "", "ko"), true);
 });
+
+test("stray tags the model invents around single-node items are stripped", () => {
+  // 모델이 배치 배열 순번으로 태그를 새로 만들어 감싼 경우 (실제 관측: <s3>Docling 파이프라인</s3>)
+  assert.deepEqual(decodeSegments("<s3>Docling 파이프라인</s3>", 1), ["Docling 파이프라인"]);
+  assert.equal(isUsableTranslation("Docling Pipeline", "<s3>Docling 파이프라인</s3>", "ko"), false);
+  assert.equal(isUsableTranslation("Docling Pipeline", "Docling 파이프라인", "ko"), true);
+});
+
+test("tags nested inside a decoded segment are stripped", () => {
+  assert.deepEqual(
+    decodeSegments("<s0>문서 <s1>처리</s1></s0><s1>처리</s1>", 2),
+    ["문서 처리", "처리"],
+  );
+});
