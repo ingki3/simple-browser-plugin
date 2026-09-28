@@ -49,14 +49,15 @@ export function looksUntranslated(source: string, output: string, targetLang: st
   const src = normalize(source);
   const out = normalize(output);
   const letters = src.match(/\p{L}/gu)?.length ?? 0;
-  if (letters < 4) return false;
+  // 한두 단어(이름·브랜드·짧은 UI 라벨)는 원문 유지가 정답인 경우가 많아 재요청하지 않는다.
+  if (letters < 4 || src.split(" ").length < 3) return false;
   const script = TARGET_SCRIPT[targetLang.toLowerCase().split(/[-_]/)[0]];
   if (script) {
     // 원문부터 대상 문자로 쓰여 있으면 그대로 두는 게 정답.
     if (script.test(src)) return false;
     return !script.test(out);
   }
-  return out === src && src.split(" ").length >= 3;
+  return out === src;
 }
 
 // 원문에 들어 있는 세그먼트 태그 개수. 태그가 없으면 단일 노드 단위라 1.

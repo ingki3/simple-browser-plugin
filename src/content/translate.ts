@@ -6,10 +6,15 @@ import {
 } from "@/lib/translationSegments";
 import { describeRoot, getAccessibleRoots, type Root } from "./docs";
 
-const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE", "TEMPLATE"]);
+// 조상 전체를 본다. 코드 블록은 <pre><span>…</span></pre>처럼 하이라이트 span 안에
+// 텍스트가 있어 부모 태그만 보면 걸러지지 않고, 블록 단위로 묶이면 수천 자짜리
+// 번역 요청(모델이 원문을 돌려줘 재요청까지)이 된다.
+const SKIP_SELECTOR = "script, style, noscript, textarea, template, pre, code, kbd, samp";
 const MAX_NODES_PER_PAGE = 2000;
 const BATCH_UNIT_LIMIT = 30;
 const BATCH_CHAR_LIMIT = 2000;
+// 한 번역 단위의 최대 길이. 넘으면 노드 경계에서 나눠 여러 단위로 보낸다.
+const UNIT_CHAR_LIMIT = 1500;
 const INITIAL_CONCURRENCY = 6;
 const OBSERVER_FLUSH_MS = 300;
 const BISECT_MAX_DEPTH = 6;
@@ -82,7 +87,7 @@ function collectTextNodes(root: Node, seen = new Set<Text>()): Text[] {
       if (!text.data.trim()) return NodeFilter.FILTER_REJECT;
       const parent = text.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
-      if (SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+      if (parent.closest(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
       if (parent.closest("[aria-hidden='true']")) return NodeFilter.FILTER_REJECT;
       if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
@@ -143,12 +148,32 @@ function buildUnits(nodes: Text[]): Unit[] {
   }
   const units: Unit[] = [];
   for (const group of groups.values()) {
-    const originals = group.map((n) => n.data);
-    const cores = originals.map((t) => t.trim());
-    if (!isMeaningfulText(cores.join(" "))) continue;
-    units.push({ nodes: group, originals, source: encodeSegments(cores) });
+    for (const chunk of splitByLength(group)) {
+      const originals = chunk.map((n) => n.data);
+      const cores = originals.map((t) => t.trim());
+      if (!isMeaningfulText(cores.join(" "))) continue;
+      units.push({ nodes: chunk, originals, source: encodeSegments(cores) });
+    }
   }
   return units;
+}
+
+function splitByLength(nodes: Text[]): Text[][] {
+  const chunks: Text[][] = [];
+  let current: Text[] = [];
+  let chars = 0;
+  for (const node of nodes) {
+    const len = node.data.length;
+    if (current.length && chars + len > UNIT_CHAR_LIMIT) {
+      chunks.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(node);
+    chars += len;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 function collectUnits(roots: Node[]): Unit[] {
@@ -340,7 +365,7 @@ function scheduleObserver(targetLang: string): void {
   const enqueueText = (node: Text) => {
     if (isAlreadyTranslated(node) || queuedNodes.has(node)) return;
     const parent = node.parentElement;
-    if (!parent || SKIP_TAGS.has(parent.tagName)) return;
+    if (!parent || parent.closest(SKIP_SELECTOR)) return;
     if (parent.closest("[aria-hidden='true']")) return;
     if (!node.data.trim()) return;
     queuedNodes.add(node);

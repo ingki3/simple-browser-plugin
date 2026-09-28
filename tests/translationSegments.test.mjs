@@ -66,3 +66,9 @@ test("tags nested inside a decoded segment are stripped", () => {
     ["문서 처리", "처리"],
   );
 });
+
+test("one- or two-word names are not retried as untranslated", () => {
+  assert.equal(looksUntranslated("Alain Airom", "Alain Airom", "ko"), false);
+  assert.equal(looksUntranslated("Opensearch", "Opensearch", "ko"), false);
+  assert.equal(isUsableTranslation("Docling Pipeline", "Docling Pipeline", "ko"), true);
+});
