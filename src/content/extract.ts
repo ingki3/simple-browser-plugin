@@ -91,6 +91,10 @@ function extractFromDoc(doc: Document): string {
   return text;
 }
 
+// 모델에 넘기는 본문 상한. 긴 기술 블로그 한 편(영문 약 6~7천 단어)이 대부분 들어가는 크기.
+// 영문 기준 약 1만 토큰이라 128k 이상 컨텍스트 모델에서 여유가 있다.
+const MAX_CONTENT_CHARS = 40_000;
+
 export function extractMainContent(): PageContent {
   const docs = getAccessibleDocs();
   const chunks: string[] = [];
@@ -99,7 +103,7 @@ export function extractMainContent(): PageContent {
     if (chunk) chunks.push(chunk);
   }
   let mainText = chunks.join("\n\n").trim();
-  if (mainText.length > 12000) mainText = mainText.slice(0, 12000) + "…";
+  if (mainText.length > MAX_CONTENT_CHARS) mainText = mainText.slice(0, MAX_CONTENT_CHARS) + "…";
 
   return {
     title: document.title?.trim() ?? "",
