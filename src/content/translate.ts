@@ -1,16 +1,27 @@
+import {
+  decodeSegments,
+  encodeSegments,
+  isUsableTranslation,
+  stripSegmentTags,
+} from "@/lib/translationSegments";
 import { describeRoot, getAccessibleRoots, type Root } from "./docs";
 
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE", "TEMPLATE"]);
 const MAX_NODES_PER_PAGE = 2000;
-const BATCH_NODE_LIMIT = 60;
+const BATCH_UNIT_LIMIT = 30;
 const BATCH_CHAR_LIMIT = 2000;
 const INITIAL_CONCURRENCY = 6;
 const OBSERVER_FLUSH_MS = 300;
 const BISECT_MAX_DEPTH = 6;
 
-interface PendingNode {
-  node: Text;
-  original: string;
+// 번역 단위: 같은 블록(문단·제목·목록 항목 등)에 속한 텍스트 노드 묶음.
+// <strong>/<a>/드롭캡 span으로 쪼개진 문장을 노드별로 따로 번역하면 문맥이 끊겨
+// "A솔직히 말해서…" 같은 조각 번역이 생기므로 블록 단위로 한 번에 보낸다.
+interface Unit {
+  nodes: Text[];
+  originals: string[];
+  source: string;
+  retried?: boolean;
 }
 
 // node → 마지막으로 우리가 적용한 텍스트.
@@ -59,43 +70,106 @@ function isAlreadyTranslated(node: Text): boolean {
   return applied !== undefined && applied === node.data;
 }
 
-function collectTextNodes(root: Node): PendingNode[] {
-  const results: PendingNode[] = [];
+// 개별 노드는 한 글자(드롭캡)나 기호일 수 있으므로 의미 판정은 블록 단위에서 한다.
+function collectTextNodes(root: Node, seen = new Set<Text>()): Text[] {
+  const results: Text[] = [];
   const doc = ownerDocOf(root);
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) => {
       const text = node as Text;
+      if (seen.has(text)) return NodeFilter.FILTER_REJECT;
       if (isAlreadyTranslated(text)) return NodeFilter.FILTER_REJECT;
+      if (!text.data.trim()) return NodeFilter.FILTER_REJECT;
       const parent = text.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
       if (SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
       if (parent.closest("[aria-hidden='true']")) return NodeFilter.FILTER_REJECT;
-      if (!isMeaningfulText(text.data)) return NodeFilter.FILTER_REJECT;
       if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });
 
   let n = walker.nextNode() as Text | null;
-  while (n && results.length < MAX_NODES_PER_PAGE) {
-    results.push({ node: n, original: n.data });
+  while (n && seen.size < MAX_NODES_PER_PAGE) {
+    seen.add(n);
+    results.push(n);
     n = walker.nextNode() as Text | null;
   }
   return results;
 }
 
-function batchNodes(nodes: PendingNode[]): PendingNode[][] {
-  const batches: PendingNode[][] = [];
-  let current: PendingNode[] = [];
+// 텍스트 노드가 속한 가장 가까운 비-inline 조상. 같은 블록의 노드끼리 한 단위로 묶는다.
+function blockOf(node: Text, cache: Map<Element, Element>): Element | null {
+  const start = node.parentElement;
+  if (!start) return null;
+  const visited: Element[] = [];
+  let el: Element | null = start;
+  let block: Element | null = null;
+  while (el) {
+    const cached = cache.get(el);
+    if (cached) {
+      block = cached;
+      break;
+    }
+    visited.push(el);
+    const win = el.ownerDocument.defaultView ?? window;
+    const style = win.getComputedStyle(el);
+    // float된 요소(드롭캡 등)는 computed display가 block이지만 문장의 일부다.
+    const inlineLike =
+      style.display === "inline" || style.display === "contents" || style.float !== "none";
+    if (!inlineLike) {
+      block = el;
+      break;
+    }
+    if (!el.parentElement) {
+      block = el;
+      break;
+    }
+    el = el.parentElement;
+  }
+  for (const v of visited) if (block) cache.set(v, block);
+  return block;
+}
+
+function buildUnits(nodes: Text[]): Unit[] {
+  const cache = new Map<Element, Element>();
+  const groups = new Map<Element, Text[]>();
+  for (const node of nodes) {
+    const block = blockOf(node, cache);
+    if (!block) continue;
+    const list = groups.get(block);
+    if (list) list.push(node);
+    else groups.set(block, [node]);
+  }
+  const units: Unit[] = [];
+  for (const group of groups.values()) {
+    const originals = group.map((n) => n.data);
+    const cores = originals.map((t) => t.trim());
+    if (!isMeaningfulText(cores.join(" "))) continue;
+    units.push({ nodes: group, originals, source: encodeSegments(cores) });
+  }
+  return units;
+}
+
+function collectUnits(roots: Node[]): Unit[] {
+  const seen = new Set<Text>();
+  const nodes: Text[] = [];
+  for (const root of roots) nodes.push(...collectTextNodes(root, seen));
+  return buildUnits(nodes);
+}
+
+function batchUnits(units: Unit[]): Unit[][] {
+  const batches: Unit[][] = [];
+  let current: Unit[] = [];
   let chars = 0;
-  for (const p of nodes) {
-    const len = p.original.length;
-    if (current.length >= BATCH_NODE_LIMIT || chars + len > BATCH_CHAR_LIMIT) {
+  for (const u of units) {
+    const len = u.source.length;
+    if (current.length >= BATCH_UNIT_LIMIT || chars + len > BATCH_CHAR_LIMIT) {
       if (current.length) batches.push(current);
       current = [];
       chars = 0;
     }
-    current.push(p);
+    current.push(u);
     chars += len;
   }
   if (current.length) batches.push(current);
@@ -131,41 +205,54 @@ async function runConcurrent<T, R>(
   return results;
 }
 
-function applyTranslation(batch: PendingNode[], translated: string[]): number {
-  let swapped = 0;
-  batch.forEach((p, i) => {
-    const t = translated[i];
-    if (typeof t !== "string") return;
+function markDone(unit: Unit): void {
+  unit.nodes.forEach((node) => translatedNodes.set(node, node.data));
+}
+
+function applyUnit(unit: Unit, raw: string): boolean {
+  // 수집 이후 페이지가 텍스트를 바꿨으면 건너뜀. 옵저버가 새 텍스트로 다시 큐잉한다.
+  if (unit.nodes.some((node, i) => node.data !== unit.originals[i])) return false;
+  if (!raw.trim()) {
     // 빈 응답: 원문 유지하되 "처리 완료"로 마킹해야 재큐잉/무한 재시도를 막음.
-    if (!t) {
-      translatedNodes.set(p.node, p.node.data);
-      return;
-    }
-    if (t === p.original) {
-      translatedNodes.set(p.node, p.node.data);
-      return;
-    }
+    markDone(unit);
+    return false;
+  }
+  const count = unit.nodes.length;
+  // 세그먼트 태그가 깨졌으면 번역문 전체를 첫 노드에 넣고 나머지를 비운다.
+  const parts = decodeSegments(raw, count) ?? [
+    stripSegmentTags(raw),
+    ...new Array<string>(count - 1).fill(""),
+  ];
+  let changed = false;
+  unit.nodes.forEach((node, i) => {
+    const original = unit.originals[i];
+    const core = parts[i].trim();
+    const next = core
+      ? original.match(/^\s*/)![0] + core + original.match(/\s*$/)![0]
+      : "";
     // WeakMap을 write 이전에 갱신해야 observer가 self-write를 판별할 수 있음.
-    translatedNodes.set(p.node, t);
-    p.node.data = t;
-    swapped += 1;
+    translatedNodes.set(node, next);
+    if (next !== node.data) {
+      node.data = next;
+      changed = true;
+    }
   });
-  return swapped;
+  return changed;
 }
 
 // 배치가 실패하면 반으로 쪼개서 재시도.
 // 하나의 나쁜 응답(길이 불일치, 파싱 실패, 거대한 항목 하나)으로 큰 배치가
 // 통째로 유실되는 걸 막는 게 목적.
+// 모델이 원문을 그대로 돌려주거나 세그먼트를 깨뜨린 단위는 한 번만 따로 다시 요청.
 async function translateBatchWithRetry(
-  batch: PendingNode[],
+  batch: Unit[],
   targetLang: string,
   depth = 0,
 ): Promise<number> {
   if (!batch.length) return 0;
-  const texts = batch.map((p) => p.original);
+  let translated: string[];
   try {
-    const translated = await requestTranslation(texts, targetLang);
-    return applyTranslation(batch, translated);
+    translated = await requestTranslation(batch.map((u) => u.source), targetLang);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const responseShapeError = /JSON 파싱|응답 길이 불일치/.test(message);
@@ -179,10 +266,24 @@ async function translateBatchWithRetry(
     console.warn(
       "[translate batch fail]",
       err,
-      batch.map((p) => p.original.slice(0, 40)),
+      batch.map((u) => u.source.slice(0, 40)),
     );
     return 0;
   }
+  let swapped = 0;
+  const retry: Unit[] = [];
+  batch.forEach((unit, i) => {
+    const out = translated[i];
+    if (typeof out !== "string") return;
+    if (!unit.retried && !isUsableTranslation(unit.source, out, targetLang)) {
+      unit.retried = true;
+      retry.push(unit);
+      return;
+    }
+    if (applyUnit(unit, out)) swapped += 1;
+  });
+  if (retry.length) swapped += await translateBatchWithRetry(retry, targetLang, depth);
+  return swapped;
 }
 
 let observers: MutationObserver[] = [];
@@ -192,7 +293,7 @@ function scheduleObserver(targetLang: string): void {
   for (const obs of observers) obs.disconnect();
   observers = [];
   activeTargetLang = targetLang;
-  let queue: PendingNode[] = [];
+  let queue: Text[] = [];
   let queuedNodes = new WeakSet<Text>();
   let timer: number | null = null;
 
@@ -200,11 +301,18 @@ function scheduleObserver(targetLang: string): void {
     timer = null;
     if (!queue.length || activeTargetLang !== targetLang) return;
     // flush 시점에 이미 번역된 노드는 제외 (중복 enqueue 방어).
-    const pending = queue.filter((p) => !isAlreadyTranslated(p.node));
+    const pending = queue.filter((node) => node.isConnected && !isAlreadyTranslated(node));
     queue = [];
     queuedNodes = new WeakSet<Text>();
     if (!pending.length) return;
-    const batches = batchNodes(pending);
+    // 바뀐 노드만이 아니라 그 노드가 속한 블록 전체를 다시 묶어야 문맥이 유지된다.
+    const cache = new Map<Element, Element>();
+    const blocks = new Set<Element>();
+    for (const node of pending) {
+      const block = blockOf(node, cache);
+      if (block) blocks.add(block);
+    }
+    const batches = batchUnits(collectUnits([...blocks]));
     try {
       await runConcurrent(batches, 2, (batch) => translateBatchWithRetry(batch, targetLang));
     } catch (err) {
@@ -221,9 +329,9 @@ function scheduleObserver(targetLang: string): void {
     const parent = node.parentElement;
     if (!parent || SKIP_TAGS.has(parent.tagName)) return;
     if (parent.closest("[aria-hidden='true']")) return;
-    if (!isMeaningfulText(node.data)) return;
+    if (!node.data.trim()) return;
     queuedNodes.add(node);
-    queue.push({ node, original: node.data });
+    queue.push(node);
   };
 
   const handleMutations = (mutations: MutationRecord[]) => {
@@ -243,7 +351,7 @@ function scheduleObserver(targetLang: string): void {
           enqueueText(added as Text);
         } else if (added.nodeType === Node.ELEMENT_NODE) {
           const fresh = collectTextNodes(added as Element);
-          fresh.forEach((item) => enqueueText(item.node));
+          fresh.forEach((node) => enqueueText(node));
         }
       });
     }
@@ -276,26 +384,25 @@ export async function translatePage(args: {
   perRoot: Array<{ name: string; collected: number }>;
   totalCollected: number;
 }> {
-  const allNodes: PendingNode[] = [];
+  const allUnits: Unit[] = [];
   const perRoot: Array<{ name: string; collected: number }> = [];
+  const seen = new Set<Text>();
   for (const root of getAccessibleRoots()) {
     const target = rootScanTarget(root);
     if (!target) {
       perRoot.push({ name: describeRoot(root), collected: 0 });
       continue;
     }
-    const before = allNodes.length;
-    allNodes.push(...collectTextNodes(target));
-    const added = allNodes.length - before;
-    perRoot.push({ name: describeRoot(root), collected: added });
-    if (allNodes.length >= MAX_NODES_PER_PAGE) break;
+    const units = buildUnits(collectTextNodes(target, seen));
+    allUnits.push(...units);
+    perRoot.push({ name: describeRoot(root), collected: units.length });
+    if (seen.size >= MAX_NODES_PER_PAGE) break;
   }
-  const nodes = allNodes
-    .slice(0, MAX_NODES_PER_PAGE)
-    .map((node, index) => ({ node, index, inViewport: isInViewport(node.node) }))
+  const units = allUnits
+    .map((unit, index) => ({ unit, index, inViewport: isInViewport(unit.nodes[0]) }))
     .sort((a, b) => Number(b.inViewport) - Number(a.inViewport) || a.index - b.index)
-    .map(({ node }) => node);
-  const batches = batchNodes(nodes);
+    .map(({ unit }) => unit);
+  const batches = batchUnits(units);
   const [firstBatch, ...remainingBatches] = batches;
   const firstCount = firstBatch
     ? await translateBatchWithRetry(firstBatch, args.targetLang)
@@ -324,6 +431,6 @@ export async function translatePage(args: {
     scheduledNodes,
     inProgress: scheduledNodes > 0,
     perRoot,
-    totalCollected: nodes.length,
+    totalCollected: units.length,
   };
 }
