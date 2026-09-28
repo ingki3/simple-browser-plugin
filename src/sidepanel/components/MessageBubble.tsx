@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../state/chatStore";
 import { StreamingText } from "./StreamingText";
+import { ThoughtBox } from "./ThoughtBox";
 import { ToolPreviewCard } from "./ToolPreviewCard";
 import { ToolResultCard } from "./ToolResultCard";
 
@@ -21,10 +22,7 @@ export function MessageBubble({ message, onApprove, onCancel }: Props) {
       return (
         <div className="msg msg-assistant">
           {message.thoughtText && (
-            <details className="thought-box" open={message.streaming && !message.text}>
-              <summary>🧠 생각 과정</summary>
-              <div className="thought-body">{message.thoughtText}</div>
-            </details>
+            <ThoughtBox text={message.thoughtText} live={message.streaming && !message.text} />
           )}
           {(message.text || !message.thoughtText) && (
             <div className="bubble bubble-assistant">
