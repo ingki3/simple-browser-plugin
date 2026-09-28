@@ -14,7 +14,8 @@ import { buildToolPreview, executeTool, parseToolArgs } from "./tools/dispatcher
 import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
-import { detectPdfAtActiveTab, fetchPdfAsBase64 } from "./pdf";
+import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
+import { captureTurnTab, type TurnTab } from "./tools/handlers";
 
 const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 탭을 돕는 한국어 에이전트다.
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
@@ -102,6 +103,9 @@ export class ChatAgent {
   private activeRequest: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
   private lastAttachedPdfUrl: string | null = null;
+  private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
+  // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
+  private translatedTabs = new Set<number>();
 
   constructor(private readonly port: chrome.runtime.Port) {}
 
@@ -111,6 +115,19 @@ export class ChatAgent {
     this.activeRequest = null;
     for (const resolve of this.pendingApprovals.values()) resolve(false);
     this.pendingApprovals.clear();
+    this.stopTranslations();
+  }
+
+  // 백그라운드 번역 배치와 동적 재번역 옵저버를 멈춘다. 멈추지 않으면 사용자가
+  // 대화를 끝낸 뒤에도 페이지 변화(예: 메일함 갱신)마다 번역 요청이 계속 나간다.
+  private stopTranslations(): void {
+    for (const tabId of this.translatedTabs) {
+      chrome.tabs.sendMessage(tabId, { kind: "translate_stop" }).catch(() => {
+        /* 탭이 닫혔거나 이동함 — 멈출 대상이 없음 */
+      });
+      debugLog("translate:stop", `tab ${tabId}`);
+    }
+    this.translatedTabs.clear();
   }
 
   approveTool(callId: string): void {
@@ -162,9 +179,9 @@ export class ChatAgent {
   }
 
   private async fetchTabHeader(): Promise<string> {
+    if ("error" in this.turnTab) return "";
     try {
-      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (!tab) return "";
+      const tab = await chrome.tabs.get(this.turnTab.tabId);
       const url = tab.url ?? "";
       const title = tab.title ?? "";
       if (!url && !title) return "";
@@ -199,7 +216,7 @@ export class ChatAgent {
   private async buildUserContent(
     userText: string,
   ): Promise<string | OpenRouterContentPart[]> {
-    const pdfInfo = await detectPdfAtActiveTab();
+    const pdfInfo = "tabId" in this.turnTab ? await detectPdfAtTab(this.turnTab.tabId) : null;
 
     if (pdfInfo?.isPdf) {
       await this.maybeShowPdfGuidance();
@@ -246,6 +263,8 @@ export class ChatAgent {
     this.aborted = false;
     beginKeepalive();
     const endTurn = timeSpan("turn");
+    this.turnTab = await captureTurnTab();
+    if ("tabId" in this.turnTab) debugLog("turn:tab", `tab ${this.turnTab.tabId}`);
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);
@@ -254,7 +273,7 @@ export class ChatAgent {
       this.history.push({ role: "user", content: userContent });
 
       await this.streamLoop(apiKey, model, systemPrompt);
-      endTurn("ok");
+      endTurn(this.aborted ? "aborted" : "ok");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       debugLog("turn:error", msg, "error");
@@ -471,7 +490,10 @@ export class ChatAgent {
         }
 
         try {
-          const result = await executeTool(toolName, parsedArgs, callId);
+          const result = await executeTool(toolName, parsedArgs, callId, this.turnTab);
+          if (toolName === "translate_page" && result.ok && "tabId" in this.turnTab) {
+            this.translatedTabs.add(this.turnTab.tabId);
+          }
           debugLog(
             "tool:result",
             `${toolName} ${result.ok ? "ok" : "fail"} · ${result.summary.slice(0, 140)}`,

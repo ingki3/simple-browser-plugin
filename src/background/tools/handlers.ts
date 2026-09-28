@@ -17,6 +17,32 @@ export async function getActiveTabId(): Promise<number> {
   return tab.id;
 }
 
+// 턴을 시작한 순간의 탭. 모델이 생각하는 동안 사용자가 다른 탭(예: 메일)으로 옮겨도
+// 도구가 그 탭을 건드리지 않도록 턴 내내 이 탭에만 작업한다.
+export type TurnTab = { tabId: number } | { error: string };
+
+export async function captureTurnTab(): Promise<TurnTab> {
+  try {
+    return { tabId: await getActiveTabId() };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function resolveTurnTab(turnTab: TurnTab): Promise<number> {
+  if ("error" in turnTab) throw new Error(turnTab.error);
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(turnTab.tabId);
+  } catch {
+    throw new Error("요청을 시작한 탭이 닫혀서 작업을 계속할 수 없습니다.");
+  }
+  if (tab.url && /^(chrome|edge|about):/i.test(tab.url)) {
+    throw new Error("브라우저 내부 페이지에서는 이 도구를 사용할 수 없습니다.");
+  }
+  return turnTab.tabId;
+}
+
 function getContentScriptFiles(): string[] {
   const manifest = chrome.runtime.getManifest();
   const entries = manifest.content_scripts ?? [];
@@ -58,9 +84,10 @@ export async function callContentTool<T = unknown>(
   toolName: ToolName,
   args: unknown,
   callId: string,
+  turnTab: TurnTab,
 ): Promise<T> {
   const endCall = timeSpan(`tool:${toolName}`);
-  const tabId = await getActiveTabId();
+  const tabId = await resolveTurnTab(turnTab);
   // If a navigation is in flight (e.g. just after click_element), wait for it
   // to settle so the content script in the new page has registered its listener.
   const navStart = Date.now();

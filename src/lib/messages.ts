@@ -127,7 +127,8 @@ export type BgToPanel =
 
 export type BgToContent =
   | { kind: "tool_exec"; toolName: ToolName; args: unknown; callId: string }
-  | { kind: "translate_batch"; texts: string[]; targetLang: string };
+  | { kind: "translate_batch"; texts: string[]; targetLang: string }
+  | { kind: "translate_stop" };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;

@@ -247,9 +247,10 @@ function applyUnit(unit: Unit, raw: string): boolean {
 async function translateBatchWithRetry(
   batch: Unit[],
   targetLang: string,
+  gen: number,
   depth = 0,
 ): Promise<number> {
-  if (!batch.length) return 0;
+  if (!batch.length || gen !== generation) return 0;
   let translated: string[];
   try {
     translated = await requestTranslation(batch.map((u) => u.source), targetLang);
@@ -259,8 +260,8 @@ async function translateBatchWithRetry(
     if (!responseShapeError) throw err;
     if (batch.length > 1 && depth < BISECT_MAX_DEPTH) {
       const mid = Math.floor(batch.length / 2);
-      const a = await translateBatchWithRetry(batch.slice(0, mid), targetLang, depth + 1);
-      const b = await translateBatchWithRetry(batch.slice(mid), targetLang, depth + 1);
+      const a = await translateBatchWithRetry(batch.slice(0, mid), targetLang, gen, depth + 1);
+      const b = await translateBatchWithRetry(batch.slice(mid), targetLang, gen, depth + 1);
       return a + b;
     }
     console.warn(
@@ -270,6 +271,8 @@ async function translateBatchWithRetry(
     );
     return 0;
   }
+  // 응답을 기다리는 사이 번역이 중지됐으면 페이지에 반영하지 않는다.
+  if (gen !== generation) return 0;
   let swapped = 0;
   const retry: Unit[] = [];
   batch.forEach((unit, i) => {
@@ -282,17 +285,27 @@ async function translateBatchWithRetry(
     }
     if (applyUnit(unit, out)) swapped += 1;
   });
-  if (retry.length) swapped += await translateBatchWithRetry(retry, targetLang, depth);
+  if (retry.length) swapped += await translateBatchWithRetry(retry, targetLang, gen, depth);
   return swapped;
 }
 
 let observers: MutationObserver[] = [];
 let activeTargetLang: string | null = null;
+// stopTranslation()마다 증가. 진행 중인 배치는 시작 시점의 값과 비교해 멈춘다.
+let generation = 0;
+
+export function stopTranslation(): void {
+  generation += 1;
+  for (const obs of observers) obs.disconnect();
+  observers = [];
+  activeTargetLang = null;
+}
 
 function scheduleObserver(targetLang: string): void {
   for (const obs of observers) obs.disconnect();
   observers = [];
   activeTargetLang = targetLang;
+  const gen = generation;
   let queue: Text[] = [];
   let queuedNodes = new WeakSet<Text>();
   let timer: number | null = null;
@@ -314,7 +327,7 @@ function scheduleObserver(targetLang: string): void {
     }
     const batches = batchUnits(collectUnits([...blocks]));
     try {
-      await runConcurrent(batches, 2, (batch) => translateBatchWithRetry(batch, targetLang));
+      await runConcurrent(batches, 2, (batch) => translateBatchWithRetry(batch, targetLang, gen));
     } catch (err) {
       console.warn("[translate observer]", err);
     }
@@ -384,6 +397,7 @@ export async function translatePage(args: {
   perRoot: Array<{ name: string; collected: number }>;
   totalCollected: number;
 }> {
+  const gen = generation;
   const allUnits: Unit[] = [];
   const perRoot: Array<{ name: string; collected: number }> = [];
   const seen = new Set<Text>();
@@ -405,13 +419,14 @@ export async function translatePage(args: {
   const batches = batchUnits(units);
   const [firstBatch, ...remainingBatches] = batches;
   const firstCount = firstBatch
-    ? await translateBatchWithRetry(firstBatch, args.targetLang)
+    ? await translateBatchWithRetry(firstBatch, args.targetLang, gen)
     : 0;
-  scheduleObserver(args.targetLang);
+  // 첫 배치를 기다리는 사이 중지됐으면 옵저버를 다시 붙이지 않는다.
+  if (gen === generation) scheduleObserver(args.targetLang);
   const scheduledNodes = remainingBatches.reduce((sum, batch) => sum + batch.length, 0);
   if (remainingBatches.length > 0) {
     void runConcurrent(remainingBatches, INITIAL_CONCURRENCY, (batch) =>
-      translateBatchWithRetry(batch, args.targetLang),
+      translateBatchWithRetry(batch, args.targetLang, gen),
     )
       .then((counts) => {
         const translated = counts.reduce((sum, count) => sum + count, 0);

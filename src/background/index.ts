@@ -38,6 +38,7 @@ chrome.runtime.onConnect.addListener((port) => {
     switch (msg.kind) {
       case "user_msg": {
         if (!agent || activeConversationId !== msg.conversationId) {
+          agent?.abort();
           agent = new ChatAgent(port);
           activeConversationId = msg.conversationId;
         }
@@ -56,6 +57,7 @@ chrome.runtime.onConnect.addListener((port) => {
         agent?.abort();
         return;
       case "reset_conversation":
+        agent?.abort();
         agent = new ChatAgent(port);
         activeConversationId = msg.conversationId;
         return;

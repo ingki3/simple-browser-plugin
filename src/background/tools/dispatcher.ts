@@ -9,7 +9,7 @@ import type {
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
 import { normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
-import { callContentTool, getActiveTabId } from "./handlers";
+import { callContentTool, resolveTurnTab, type TurnTab } from "./handlers";
 import { startImageDownloads } from "./downloads";
 import { markOptimisticNavigation } from "../navigation";
 import {
@@ -131,10 +131,11 @@ export async function executeTool(
   toolName: ToolName,
   parsedArgs: unknown,
   callId: string,
+  turnTab: TurnTab,
 ): Promise<ToolExecResult> {
   switch (toolName) {
     case "describe_page": {
-      const data = await callContentTool<PageDescription>(toolName, parsedArgs, callId);
+      const data = await callContentTool<PageDescription>(toolName, parsedArgs, callId, turnTab);
       const regionList =
         data.landmarks.map((l) => `${l.region}(${l.clickableCount})`).join(", ") || "없음";
       return {
@@ -144,7 +145,7 @@ export async function executeTool(
       };
     }
     case "get_page_content": {
-      const data = await callContentTool<PageContent>(toolName, parsedArgs, callId);
+      const data = await callContentTool<PageContent>(toolName, parsedArgs, callId, turnTab);
       return {
         ok: true,
         summary: `본문 ${data.wordCount}자 추출: ${truncate(data.title, 60)}`,
@@ -158,7 +159,7 @@ export async function executeTool(
         inProgress?: boolean;
         perRoot?: Array<{ name: string; collected: number }>;
         totalCollected?: number;
-      }>(toolName, parsedArgs, callId);
+      }>(toolName, parsedArgs, callId, turnTab);
       const breakdown = data.perRoot?.length
         ? " [" +
           data.perRoot
@@ -181,7 +182,7 @@ export async function executeTool(
       };
     }
     case "find_form_fields": {
-      const data = await callContentTool<FormField[]>(toolName, parsedArgs, callId);
+      const data = await callContentTool<FormField[]>(toolName, parsedArgs, callId, turnTab);
       return {
         ok: true,
         summary: `입력 필드 ${data.length}개 발견.`,
@@ -193,6 +194,7 @@ export async function executeTool(
         toolName,
         parsedArgs,
         callId,
+        turnTab,
       );
       return {
         ok: true,
@@ -201,7 +203,7 @@ export async function executeTool(
       };
     }
     case "list_page_images": {
-      const data = await callContentTool<PageImage[]>(toolName, parsedArgs, callId);
+      const data = await callContentTool<PageImage[]>(toolName, parsedArgs, callId, turnTab);
       return {
         ok: true,
         summary: `이미지 ${data.length}개 발견.`,
@@ -224,6 +226,7 @@ export async function executeTool(
         toolName,
         parsedArgs,
         callId,
+        turnTab,
       );
       return {
         ok: true,
@@ -234,7 +237,7 @@ export async function executeTool(
     case "navigate_to_url": {
       const args = parsedArgs as ToolArgs["navigate_to_url"];
       const url = normalizeNavigationUrl(args.url);
-      const tabId = await getActiveTabId();
+      const tabId = await resolveTurnTab(turnTab);
       markOptimisticNavigation(tabId);
       await chrome.tabs.update(tabId, { url });
       return {
@@ -244,7 +247,7 @@ export async function executeTool(
       };
     }
     case "find_clickables": {
-      const data = await callContentTool<ClickableElement[]>(toolName, parsedArgs, callId);
+      const data = await callContentTool<ClickableElement[]>(toolName, parsedArgs, callId, turnTab);
       return {
         ok: true,
         summary: `클릭 가능 요소 ${data.length}개 발견.`,
@@ -256,10 +259,11 @@ export async function executeTool(
         toolName,
         parsedArgs,
         callId,
+        turnTab,
       );
       if (data.clicked) {
         try {
-          const tabId = await getActiveTabId();
+          const tabId = await resolveTurnTab(turnTab);
           markOptimisticNavigation(tabId);
         } catch {
           /* ignore */

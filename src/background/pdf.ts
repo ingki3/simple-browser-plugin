@@ -5,8 +5,8 @@ export interface PdfTabInfo {
   url: string;
 }
 
-export async function detectPdfAtActiveTab(): Promise<PdfTabInfo | null> {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+export async function detectPdfAtTab(tabId: number): Promise<PdfTabInfo | null> {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab?.url) return null;
   const url = tab.url;
 
