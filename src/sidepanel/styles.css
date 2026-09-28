@@ -223,6 +223,11 @@ body,
   display: none;
 }
 
+/* 스트리밍 중 내용 길이에 따라 폭이 들쭉날쭉하지 않도록 펼친 상태는 폭 고정. */
+.thought-box[open] {
+  width: 92%;
+}
+
 .thought-box[open] summary {
   margin-bottom: 4px;
 }
@@ -232,6 +237,21 @@ body,
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.5;
+  /* 긴 reasoning(수만 자)이 패널 전체를 밀어내지 않도록 박스 안에서 스크롤. */
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.thought-live {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: currentColor;
+  animation: thinking-dot 1.2s ease-in-out infinite;
 }
 
 .msg-assistant {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { useChatStore } from "../state/chatStore";
 import { MessageBubble } from "./MessageBubble";
 import { ThinkingIndicator } from "./ThinkingIndicator";
@@ -12,10 +12,16 @@ interface Props {
 export function MessageList({ onApprove, onCancel }: Props) {
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // 사용자가 위로 스크롤해 과거 내용을 보는 중이면 자동 스크롤을 멈춘다.
+  const stickRef = useRef(true);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  // 청크마다 smooth scrollIntoView를 다시 걸면 애니메이션이 계속 재시작돼
+  // 긴 스트리밍에서 바닥을 따라가지 못한다. 페인트 전에 즉시 바닥으로 맞춘다.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || !stickRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages, streaming]);
 
   const lastMsg = messages[messages.length - 1];
@@ -37,12 +43,18 @@ export function MessageList({ onApprove, onCancel }: Props) {
   }
 
   return (
-    <div className="message-list">
+    <div
+      ref={listRef}
+      className="message-list"
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32;
+      }}
+    >
       {messages.map((m) => (
         <MessageBubble key={m.id} message={m} onApprove={onApprove} onCancel={onCancel} />
       ))}
       {showThinking && <ThinkingIndicator />}
-      <div ref={bottomRef} />
     </div>
   );
 }
