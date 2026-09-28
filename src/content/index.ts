@@ -1,6 +1,6 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
 import { extractMainContent } from "./extract";
-import { translatePage } from "./translate";
+import { stopTranslation, translatePage } from "./translate";
 import { findFormFields, fillFormFields } from "./forms";
 import { listPageImages } from "./images";
 import { queryDom } from "./dom";
@@ -37,6 +37,11 @@ async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
 chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   const msg = raw as BgToContent;
   if (!msg || typeof msg !== "object") return false;
+  if (msg.kind === "translate_stop") {
+    stopTranslation();
+    sendResponse({ ok: true } satisfies ContentResponse);
+    return false;
+  }
   if (msg.kind !== "tool_exec") return false;
 
   execTool(msg.toolName, msg.args)
