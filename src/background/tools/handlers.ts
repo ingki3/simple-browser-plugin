@@ -62,6 +62,21 @@ async function injectContentScript(tabId: number): Promise<void> {
   });
 }
 
+// 주입한 content script는 로더가 본체 모듈을 동적 import한 뒤에야 리스너를 등록한다.
+// 그 전에 보낸 메시지는 "Receiving end does not exist"로 실패하므로 잠깐씩 기다리며 재시도.
+const INJECT_READY_DELAYS_MS = [50, 100, 200, 400, 800, 1500];
+
+function isMissingReceiver(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    /Could not establish connection|Receiving end does not exist/i.test(err.message)
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -109,10 +124,7 @@ export async function callContentTool<T = unknown>(
   try {
     res = await send();
   } catch (err) {
-    const looksLikeMissing =
-      err instanceof Error &&
-      /Could not establish connection|Receiving end does not exist/i.test(err.message);
-    if (!looksLikeMissing) {
+    if (!isMissingReceiver(err)) {
       endCall("fail");
       throw err;
     }
@@ -124,13 +136,24 @@ export async function callContentTool<T = unknown>(
       const baseMsg = injectErr instanceof Error ? injectErr.message : String(injectErr);
       throw new Error(`이 탭에 확장을 주입할 수 없습니다: ${baseMsg}`);
     }
-    try {
-      res = await send();
-    } catch (retryErr) {
+    let lastErr: unknown = null;
+    let delivered: ContentResponse<T> | null = null;
+    for (const delay of INJECT_READY_DELAYS_MS) {
+      await sleep(delay);
+      try {
+        delivered = await send();
+        break;
+      } catch (retryErr) {
+        lastErr = retryErr;
+        if (!isMissingReceiver(retryErr)) break;
+      }
+    }
+    if (!delivered) {
       endCall("retry_fail");
-      const baseMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      const baseMsg = lastErr instanceof Error ? lastErr.message : String(lastErr);
       throw new Error(`컨텐트 스크립트 호출 실패: ${baseMsg}`);
     }
+    res = delivered;
   }
 
   if (!res?.ok) {
