@@ -190,6 +190,7 @@ export const useChatStore = create<ChatState>((set) => ({
       conversationId: crypto.randomUUID(),
       messages: [],
       streaming: false,
+      statusText: null,
       debugEvents: s.debugEvents,
     })),
 

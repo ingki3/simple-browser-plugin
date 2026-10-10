@@ -99,7 +99,9 @@ export class ChatAgent {
   private apiKey: string | null = null;
   private model: ModelId | null = null;
   private customSystemPrompt: string | null = null;
-  private aborted = false;
+  // 턴마다 증가. 중단되거나 새 턴에 밀린 루프는 자기 번호가 현재 값과 달라지므로
+  // 늦게 끝난 도구 결과를 대화 기록에 쓰지 않고 빠진다.
+  private currentTurn = 0;
   private activeRequest: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
   private lastAttachedPdfUrl: string | null = null;
@@ -110,12 +112,39 @@ export class ChatAgent {
   constructor(private readonly port: chrome.runtime.Port) {}
 
   abort(): void {
-    this.aborted = true;
+    this.currentTurn += 1;
+    this.cancelInFlight();
+    this.stopTranslations();
+  }
+
+  private cancelInFlight(): void {
     this.activeRequest?.abort();
     this.activeRequest = null;
     for (const resolve of this.pendingApprovals.values()) resolve(false);
     this.pendingApprovals.clear();
-    this.stopTranslations();
+  }
+
+  private isStale(turn: number): boolean {
+    return turn !== this.currentTurn;
+  }
+
+  // 중단된 턴이 tool_calls만 남기고 결과를 못 채웠으면 다음 요청이 API에서 거부된다.
+  // 빠진 결과를 "중단됨"으로 채워 기록을 유효하게 만든다.
+  private closeDanglingToolCalls(): void {
+    const last = [...this.history].reverse().find((m) => m.role === "assistant");
+    if (!last || last.role !== "assistant" || !last.tool_calls?.length) return;
+    const answered = new Set(
+      this.history.flatMap((m) => (m.role === "tool" ? [m.tool_call_id] : [])),
+    );
+    for (const call of last.tool_calls) {
+      if (answered.has(call.id)) continue;
+      this.history.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: call.function.name,
+        content: JSON.stringify({ error: "interrupted" }),
+      });
+    }
   }
 
   // 백그라운드 번역 배치와 동적 재번역 옵저버를 멈춘다. 멈추지 않으면 사용자가
@@ -140,7 +169,6 @@ export class ChatAgent {
 
   reset(): void {
     this.history = [];
-    this.aborted = false;
     this.lastAttachedPdfUrl = null;
   }
 
@@ -260,7 +288,9 @@ export class ChatAgent {
   }
 
   async sendUserTurn(userText: string): Promise<void> {
-    this.aborted = false;
+    // 이전 턴이 아직 돌고 있으면 끊는다. 백그라운드 번역은 대화가 이어지는 동안 유지한다.
+    this.cancelInFlight();
+    const turn = ++this.currentTurn;
     beginKeepalive();
     const endTurn = timeSpan("turn");
     this.turnTab = await captureTurnTab();
@@ -270,11 +300,20 @@ export class ChatAgent {
       debugLog("turn:model", model);
 
       const userContent = await this.buildUserContent(userText);
+      if (this.isStale(turn)) {
+        endTurn("aborted");
+        return;
+      }
+      this.closeDanglingToolCalls();
       this.history.push({ role: "user", content: userContent });
 
-      await this.streamLoop(apiKey, model, systemPrompt);
-      endTurn(this.aborted ? "aborted" : "ok");
+      await this.streamLoop(apiKey, model, systemPrompt, turn);
+      endTurn(this.isStale(turn) ? "aborted" : "ok");
     } catch (err) {
+      if (this.isStale(turn)) {
+        endTurn("aborted");
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       debugLog("turn:error", msg, "error");
       endTurn("fail");
@@ -288,10 +327,11 @@ export class ChatAgent {
     apiKey: string,
     model: ModelId,
     systemPrompt: string,
+    turn: number,
   ): Promise<void> {
     const { maxToolHops } = await getSettings();
     for (let hop = 0; hop < maxToolHops; hop += 1) {
-      if (this.aborted) return;
+      if (this.isStale(turn)) return;
       debugLog("hop:start", `#${hop + 1}/${maxToolHops}`);
 
       const CONNECT_TIMEOUT_MS = 20_000;
@@ -331,7 +371,7 @@ export class ChatAgent {
             `OpenRouter 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
           );
         }
-        if (this.aborted) return;
+        if (this.isStale(turn)) return;
         throw err;
       } finally {
         clearTimeout(connectTimer);
@@ -399,7 +439,7 @@ export class ChatAgent {
         );
       } catch (err) {
         controller.abort();
-        if (this.aborted) return;
+        if (this.isStale(turn)) return;
         throw err;
       } finally {
         if (this.activeRequest === controller) this.activeRequest = null;
@@ -414,6 +454,7 @@ export class ChatAgent {
         "stream:done",
         `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
       );
+      if (this.isStale(turn)) return;
 
       this.history.push({
         role: "assistant",
@@ -433,6 +474,7 @@ export class ChatAgent {
       }
 
       for (const fc of functionCalls) {
+        if (this.isStale(turn)) return;
         const toolName = fc.function.name as ToolName;
         const callId = fc.id;
 
@@ -466,6 +508,7 @@ export class ChatAgent {
             this.pendingApprovals.set(callId, resolve);
           });
           this.pendingApprovals.delete(callId);
+          if (this.isStale(turn)) return;
           debugLog(
             "tool:approval_result",
             `${toolName} ${approved ? "approved" : "cancelled"}`,
@@ -489,11 +532,13 @@ export class ChatAgent {
           }
         }
 
+        // 실행 전에 등록해야 번역 도중 중단해도 translate_stop이 이 탭에 간다.
+        if (toolName === "translate_page" && "tabId" in this.turnTab) {
+          this.translatedTabs.add(this.turnTab.tabId);
+        }
         try {
           const result = await executeTool(toolName, parsedArgs, callId, this.turnTab);
-          if (toolName === "translate_page" && result.ok && "tabId" in this.turnTab) {
-            this.translatedTabs.add(this.turnTab.tabId);
-          }
+          if (this.isStale(turn)) return;
           debugLog(
             "tool:result",
             `${toolName} ${result.ok ? "ok" : "fail"} · ${result.summary.slice(0, 140)}`,
@@ -512,6 +557,7 @@ export class ChatAgent {
             content: JSON.stringify({ result: result.data }),
           });
         } catch (err) {
+          if (this.isStale(turn)) return;
           const msg = err instanceof Error ? err.message : String(err);
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
           this.history.push({
@@ -523,6 +569,8 @@ export class ChatAgent {
         }
       }
     }
+
+    if (this.isStale(turn)) return;
 
     this.send({
       kind: "error",

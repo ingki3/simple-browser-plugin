@@ -4,11 +4,13 @@ import { SettingsDrawer } from "./components/SettingsDrawer";
 import { DebugDrawer } from "./components/DebugDrawer";
 import { KO } from "./i18n/ko";
 import { useChatStore } from "./state/chatStore";
+import { useChatSession } from "./hooks/useChatSession";
 
 export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
-  const reset = useChatStore((s) => s.reset);
+  // 포트는 패널당 하나. 새 대화 버튼도 백그라운드에 알려야 진행 중인 턴·번역이 멈춘다.
+  const session = useChatSession();
   const debugCount = useChatStore((s) => s.debugEvents.length);
 
   return (
@@ -16,7 +18,7 @@ export function App() {
       <header className="app-header">
         <h1 className="app-title">{KO.appTitle}</h1>
         <div className="app-actions">
-          <button className="icon-btn" onClick={() => reset()} title={KO.newChat}>
+          <button className="icon-btn" onClick={session.resetConversation} title={KO.newChat}>
             ＋
           </button>
           <button
@@ -33,7 +35,7 @@ export function App() {
         </div>
       </header>
       <main className="app-main">
-        <ChatView />
+        <ChatView session={session} />
       </main>
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <DebugDrawer open={debugOpen} onClose={() => setDebugOpen(false)} />

@@ -13,7 +13,8 @@ export function Composer({ onSend, onAbort }: Props) {
 
   const submit = () => {
     const v = value.trim();
-    if (!v) return;
+    // 응답 중 Enter로 보내면 백그라운드에서 두 턴이 같은 대화 기록에 동시에 쓴다.
+    if (!v || streaming) return;
     onSend(v);
     setValue("");
   };
