@@ -4,7 +4,13 @@ import {
   isUsableTranslation,
   stripSegmentTags,
 } from "@/lib/translationSegments";
-import { describeRoot, getAccessibleRoots, type Root } from "./docs";
+import {
+  describeRoot,
+  getAccessibleRoots,
+  isHtmlElement,
+  isShadowRoot,
+  type Root,
+} from "./docs";
 
 // 조상 전체를 본다. 코드 블록은 <pre><span>…</span></pre>처럼 하이라이트 span 안에
 // 텍스트가 있어 부모 태그만 보면 걸러지지 않고, 블록 단위로 묶이면 수천 자짜리
@@ -45,7 +51,7 @@ function isVisible(el: Element | null): boolean {
   const win = el.ownerDocument.defaultView ?? window;
   const style = win.getComputedStyle(el);
   if (style.display === "none" || style.visibility === "hidden") return false;
-  if (el instanceof HTMLElement && el.hidden) return false;
+  if (isHtmlElement(el) && el.hidden) return false;
   return true;
 }
 
@@ -66,7 +72,7 @@ function isInViewport(node: Text): boolean {
 
 function ownerDocOf(root: Node): Document {
   if (root.nodeType === Node.DOCUMENT_NODE) return root as Document;
-  if (root instanceof ShadowRoot) return root.ownerDocument;
+  if (isShadowRoot(root)) return root.ownerDocument;
   return (root as Element).ownerDocument;
 }
 
@@ -399,7 +405,7 @@ function scheduleObserver(targetLang: string): void {
   // 초기 수집이 훑은 모든 루트(top doc + iframe docs + shadow roots)에 옵저버 부착.
   // 예전엔 document.body 하나만 감시해서 iframe/shadow 내부 변경을 놓쳤음.
   for (const root of getAccessibleRoots()) {
-    const target = root instanceof ShadowRoot ? root : root.body;
+    const target = isShadowRoot(root) ? root : root.body;
     if (!target) continue;
     const obs = new MutationObserver(handleMutations);
     obs.observe(target, { childList: true, subtree: true, characterData: true });
@@ -408,7 +414,7 @@ function scheduleObserver(targetLang: string): void {
 }
 
 function rootScanTarget(root: Root): Node | null {
-  if (root instanceof ShadowRoot) return root;
+  if (isShadowRoot(root)) return root;
   return root.body ?? null;
 }
 
