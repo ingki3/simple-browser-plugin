@@ -1,9 +1,13 @@
-import { useChatSession } from "../hooks/useChatSession";
+import type { useChatSession } from "../hooks/useChatSession";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 
-export function ChatView() {
-  const { sendUser, approveTool, cancelTool, abortStream } = useChatSession();
+interface Props {
+  session: ReturnType<typeof useChatSession>;
+}
+
+export function ChatView({ session }: Props) {
+  const { sendUser, approveTool, cancelTool, abortStream } = session;
 
   return (
     <>

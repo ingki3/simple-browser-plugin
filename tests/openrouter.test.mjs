@@ -77,3 +77,16 @@ test("translation response rejects missing items", () => {
     /길이 불일치/,
   );
 });
+
+test("translation parser accepts schema-ignoring response shapes", () => {
+  assert.deepEqual(parseTranslationResponse('["가","나"]', 2), ["가", "나"]);
+  assert.deepEqual(
+    parseTranslationResponse('[{"translations":["가","나"]}]', 2),
+    ["가", "나"],
+  );
+  assert.deepEqual(
+    parseTranslationResponse('[{"translations":["가"]}]', 1),
+    ["가"],
+  );
+  assert.throws(() => parseTranslationResponse('["가"]', 2), /길이 불일치/);
+});
