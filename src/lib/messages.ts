@@ -3,6 +3,7 @@ import type { ModelId } from "./models";
 export type ToolName =
   | "describe_page"
   | "get_page_content"
+  | "get_youtube_transcript"
   | "translate_page"
   | "find_form_fields"
   | "fill_form_fields"
@@ -74,6 +75,16 @@ export interface PageImage {
   alt: string;
   width: number;
   height: number;
+}
+
+export interface YoutubeTranscript {
+  videoId: string;
+  url: string;
+  title: string;
+  channel: string;
+  segmentCount: number;
+  transcript: string;
+  truncated: boolean;
 }
 
 export interface PageContent {

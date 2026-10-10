@@ -5,6 +5,7 @@ import type {
   PageDescription,
   PageImage,
   ToolName,
+  YoutubeTranscript,
 } from "@/lib/messages";
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
 import { normalizeNavigationUrl } from "@/lib/sanitize";
@@ -149,6 +150,16 @@ export async function executeTool(
       return {
         ok: true,
         summary: `본문 ${data.wordCount}자 추출: ${truncate(data.title, 60)}`,
+        data,
+      };
+    }
+    case "get_youtube_transcript": {
+      const data = await callContentTool<YoutubeTranscript>(toolName, parsedArgs, callId, turnTab);
+      return {
+        ok: true,
+        summary:
+          `스크립트 ${data.segmentCount}줄 추출: ${truncate(data.title, 60)}` +
+          (data.truncated ? " (일부 잘림)" : ""),
         data,
       };
     }

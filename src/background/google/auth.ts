@@ -7,6 +7,11 @@ function getManifestClientId(): string {
   return mf.oauth2?.client_id ?? "";
 }
 
+// 빌드 시 GOOGLE_OAUTH_CLIENT_ID가 없으면 Google 도구를 모델에 노출하지 않는다.
+export function isGoogleConfigured(): boolean {
+  return !!getManifestClientId() && typeof chrome.identity !== "undefined";
+}
+
 function requireOauthConfigured(): void {
   if (!getManifestClientId()) {
     throw new Error(
@@ -98,7 +103,7 @@ export interface GoogleConnectionState {
 
 export async function getGoogleConnectionState(): Promise<GoogleConnectionState> {
   const clientId = getManifestClientId();
-  const configured = !!clientId && typeof chrome.identity !== "undefined";
+  const configured = isGoogleConfigured();
   let connected = false;
   if (configured) {
     try {
