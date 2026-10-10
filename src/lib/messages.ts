@@ -85,6 +85,8 @@ export interface YoutubeTranscript {
   segmentCount: number;
   transcript: string;
   truncated: boolean;
+  // false면 대기 시간 안에 패널이 다 그려지지 않아 뒷부분이 빠졌을 수 있다.
+  complete: boolean;
 }
 
 export interface PageContent {

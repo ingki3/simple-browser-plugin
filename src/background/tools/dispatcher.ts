@@ -159,7 +159,8 @@ export async function executeTool(
         ok: true,
         summary:
           `스크립트 ${data.segmentCount}줄 추출: ${truncate(data.title, 60)}` +
-          (data.truncated ? " (일부 잘림)" : ""),
+          (data.truncated ? " (일부 잘림)" : "") +
+          (data.complete ? "" : " (로딩 미완료, 뒷부분 누락 가능)"),
         data,
       };
     }

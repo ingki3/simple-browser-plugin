@@ -7,13 +7,17 @@ const PANEL_SELECTOR =
   'ytd-engagement-panel-section-list-renderer[target-id*="transcript"]';
 // 구형(ytd-transcript-segment-renderer)과 신형(transcript-segment-view-model) UI 모두 대응.
 const SEGMENT_SELECTOR = "ytd-transcript-segment-renderer, transcript-segment-view-model";
+// 승인 없이 실행되는 도구라 클릭 대상은 스크립트 전용 컨테이너 안의 버튼으로만 한정한다.
+// 라벨 문구로 아무 버튼이나 찾으면 구독·좋아요 같은 계정 동작을 누를 수 있다.
 const OPEN_BUTTON_SELECTOR = "ytd-video-description-transcript-section-renderer button";
-const DESCRIPTION_EXPAND_SELECTOR = "ytd-watch-metadata #description-inner #expand, tp-yt-paper-button#expand";
-// 설명란 버튼을 못 찾았을 때 접근성 라벨·텍스트로 찾는다. UI 언어마다 문구가 다르다.
-const TRANSCRIPT_LABEL = /transcript|스크립트|대본|文字起こし|文字记录|字幕|transcripción|transcription|transkript/i;
+const DESCRIPTION_EXPAND_SELECTOR = "ytd-watch-metadata #description-inner #expand";
+// 로딩 중 표시. 이게 패널에 남아 있으면 아직 줄을 더 그리는 중이다.
+const LOADING_SELECTOR = "ytd-continuation-item-renderer, tp-yt-paper-spinner[active]";
 const TIMESTAMP = /^\s*(?:\d{1,2}:)?\d{1,2}:\d{2}/;
 const WAIT_MS = 10_000;
 const POLL_MS = 200;
+// 줄 수가 이 시간 동안 변하지 않고 로딩 표시가 없으면 다 그려진 것으로 본다.
+const STABLE_MS = 1_000;
 const DEFAULT_MAX_CHARS = 40_000;
 
 interface Segment {
@@ -51,32 +55,41 @@ function readSegments(): Segment[] {
 }
 
 function findOpenButton(): HTMLElement | null {
-  const direct = document.querySelector<HTMLElement>(OPEN_BUTTON_SELECTOR);
-  if (direct) return direct;
-  const candidates = document.querySelectorAll<HTMLElement>(
-    "ytd-watch-metadata button, #description button, ytd-menu-popup-renderer tp-yt-paper-item",
-  );
-  for (const el of candidates) {
-    const label = el.getAttribute("aria-label") ?? "";
-    const text = clean(el.textContent);
-    if (TRANSCRIPT_LABEL.test(label) || (text.length < 40 && TRANSCRIPT_LABEL.test(text))) {
-      return el;
-    }
-  }
-  return null;
+  return document.querySelector<HTMLElement>(OPEN_BUTTON_SELECTOR);
 }
 
-async function waitForSegments(): Promise<Segment[]> {
-  const deadline = Date.now() + WAIT_MS;
-  let last: Segment[] = [];
-  while (Date.now() < deadline) {
-    const segments = readSegments();
-    // 패널이 줄을 나눠 그리는 중일 수 있으니 개수가 한 번 더 같을 때까지 기다린다.
-    if (segments.length && segments.length === last.length) return segments;
-    last = segments;
-    await sleep(POLL_MS);
+function isLoading(): boolean {
+  return !!document.querySelector(PANEL_SELECTOR)?.querySelector(LOADING_SELECTOR);
+}
+
+// 대기 중 SPA 이동으로 다른 영상이 열리면 그 영상의 자막을 섞어 돌려주게 된다.
+function assertSameVideo(videoId: string): void {
+  if (currentVideoId() !== videoId) {
+    throw new Error("스크립트를 읽는 중에 다른 영상으로 이동했습니다. 다시 요청해 주세요.");
   }
-  return last;
+}
+
+async function waitForSegments(
+  videoId: string,
+): Promise<{ segments: Segment[]; complete: boolean }> {
+  const deadline = Date.now() + WAIT_MS;
+  let segments: Segment[] = [];
+  let lastCount = -1;
+  let stableSince = Date.now();
+  while (Date.now() < deadline) {
+    await sleep(POLL_MS);
+    assertSameVideo(videoId);
+    segments = readSegments();
+    if (segments.length !== lastCount) {
+      lastCount = segments.length;
+      stableSince = Date.now();
+      continue;
+    }
+    if (segments.length && !isLoading() && Date.now() - stableSince >= STABLE_MS) {
+      return { segments, complete: true };
+    }
+  }
+  return { segments, complete: false };
 }
 
 function closePanel(): void {
@@ -107,13 +120,14 @@ export async function getYoutubeTranscript(args: {
   }
 
   let segments = readSegments();
-  let openedByUs = false;
+  let complete = segments.length > 0 && !isLoading();
   if (!segments.length) {
     let button = findOpenButton();
     if (!button) {
       // 설명란이 접혀 있으면 스크립트 버튼이 아직 렌더링되지 않았을 수 있다.
       document.querySelector<HTMLElement>(DESCRIPTION_EXPAND_SELECTOR)?.click();
       await sleep(500);
+      assertSameVideo(videoId);
       button = findOpenButton();
     }
     if (!button) {
@@ -122,11 +136,14 @@ export async function getYoutubeTranscript(args: {
       );
     }
     button.click();
-    openedByUs = true;
-    segments = await waitForSegments();
+    try {
+      ({ segments, complete } = await waitForSegments(videoId));
+    } finally {
+      closePanel();
+    }
   }
 
-  if (openedByUs) closePanel();
+  assertSameVideo(videoId);
   if (!segments.length) {
     throw new Error(
       `스크립트 패널을 열었지만 ${WAIT_MS / 1000}초 안에 내용이 표시되지 않았습니다. 자막이 없는 영상일 수 있습니다.`,
@@ -147,5 +164,6 @@ export async function getYoutubeTranscript(args: {
     segmentCount: segments.length,
     transcript: truncated ? full.slice(0, maxChars) : full,
     truncated,
+    complete,
   };
 }

@@ -69,7 +69,7 @@ describe_page 결과를 읽는 법:
 
 YouTube 모드:
 - 탭 URL이 youtube.com/watch, /shorts/, /live/ 이고 사용자가 영상 내용(요약, 질문, 특정 장면 찾기, 번역 등)을 물으면 describe_page·get_page_content 대신 get_youtube_transcript를 먼저 호출한다. 페이지 본문에는 영상 내용이 거의 없다.
-- 결과의 타임스탬프([m:ss])를 근거로 "몇 분쯤에 나온다"를 답할 수 있다. truncated가 true면 뒷부분이 잘렸음을 알린다.
+- 결과의 타임스탬프([m:ss])를 근거로 "몇 분쯤에 나온다"를 답할 수 있다. truncated가 true이거나 complete가 false면 뒷부분이 빠졌을 수 있음을 알린다.
 - 스크립트가 없다는 오류가 오면 자막이 없는 영상일 수 있음을 알리고, 다른 도구로 내용을 추측하지 않는다.
 
 지원하지 않는 기능에 대한 규칙:
