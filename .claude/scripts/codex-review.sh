@@ -36,6 +36,9 @@ read -r -d '' PROMPT <<'EOF' || true
 구성: src/background(서비스 워커, 에이전트 루프, 도구 디스패처), src/content(페이지 DOM 도구),
 src/sidepanel(React UI), src/lib(공용 타입·스키마).
 
+리뷰 대상은 BASE_REF...HEAD 사이의 커밋이다. `git log BASE_REF..HEAD`와 `git diff BASE_REF...HEAD`로 변경을 확인하고,
+필요하면 주변 코드를 읽어 맥락을 파악해라. 파일을 수정하지 마라.
+
 변경 사항을 리뷰해라. 우선순위:
 1. 정확성 버그: 경쟁 조건, 중단/재시도 처리, 비동기 오류 누락, 타입과 런타임 불일치
 2. 보안: 페이지 콘텐츠를 통한 프롬프트 인젝션으로 민감 동작이 승인 없이 실행되는 경로,
@@ -52,12 +55,14 @@ VERDICT: PASS                (P0/P1이 하나도 없을 때)
 VERDICT: CHANGES_REQUESTED   (P0/P1이 하나라도 있을 때)
 EOF
 
+PROMPT="${PROMPT//BASE_REF/$BASE}"
+
 echo "[codex-review] $MODEL ($EFFORT) · $BASE..${HEAD_SHA:0:7} 리뷰 중…" >&2
-if ! codex exec review \
-  --base "$BASE" \
+# `codex exec review --base`는 사용자 지침과 함께 쓸 수 없어서 일반 exec에 diff 범위를 지정한다.
+if ! codex exec \
   -m "$MODEL" \
   -c "model_reasoning_effort=\"$EFFORT\"" \
-  -c 'sandbox_mode="read-only"' \
+  -s read-only \
   -c 'approval_policy="never"' \
   --ephemeral \
   --color never \
