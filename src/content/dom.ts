@@ -1,4 +1,4 @@
-import { getAccessibleDocs } from "./docs";
+import { getAccessibleRoots } from "./docs";
 
 export interface QueryResult {
   text: string;
@@ -9,11 +9,11 @@ export function queryDom(args: { selector: string; attr?: string; limit?: number
   const limit = Math.min(args.limit ?? 50, 200);
   const out: QueryResult[] = [];
 
-  for (const doc of getAccessibleDocs()) {
+  for (const root of getAccessibleRoots()) {
     if (out.length >= limit) break;
     let nodes: NodeListOf<Element>;
     try {
-      nodes = doc.querySelectorAll(args.selector);
+      nodes = root.querySelectorAll(args.selector);
     } catch (err) {
       throw new Error(`잘못된 선택자: ${(err as Error).message}`);
     }

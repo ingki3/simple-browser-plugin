@@ -1,4 +1,22 @@
 const MAX_DEPTH = 4;
+const XHTML_NS = "http://www.w3.org/1999/xhtml";
+
+// 같은 출처 iframe의 요소는 그 iframe 창의 HTMLInputElement 등으로 만들어져서
+// 이 스크립트 전역의 클래스로 instanceof 하면 항상 false다. 태그 이름으로 판별한다.
+export function isTag<K extends keyof HTMLElementTagNameMap>(
+  el: Element,
+  tag: K,
+): el is HTMLElementTagNameMap[K] {
+  return el.localName === tag && el.namespaceURI === XHTML_NS;
+}
+
+export function isHtmlElement(node: Node | null): node is HTMLElement {
+  return node?.nodeType === Node.ELEMENT_NODE && (node as Element).namespaceURI === XHTML_NS;
+}
+
+export function isShadowRoot(node: Node): node is ShadowRoot {
+  return node.nodeType === Node.DOCUMENT_FRAGMENT_NODE && "host" in node;
+}
 
 export function getAccessibleDocs(root: Document = document, depth = 0): Document[] {
   const docs: Document[] = [root];
@@ -50,11 +68,7 @@ export function getAccessibleRoots(): Root[] {
 }
 
 export function describeRoot(root: Root): string {
-  if (root instanceof ShadowRoot) {
-    const host = root.host;
-    const name = host instanceof Element ? host.tagName.toLowerCase() : "?";
-    return `shadow:${name}`;
-  }
+  if (isShadowRoot(root)) return `shadow:${root.host.localName}`;
   try {
     return root.location?.href ?? "doc";
   } catch {

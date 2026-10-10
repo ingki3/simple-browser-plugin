@@ -1,5 +1,5 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
-import { findElementByAttr, getAccessibleDocs } from "./docs";
+import { findElementByAttr, getAccessibleRoots, isShadowRoot, isTag } from "./docs";
 
 const CLICK_ATTR = "data-sbp-cid";
 let counter = 0;
@@ -40,7 +40,9 @@ function detectRegion(el: Element): PageRegion {
     if (tag === "aside" || role === "complementary") return "aside";
     if (tag === "header" || role === "banner") return "header";
     if (tag === "footer" || role === "contentinfo") return "footer";
-    cur = cur.parentElement;
+    // shadow root 경계에서는 parentElement가 null이므로 host로 넘어간다.
+    const rootNode = cur.getRootNode();
+    cur = cur.parentElement ?? (isShadowRoot(rootNode) ? rootNode.host : null);
     depth += 1;
   }
   return "other";
@@ -64,11 +66,9 @@ export function findClickables(args: {
   const q = args.query?.toLowerCase().trim() ?? "";
   const out: ClickableElement[] = [];
   const seenKeys = new Set<string>();
-  const docs = getAccessibleDocs();
-
-  for (const doc of docs) {
+  for (const root of getAccessibleRoots()) {
     if (out.length >= limit) break;
-    const nodes = doc.querySelectorAll<HTMLElement>(
+    const nodes = root.querySelectorAll<HTMLElement>(
       'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]',
     );
     for (const el of nodes) {
@@ -83,13 +83,13 @@ export function findClickables(args: {
 
       const tag = el.tagName.toLowerCase();
       const role = el.getAttribute("role") ?? "";
-      const href = el instanceof HTMLAnchorElement ? el.href : "";
+      const href = isTag(el, "a") ? el.href : "";
       const text = cleanText(
         el.innerText ||
           el.textContent ||
           el.getAttribute("aria-label") ||
           el.getAttribute("title") ||
-          (el as HTMLInputElement).value ||
+          (isTag(el, "input") ? el.value : "") ||
           "",
       );
       if (!text && !href) continue;
@@ -116,7 +116,7 @@ export function clickElement(args: { id: string }): { clicked: boolean; text: st
   if (!el) throw new Error(`id '${args.id}'에 해당하는 요소를 찾지 못했습니다.`);
 
   const text = cleanText(el.innerText || el.textContent || "");
-  const href = el instanceof HTMLAnchorElement ? el.href : "";
+  const href = isTag(el, "a") ? el.href : "";
 
   // Defer actual click so the content-script response can fly back to the
   // background before a potential navigation tears down this context.

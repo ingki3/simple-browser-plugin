@@ -1,8 +1,16 @@
 import type { FormField } from "@/lib/messages";
-import { findElementByAttr, getAccessibleDocs } from "./docs";
+import { findElementByAttr, getAccessibleRoots, isTag } from "./docs";
 
 const FIELD_ATTR = "data-sbp-fid";
+const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
+const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
 let counter = 0;
+
+type FieldElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
+function isFieldElement(el: Element): el is FieldElement {
+  return isTag(el, "input") || isTag(el, "textarea") || isTag(el, "select");
+}
 
 function isVisible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
@@ -14,24 +22,27 @@ function isVisible(el: HTMLElement): boolean {
   return true;
 }
 
-function resolveLabel(el: HTMLElement): string {
-  const doc = el.ownerDocument;
+function resolveLabel(el: FieldElement): string {
+  // shadow root 안의 필드는 label도 같은 shadow root 안에 있다.
+  const root = el.getRootNode() as Document | ShadowRoot;
   if (el.id) {
-    const byFor = doc.querySelector<HTMLLabelElement>(`label[for="${CSS.escape(el.id)}"]`);
+    const byFor = root.querySelector<HTMLLabelElement>(`label[for="${CSS.escape(el.id)}"]`);
     if (byFor?.textContent) return byFor.textContent.trim();
   }
   const aria = el.getAttribute("aria-label");
   if (aria) return aria.trim();
   const labelledBy = el.getAttribute("aria-labelledby");
   if (labelledBy) {
-    const ref = doc.getElementById(labelledBy);
-    if (ref?.textContent) return ref.textContent.trim();
+    const text = labelledBy
+      .split(/\s+/)
+      .map((id) => root.getElementById(id)?.textContent?.trim() ?? "")
+      .filter(Boolean)
+      .join(" ");
+    if (text) return text;
   }
   const wrappingLabel = el.closest("label");
   if (wrappingLabel?.textContent) return wrappingLabel.textContent.trim();
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    return el.placeholder?.trim() ?? "";
-  }
+  if (!isTag(el, "select")) return el.placeholder?.trim() ?? "";
   return "";
 }
 
@@ -44,53 +55,89 @@ function ensureId(el: HTMLElement): string {
   return id;
 }
 
-function describeType(el: HTMLElement): string {
-  if (el instanceof HTMLInputElement) return el.type || "text";
-  if (el instanceof HTMLTextAreaElement) return "textarea";
-  if (el instanceof HTMLSelectElement) return "select";
-  return el.tagName.toLowerCase();
+function describeType(el: FieldElement): string {
+  if (isTag(el, "input")) return el.type || "text";
+  if (isTag(el, "textarea")) return "textarea";
+  return "select";
+}
+
+function currentValueOf(el: FieldElement): string {
+  if (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")) {
+    return el.checked ? `checked (value=${el.value})` : `unchecked (value=${el.value})`;
+  }
+  return el.value ?? "";
 }
 
 export function findFormFields(args: { onlyVisible?: boolean }): FormField[] {
   const onlyVisible = args.onlyVisible !== false;
   const fields: FormField[] = [];
 
-  for (const doc of getAccessibleDocs()) {
-    const nodes = doc.querySelectorAll<HTMLElement>("input, textarea, select");
-    nodes.forEach((el) => {
-      if (el instanceof HTMLInputElement) {
-        const skip = ["hidden", "submit", "reset", "button", "image"];
-        if (skip.includes(el.type)) return;
-      }
+  for (const root of getAccessibleRoots()) {
+    root.querySelectorAll("input, textarea, select").forEach((el) => {
+      if (!isFieldElement(el)) return;
+      if (isTag(el, "input") && SKIP_INPUT_TYPES.has(el.type)) return;
       if (onlyVisible && !isVisible(el)) return;
-      if ((el as HTMLInputElement).disabled) return;
-      if ((el as HTMLInputElement).readOnly) return;
-
-      const id = ensureId(el);
-      const label = resolveLabel(el);
-      const placeholder =
-        el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
-          ? el.placeholder ?? ""
-          : "";
-      const currentValue =
-        el instanceof HTMLInputElement ||
-        el instanceof HTMLTextAreaElement ||
-        el instanceof HTMLSelectElement
-          ? (el as HTMLInputElement).value ?? ""
-          : "";
+      if (el.disabled) return;
+      if (!isTag(el, "select") && el.readOnly) return;
 
       fields.push({
-        id,
-        label,
-        placeholder,
+        id: ensureId(el),
+        label: resolveLabel(el),
+        placeholder: isTag(el, "select") ? "" : el.placeholder ?? "",
         type: describeType(el),
         role: el.getAttribute("role") ?? "",
-        currentValue,
+        currentValue: currentValueOf(el),
       });
     });
   }
 
   return fields;
+}
+
+// React 등은 value/checked 속성 setter를 인스턴스에 덮어써 변경을 추적한다.
+// 요소 자신의 프로토타입(= iframe이면 그 창의 프로토타입) setter로 써야 이벤트가 반영된다.
+function setNativeProperty(el: Element, prop: "value" | "checked", value: string | boolean): void {
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), prop)?.set;
+  if (setter) setter.call(el, value);
+  else (el as unknown as Record<string, unknown>)[prop] = value;
+}
+
+function dispatchChange(el: Element): void {
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function fillOne(el: FieldElement, value: string): boolean {
+  if (isTag(el, "select")) {
+    const match = Array.from(el.options).find(
+      (opt) => opt.value === value || opt.textContent?.trim() === value,
+    );
+    if (!match) return false;
+    setNativeProperty(el, "value", match.value);
+    dispatchChange(el);
+    return true;
+  }
+  if (isTag(el, "input") && el.type === "checkbox") {
+    // value 속성이 아니라 체크 상태를 바꾼다. "true"/"예" 등이면 체크, 그 외는 해제.
+    const want = TRUTHY_VALUES.test(value.trim()) || value === el.value;
+    if (el.checked !== want) {
+      setNativeProperty(el, "checked", want);
+      dispatchChange(el);
+    }
+    return true;
+  }
+  if (isTag(el, "input") && el.type === "radio") {
+    // 라디오는 해제할 수 없으니 선택만 한다. 값이 이 항목의 value이거나 참 값이면 선택.
+    if (value !== el.value && !TRUTHY_VALUES.test(value.trim())) return false;
+    if (!el.checked) {
+      setNativeProperty(el, "checked", true);
+      dispatchChange(el);
+    }
+    return true;
+  }
+  setNativeProperty(el, "value", value);
+  dispatchChange(el);
+  return true;
 }
 
 export function fillFormFields(args: {
@@ -99,29 +146,8 @@ export function fillFormFields(args: {
   let filled = 0;
   for (const f of args.fills) {
     const el = findElementByAttr(FIELD_ATTR, f.id);
-    if (!el) continue;
-
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-      const setter = Object.getOwnPropertyDescriptor(
-        el instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
-        "value",
-      )?.set;
-      if (setter) setter.call(el, f.value);
-      else el.value = f.value;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      filled += 1;
-    } else if (el instanceof HTMLSelectElement) {
-      const want = f.value;
-      const match = Array.from(el.options).find(
-        (opt) => opt.value === want || opt.textContent?.trim() === want,
-      );
-      if (match) {
-        el.value = match.value;
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        filled += 1;
-      }
-    }
+    if (!el || !isFieldElement(el)) continue;
+    if (fillOne(el, f.value)) filled += 1;
   }
   return { filledCount: filled };
 }

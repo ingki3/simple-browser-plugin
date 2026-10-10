@@ -1,5 +1,5 @@
 import type { LandmarkSnapshot, PageDescription, PageRegion } from "@/lib/messages";
-import { getAccessibleDocs } from "./docs";
+import { getAccessibleDocs, isHtmlElement, isTag } from "./docs";
 
 const REGION_SELECTORS: Record<Exclude<PageRegion, "other">, string> = {
   main: "main, [role='main']",
@@ -15,7 +15,7 @@ function clean(raw: string, max = 800): string {
 }
 
 function visibleElement(el: Element): boolean {
-  if (!(el instanceof HTMLElement)) return true;
+  if (!isHtmlElement(el)) return true;
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   const style = el.ownerDocument.defaultView?.getComputedStyle(el);
@@ -33,11 +33,11 @@ function snapshotRegion(region: PageRegion, el: Element): LandmarkSnapshot {
 
   const sampleClickables = clickables.slice(0, 8).map((c) => ({
     text: clean(c.innerText || c.textContent || c.getAttribute("aria-label") || "", 120),
-    href: c instanceof HTMLAnchorElement ? c.href : "",
+    href: isTag(c, "a") ? c.href : "",
   }));
 
   const text =
-    el instanceof HTMLElement ? el.innerText || el.textContent || "" : el.textContent || "";
+    isHtmlElement(el) ? el.innerText || el.textContent || "" : el.textContent || "";
 
   return {
     region,
@@ -102,7 +102,7 @@ export function describePage(): PageDescription {
           .slice(0, 8)
           .map((c) => ({
             text: clean(c.innerText || c.textContent || "", 120),
-            href: c instanceof HTMLAnchorElement ? c.href : "",
+            href: isTag(c, "a") ? c.href : "",
           })),
       });
     }
