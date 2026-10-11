@@ -13,7 +13,7 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
    - 리뷰 후 커밋을 추가하면 그 커밋은 다시 리뷰해야 한다.
 5. PASS 후 push하고 PR을 만든다. PR 본문에 리뷰 결과(PASS, 반영한 지적 사항)를 적는다.
 
-`gh pr create` / `gh pr merge`는 `.claude/hooks/require-codex-review.sh` 훅이 리뷰 통과 기록
+`gh pr create` / `gh pr merge`는 `.claude/hooks/require-codex-review.py` 훅이 리뷰 통과 기록
 (`.git/codex-review-passed`)이 없는 커밋에 대해 차단한다. 훅을 우회하지 않는다.
 
 리뷰를 직접 돌리려면: `.claude/scripts/codex-review.sh [base]` (기본 main).
