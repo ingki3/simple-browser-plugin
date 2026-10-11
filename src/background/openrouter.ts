@@ -17,12 +17,13 @@ import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
 import { captureTurnTab, type TurnTab } from "./tools/handlers";
 import { isGoogleConfigured } from "./google/auth";
+import { youtubeVideoId } from "@/lib/youtubeUrl";
 
 const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 탭을 돕는 한국어 에이전트다.
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
 
 절대 규칙:
-1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다. 단, 사용자가 현재 페이지와 무관하게 특정 URL이나 사이트 홈으로 이동해 달라고 명시한 경우에는 describe_page 없이 navigate_to_url을 바로 호출한다.
+1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다. 단, 사용자가 현재 페이지와 무관하게 특정 URL이나 사이트 홈으로 이동해 달라고 명시한 경우에는 describe_page 없이 navigate_to_url을 바로 호출한다. 또 YouTube 영상 페이지에서 영상 내용(요약·질문 등)을 물으면 describe_page 없이 get_youtube_transcript를 먼저 호출한다(아래 YouTube 모드).
 2. 모든 툴 호출 직전에 짧은 Thought를 텍스트로 먼저 말한다. Thought는 다음을 포함한다:
    (a) 관측 결과에 근거한 현재 페이지의 성격(어떤 종류의 사이트/화면으로 보이는지, 주요 랜드마크는 무엇인지).
    (b) 사용자의 요청이 이 페이지 맥락에서 구체적으로 무엇을 가리키는지.
@@ -229,7 +230,11 @@ export class ChatAgent {
       const url = tab.url ?? "";
       const title = tab.title ?? "";
       if (!url && !title) return "";
-      return `[탭 메타데이터 — 상세 내용은 describe_page로 관측하세요]\nURL: ${url}\n제목: ${title}`;
+      // 가벼운 모델은 시스템 프롬프트 뒤쪽의 YouTube 모드보다 이 머리말을 따르므로 여기서 도구를 안내한다.
+      const guide = youtubeVideoId(url)
+        ? "YouTube 영상 페이지 — 영상 내용(요약·질문 등)은 describe_page·get_page_content 대신 get_youtube_transcript로 먼저 확인하세요"
+        : "상세 내용은 describe_page로 관측하세요";
+      return `[탭 메타데이터 — ${guide}]\nURL: ${url}\n제목: ${title}`;
     } catch {
       return "";
     }
