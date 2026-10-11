@@ -119,9 +119,12 @@ export async function getYoutubeTranscript(args: {
     throw new Error("현재 탭이 YouTube 영상 페이지(youtube.com/watch, /shorts/, /live/)가 아닙니다.");
   }
 
-  let segments = readSegments();
-  let complete = segments.length > 0 && !isLoading();
-  if (!segments.length) {
+  let segments: Segment[];
+  let complete: boolean;
+  if (readSegments().length) {
+    // 이미 열린 패널이라도 일부만 그려진 상태일 수 있으니 안정될 때까지 기다린다.
+    ({ segments, complete } = await waitForSegments(videoId));
+  } else {
     let button = findOpenButton();
     if (!button) {
       // 설명란이 접혀 있으면 스크립트 버튼이 아직 렌더링되지 않았을 수 있다.
@@ -139,7 +142,8 @@ export async function getYoutubeTranscript(args: {
     try {
       ({ segments, complete } = await waitForSegments(videoId));
     } finally {
-      closePanel();
+      // 다른 영상으로 이동했다면 지금 패널은 사용자가 연 것일 수 있으니 건드리지 않는다.
+      if (currentVideoId() === videoId) closePanel();
     }
   }
 
