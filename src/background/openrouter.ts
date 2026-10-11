@@ -127,6 +127,8 @@ export class ChatAgent {
   // 늦게 끝난 도구 결과를 대화 기록에 쓰지 않고 빠진다.
   private currentTurn = 0;
   private activeRequest: AbortController | null = null;
+  // 백그라운드에서 직접 네트워크를 쓰는 도구(read_document)를 중단 시 함께 끊는다.
+  private activeTool: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
   private lastAttachedPdfUrl: string | null = null;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
@@ -144,6 +146,8 @@ export class ChatAgent {
   private cancelInFlight(): void {
     this.activeRequest?.abort();
     this.activeRequest = null;
+    this.activeTool?.abort();
+    this.activeTool = null;
     for (const resolve of this.pendingApprovals.values()) resolve(false);
     this.pendingApprovals.clear();
   }
@@ -564,8 +568,10 @@ export class ChatAgent {
         if (toolName === "translate_page" && "tabId" in this.turnTab) {
           this.translatedTabs.add(this.turnTab.tabId);
         }
+        const toolAbort = new AbortController();
+        this.activeTool = toolAbort;
         try {
-          const result = await executeTool(toolName, parsedArgs, callId, this.turnTab);
+          const result = await executeTool(toolName, parsedArgs, callId, this.turnTab, toolAbort.signal);
           if (this.isStale(turn)) return;
           debugLog(
             "tool:result",
@@ -594,6 +600,8 @@ export class ChatAgent {
             name: toolName,
             content: JSON.stringify({ error: msg }),
           });
+        } finally {
+          if (this.activeTool === toolAbort) this.activeTool = null;
         }
       }
     }

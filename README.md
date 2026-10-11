@@ -15,8 +15,8 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `navigate_to_url` — 현재 탭을 지정한 URL이나 사이트 홈으로 직접 이동 (승인 카드)
   - `query_dom` — CSS 선택자 기반 DOM 조회
   - `get_youtube_transcript` — YouTube 영상의 "스크립트 표시" 패널을 열어 타임스탬프 포함 자막 추출
-  - `read_document` — Word·Excel·PowerPoint(.docx/.xlsx/.pptx) 파일 URL을 내려받아 Markdown으로 변환 ([docling.rs-wasm](https://github.com/docling-project/docling.rs), 브라우저 안에서 처리, 최대 20MB)
-- **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
+  - `read_document` — Word·Excel·PowerPoint(.docx/.xlsx/.pptx) 파일 URL을 내려받아 Markdown으로 변환 ([docling.rs-wasm](https://github.com/docling-project/docling.rs), 브라우저 안에서 처리, 최대 20MB) (승인 카드)
+- **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경과 문서 URL 요청(쿠키 포함)은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
 - **OpenRouter 모델 지원** — `provider/model` 형식의 모델 ID를 직접 선택하며, reasoning과 tool calling 결과를 실시간 스트리밍
 - **사용자 기본 지침** — "모든 출력은 한글로" 같은 시스템 지침을 설정해 모든 대화에 적용
 - **모델별 reasoning 호환성** — Gemini 3 계열의 필수 effort와 gpt-oss 출력 제한·스트림 종료 처리

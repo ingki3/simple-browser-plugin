@@ -28,6 +28,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "download_images",
   "navigate_to_url",
   "click_element",
+  // 모델이 고른 URL로 쿠키를 실어 GET을 보낸다. 프롬프트 주입이 쿼리에 대화 내용을 담아 외부로 보낼 수 있다.
+  "read_document",
   "google_sheets_write_range",
   "google_sheets_append_rows",
   "google_sheets_write_markdown_table",

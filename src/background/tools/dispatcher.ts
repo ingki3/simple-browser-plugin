@@ -22,6 +22,7 @@ import {
 } from "../google/sheets";
 import { exportFile, listRecent, searchFiles } from "../google/drive";
 import { readDocument } from "../document";
+import { parseDocumentUrl } from "@/lib/documentUrl";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -70,6 +71,16 @@ export async function buildToolPreview(
       return {
         summary: `페이지 요소를 클릭합니다 (id: ${args.id}).`,
         details: `대상 id: ${args.id}\n\nfind_clickables 결과의 id로 매핑된 요소가 클릭됩니다. 링크면 해당 페이지로 이동합니다.`,
+      };
+    }
+    case "read_document": {
+      const args = parsedArgs as ToolArgs["read_document"];
+      const target = parseDocumentUrl(args.url);
+      if (!target) throw new Error("read_document: 지원하지 않는 URL입니다(.docx/.xlsx/.pptx로 끝나는 http(s) URL만 가능).");
+      const host = new URL(target.url).host;
+      return {
+        summary: `${host}에서 문서 '${truncate(target.filename, 60)}'를 로그인 쿠키와 함께 내려받아 읽습니다.`,
+        details: `${target.url}\n\nURL 전체(쿼리 포함)가 ${host}로 전송됩니다. 모르는 사이트이거나 쿼리에 대화 내용이 들어 있으면 거부하세요.`,
       };
     }
     case "navigate_to_url": {
@@ -134,6 +145,7 @@ export async function executeTool(
   parsedArgs: unknown,
   callId: string,
   turnTab: TurnTab,
+  signal?: AbortSignal,
 ): Promise<ToolExecResult> {
   switch (toolName) {
     case "describe_page": {
@@ -166,7 +178,7 @@ export async function executeTool(
       };
     }
     case "read_document": {
-      const data = await readDocument(parsedArgs as ToolArgs["read_document"]);
+      const data = await readDocument(parsedArgs as ToolArgs["read_document"], signal);
       return {
         ok: true,
         summary:

@@ -6,6 +6,7 @@ import { debugLog, timeSpan } from "./debug";
 
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_CHARS = 40_000;
+const FETCH_TIMEOUT_MS = 30_000;
 
 // wasm(약 15MB)은 처음 문서를 읽을 때 한 번만 컴파일한다. 서비스 워커가 다시 뜨면 다시 초기화된다.
 let doclingReady: Promise<unknown> | null = null;
@@ -30,14 +31,53 @@ function ensureDocling(): Promise<unknown> {
   return doclingReady;
 }
 
-async function fetchDocument(url: string, filename: string): Promise<Uint8Array> {
-  let res: Response;
-  try {
-    res = await fetch(url, { credentials: "include" });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`문서를 내려받지 못했습니다(네트워크 오류: ${msg}). 브라우저에서 이 URL이 직접 열리는지 확인해 주세요.`);
+function tooLarge(bytes: number): Error {
+  return new Error(`문서가 너무 큽니다(${Math.round(bytes / 1024 / 1024)}MB 이상). 20MB 이하만 지원합니다.`);
+}
+
+// 길이 헤더가 없거나 거짓이어도 20MB를 넘는 순간 끊는다.
+async function readCapped(res: Response): Promise<Uint8Array> {
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_DOCUMENT_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge(total);
+    }
+    chunks.push(value);
   }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+async function fetchDocument(url: string, filename: string, signal?: AbortSignal): Promise<Uint8Array> {
+  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  try {
+    // 리다이렉트는 따라간다(CDN 서명 URL 등). 시작 URL은 사용자가 승인 카드에서 확인한다.
+    const res = await fetch(url, { credentials: "include", signal: combined });
+    return await readResponse(res, filename);
+  } catch (err) {
+    if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
+    if (timeout.aborted) throw new Error(`문서를 ${FETCH_TIMEOUT_MS / 1000}초 안에 내려받지 못했습니다.`);
+    if (err instanceof TypeError) {
+      throw new Error(`문서를 내려받지 못했습니다(네트워크 오류: ${err.message}). 브라우저에서 이 URL이 직접 열리는지 확인해 주세요.`);
+    }
+    throw err;
+  }
+}
+
+async function readResponse(res: Response, filename: string): Promise<Uint8Array> {
   if (!res.ok) {
     throw new Error(`문서 가져오기 실패: HTTP ${res.status} ${res.statusText}`);
   }
@@ -50,24 +90,27 @@ async function fetchDocument(url: string, filename: string): Promise<Uint8Array>
   }
   const declared = Number(res.headers.get("content-length") ?? "0");
   if (declared > MAX_DOCUMENT_BYTES) {
-    throw new Error(`문서가 너무 큽니다(${Math.round(declared / 1024 / 1024)}MB). 20MB 이하만 지원합니다.`);
+    await res.body?.cancel().catch(() => {});
+    throw tooLarge(declared);
   }
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength === 0) throw new Error("문서가 비어 있습니다.");
-  if (buf.byteLength > MAX_DOCUMENT_BYTES) {
-    throw new Error(`문서가 너무 큽니다(${Math.round(buf.byteLength / 1024 / 1024)}MB). 20MB 이하만 지원합니다.`);
-  }
-  return new Uint8Array(buf);
+  const bytes = await readCapped(res);
+  if (bytes.byteLength === 0) throw new Error("문서가 비어 있습니다.");
+  return bytes;
 }
 
-export async function readDocument(args: { url: string; maxChars?: number }): Promise<DocumentContent> {
+export async function readDocument(
+  args: { url: string; maxChars?: number },
+  signal?: AbortSignal,
+): Promise<DocumentContent> {
   const target = parseDocumentUrl(args.url);
   if (!target) {
     throw new Error(
       "read_document는 경로가 .docx, .xlsx, .pptx로 끝나는 http(s) URL만 읽을 수 있습니다. 확장자가 없는 다운로드 링크나 미리보기 페이지는 지원하지 않습니다.",
     );
   }
-  const [bytes] = await Promise.all([fetchDocument(target.url, target.filename), ensureDocling()]);
+  const [bytes] = await Promise.all([fetchDocument(target.url, target.filename, signal), ensureDocling()]);
+  // 중단된 턴이면 (동기라 끊을 수 없는) 변환을 시작하지 않는다.
+  if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
 
   const endConvert = timeSpan("document:convert");
   let markdown: string;
