@@ -30,7 +30,8 @@ PASSED="$GIT_DIR/codex-review-passed"
 # 로컬 main에 미푸시 커밋이 있으면 그만큼 리뷰에서 빠지므로 로컬 브랜치를 기준으로 쓰지 않는다.
 RECORD=0
 if [ "$BASE" = "main" ]; then
-  if ! git fetch -q origin main; then
+  # single-branch clone에도 origin/main이 생기도록 목적지를 명시한다.
+  if ! git fetch -q origin "+refs/heads/main:refs/remotes/origin/main"; then
     echo "origin main을 가져오지 못했습니다. 네트워크를 확인한 뒤 다시 실행하세요." >&2
     exit 3
   fi
@@ -50,19 +51,34 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   exit 3
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+# pid와 모든 자손 프로세스를 TERM으로 끝내고, 3초 안에 안 끝나면 KILL한다.
+descendants() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null); do
+    echo "$child"
+    descendants "$child"
+  done
+}
+kill_tree() {
+  local pids i
+  pids="$1 $(descendants "$1")"
+  kill -TERM $pids 2>/dev/null
+  for i in $(seq 15); do
+    kill -0 $pids 2>/dev/null || return 0
+    sleep 0.2
+  done
+  kill -KILL $pids 2>/dev/null
+  return 0
+}
+
 # 중단되면 codex와 감시 프로세스를 먼저 끝내고 lock을 푼다. 남은 codex가 같은 결과 파일을 덮어쓰지 않게.
 on_signal() {
   set +e  # 정리 명령이 실패해도(자식 없음 등) 끝까지 진행한다.
-  if [ -n "${WATCHDOG_PID:-}" ]; then
-    pkill -P "$WATCHDOG_PID" 2>/dev/null
-    kill "$WATCHDOG_PID" 2>/dev/null
-  fi
+  [ -n "${WATCHDOG_PID:-}" ] && kill_tree "$WATCHDOG_PID"
   if [ -n "${CODEX_PID:-}" ]; then
-    pkill -TERM -P "$CODEX_PID" 2>/dev/null
-    kill "$CODEX_PID" 2>/dev/null
+    kill_tree "$CODEX_PID"
     wait "$CODEX_PID" 2>/dev/null
-    # 종료를 확인한 뒤에야 lock을 푼다(EXIT 트랩).
-    while kill -0 "$CODEX_PID" 2>/dev/null; do sleep 0.2; done
   fi
   exit 4
 }
@@ -122,7 +138,10 @@ codex exec \
   -o "$OUT" \
   "$PROMPT" </dev/null >"$LOG" 2>&1 &
 CODEX_PID=$!
-( exec 2>/dev/null; sleep "$TIMEOUT_S" && kill "$CODEX_PID" 2>/dev/null && echo "[codex-review] ${TIMEOUT_S}초 초과로 중단" >>"$LOG" ) &
+( exec 2>/dev/null; trap - INT TERM; set +e
+  sleep "$TIMEOUT_S" || exit 0
+  echo "[codex-review] ${TIMEOUT_S}초 초과로 중단" >>"$LOG"
+  kill_tree "$CODEX_PID" ) &
 WATCHDOG_PID=$!
 CODEX_RC=0
 wait "$CODEX_PID" || CODEX_RC=$?

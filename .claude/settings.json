@@ -12,7 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/require-codex-review.py"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/require-codex-review.py || { rc=$?; [ $rc -eq 2 ] || echo \"require-codex-review 훅 실행 실패(코드 $rc). python3 확인 필요. 안전을 위해 차단합니다.\" >&2; exit 2; }"
           }
         ]
       }

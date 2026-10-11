@@ -19,8 +19,8 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 셸을 해석하지 않고 허용 목록으로 검사하므로, 명령 어디든 `gh`와 `pr`이 보이면 다음 형식만 통과한다.
 
 - 다른 명령과 묶지 않고 단독 실행(`&&`, `;`, `|`, `$`, 백틱, `bash -c`, `eval`, `gh -R`/`gh pr -R` 불가).
-- 생성: PASS한 커밋을 push한 뒤 `gh pr create --base main --title … --body-file …`.
-  원격 브랜치 SHA가 PASS 기록과 같아야 한다.
+- 생성: PASS한 커밋을 push한 뒤 `gh pr create --base main --head <브랜치> --title … --body-file …`.
+  origin의 그 브랜치 SHA가 PASS 기록과 같아야 한다.
 - 머지: `gh pr merge <번호> --squash --match-head-commit <PASS한 전체 SHA>`. PR base는 main이어야 한다.
   `--auto`, `--admin`은 불가.
 - 옵션은 허용 목록에 있는 것만, 붙여 쓰지 않고(`-Hx`, `-fH` 불가), 한 번씩만 쓴다.

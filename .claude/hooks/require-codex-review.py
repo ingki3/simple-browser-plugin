@@ -10,8 +10,8 @@
 
 - gh pr merge <번호> [허용 옵션] --match-head-commit <PASS한 SHA>
   gh가 실행 시점에 head를 고정한다. --auto/--admin 불가, PR base는 main.
-- gh pr create|new --base main [허용 옵션]
-  원격 브랜치(--head 또는 현재 브랜치)의 SHA가 PASS 기록에 있어야 한다.
+- gh pr create|new --base main --head <브랜치> [허용 옵션]
+  origin의 그 브랜치 SHA가 PASS 기록에 있어야 한다.
 
 기록(.git/codex-review-passed)은 .claude/scripts/codex-review.sh가 main 대비 PASS일 때만 남긴다.
 종료 코드 2면 명령이 차단된다.
@@ -58,7 +58,7 @@ USAGE = (
     "PR 생성·머지 명령은 다음 형식으로 단독 실행하세요(다른 명령과 묶기, $(...), bash -c, eval,\n"
     "gh 전역 옵션, 붙여 쓴 짧은 옵션, 중복 옵션, 목록에 없는 옵션은 차단).\n"
     "  머지: gh pr merge <번호> --squash --match-head-commit <Codex PASS한 전체 SHA>\n"
-    "  생성: 리뷰 통과 커밋을 push한 뒤 gh pr create --base main --title ... --body-file ...\n"
+    "  생성: 리뷰 통과 커밋을 push한 뒤 gh pr create --base main --head <브랜치> --title ... --body-file ...\n"
     "커밋 메시지 등에 gh와 pr이 함께 들어가면 git commit -F <파일>로 넘기세요."
 )
 
@@ -187,17 +187,15 @@ def check(action: str, args: list[str], allowed: dict[str, bool], passed: set[st
         return f"gh pr create에 알 수 없는 인자: {positional[0]}"
     if opts.get("--base") != BASE_BRANCH:
         return f"gh pr create에는 --base {BASE_BRANCH}를 명시해야 합니다."
-    head = opts.get("--head")
-    if head is not None and ":" in head:
-        return f"--head {head}: 다른 저장소의 브랜치는 확인할 수 없습니다."
-    branch = head or run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"])
+    # --head를 생략하면 gh가 추적 설정 등으로 브랜치를 고르므로 검사 대상과 어긋날 수 있다.
+    branch = opts.get("--head")
     if not branch:
-        return "현재 브랜치를 확인할 수 없습니다(detached HEAD)."
+        return "gh pr create에는 --head <브랜치>를 명시해야 합니다."
+    if ":" in branch:
+        return f"--head {branch}: 다른 저장소의 브랜치는 확인할 수 없습니다."
     remote = remote_branch_sha(branch)
     if not remote:
         return f"origin/{branch}가 없습니다. 리뷰 통과 커밋을 먼저 push하세요."
-    if head is None and remote != run(["git", "rev-parse", "HEAD"]):
-        return f"origin/{branch}({remote[:7]})가 로컬 HEAD와 다릅니다. push 상태를 맞춘 뒤 다시 실행하세요."
     if remote not in passed:
         return f"origin/{branch}({remote[:7]})는 Codex 리뷰 통과 기록이 없는 커밋입니다."
     return None
@@ -253,4 +251,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:  # 훅 오류가 비차단으로 넘어가지 않게 차단으로 바꾼다.
+        print(f"require-codex-review 훅 내부 오류로 차단합니다: {e!r}", file=sys.stderr)
+        sys.exit(2)
