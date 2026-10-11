@@ -217,11 +217,15 @@ def main() -> int:
         return block(f"gh pr {words[2]}: 허용 목록에 없는 하위 명령입니다.")
     action, allowed = ACTIONS[words[2]]
 
-    project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or "."
+    # 명령이 실제로 실행될 디렉터리(worktree일 수 있음)를 기준으로 검사한다.
+    workdir = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or "."
     try:
-        os.chdir(project)
+        os.chdir(workdir)
     except OSError:
-        pass
+        return block(f"작업 디렉터리 {workdir}에 들어갈 수 없습니다.")
+    # gh의 기본 저장소가 origin이 아닐 수 있는 구성(fork + upstream 등)은 검사 대상을 확신할 수 없다.
+    if run(["git", "remote"]).split() != ["origin"]:
+        return block("원격이 origin 하나가 아닌 저장소에서는 PR 생성·머지를 검사할 수 없습니다.")
     passed: set[str] = set()
     git_dir = run(["git", "rev-parse", "--git-common-dir"])
     if git_dir:

@@ -44,11 +44,17 @@ fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 # 중단되면 codex와 감시 프로세스를 먼저 끝내고 lock을 푼다. 남은 codex가 같은 결과 파일을 덮어쓰지 않게.
 on_signal() {
-  [ -n "${WATCHDOG_PID:-}" ] && { pkill -P "$WATCHDOG_PID"; kill "$WATCHDOG_PID"; } 2>/dev/null
+  set +e  # 정리 명령이 실패해도(자식 없음 등) 끝까지 진행한다.
+  if [ -n "${WATCHDOG_PID:-}" ]; then
+    pkill -P "$WATCHDOG_PID" 2>/dev/null
+    kill "$WATCHDOG_PID" 2>/dev/null
+  fi
   if [ -n "${CODEX_PID:-}" ]; then
     pkill -TERM -P "$CODEX_PID" 2>/dev/null
     kill "$CODEX_PID" 2>/dev/null
     wait "$CODEX_PID" 2>/dev/null
+    # 종료를 확인한 뒤에야 lock을 푼다(EXIT 트랩).
+    while kill -0 "$CODEX_PID" 2>/dev/null; do sleep 0.2; done
   fi
   exit 4
 }
@@ -128,7 +134,12 @@ if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ] || [ -n "$(git status --porcelain)
   exit 3
 fi
 
-VERDICT="$(grep -E '^[[:space:]]*VERDICT:[[:space:]]*(PASS|CHANGES_REQUESTED)[[:space:]]*$' "$OUT" | tail -1 | tr -d '[:space:]' || true)"
+# 판정은 응답의 마지막 비어 있지 않은 줄만 인정한다. 본문 중간의 예시 문구는 무시한다.
+LAST_LINE="$(awk 'NF { last = $0 } END { print last }' "$OUT")"
+VERDICT=""
+if [[ "$LAST_LINE" =~ ^[[:space:]]*VERDICT:[[:space:]]*(PASS|CHANGES_REQUESTED)[[:space:]]*$ ]]; then
+  VERDICT="VERDICT:${BASH_REMATCH[1]}"
+fi
 case "$VERDICT" in
   VERDICT:PASS)
     if [ "$RECORD" = 1 ]; then
@@ -143,7 +154,7 @@ case "$VERDICT" in
     exit 1
     ;;
   *)
-    echo "[codex-review] 응답에서 VERDICT 줄을 찾지 못했습니다. 통과로 간주하지 않습니다. (전문: $OUT)" >&2
+    echo "[codex-review] 응답의 마지막 줄이 VERDICT 형식이 아닙니다. 통과로 간주하지 않습니다. (전문: $OUT)" >&2
     exit 5
     ;;
 esac
