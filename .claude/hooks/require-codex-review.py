@@ -152,6 +152,12 @@ def run(cmd: list[str]) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def repo_slug(url: str) -> str:
+    """git@github.com:o/r.git, https://github.com/o/r(.git) -> o/r. GitHub 외 호스트는 빈 문자열."""
+    m = re.match(r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)([^/]+/[^/]+?)(?:\.git)?/?$", url)
+    return m.group(1) if m else ""
+
+
 def remote_branch_sha(branch: str) -> str:
     out = run(["git", "ls-remote", "origin", f"refs/heads/{branch}"])
     return out.split()[0] if out else ""
@@ -226,6 +232,13 @@ def main() -> int:
     # gh의 기본 저장소가 origin이 아닐 수 있는 구성(fork + upstream 등)은 검사 대상을 확신할 수 없다.
     if run(["git", "remote"]).split() != ["origin"]:
         return block("원격이 origin 하나가 아닌 저장소에서는 PR 생성·머지를 검사할 수 없습니다.")
+    # GH_REPO·set-default 등으로 gh가 다른 저장소를 대상으로 하면 로컬 기록과 맞지 않는다.
+    if os.environ.get("GH_REPO") or os.environ.get("GH_HOST"):
+        return block("GH_REPO/GH_HOST가 설정되어 있으면 PR 대상 저장소를 확신할 수 없습니다.")
+    origin_repo = repo_slug(run(["git", "remote", "get-url", "origin"]))
+    gh_repo = run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"])
+    if not origin_repo or origin_repo.lower() != gh_repo.lower():
+        return block(f"gh 대상 저장소({gh_repo or '확인 불가'})가 origin({origin_repo or '확인 불가'})과 다릅니다.")
     passed: set[str] = set()
     git_dir = run(["git", "rev-parse", "--git-common-dir"])
     if git_dir:

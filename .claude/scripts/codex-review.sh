@@ -21,19 +21,27 @@ if [ -n "$(git status --porcelain)" ]; then
   git status --short >&2
   exit 3
 fi
-if [ -z "$(git log --oneline "$BASE..HEAD")" ]; then
-  echo "$BASE 대비 새 커밋이 없습니다. 리뷰할 변경이 없습니다." >&2
-  exit 3
-fi
 
 # 리뷰 도중 브랜치가 바뀌어도 리뷰 범위와 기록 SHA가 어긋나지 않게 SHA로 고정한다.
 HEAD_SHA="$(git rev-parse HEAD)"
-BASE_SHA="$(git merge-base "$BASE" HEAD)"
 GIT_DIR="$(git rev-parse --git-common-dir)"
 PASSED="$GIT_DIR/codex-review-passed"
-# PR은 main으로 머지되므로 main 대비 전체 범위를 리뷰했을 때만 통과를 기록한다.
-RECORD=1
-[ "$BASE" = "main" ] || RECORD=0
+# PR은 원격 main으로 머지되므로 origin/main 대비 전체 범위를 리뷰했을 때만 통과를 기록한다.
+# 로컬 main에 미푸시 커밋이 있으면 그만큼 리뷰에서 빠지므로 로컬 브랜치를 기준으로 쓰지 않는다.
+RECORD=0
+if [ "$BASE" = "main" ]; then
+  if ! git fetch -q origin main; then
+    echo "origin main을 가져오지 못했습니다. 네트워크를 확인한 뒤 다시 실행하세요." >&2
+    exit 3
+  fi
+  BASE="origin/main"
+  RECORD=1
+fi
+BASE_SHA="$(git merge-base "$BASE" HEAD)"
+if [ -z "$(git log --oneline "$BASE_SHA..HEAD")" ]; then
+  echo "$BASE 대비 새 커밋이 없습니다. 리뷰할 변경이 없습니다." >&2
+  exit 3
+fi
 
 # 같은 저장소에서 리뷰가 겹치면 통과 기록 갱신이 꼬이므로 한 번에 하나만 실행한다.
 LOCK="$GIT_DIR/codex-review.lock"
