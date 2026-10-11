@@ -22,7 +22,7 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 - 생성: PASS한 커밋을 push한 뒤 `gh pr create --base main --head <브랜치> --title … --body-file …`.
   origin의 그 브랜치 SHA가 PASS 기록과 같아야 한다.
 - 머지: `gh pr merge <번호> --squash --match-head-commit <PASS한 전체 SHA>`. PR base는 main이어야 한다.
-  `--auto`, `--admin`은 불가.
+  `--auto`, `--admin`은 불가. PR이 바로 머지 가능(CLEAN)하고 main에 merge queue가 없어야 한다.
 - 옵션은 허용 목록에 있는 것만, 붙여 쓰지 않고(`-Hx`, `-fH` 불가), 한 번씩만 쓴다.
 - `gh pr view/list/status/checks/diff/edit/comment/close/reopen/ready`는 단독 실행이면 통과한다.
 - 커밋 메시지에 `gh`와 `pr`이 함께 들어가면 차단되므로 `git commit -F <파일>`로 넘긴다.

@@ -11,6 +11,7 @@
 
 - gh pr merge <번호> [허용 옵션] --match-head-commit <PASS한 SHA>
   gh가 실행 시점에 head를 고정한다. --auto/--admin 불가, PR base는 main.
+  PR이 바로 머지 가능(CLEAN)하고 main에 merge queue가 없어야 한다(자동 머지 예약 방지).
 - gh pr create|new --base main --head <브랜치> [허용 옵션]
   origin의 그 브랜치 SHA가 PASS 기록에 있어야 한다.
 
@@ -147,8 +148,8 @@ def parse_args(args: list[str], allowed: dict[str, bool]) -> tuple[dict[str, str
 
 def run(cmd: list[str]) -> str:
     try:
-        # 호출은 최대 4번. settings.json의 훅 timeout(90초) 안에 끝나도록 짧게 둔다.
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        # 호출은 최대 7번. settings.json의 훅 timeout(90초) 안에 끝나도록 짧게 둔다.
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
@@ -158,6 +159,17 @@ def repo_slug(url: str) -> str:
     """git@github.com:o/r.git, https://github.com/o/r(.git) -> o/r. GitHub 외 호스트는 빈 문자열."""
     m = re.match(r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)([^/]+/[^/]+?)(?:\.git)?/?$", url)
     return m.group(1) if m else ""
+
+
+def has_merge_queue() -> bool:
+    """main에 merge queue가 있거나 확인할 수 없으면 True."""
+    owner, _, name = repo_slug(run(["git", "remote", "get-url", "origin"])).partition("/")
+    if not owner or not name:
+        return True
+    query = 'query($o:String!,$n:String!,$b:String!){repository(owner:$o,name:$n){mergeQueue(branch:$b){id}}}'
+    out = run(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"o={owner}", "-f", f"n={name}",
+               "-f", f"b={BASE_BRANCH}", "-q", ".data.repository.mergeQueue == null"])
+    return out != "true"
 
 
 def remote_branch_sha(branch: str) -> str:
@@ -180,9 +192,17 @@ def check(action: str, args: list[str], allowed: dict[str, bool], passed: set[st
             return "gh pr merge에 --match-head-commit <리뷰 통과 SHA>가 없습니다."
         if sha not in passed:
             return f"--match-head-commit {sha}는 Codex 리뷰 통과 기록이 없는 커밋입니다."
-        base = run(["gh", "pr", "view", positional[0], "--json", "baseRefName", "-q", ".baseRefName"])
+        state = run(["gh", "pr", "view", positional[0], "--json", "baseRefName,mergeStateStatus",
+                     "-q", '.baseRefName + " " + .mergeStateStatus']).split()
+        base, merge_state = (state + ["", ""])[:2]
         if base != BASE_BRANCH:
             return f"PR의 base({base or '확인 불가'})가 {BASE_BRANCH}가 아닙니다. 리뷰 기록은 {BASE_BRANCH} 대비로만 남습니다."
+        # 즉시 머지되지 않으면 gh가 자동 머지·merge queue로 예약하고, 이후 push된 미리뷰 커밋이
+        # 훅을 다시 거치지 않고 머지될 수 있다. 바로 머지 가능한 상태에서만 허용한다.
+        if merge_state != "CLEAN":
+            return f"PR이 바로 머지 가능한 상태(CLEAN)가 아닙니다({merge_state or '확인 불가'}). 자동 머지 예약은 허용하지 않습니다."
+        if has_merge_queue():
+            return f"{BASE_BRANCH}에 merge queue가 있어 머지가 예약될 수 있습니다."
         return None
 
     if positional:
