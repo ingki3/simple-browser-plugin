@@ -10,6 +10,8 @@ set -euo pipefail
 BASE="${1:-main}"
 MODEL="${CODEX_REVIEW_MODEL:-gpt-6.1-sol}"
 EFFORT="${CODEX_REVIEW_EFFORT:-high}"
+# 리뷰어 에이전트의 Bash 호출 제한(10분) 안에 끝나도록 9분으로 둔다.
+TIMEOUT_S="${CODEX_REVIEW_TIMEOUT:-540}"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -59,7 +61,9 @@ PROMPT="${PROMPT//BASE_REF/$BASE}"
 
 echo "[codex-review] $MODEL ($EFFORT) · $BASE..${HEAD_SHA:0:7} 리뷰 중…" >&2
 # `codex exec review --base`는 사용자 지침과 함께 쓸 수 없어서 일반 exec에 diff 범위를 지정한다.
-if ! codex exec \
+# stdin이 열려 있으면 codex가 추가 입력을 기다리며 영원히 멈추므로 /dev/null을 물린다.
+# macOS에는 timeout(1)이 없어서 감시 프로세스로 시간 제한을 건다.
+codex exec \
   -m "$MODEL" \
   -c "model_reasoning_effort=\"$EFFORT\"" \
   -s read-only \
@@ -67,7 +71,14 @@ if ! codex exec \
   --ephemeral \
   --color never \
   -o "$OUT" \
-  "$PROMPT" >"$LOG" 2>&1; then
+  "$PROMPT" </dev/null >"$LOG" 2>&1 &
+CODEX_PID=$!
+( exec 2>/dev/null; sleep "$TIMEOUT_S" && kill "$CODEX_PID" 2>/dev/null && echo "[codex-review] ${TIMEOUT_S}초 초과로 중단" >>"$LOG" ) &
+WATCHDOG_PID=$!
+CODEX_RC=0
+wait "$CODEX_PID" || CODEX_RC=$?
+{ pkill -P "$WATCHDOG_PID"; kill "$WATCHDOG_PID"; wait "$WATCHDOG_PID"; } 2>/dev/null || true
+if [ "$CODEX_RC" -ne 0 ]; then
   echo "[codex-review] codex 실행 실패 (로그: $LOG)" >&2
   tail -20 "$LOG" >&2
   exit 4
