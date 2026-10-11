@@ -8,3 +8,4 @@ dist
 *.jpg
 *.jpeg
 !public/icons/*.png
+__pycache__/
