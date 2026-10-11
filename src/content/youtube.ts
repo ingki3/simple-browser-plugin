@@ -1,4 +1,5 @@
 import type { YoutubeTranscript } from "@/lib/messages";
+import { youtubeVideoId } from "@/lib/youtubeUrl";
 
 // 자막 트랙 URL(timedtext)을 직접 받아오는 방식은 2025년부터 플레이어가 만드는
 // PO 토큰 없이는 빈 응답이 온다. 대신 YouTube 화면의 "스크립트 표시" 패널을 열어
@@ -40,10 +41,7 @@ function clean(raw: string | null | undefined): string {
 }
 
 function currentVideoId(): string | null {
-  if (!/(^|\.)youtube\.com$/i.test(location.hostname)) return null;
-  const url = new URL(location.href);
-  if (url.pathname === "/watch") return url.searchParams.get("v");
-  return url.pathname.match(/^\/(?:shorts|live)\/([\w-]{6,})/)?.[1] ?? null;
+  return youtubeVideoId(location.href);
 }
 
 function findPanel(): Element | null {
