@@ -18,14 +18,18 @@ import subprocess
 import sys
 
 SEPARATORS = set(";&|()`\n")
-# 따옴표·치환 안에 숨은 것까지 포함해 원문에서 gh ... pr ... create|merge 흔적을 찾는다.
-LOOSE = re.compile(r"\bgh\b.*\bpr\b.*\b(create|merge)\b", re.S)
+# 따옴표·치환·bash -c·eval 안에 숨은 것까지 포함해 원문에서 흔적을 찾는다.
+# 커밋 메시지에 이 문구를 쓰면 함께 차단되지만, 놓치는 것보다 낫다.
+LOOSE = re.compile(r"\bgh\b.*\bpr\b.*\b(create|new|merge)\b", re.S)
+ACTIONS = {"create": "create", "new": "create", "merge": "merge"}
+# PASS 기록은 main 대비 리뷰에 대해서만 남는다(codex-review.sh).
+BASE_BRANCH = "main"
 
 USAGE = (
-    "gh pr create / gh pr merge는 다른 명령과 묶지 말고 단독으로 실행하세요"
-    " (&&, ;, |, $(...), gh 전역 옵션 불가).\n"
+    "PR 생성·머지 명령은 다른 명령과 묶지 말고 단독으로 실행하세요"
+    " (&&, ;, |, $(...), bash -c, eval, gh 전역 옵션, 중복 옵션 불가).\n"
     "  머지: gh pr merge <번호> --squash --match-head-commit <Codex PASS한 SHA>\n"
-    "  생성: 리뷰 통과 커밋을 push한 뒤 gh pr create ... (-R/--repo 불가)"
+    "  생성: 리뷰 통과 커밋을 push한 뒤 gh pr create ... (-R/--repo 불가, base는 main)"
 )
 
 
@@ -77,26 +81,46 @@ def split_commands(cmd: str) -> list[list[str]]:
     return commands
 
 
-def mentions_pr_op(cmd: str, commands: list[list[str]]) -> bool:
-    """gh pr create/merge가 실행될 수 있는 명령인가. 판단이 애매하면 True(검사 대상)."""
-    for words in commands:
-        if any(os.path.basename(w) == "gh" for w in words) and "pr" in words and (
-            "create" in words or "merge" in words
-        ):
-            return True
-    # 큰따옴표 안의 $(...)나 백틱은 위 파서가 문자열로 취급하므로 원문으로 한 번 더 본다.
-    return ("$(" in cmd or "`" in cmd) and bool(LOOSE.search(cmd))
+def mentions_pr_op(cmd: str) -> bool:
+    """PR 생성·머지가 실행될 수 있는 명령인가. 판단이 애매하면 True(검사 대상)."""
+    return bool(LOOSE.search(cmd))
 
 
-def flag_value(args: list[str], short: str, long: str) -> str | None:
-    """-X v, -Xv, --long v, --long=v 모두 인식한다."""
+class DuplicateFlag(Exception):
+    pass
+
+
+def flag_value(args: list[str], short: str | None, long: str) -> str | None:
+    """-X v, -Xv, --long v, --long=v 모두 인식한다. gh는 뒤의 값으로 덮어쓰므로 중복은 거부한다."""
+    found: list[str] = []
     for i, a in enumerate(args):
         if a in (short, long):
-            return args[i + 1] if i + 1 < len(args) else ""
-        if a.startswith(long + "="):
-            return a[len(long) + 1:]
-        if a.startswith(short) and not a.startswith("--") and len(a) > len(short):
-            return a[len(short):]
+            found.append(args[i + 1] if i + 1 < len(args) else "")
+        elif a.startswith(long + "="):
+            found.append(a[len(long) + 1:])
+        elif short and a.startswith(short) and not a.startswith("--") and len(a) > len(short):
+            found.append(a[len(short):])
+    if len(found) > 1:
+        raise DuplicateFlag(long)
+    return found[0] if found else None
+
+
+# gh pr merge에서 값을 받는 옵션. 이 뒤의 단어는 PR 지정자가 아니다.
+MERGE_VALUE_FLAGS = {
+    "-b", "--body", "-F", "--body-file", "-t", "--subject",
+    "-A", "--author-email", "--match-head-commit",
+}
+
+
+def merge_target(args: list[str]) -> str | None:
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in MERGE_VALUE_FLAGS:
+            skip = True
+        elif not a.startswith("-"):
+            return a
     return None
 
 
@@ -115,16 +139,32 @@ def remote_branch_sha(branch: str) -> str:
 
 def check(action: str, args: list[str], passed: set[str]) -> str | None:
     """통과면 None, 아니면 차단 사유."""
+    try:
+        return check_flags(action, args, passed)
+    except DuplicateFlag as e:
+        return f"{e} 옵션이 여러 번 지정되었습니다."
+
+
+def check_flags(action: str, args: list[str], passed: set[str]) -> str | None:
+    if flag_value(args, "-R", "--repo") is not None:
+        return "-R/--repo는 허용하지 않습니다(대상 커밋을 확인할 수 없음)."
+
     if action == "merge":
-        sha = flag_value(args, "--match-head-commit", "--match-head-commit")
+        sha = flag_value(args, None, "--match-head-commit")
         if not sha:
             return "gh pr merge에 --match-head-commit <리뷰 통과 SHA>가 없습니다."
         if sha not in passed:
             return f"--match-head-commit {sha}는 Codex 리뷰 통과 기록이 없는 커밋입니다."
+        target = merge_target(args)
+        view = ["gh", "pr", "view"] + ([target] if target else []) + ["--json", "baseRefName", "-q", ".baseRefName"]
+        base = run(view)
+        if base != BASE_BRANCH:
+            return f"PR의 base({base or '확인 불가'})가 {BASE_BRANCH}가 아닙니다. 리뷰 기록은 {BASE_BRANCH} 대비로만 남습니다."
         return None
 
-    if flag_value(args, "-R", "--repo") is not None:
-        return "gh pr create의 -R/--repo는 허용하지 않습니다(대상 커밋을 확인할 수 없음)."
+    base = flag_value(args, "-B", "--base")
+    if base not in (None, BASE_BRANCH):
+        return f"base {base}: 리뷰 기록은 {BASE_BRANCH} 대비로만 남습니다."
     head = flag_value(args, "-H", "--head")
     if head is not None and ":" in head:
         return f"--head {head}: 다른 저장소의 브랜치는 확인할 수 없습니다."
@@ -144,9 +184,9 @@ def check(action: str, args: list[str], passed: set[str]) -> str | None:
 def main() -> int:
     data = json.load(sys.stdin)
     cmd = (data.get("tool_input") or {}).get("command") or ""
-    commands = split_commands(cmd)
-    if not mentions_pr_op(cmd, commands):
+    if not mentions_pr_op(cmd):
         return 0
+    commands = split_commands(cmd)
 
     def block(reason: str) -> int:
         print(f"차단: {reason}\n{USAGE}\n리뷰는 codex-reviewer 에이전트로 받으세요.", file=sys.stderr)
@@ -160,9 +200,9 @@ def main() -> int:
         or len(commands[0]) < 3
         or commands[0][0] != "gh"
         or commands[0][1] != "pr"
-        or commands[0][2] not in ("create", "merge")
+        or commands[0][2] not in ACTIONS
     ):
-        return block("검사할 수 없는 형식의 gh pr create/merge 명령입니다.")
+        return block("검사할 수 없는 형식의 PR 생성·머지 명령입니다.")
 
     project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or "."
     try:
@@ -178,7 +218,7 @@ def main() -> int:
         except OSError:
             pass
 
-    reason = check(commands[0][2], commands[0][3:], passed)
+    reason = check(ACTIONS[commands[0][2]], commands[0][3:], passed)
     return block(reason) if reason else 0
 
 

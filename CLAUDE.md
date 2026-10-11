@@ -19,7 +19,11 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 
 - 다른 명령과 묶지 않고 단독으로 실행한다(`&&`, `;`, `|`, `$(...)`, `gh -R … pr` 불가).
 - 생성: PASS한 커밋을 push한 뒤 `gh pr create …`. 원격 브랜치 SHA가 PASS 기록과 같아야 하고 `-R`은 쓸 수 없다.
-- 머지: `gh pr merge <번호> --squash --match-head-commit <PASS한 전체 SHA>`.
+- 머지: `gh pr merge <번호> --squash --match-head-commit <PASS한 전체 SHA>`. PR base는 main이어야 한다.
+- 중복 옵션, `bash -c`·`eval` 감싸기, `gh pr new` 별칭도 같은 규칙으로 검사한다.
+- 명령 문자열 어디든 `gh … pr … create|new|merge` 순서의 단어가 있으면 검사 대상이 된다.
+  커밋 메시지·PR 본문에 이런 문구를 쓸 때는 `git commit -F <파일>`, `--body-file`로 넘긴다.
+- 통과 기록은 main 대비 리뷰에서만 남는다. 리뷰는 한 번에 하나만 실행된다.
 
 리뷰를 직접 돌리려면: `.claude/scripts/codex-review.sh [base]` (기본 main).
 모델·추론 강도·시간 제한은 `CODEX_REVIEW_MODEL`, `CODEX_REVIEW_EFFORT`, `CODEX_REVIEW_TIMEOUT`

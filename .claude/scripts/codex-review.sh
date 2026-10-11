@@ -31,6 +31,18 @@ HEAD_SHA="$(git rev-parse HEAD)"
 BASE_SHA="$(git merge-base "$BASE" HEAD)"
 GIT_DIR="$(git rev-parse --git-common-dir)"
 PASSED="$GIT_DIR/codex-review-passed"
+# PR은 main으로 머지되므로 main 대비 전체 범위를 리뷰했을 때만 통과를 기록한다.
+RECORD=1
+[ "$BASE" = "main" ] || RECORD=0
+
+# 같은 저장소에서 리뷰가 겹치면 통과 기록 갱신이 꼬이므로 한 번에 하나만 실행한다.
+LOCK="$GIT_DIR/codex-review.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "다른 Codex 리뷰가 실행 중입니다. 끝난 뒤 다시 실행하세요. (멈춘 실행이 남긴 것이면 $LOCK 삭제)" >&2
+  exit 3
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+trap 'exit 4' INT TERM
 OUT_DIR="$GIT_DIR/codex-review"
 mkdir -p "$OUT_DIR"
 OUT="$OUT_DIR/$HEAD_SHA.md"
@@ -109,8 +121,12 @@ fi
 VERDICT="$(grep -E '^[[:space:]]*VERDICT:[[:space:]]*(PASS|CHANGES_REQUESTED)[[:space:]]*$' "$OUT" | tail -1 | tr -d '[:space:]' || true)"
 case "$VERDICT" in
   VERDICT:PASS)
-    echo "$HEAD_SHA" >>"$PASSED"
-    echo "[codex-review] PASS — ${HEAD_SHA:0:7} 통과 기록 (전문: $OUT)"
+    if [ "$RECORD" = 1 ]; then
+      echo "$HEAD_SHA" >>"$PASSED"
+      echo "[codex-review] PASS — ${HEAD_SHA:0:7} 통과 기록 (전문: $OUT)"
+    else
+      echo "[codex-review] PASS — base가 main이 아니라 통과 기록은 남기지 않습니다. PR 전에는 main 대비로 다시 리뷰하세요. (전문: $OUT)"
+    fi
     ;;
   VERDICT:CHANGES_REQUESTED)
     echo "[codex-review] CHANGES_REQUESTED — 지적 사항을 수정·커밋한 뒤 다시 리뷰하세요. (전문: $OUT)"
