@@ -15,9 +15,15 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 
 `gh pr create` / `gh pr merge`는 `.claude/hooks/require-codex-review.py` 훅이 리뷰 통과 기록
 (`.git/codex-review-passed`)이 없는 커밋에 대해 차단한다. 훅을 우회하지 않는다.
+훅이 대상을 확실히 검사할 수 있도록 다음 형식만 허용한다.
+
+- 다른 명령과 묶지 않고 단독으로 실행한다(`&&`, `;`, `|`, `$(...)`, `gh -R … pr` 불가).
+- 생성: PASS한 커밋을 push한 뒤 `gh pr create …`. 원격 브랜치 SHA가 PASS 기록과 같아야 하고 `-R`은 쓸 수 없다.
+- 머지: `gh pr merge <번호> --squash --match-head-commit <PASS한 전체 SHA>`.
 
 리뷰를 직접 돌리려면: `.claude/scripts/codex-review.sh [base]` (기본 main).
-모델·추론 강도는 `CODEX_REVIEW_MODEL`, `CODEX_REVIEW_EFFORT` 환경변수로 바꿀 수 있다(기본 gpt-6.1-sol, high).
+모델·추론 강도·시간 제한은 `CODEX_REVIEW_MODEL`, `CODEX_REVIEW_EFFORT`, `CODEX_REVIEW_TIMEOUT`
+환경변수로 바꿀 수 있다(기본 gpt-6.1-sol, high, 540초).
 
 ## 테스트 메모
 
