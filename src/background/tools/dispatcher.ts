@@ -21,6 +21,7 @@ import {
   writeRange,
 } from "../google/sheets";
 import { exportFile, listRecent, searchFiles } from "../google/drive";
+import { readDocument } from "../document";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -161,6 +162,16 @@ export async function executeTool(
           `스크립트 ${data.segmentCount}줄 추출: ${truncate(data.title, 60)}` +
           (data.truncated ? " (일부 잘림)" : "") +
           (data.complete ? "" : " (로딩 미완료, 뒷부분 누락 가능)"),
+        data,
+      };
+    }
+    case "read_document": {
+      const data = await readDocument(parsedArgs as ToolArgs["read_document"]);
+      return {
+        ok: true,
+        summary:
+          `문서 변환: ${truncate(data.filename, 60)} (${data.format}, ${data.totalChars}자)` +
+          (data.truncated ? ` (앞 ${data.markdown.length}자만 전달)` : ""),
         data,
       };
     }

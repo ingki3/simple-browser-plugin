@@ -14,6 +14,8 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `find_clickables` / `click_element` — 링크·버튼 탐색·클릭 (승인 카드)
   - `navigate_to_url` — 현재 탭을 지정한 URL이나 사이트 홈으로 직접 이동 (승인 카드)
   - `query_dom` — CSS 선택자 기반 DOM 조회
+  - `get_youtube_transcript` — YouTube 영상의 "스크립트 표시" 패널을 열어 타임스탬프 포함 자막 추출
+  - `read_document` — Word·Excel·PowerPoint(.docx/.xlsx/.pptx) 파일 URL을 내려받아 Markdown으로 변환 ([docling.rs-wasm](https://github.com/docling-project/docling.rs), 브라우저 안에서 처리, 최대 20MB)
 - **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
 - **OpenRouter 모델 지원** — `provider/model` 형식의 모델 ID를 직접 선택하며, reasoning과 tool calling 결과를 실시간 스트리밍
 - **사용자 기본 지침** — "모든 출력은 한글로" 같은 시스템 지침을 설정해 모든 대화에 적용
@@ -44,6 +46,8 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
 - "이 페이지 요약해줘"
 - "PXG 골프공 검색해서 가장 싼 스토어로 이동해줘"
 - PDF 탭에서: "이 논문 요약해줘", "결론 부분만 번역해줘", "첨부된 계약서의 핵심 조항 뽑아줘"
+- YouTube 영상에서: "이 영상 요약해줘", "가격 얘기는 몇 분쯤 나와?"
+- 문서 링크가 있는 페이지에서: "이 페이지의 엑셀 파일 내용 정리해줘", "https://…/report.docx 요약해줘"
 
 ## 개발
 

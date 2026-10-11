@@ -12,6 +12,13 @@ export const getYoutubeTranscriptArgs = z
   })
   .strict();
 
+export const readDocumentArgs = z
+  .object({
+    url: z.string().min(1).max(2048),
+    maxChars: z.number().int().min(1000).max(100_000).optional(),
+  })
+  .strict();
+
 export const translatePageArgs = z
   .object({
     targetLang: z.string().min(2).max(10),
@@ -153,6 +160,7 @@ export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
   get_youtube_transcript: getYoutubeTranscriptArgs,
+  read_document: readDocumentArgs,
   translate_page: translatePageArgs,
   find_form_fields: findFormFieldsArgs,
   fill_form_fields: fillFormFieldsArgs,

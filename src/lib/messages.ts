@@ -4,6 +4,7 @@ export type ToolName =
   | "describe_page"
   | "get_page_content"
   | "get_youtube_transcript"
+  | "read_document"
   | "translate_page"
   | "find_form_fields"
   | "fill_form_fields"
@@ -87,6 +88,17 @@ export interface YoutubeTranscript {
   truncated: boolean;
   // false면 대기 시간 안에 패널이 다 그려지지 않아 뒷부분이 빠졌을 수 있다.
   complete: boolean;
+}
+
+export interface DocumentContent {
+  url: string;
+  filename: string;
+  format: "docx" | "xlsx" | "pptx";
+  bytes: number;
+  // 변환된 Markdown 전체 길이. truncated면 markdown은 앞부분만 담는다.
+  totalChars: number;
+  markdown: string;
+  truncated: boolean;
 }
 
 export interface PageContent {

@@ -50,6 +50,10 @@ export default defineManifest({
     "identity",
   ],
   host_permissions: ["<all_urls>"],
+  // read_document의 문서 변환기(docling.rs-wasm)가 WebAssembly를 쓴다. MV3는 'wasm-unsafe-eval'만 따로 허용할 수 있다.
+  content_security_policy: {
+    extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+  },
   minimum_chrome_version: "116",
   ...(GOOGLE_OAUTH_CLIENT_ID
     ? {
