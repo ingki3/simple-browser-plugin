@@ -1,7 +1,7 @@
 import initDocling, { convert } from "docling.rs-wasm/web";
 import doclingWasmUrl from "docling.rs-wasm/web/docling_wasm_bg.wasm?url";
 import { parseDocumentUrl } from "@/lib/documentUrl";
-import { zipXmlUncompressedBytes } from "@/lib/zipInspect";
+import { sanitizeOfficeZip, ZipRejected } from "@/lib/zipSanitize";
 import type { DocumentContent } from "@/lib/messages";
 import { debugLog, timeSpan } from "./debug";
 
@@ -9,6 +9,8 @@ const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_CHARS = 40_000;
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_XML_BYTES = 6 * 1024 * 1024;
+// 이미지 등 포함 전체. 변환기는 이미지를 쓰지 않지만 다시 만든 zip이 메모리에 올라간다.
+const MAX_TOTAL_BYTES = 40 * 1024 * 1024;
 
 // wasm(약 15MB)은 처음 문서를 읽을 때 한 번만 컴파일한다. 서비스 워커가 다시 뜨면 다시 초기화된다.
 let doclingReady: Promise<unknown> | null = null;
@@ -118,18 +120,23 @@ export async function readDocument(
   // 중단된 턴이면 (동기라 끊을 수 없는) 변환을 시작하지 않는다.
   if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
   // 변환은 서비스 워커에서 동기로 돌고 비용이 XML 크기에 비례한다(실측: 8MB → 약 0.5초·375MB).
-  // 압축률이 높은 거대 문서는 변환 전에 거른다.
-  const xmlBytes = zipXmlUncompressedBytes(bytes);
-  if (xmlBytes === "zip64" || (xmlBytes !== null && xmlBytes > MAX_XML_BYTES)) {
-    throw new Error(
-      `${target.filename}은(는) 압축을 풀면 너무 큽니다${typeof xmlBytes === "number" ? `(${(xmlBytes / 1024 / 1024).toFixed(1)}MB)` : ""}. 본문 XML 기준 ${MAX_XML_BYTES / 1024 / 1024}MB 이하 문서만 읽을 수 있습니다. 문서를 나누거나 필요한 부분만 복사해 붙여 주세요.`,
-    );
+  // zip 목차의 크기 값은 꾸밀 수 있으므로 직접 풀며 세고, 검증된 내용으로 다시 만든 zip만 변환기에 넘긴다.
+  let sanitized: Uint8Array;
+  try {
+    sanitized = (await sanitizeOfficeZip(bytes, { maxXmlBytes: MAX_XML_BYTES, maxTotalBytes: MAX_TOTAL_BYTES })).bytes;
+  } catch (err) {
+    if (!(err instanceof ZipRejected)) throw err;
+    const hint = err.tooLarge
+      ? "문서를 나누거나 필요한 부분만 복사해 붙여 주세요."
+      : "파일이 손상됐거나 지원하지 않는 형식일 수 있습니다.";
+    throw new Error(`${target.filename}을(를) 읽을 수 없습니다: ${err.message}. ${hint}`);
   }
+  if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
 
   const endConvert = timeSpan("document:convert");
   let markdown: string;
   try {
-    markdown = convert(bytes, target.filename, "md");
+    markdown = convert(sanitized, target.filename, "md");
     endConvert("ok");
   } catch (err) {
     endConvert("fail");
