@@ -104,6 +104,12 @@ src/sidepanel(React UI), src/lib(공용 타입·스키마).
 4. MV3 제약: 서비스 워커 수명, content script 주입 시점, 권한
 스타일·취향 지적은 하지 않는다.
 
+위협 모델(.claude/ 아래 훅·리뷰 스크립트 변경에 적용): 이 도구들은 Claude Code 에이전트가 리뷰를
+빠뜨리거나 리뷰 후 커밋을 추가한 채 PR을 올리는 실수를 막는 절차 가드다. 다음은 범위 밖이므로
+P2 이하로만 분류한다: 셸 접근 권한자의 의도적 우회, 다른 작업자의 동시 push로 인한 검사-실행 사이 경쟁,
+Claude Code 훅 실행기 자체의 장애·타임아웃. 에이전트가 평범하게 쓰는 명령에서 게이트가 잘못 열리거나
+정상 작업이 막히는 문제는 범위 안이다.
+
 각 지적 사항은 [P0]~[P3] 심각도, 파일:줄, 실패 시나리오(어떤 입력/상태에서 어떻게 틀리는지)를 적는다.
 P0/P1은 머지를 막아야 하는 문제, P2/P3는 권고다.
 
@@ -138,14 +144,23 @@ codex exec \
   -o "$OUT" \
   "$PROMPT" </dev/null >"$LOG" 2>&1 &
 CODEX_PID=$!
+TIMED_OUT="$OUT_DIR/.timed-out.$$"
+rm -f "$TIMED_OUT"
 ( exec 2>/dev/null; trap - INT TERM; set +e
   sleep "$TIMEOUT_S" || exit 0
+  : >"$TIMED_OUT"
   echo "[codex-review] ${TIMEOUT_S}초 초과로 중단" >>"$LOG"
   kill_tree "$CODEX_PID" ) &
 WATCHDOG_PID=$!
 CODEX_RC=0
 wait "$CODEX_PID" || CODEX_RC=$?
-{ pkill -P "$WATCHDOG_PID"; kill "$WATCHDOG_PID"; wait "$WATCHDOG_PID"; } 2>/dev/null || true
+if [ -e "$TIMED_OUT" ]; then
+  # 타임아웃 정리(TERM 후 KILL)가 끝날 때까지 기다린 뒤 진행한다. 중간에 끊으면 자손이 살아남는다.
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  rm -f "$TIMED_OUT"
+else
+  { pkill -P "$WATCHDOG_PID"; kill "$WATCHDOG_PID"; wait "$WATCHDOG_PID"; } 2>/dev/null || true
+fi
 if [ "$CODEX_RC" -ne 0 ]; then
   echo "[codex-review] codex 실행 실패 (로그: $LOG)" >&2
   tail -20 "$LOG" >&2

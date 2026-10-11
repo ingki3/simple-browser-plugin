@@ -3,7 +3,8 @@
 
 위협 모델: 이 훅은 Claude Code가 리뷰를 빠뜨리거나 리뷰 후 커밋을 추가한 채 PR을 올리는
 실수를 막는 절차 가드다. 셸 접근 권한을 가진 사람의 의도적 우회는 막지 못하며(훅 파일
-수정, 다른 터미널 사용 등), 그 경우의 강제는 GitHub 브랜치 보호의 몫이다.
+수정, 다른 터미널 사용 등), 그 경우의 강제는 GitHub 브랜치 보호의 몫이다. 훅 검사 직후
+다른 작업자가 같은 브랜치에 push하는 경쟁(PR 생성 시)과 훅 실행기 자체의 장애도 범위 밖이다.
 
 셸 구문을 해석하는 대신 허용 목록으로 검사한다. 명령 어딘가에 gh와 pr이 보이면
 다음 표준형만 허용하고 나머지는 모두 차단한다.
@@ -146,7 +147,8 @@ def parse_args(args: list[str], allowed: dict[str, bool]) -> tuple[dict[str, str
 
 def run(cmd: list[str]) -> str:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # 호출은 최대 4번. settings.json의 훅 timeout(90초) 안에 끝나도록 짧게 둔다.
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
