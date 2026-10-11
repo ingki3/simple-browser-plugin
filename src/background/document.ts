@@ -1,12 +1,14 @@
 import initDocling, { convert } from "docling.rs-wasm/web";
 import doclingWasmUrl from "docling.rs-wasm/web/docling_wasm_bg.wasm?url";
 import { parseDocumentUrl } from "@/lib/documentUrl";
+import { zipXmlUncompressedBytes } from "@/lib/zipInspect";
 import type { DocumentContent } from "@/lib/messages";
 import { debugLog, timeSpan } from "./debug";
 
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_CHARS = 40_000;
 const FETCH_TIMEOUT_MS = 30_000;
+const MAX_XML_BYTES = 6 * 1024 * 1024;
 
 // wasm(약 15MB)은 처음 문서를 읽을 때 한 번만 컴파일한다. 서비스 워커가 다시 뜨면 다시 초기화된다.
 let doclingReady: Promise<unknown> | null = null;
@@ -64,14 +66,18 @@ async function fetchDocument(url: string, filename: string, signal?: AbortSignal
   const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
-    // 리다이렉트는 따라간다(CDN 서명 URL 등). 시작 URL은 사용자가 승인 카드에서 확인한다.
-    const res = await fetch(url, { credentials: "include", signal: combined });
+    // 리다이렉트는 따라가지 않는다. 승인한 URL이 로그인된 다른 사이트의 상태 변경 GET으로
+    // 302를 보내면 쿠키를 실어 그대로 실행되기 때문이다(승인 카드에는 시작 URL만 보인다).
+    const res = await fetch(url, { credentials: "include", redirect: "error", signal: combined });
     return await readResponse(res, filename);
   } catch (err) {
     if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
     if (timeout.aborted) throw new Error(`문서를 ${FETCH_TIMEOUT_MS / 1000}초 안에 내려받지 못했습니다.`);
     if (err instanceof TypeError) {
-      throw new Error(`문서를 내려받지 못했습니다(네트워크 오류: ${err.message}). 브라우저에서 이 URL이 직접 열리는지 확인해 주세요.`);
+      // redirect: "error"로 막힌 경우도 TypeError로 온다.
+      throw new Error(
+        `문서를 내려받지 못했습니다(${err.message}). 다른 주소로 리다이렉트되는 링크(로그인·다운로드 중계 페이지 등)는 안전을 위해 읽지 않습니다. 파일을 직접 가리키는 URL인지 확인해 주세요.`,
+      );
     }
     throw err;
   }
@@ -111,6 +117,14 @@ export async function readDocument(
   const [bytes] = await Promise.all([fetchDocument(target.url, target.filename, signal), ensureDocling()]);
   // 중단된 턴이면 (동기라 끊을 수 없는) 변환을 시작하지 않는다.
   if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
+  // 변환은 서비스 워커에서 동기로 돌고 비용이 XML 크기에 비례한다(실측: 8MB → 약 0.5초·375MB).
+  // 압축률이 높은 거대 문서는 변환 전에 거른다.
+  const xmlBytes = zipXmlUncompressedBytes(bytes);
+  if (xmlBytes === "zip64" || (xmlBytes !== null && xmlBytes > MAX_XML_BYTES)) {
+    throw new Error(
+      `${target.filename}은(는) 압축을 풀면 너무 큽니다${typeof xmlBytes === "number" ? `(${(xmlBytes / 1024 / 1024).toFixed(1)}MB)` : ""}. 본문 XML 기준 ${MAX_XML_BYTES / 1024 / 1024}MB 이하 문서만 읽을 수 있습니다. 문서를 나누거나 필요한 부분만 복사해 붙여 주세요.`,
+    );
+  }
 
   const endConvert = timeSpan("document:convert");
   let markdown: string;

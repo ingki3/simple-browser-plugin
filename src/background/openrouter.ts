@@ -79,6 +79,8 @@ YouTube 모드:
 - 링크를 클릭(click_element)하면 파일이 내려받아질 뿐 내용을 읽을 수 없으니, 내용을 보려고 클릭하지 않는다.
 - 엑셀은 시트별 표, 파워포인트는 슬라이드별(제목은 #)로 온다. truncated가 true면 앞부분만 읽었음을 알린다.
 - 경로가 .docx/.xlsx/.pptx로 끝나지 않는 링크(확장자 없는 다운로드 링크, 미리보기 페이지)와 .doc/.xls/.ppt 구형 형식은 읽을 수 없다고 안내한다.
+- 다른 주소로 리다이렉트되는 링크와 압축을 풀면 아주 큰 문서는 안전을 위해 읽지 않는다. 이런 오류가 오면 같은 URL로 다시 시도하지 말고 사용자에게 사유를 전한다.
+- read_document는 승인 카드를 거친다. 사용자가 거부하면 다시 요청하지 않는다.
 
 지원하지 않는 기능에 대한 규칙:
 - 이 확장에는 채팅 첨부 파일 버튼, 클립 아이콘, 파일 업로드 다이얼로그가 없다. 모델이 임의로 "업로드해 주세요"라고 안내하지 말 것.
@@ -526,7 +528,22 @@ export class ChatAgent {
         }
 
         if (SENSITIVE_TOOLS.has(toolName)) {
-          const preview = await buildToolPreview(toolName, parsedArgs);
+          let preview: Awaited<ReturnType<typeof buildToolPreview>>;
+          try {
+            preview = await buildToolPreview(toolName, parsedArgs);
+          } catch (err) {
+            // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
+            if (this.isStale(turn)) return;
+            const msg = err instanceof Error ? err.message : String(err);
+            this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
+            this.history.push({
+              role: "tool",
+              tool_call_id: callId,
+              name: toolName,
+              content: JSON.stringify({ error: msg }),
+            });
+            continue;
+          }
           debugLog("tool:awaiting_approval", `${toolName}`);
           this.send({
             kind: "tool_pending",
