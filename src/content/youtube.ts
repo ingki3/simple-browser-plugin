@@ -165,7 +165,12 @@ export async function getYoutubeTranscript(args: {
     }
     // 클릭으로 새로 펼쳐진 패널만 도구가 연 것으로 보고 닫는다. 내용이 안 뜬 패널도 닫아야 한다.
     const before = new Set(expandedPanels());
-    const opened = () => expandedPanels().filter((p) => !before.has(p));
+    // 대기 중 사용자가 연 댓글 등 다른 패널은 제외한다. 스크립트 패널의 target-id는 없거나 transcript를 포함한다.
+    const opened = () =>
+      expandedPanels().filter((p) => {
+        const target = p.getAttribute("target-id");
+        return !before.has(p) && (!target || target === "null" || /transcript/i.test(target));
+      });
     button.click();
     try {
       ({ segments, complete } = await waitForSegments(videoId));
