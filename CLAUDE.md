@@ -15,14 +15,17 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 
 `gh pr create` / `gh pr merge`는 `.claude/hooks/require-codex-review.py` 훅이 리뷰 통과 기록
 (`.git/codex-review-passed`)이 없는 커밋에 대해 차단한다. 훅을 우회하지 않는다.
-훅이 대상을 확실히 검사할 수 있도록 다음 형식만 허용한다.
+훅은 Claude가 리뷰를 빠뜨리는 실수를 막는 절차 가드다(의도적 우회 방지는 GitHub 브랜치 보호의 몫).
+셸을 해석하지 않고 허용 목록으로 검사하므로, 명령 어디든 `gh`와 `pr`이 보이면 다음 형식만 통과한다.
 
-- 다른 명령과 묶지 않고 단독으로 실행한다(`&&`, `;`, `|`, `$(...)`, `gh -R … pr` 불가).
-- 생성: PASS한 커밋을 push한 뒤 `gh pr create …`. 원격 브랜치 SHA가 PASS 기록과 같아야 하고 `-R`은 쓸 수 없다.
+- 다른 명령과 묶지 않고 단독 실행(`&&`, `;`, `|`, `$`, 백틱, `bash -c`, `eval`, `gh -R`/`gh pr -R` 불가).
+- 생성: PASS한 커밋을 push한 뒤 `gh pr create --base main --title … --body-file …`.
+  원격 브랜치 SHA가 PASS 기록과 같아야 한다.
 - 머지: `gh pr merge <번호> --squash --match-head-commit <PASS한 전체 SHA>`. PR base는 main이어야 한다.
-- 중복 옵션, `bash -c`·`eval` 감싸기, `gh pr new` 별칭도 같은 규칙으로 검사한다.
-- 명령 문자열 어디든 `gh … pr … create|new|merge` 순서의 단어가 있으면 검사 대상이 된다.
-  커밋 메시지·PR 본문에 이런 문구를 쓸 때는 `git commit -F <파일>`, `--body-file`로 넘긴다.
+  `--auto`, `--admin`은 불가.
+- 옵션은 허용 목록에 있는 것만, 붙여 쓰지 않고(`-Hx`, `-fH` 불가), 한 번씩만 쓴다.
+- `gh pr view/list/status/checks/diff/edit/comment/close/reopen/ready`는 단독 실행이면 통과한다.
+- 커밋 메시지에 `gh`와 `pr`이 함께 들어가면 차단되므로 `git commit -F <파일>`로 넘긴다.
 - 통과 기록은 main 대비 리뷰에서만 남는다. 리뷰는 한 번에 하나만 실행된다.
 
 리뷰를 직접 돌리려면: `.claude/scripts/codex-review.sh [base]` (기본 main).

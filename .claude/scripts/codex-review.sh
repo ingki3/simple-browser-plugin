@@ -42,7 +42,17 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   exit 3
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-trap 'exit 4' INT TERM
+# 중단되면 codex와 감시 프로세스를 먼저 끝내고 lock을 푼다. 남은 codex가 같은 결과 파일을 덮어쓰지 않게.
+on_signal() {
+  [ -n "${WATCHDOG_PID:-}" ] && { pkill -P "$WATCHDOG_PID"; kill "$WATCHDOG_PID"; } 2>/dev/null
+  if [ -n "${CODEX_PID:-}" ]; then
+    pkill -TERM -P "$CODEX_PID" 2>/dev/null
+    kill "$CODEX_PID" 2>/dev/null
+    wait "$CODEX_PID" 2>/dev/null
+  fi
+  exit 4
+}
+trap on_signal INT TERM
 OUT_DIR="$GIT_DIR/codex-review"
 mkdir -p "$OUT_DIR"
 OUT="$OUT_DIR/$HEAD_SHA.md"
