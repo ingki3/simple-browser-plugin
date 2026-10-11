@@ -6,6 +6,7 @@ import { listPageImages } from "./images";
 import { queryDom } from "./dom";
 import { findClickables, clickElement } from "./clickables";
 import { describePage } from "./describe";
+import { getYoutubeTranscript } from "./youtube";
 
 async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
   switch (toolName) {
@@ -13,6 +14,10 @@ async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
       return describePage();
     case "get_page_content":
       return extractMainContent();
+    case "get_youtube_transcript":
+      return getYoutubeTranscript(
+        (args ?? {}) as { includeTimestamps?: boolean; maxChars?: number },
+      );
     case "translate_page":
       return translatePage(args as { targetLang: string; scope?: "visible" | "article" });
     case "find_form_fields":

@@ -3,6 +3,7 @@ import type { ModelId } from "./models";
 export type ToolName =
   | "describe_page"
   | "get_page_content"
+  | "get_youtube_transcript"
   | "translate_page"
   | "find_form_fields"
   | "fill_form_fields"
@@ -74,6 +75,18 @@ export interface PageImage {
   alt: string;
   width: number;
   height: number;
+}
+
+export interface YoutubeTranscript {
+  videoId: string;
+  url: string;
+  title: string;
+  channel: string;
+  segmentCount: number;
+  transcript: string;
+  truncated: boolean;
+  // false면 대기 시간 안에 패널이 다 그려지지 않아 뒷부분이 빠졌을 수 있다.
+  complete: boolean;
 }
 
 export interface PageContent {

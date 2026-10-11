@@ -16,6 +16,7 @@ import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
 import { captureTurnTab, type TurnTab } from "./tools/handlers";
+import { isGoogleConfigured } from "./google/auth";
 
 const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 탭을 돕는 한국어 에이전트다.
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
@@ -57,7 +58,7 @@ describe_page 결과를 읽는 법:
 - list_page_images / download_images: 이미지 목록 → 저장(민감).
 - translate_page: 페이지 전체 번역.
 - query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회.
-- google_sheets_* / google_drive_*: Google Sheets · Drive 직접 조작. 아래 Google Workspace 모드 섹션 참조.
+- get_youtube_transcript: YouTube 영상 페이지의 자막 스크립트(타임스탬프 포함) 추출.
 
 일반 규칙:
 - 페이지와 무관한 잡담·일반 번역·개념 질문은 툴 없이 바로 답한다.
@@ -66,14 +67,14 @@ describe_page 결과를 읽는 법:
 - translate_page 결과의 inProgress가 true면 첫 화면 번역이 적용됐고 나머지는 백그라운드에서 진행 중이라는 뜻이다. 성공 직후 get_page_content로 번역 여부를 재검사하지 말고, 사용자에게 번역이 시작됐으며 순차 적용 중이라고 알린다.
 - translate_page가 타임아웃 또는 일부 실패한 뒤 get_page_content에서 대상 언어 텍스트가 보이면, 확장이 완료한 일부 배치일 수 있다. 이를 Medium·브라우저 자동 번역이라고 근거 없이 단정하지 않는다.
 
-Google Workspace 모드:
-- 탭 URL이 docs.google.com/spreadsheets/d/{ID}면 {ID}가 spreadsheetId. URL hash의 gid·range로 현재 시트와 선택 범위도 추출 가능. drive.google.com이면 Drive UI.
-- 이런 Google 앱 탭에서는 describe_page·find_clickables·query_dom 등 DOM 조작 툴이 캔버스·가상 렌더링 때문에 쓸모없다. 대신 google_sheets_*·google_drive_* 툴을 쓴다.
-- Sheets 쓰기 전에는 반드시 google_sheets_list / google_sheets_read_range 로 현재 구조를 확인한다. Google Docs 문서 수정 기능은 이 확장이 지원하지 않는다 (Drive export로 읽기·다운로드는 가능).
-- 사용자가 표 형태 데이터를 원하면 google_sheets_write_markdown_table로 markdown 표를 한 번에 시트에 반영할 수 있다.
-- Drive 검색은 Drive API q 문법 (예: "mimeType='application/vnd.google-apps.spreadsheet' and name contains '예산'", "'folderId' in parents").
-- Google 인증 실패 메시지가 tool_result에 오면 사용자에게 설정의 'Google 연결' 버튼을 눌러 달라고 한 번만 안내하고 멈춘다. 재시도 루프 금지.
-- 공유된 시트/문서에 대해 사용자 권한이 없으면 API가 403을 반환한다. 이 경우 권한 문제임을 간결히 설명한다.
+YouTube 모드:
+- 탭 URL이 youtube.com/watch, /shorts/, /live/ 이고 사용자가 영상 내용(요약, 질문, 특정 장면 찾기, 번역 등)을 물으면 describe_page·get_page_content 대신 get_youtube_transcript를 먼저 호출한다. 페이지 본문에는 영상 내용이 거의 없다.
+- 결과의 타임스탬프([m:ss])를 근거로 "몇 분쯤에 나온다"를 답할 수 있다. truncated가 true이거나 complete가 false면 뒷부분이 빠졌을 수 있음을 알린다.
+- 스크립트가 없다는 오류가 오면 자막이 없는 영상일 수 있음을 알리고, 다른 도구로 내용을 추측하지 않는다.
+
+지원하지 않는 기능에 대한 규칙:
+- 이 확장에는 채팅 첨부 파일 버튼, 클립 아이콘, 파일 업로드 다이얼로그가 없다. 모델이 임의로 "업로드해 주세요"라고 안내하지 말 것.
+- 새 탭 열기·탭 닫기, 스크롤, 셀 병합 같은 툴은 제공되지 않는다. 현재 탭의 URL 이동은 navigate_to_url로 지원한다. 그 외 지원하지 않는 작업을 요청받으면 지원 범위 밖임을 밝힌다.
 
 PDF 모드:
 - 사용자 턴에 PDF 파일이 첨부되어 있거나 "[현재 탭: PDF 문서]" 문구가 있으면, 현재 화면은 Chrome의 내장 PDF 뷰어다.
@@ -84,14 +85,29 @@ PDF 모드:
     1) 페이지를 새로고침(F5) 후 다시 시도 — 일시적 네트워크 오류 대응.
     2) PDF를 공개 URL(http/https)로 호스팅되는 주소에서 다시 열어 탭에 띄우기 — 로그인 보호·file:// 경로 우회.
     3) PDF 본문을 복사해 채팅창에 직접 붙여넣기 — 붙여넣어 주면 그 텍스트로 요약/번역/분석.
-  file:// 경로나 chrome-extension:// 경로라서 실패한 경우: 정책상 읽을 수 없음을 명확히 알리고 위 2/3 대안을 제시한다.
+  file:// 경로나 chrome-extension:// 경로라서 실패한 경우: 정책상 읽을 수 없음을 명확히 알리고 위 2/3 대안을 제시한다.`;
 
-지원하지 않는 기능에 대한 규칙:
-- 이 확장에는 채팅 첨부 파일 버튼, 클립 아이콘, 파일 업로드 다이얼로그가 없다. 모델이 임의로 "업로드해 주세요"라고 안내하지 말 것.
-- 새 탭 열기·탭 닫기, 스크롤, 셀 병합 같은 툴은 제공되지 않는다. 현재 탭의 URL 이동은 navigate_to_url로 지원한다. 그 외 지원하지 않는 작업을 요청받으면 지원 범위 밖임을 밝힌다.`;
+// manifest에 OAuth 클라이언트 ID가 있을 때만 붙인다. 없으면 Google 도구도 노출하지 않는다.
+const GOOGLE_PROMPT_SECTION = `Google Workspace 모드:
+- google_sheets_* / google_drive_*: Google Sheets · Drive 직접 조작 툴.
+- 탭 URL이 docs.google.com/spreadsheets/d/{ID}면 {ID}가 spreadsheetId. URL hash의 gid·range로 현재 시트와 선택 범위도 추출 가능. drive.google.com이면 Drive UI.
+- 이런 Google 앱 탭에서는 describe_page·find_clickables·query_dom 등 DOM 조작 툴이 캔버스·가상 렌더링 때문에 쓸모없다. 대신 google_sheets_*·google_drive_* 툴을 쓴다.
+- Sheets 쓰기 전에는 반드시 google_sheets_list / google_sheets_read_range 로 현재 구조를 확인한다. Google Docs 문서 수정 기능은 이 확장이 지원하지 않는다 (Drive export로 읽기·다운로드는 가능).
+- 사용자가 표 형태 데이터를 원하면 google_sheets_write_markdown_table로 markdown 표를 한 번에 시트에 반영할 수 있다.
+- Drive 검색은 Drive API q 문법 (예: "mimeType='application/vnd.google-apps.spreadsheet' and name contains '예산'", "'folderId' in parents").
+- Google 인증 실패 메시지가 tool_result에 오면 사용자에게 설정의 'Google 연결' 버튼을 눌러 달라고 한 번만 안내하고 멈춘다. 재시도 루프 금지.
+- 공유된 시트/문서에 대해 사용자 권한이 없으면 API가 403을 반환한다. 이 경우 권한 문제임을 간결히 설명한다.`;
 
 export function composeSystemPrompt(customPrompt: string): string {
-  return appendCustomSystemPrompt(SYSTEM_PROMPT, customPrompt);
+  const base = isGoogleConfigured()
+    ? `${SYSTEM_PROMPT}\n\n${GOOGLE_PROMPT_SECTION}`
+    : SYSTEM_PROMPT;
+  return appendCustomSystemPrompt(base, customPrompt);
+}
+
+function availableTools(): typeof functionDeclarations {
+  if (isGoogleConfigured()) return functionDeclarations;
+  return functionDeclarations.filter((fn) => !fn.name.startsWith("google_"));
 }
 
 export class ChatAgent {
@@ -353,7 +369,7 @@ export class ChatAgent {
               { role: "system", content: systemPrompt },
               ...this.history,
             ],
-            tools: functionDeclarations.map((fn) => ({
+            tools: availableTools().map((fn) => ({
               type: "function",
               function: fn,
             })),

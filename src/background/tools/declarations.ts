@@ -24,6 +24,24 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "get_youtube_transcript",
+    description:
+      "현재 탭이 YouTube 영상 페이지(youtube.com/watch, /shorts/, /live/)일 때 영상의 자막 스크립트를 추출한다. YouTube의 '스크립트 표시' 패널을 열어 읽으며, 각 줄은 '[m:ss] 텍스트' 형식이다. 영상 요약·질의응답·특정 장면 찾기에 사용한다. 자막이 없는 영상이면 오류를 반환한다.",
+    parameters: {
+      type: "object",
+      properties: {
+        includeTimestamps: {
+          type: "boolean",
+          description: "각 줄 앞에 [m:ss] 타임스탬프를 붙일지. 기본 true.",
+        },
+        maxChars: {
+          type: "number",
+          description: "반환할 최대 글자 수. 기본 40000, 최대 100000.",
+        },
+      },
+    },
+  },
+  {
     name: "translate_page",
     description:
       "현재 활성 탭의 가시 텍스트 노드를 대상 언어로 번역해 화면에 즉시 덮어쓴다. 사용자가 '이 페이지 번역해줘' 같은 페이지 전체 번역을 요청했을 때만 사용한다. 짧은 문장의 일반 번역은 이 도구를 쓰지 말고 채팅으로 직접 번역한다.",

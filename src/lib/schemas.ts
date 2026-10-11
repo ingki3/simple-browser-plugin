@@ -5,6 +5,13 @@ export const describePageArgs = z.object({}).strict();
 
 export const getPageContentArgs = z.object({}).strict();
 
+export const getYoutubeTranscriptArgs = z
+  .object({
+    includeTimestamps: z.boolean().optional(),
+    maxChars: z.number().int().min(1000).max(100_000).optional(),
+  })
+  .strict();
+
 export const translatePageArgs = z
   .object({
     targetLang: z.string().min(2).max(10),
@@ -145,6 +152,7 @@ export const googleDriveExportArgs = z
 export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
+  get_youtube_transcript: getYoutubeTranscriptArgs,
   translate_page: translatePageArgs,
   find_form_fields: findFormFieldsArgs,
   fill_form_fields: fillFormFieldsArgs,
