@@ -42,6 +42,25 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "read_document",
+    description:
+      "Word(.docx)·Excel(.xlsx)·PowerPoint(.pptx) 파일 URL을 내려받아 Markdown 텍스트로 변환해 반환한다(제목·목록·표 유지, 엑셀은 시트별 표, 파워포인트는 슬라이드별). URL 경로가 .docx/.xlsx/.pptx로 끝나야 한다. 페이지에 있는 문서 링크는 find_clickables나 query_dom으로 href를 먼저 얻는다. 이미지·차트 안의 내용은 읽지 못한다.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "문서 파일의 http(s) URL. 경로가 .docx, .xlsx, .pptx로 끝나야 한다.",
+        },
+        maxChars: {
+          type: "number",
+          description: "반환할 최대 글자 수. 기본 40000, 최대 100000.",
+        },
+      },
+      required: ["url"],
+    },
+  },
+  {
     name: "translate_page",
     description:
       "현재 활성 탭의 가시 텍스트 노드를 대상 언어로 번역해 화면에 즉시 덮어쓴다. 사용자가 '이 페이지 번역해줘' 같은 페이지 전체 번역을 요청했을 때만 사용한다. 짧은 문장의 일반 번역은 이 도구를 쓰지 말고 채팅으로 직접 번역한다.",

@@ -60,6 +60,7 @@ describe_page 결과를 읽는 법:
 - translate_page: 페이지 전체 번역.
 - query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회.
 - get_youtube_transcript: YouTube 영상 페이지의 자막 스크립트(타임스탬프 포함) 추출.
+- read_document(url): Word·Excel·PowerPoint(.docx/.xlsx/.pptx) 파일 URL을 Markdown으로 변환해 읽기.
 
 일반 규칙:
 - 페이지와 무관한 잡담·일반 번역·개념 질문은 툴 없이 바로 답한다.
@@ -72,6 +73,14 @@ YouTube 모드:
 - 탭 URL이 youtube.com/watch, /shorts/, /live/ 이고 사용자가 영상 내용(요약, 질문, 특정 장면 찾기, 번역 등)을 물으면 describe_page·get_page_content 대신 get_youtube_transcript를 먼저 호출한다. 페이지 본문에는 영상 내용이 거의 없다.
 - 결과의 타임스탬프([m:ss])를 근거로 "몇 분쯤에 나온다"를 답할 수 있다. truncated가 true이거나 complete가 false면 뒷부분이 빠졌을 수 있음을 알린다.
 - 스크립트가 없다는 오류가 오면 자막이 없는 영상일 수 있음을 알리고, 다른 도구로 내용을 추측하지 않는다.
+
+문서 파일(Word·Excel·PowerPoint) 모드:
+- 사용자가 페이지의 .docx/.xlsx/.pptx 파일 내용을 물으면, find_clickables나 query_dom으로 그 링크의 href를 얻은 뒤 read_document(url)로 읽는다. 사용자가 URL을 직접 주면 바로 read_document를 호출한다.
+- 링크를 클릭(click_element)하면 파일이 내려받아질 뿐 내용을 읽을 수 없으니, 내용을 보려고 클릭하지 않는다.
+- 엑셀은 시트별 표, 파워포인트는 슬라이드별(제목은 #)로 온다. truncated가 true면 앞부분만 읽었음을 알린다.
+- 경로가 .docx/.xlsx/.pptx로 끝나지 않는 링크(확장자 없는 다운로드 링크, 미리보기 페이지)와 .doc/.xls/.ppt 구형 형식은 읽을 수 없다고 안내한다.
+- 다른 주소로 리다이렉트되는 링크와 압축을 풀면 아주 큰 문서는 안전을 위해 읽지 않는다. 이런 오류가 오면 같은 URL로 다시 시도하지 말고 사용자에게 사유를 전한다.
+- read_document는 승인 카드를 거친다. 사용자가 거부하면 다시 요청하지 않는다.
 
 지원하지 않는 기능에 대한 규칙:
 - 이 확장에는 채팅 첨부 파일 버튼, 클립 아이콘, 파일 업로드 다이얼로그가 없다. 모델이 임의로 "업로드해 주세요"라고 안내하지 말 것.
@@ -120,6 +129,8 @@ export class ChatAgent {
   // 늦게 끝난 도구 결과를 대화 기록에 쓰지 않고 빠진다.
   private currentTurn = 0;
   private activeRequest: AbortController | null = null;
+  // 백그라운드에서 직접 네트워크를 쓰는 도구(read_document)를 중단 시 함께 끊는다.
+  private activeTool: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
   private lastAttachedPdfUrl: string | null = null;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
@@ -137,6 +148,8 @@ export class ChatAgent {
   private cancelInFlight(): void {
     this.activeRequest?.abort();
     this.activeRequest = null;
+    this.activeTool?.abort();
+    this.activeTool = null;
     for (const resolve of this.pendingApprovals.values()) resolve(false);
     this.pendingApprovals.clear();
   }
@@ -515,7 +528,22 @@ export class ChatAgent {
         }
 
         if (SENSITIVE_TOOLS.has(toolName)) {
-          const preview = await buildToolPreview(toolName, parsedArgs);
+          let preview: Awaited<ReturnType<typeof buildToolPreview>>;
+          try {
+            preview = await buildToolPreview(toolName, parsedArgs);
+          } catch (err) {
+            // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
+            if (this.isStale(turn)) return;
+            const msg = err instanceof Error ? err.message : String(err);
+            this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
+            this.history.push({
+              role: "tool",
+              tool_call_id: callId,
+              name: toolName,
+              content: JSON.stringify({ error: msg }),
+            });
+            continue;
+          }
           debugLog("tool:awaiting_approval", `${toolName}`);
           this.send({
             kind: "tool_pending",
@@ -557,8 +585,10 @@ export class ChatAgent {
         if (toolName === "translate_page" && "tabId" in this.turnTab) {
           this.translatedTabs.add(this.turnTab.tabId);
         }
+        const toolAbort = new AbortController();
+        this.activeTool = toolAbort;
         try {
-          const result = await executeTool(toolName, parsedArgs, callId, this.turnTab);
+          const result = await executeTool(toolName, parsedArgs, callId, this.turnTab, toolAbort.signal);
           if (this.isStale(turn)) return;
           debugLog(
             "tool:result",
@@ -587,6 +617,8 @@ export class ChatAgent {
             name: toolName,
             content: JSON.stringify({ error: msg }),
           });
+        } finally {
+          if (this.activeTool === toolAbort) this.activeTool = null;
         }
       }
     }

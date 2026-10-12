@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isNavigationSafeUrl } from "./sanitize";
+import { parseDocumentUrl } from "./documentUrl";
 
 export const describePageArgs = z.object({}).strict();
 
@@ -8,6 +9,20 @@ export const getPageContentArgs = z.object({}).strict();
 export const getYoutubeTranscriptArgs = z
   .object({
     includeTimestamps: z.boolean().optional(),
+    maxChars: z.number().int().min(1000).max(100_000).optional(),
+  })
+  .strict();
+
+export const readDocumentArgs = z
+  .object({
+    url: z
+      .string()
+      .min(1)
+      .max(2048)
+      .refine((u) => parseDocumentUrl(u) !== null, {
+        message:
+          "경로가 .docx, .xlsx, .pptx로 끝나는 http(s) URL만 읽을 수 있습니다(확장자 없는 다운로드 링크·미리보기 페이지·.doc/.xls/.ppt 불가).",
+      }),
     maxChars: z.number().int().min(1000).max(100_000).optional(),
   })
   .strict();
@@ -153,6 +168,7 @@ export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
   get_youtube_transcript: getYoutubeTranscriptArgs,
+  read_document: readDocumentArgs,
   translate_page: translatePageArgs,
   find_form_fields: findFormFieldsArgs,
   fill_form_fields: fillFormFieldsArgs,

@@ -14,7 +14,9 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `find_clickables` / `click_element` — 링크·버튼 탐색·클릭 (승인 카드)
   - `navigate_to_url` — 현재 탭을 지정한 URL이나 사이트 홈으로 직접 이동 (승인 카드)
   - `query_dom` — CSS 선택자 기반 DOM 조회
-- **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
+  - `get_youtube_transcript` — YouTube 영상의 "스크립트 표시" 패널을 열어 타임스탬프 포함 자막 추출
+  - `read_document` — Word·Excel·PowerPoint(.docx/.xlsx/.pptx) 파일 URL을 내려받아 Markdown으로 변환 ([docling.rs-wasm](https://github.com/docling-project/docling.rs), 브라우저 안에서 처리, 최대 20MB) (승인 카드)
+- **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경과 문서 URL 요청(쿠키 포함)은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
 - **OpenRouter 모델 지원** — `provider/model` 형식의 모델 ID를 직접 선택하며, reasoning과 tool calling 결과를 실시간 스트리밍
 - **사용자 기본 지침** — "모든 출력은 한글로" 같은 시스템 지침을 설정해 모든 대화에 적용
 - **모델별 reasoning 호환성** — Gemini 3 계열의 필수 effort와 gpt-oss 출력 제한·스트림 종료 처리
@@ -44,6 +46,8 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
 - "이 페이지 요약해줘"
 - "PXG 골프공 검색해서 가장 싼 스토어로 이동해줘"
 - PDF 탭에서: "이 논문 요약해줘", "결론 부분만 번역해줘", "첨부된 계약서의 핵심 조항 뽑아줘"
+- YouTube 영상에서: "이 영상 요약해줘", "가격 얘기는 몇 분쯤 나와?"
+- 문서 링크가 있는 페이지에서: "이 페이지의 엑셀 파일 내용 정리해줘", "https://…/report.docx 요약해줘"
 
 ## 개발
 
@@ -78,10 +82,11 @@ gh pr create --base main --title "..." --body "..."
 
 ### 주요 구성
 
-- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation` 권한 + `host_permissions: ["<all_urls>"]`
+- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation`, `identity`, `offscreen` 권한 + `host_permissions: ["<all_urls>"]`
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
 - **webNavigation 기반 settle 대기** — URL 이동·클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록
+- **문서 변환 격리** — `read_document`는 offscreen 문서 안의 Worker에서 변환하고, 10초가 지나거나 사용자가 중단하면 Worker를 강제 종료. zip은 직접 풀어 크기를 센 뒤(본문 6MB·전체 40MB) 다시 만들어 넘기며, 이미지 등 바이너리는 비워서 넘김. 1분 동안 쓰지 않으면 offscreen 문서를 닫음
 
 ## 보안 / 프라이버시
 

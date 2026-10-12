@@ -14,7 +14,13 @@ export default defineConfig({
   build: {
     target: "es2022",
     sourcemap: true,
+    rollupOptions: {
+      // manifest에 적지 않는 페이지. read_document가 chrome.offscreen으로 연다.
+      input: { offscreen: "src/offscreen/index.html" },
+    },
   },
+  // offscreen 문서의 변환 Worker가 모듈 import를 쓴다.
+  worker: { format: "es" },
   server: {
     port: 5173,
     strictPort: true,

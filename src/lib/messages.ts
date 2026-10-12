@@ -4,6 +4,7 @@ export type ToolName =
   | "describe_page"
   | "get_page_content"
   | "get_youtube_transcript"
+  | "read_document"
   | "translate_page"
   | "find_form_fields"
   | "fill_form_fields"
@@ -27,6 +28,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "download_images",
   "navigate_to_url",
   "click_element",
+  // 모델이 고른 URL로 쿠키를 실어 GET을 보낸다. 프롬프트 주입이 쿼리에 대화 내용을 담아 외부로 보낼 수 있다.
+  "read_document",
   "google_sheets_write_range",
   "google_sheets_append_rows",
   "google_sheets_write_markdown_table",
@@ -87,6 +90,17 @@ export interface YoutubeTranscript {
   truncated: boolean;
   // false면 대기 시간 안에 패널이 다 그려지지 않아 뒷부분이 빠졌을 수 있다.
   complete: boolean;
+}
+
+export interface DocumentContent {
+  url: string;
+  filename: string;
+  format: "docx" | "xlsx" | "pptx";
+  bytes: number;
+  // 변환된 Markdown 전체 길이. truncated면 markdown은 앞부분만 담는다.
+  totalChars: number;
+  markdown: string;
+  truncated: boolean;
 }
 
 export interface PageContent {
