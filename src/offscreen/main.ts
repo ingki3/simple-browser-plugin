@@ -5,6 +5,10 @@ import { CONVERT_TIMEOUT_MS, type DocumentJob, type DocumentJobResult, type Work
 
 // wasm(약 15MB)은 한 번만 컴파일하고 모듈을 Worker에 넘긴다.
 let compiled: Promise<WebAssembly.Module> | null = null;
+// 서비스 워커가 문서를 닫기 전에 종료되면 닫는 타이머도 사라진다. 그래도 컴파일한 모듈은 놓아 메모리를 돌려준다.
+const MODULE_IDLE_MS = 60_000;
+let activeJobs = 0;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function doclingModule(): Promise<WebAssembly.Module> {
   if (!compiled) {
@@ -17,6 +21,8 @@ function doclingModule(): Promise<WebAssembly.Module> {
 }
 
 function runJob(job: DocumentJob, port: MessagePort): void {
+  activeJobs++;
+  if (idleTimer) clearTimeout(idleTimer);
   const worker = new Worker(new URL("./docling.worker.ts", import.meta.url), { type: "module" });
   let done = false;
   const finish = (result: DocumentJobResult) => {
@@ -26,6 +32,11 @@ function runJob(job: DocumentJob, port: MessagePort): void {
     worker.terminate();
     port.postMessage(result);
     port.close();
+    if (--activeJobs === 0) {
+      idleTimer = setTimeout(() => {
+        if (activeJobs === 0) compiled = null;
+      }, MODULE_IDLE_MS);
+    }
   };
   const timer = setTimeout(() => finish({ ok: false, kind: "timeout" }), CONVERT_TIMEOUT_MS);
   port.onmessage = (ev: MessageEvent) => {

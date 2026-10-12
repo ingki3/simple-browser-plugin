@@ -89,6 +89,14 @@ function scheduleIdleClose(): void {
   }, OFFSCREEN_IDLE_MS);
 }
 
+// 닫는 타이머는 서비스 워커 종료와 함께 사라지므로, 다시 뜰 때 이전 실행에서 남은 offscreen 문서를 닫는다.
+closing = hasOffscreen()
+  .then((open) => (open ? chrome.offscreen.closeDocument() : undefined))
+  .catch(() => {})
+  .finally(() => {
+    closing = null;
+  });
+
 // 변환을 offscreen 문서의 Worker에 맡긴다. 중단·시간 초과 시 Worker가 강제 종료된다.
 async function convertInWorker(
   bytes: Uint8Array,
@@ -139,6 +147,8 @@ async function convertInWorker(
         settle({ ok: false, kind: "timeout" });
       }, JOB_GUARD_MS);
       signal?.addEventListener("abort", onAbort, { once: true });
+      // offscreenClient()를 기다리는 사이에 중단됐으면 리스너가 불리지 않으므로 여기서 처리한다.
+      if (signal?.aborted) return onAbort();
       channel.port1.onmessage = (ev: MessageEvent<DocumentJobResult>) => settle(ev.data);
       client.postMessage(job, [channel.port2, buffer]);
     });
