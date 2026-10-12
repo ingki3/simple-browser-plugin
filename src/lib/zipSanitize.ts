@@ -39,6 +39,7 @@ interface Entry {
   nameText: string;
   method: number;
   flags: number;
+  crc: number;
   compressedSize: number;
   localOffset: number;
 }
@@ -71,6 +72,7 @@ function readEntries(bytes: Uint8Array): Entry[] {
     }
     const flags = view.getUint16(pos + 8, true);
     const method = view.getUint16(pos + 10, true);
+    const crc = view.getUint32(pos + 16, true);
     const compressedSize = view.getUint32(pos + 20, true);
     const nameLen = view.getUint16(pos + 28, true);
     const extraLen = view.getUint16(pos + 30, true);
@@ -81,7 +83,7 @@ function readEntries(bytes: Uint8Array): Entry[] {
     }
     if (pos + 46 + nameLen > bytes.byteLength) throw new ZipRejected("zip 목차가 손상됐습니다");
     const name = bytes.slice(pos + 46, pos + 46 + nameLen);
-    entries.push({ name, nameText: decoder.decode(name), method, flags, compressedSize, localOffset });
+    entries.push({ name, nameText: decoder.decode(name), method, flags, crc, compressedSize, localOffset });
     pos += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
@@ -253,6 +255,8 @@ export async function sanitizeOfficeZip(bytes: Uint8Array, limits: SanitizeLimit
     } else {
       throw new ZipRejected(`지원하지 않는 압축 방식(${e.method})입니다`);
     }
+    // 다시 만든 zip에는 새 CRC가 들어가므로, 원본 CRC와 여기서 맞춰 봐야 손상을 놓치지 않는다.
+    if (crc32(data) !== e.crc) throw new ZipRejected(`zip 항목의 내용이 손상됐습니다(CRC 불일치): ${e.nameText}`);
     totalBytes += data.length;
     if (isKnownBinary(data)) {
       // 그림 등은 변환 결과에 자리표시로만 나오므로 내용 없이 이름만 남긴다.

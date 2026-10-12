@@ -69,6 +69,18 @@ test("binary media is emptied and not counted as XML", async () => {
   assert.ok(result.totalBytes > result.xmlBytes);
 });
 
+test("content that doesn't match the original CRC is rejected", async () => {
+  const doc = fixture("report_ko.docx").slice();
+  const view = new DataView(doc.buffer);
+  for (let i = 0; i < doc.length - 4; i++) {
+    if (view.getUint32(i, true) === 0x02014b50) {
+      view.setUint32(i + 16, view.getUint32(i + 16, true) ^ 1, true);
+      break;
+    }
+  }
+  await assert.rejects(sanitizeOfficeZip(doc, LIMITS), /CRC 불일치/);
+});
+
 test("limits are configurable and non-zip input is rejected", async () => {
   await assert.rejects(
     sanitizeOfficeZip(fixture("report_ko.docx"), { maxXmlBytes: 100_000, maxTotalBytes: LIMITS.maxTotalBytes }),
