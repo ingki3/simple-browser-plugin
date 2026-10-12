@@ -42,6 +42,33 @@ test("real inflated size is enforced even when the central directory lies", asyn
   await assert.rejects(sanitizeOfficeZip(forged, LIMITS), /본문 XML이 6MB를 넘습니다/);
 });
 
+// 이름이 같은 길이의 다른 이름으로 바뀐 사본(로컬·중앙 헤더 모두)을 만든다.
+function renameEntry(bytes, from, to) {
+  const a = new TextEncoder().encode(from);
+  const b = new TextEncoder().encode(to);
+  assert.equal(a.length, b.length);
+  const out = bytes.slice();
+  let hits = 0;
+  for (let i = 0; i <= out.length - a.length; i++) {
+    if (a.every((x, k) => out[i + k] === x)) {
+      out.set(b, i);
+      hits++;
+    }
+  }
+  assert.ok(hits >= 2);
+  return out;
+}
+
+test("part names don't decide what counts toward the XML budget", async () => {
+  const renamed = renameEntry(fixture("paras_200000.docx"), "word/document.xml", "word/document.png");
+  await assert.rejects(sanitizeOfficeZip(renamed, LIMITS), /본문 XML이 6MB를 넘습니다/);
+});
+
+test("binary media is emptied and not counted as XML", async () => {
+  const result = await sanitizeOfficeZip(fixture("report_ko.docx"), LIMITS);
+  assert.ok(result.totalBytes > result.xmlBytes);
+});
+
 test("limits are configurable and non-zip input is rejected", async () => {
   await assert.rejects(
     sanitizeOfficeZip(fixture("report_ko.docx"), { maxXmlBytes: 100_000, maxTotalBytes: LIMITS.maxTotalBytes }),

@@ -82,10 +82,11 @@ gh pr create --base main --title "..." --body "..."
 
 ### 주요 구성
 
-- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation` 권한 + `host_permissions: ["<all_urls>"]`
+- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation`, `identity`, `offscreen` 권한 + `host_permissions: ["<all_urls>"]`
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
 - **webNavigation 기반 settle 대기** — URL 이동·클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록
+- **문서 변환 격리** — `read_document`는 offscreen 문서 안의 Worker에서 변환하고, 10초가 지나거나 사용자가 중단하면 Worker를 강제 종료. zip은 직접 풀어 크기를 센 뒤(본문 6MB·전체 40MB) 다시 만들어 넘기며, 이미지 등 바이너리는 비워서 넘김. 1분 동안 쓰지 않으면 offscreen 문서를 닫음
 
 ## 보안 / 프라이버시
 

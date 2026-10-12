@@ -1,11 +1,16 @@
 // Office 문서(zip)를 실제로 압축 해제하며 크기를 세고, 검증된 내용만 담은 비압축(stored) zip을 다시 만든다.
 // zip 중앙 디렉터리의 크기 값은 파일 작성자가 꾸밀 수 있으므로 믿지 않는다. 변환기(docling.rs-wasm)는
 // 다시 만든 zip만 받으므로, 여기서 센 바이트보다 많은 데이터를 풀 수 없다.
+//
+// 파트 이름(확장자·경로)도 작성자가 정하므로 종류 판단에 쓰지 않는다. 내용 앞부분이 이미지·영상 등
+// 알려진 바이너리 형식이면 비워서 넘기고(변환기는 그림을 자리표시로만 출력한다), 나머지는 모두
+// 변환기가 해석할 수 있는 파트로 보고 maxXmlBytes에 넣는다. XML 앞에 PNG 서명을 붙여 위장해도
+// 비워지므로 해석되지 않는다.
 
 export interface SanitizeLimits {
-  // .xml/.rels 파트의 실제 압축 해제 합계 상한. 변환 비용이 여기에 비례한다.
+  // 변환기에 넘기는 파트(알려진 바이너리를 뺀 전부)의 실제 압축 해제 합계 상한. 변환 비용이 여기에 비례한다.
   maxXmlBytes: number;
-  // 모든 파트(이미지 등 포함)의 실제 압축 해제 합계 상한.
+  // 모든 파트(이미지 등 포함)의 실제 압축 해제 합계 상한. 압축 해제 작업량을 묶는다.
   maxTotalBytes: number;
 }
 
@@ -128,6 +133,40 @@ function concat(chunks: Uint8Array[], total: number): Uint8Array {
   return out;
 }
 
+function startsWith(data: Uint8Array, sig: number[], at = 0): boolean {
+  if (data.length < at + sig.length) return false;
+  return sig.every((b, i) => data[at + i] === b);
+}
+
+const ascii = (text: string): number[] => [...text].map((c) => c.charCodeAt(0));
+
+// 문서에 흔히 들어가는 이미지·영상·소리·포함 개체의 서명.
+const BINARY_SIGNATURES: { sig: number[]; at?: number }[] = [
+  { sig: [0x89, 0x50, 0x4e, 0x47] }, // PNG
+  { sig: [0xff, 0xd8, 0xff] }, // JPEG
+  { sig: ascii("GIF8") },
+  { sig: ascii("BM") },
+  { sig: [0x49, 0x49, 0x2a, 0x00] }, // TIFF(LE)
+  { sig: [0x4d, 0x4d, 0x00, 0x2a] }, // TIFF(BE)
+  { sig: ascii(" EMF"), at: 40 },
+  { sig: [0xd7, 0xcd, 0xc6, 0x9a] }, // WMF(placeable)
+  { sig: [0x01, 0x00, 0x09, 0x00] }, // WMF
+  { sig: [0x02, 0x00, 0x09, 0x00] }, // WMF
+  { sig: [0x1f, 0x8b] }, // gzip(EMZ·WMZ)
+  { sig: [0x00, 0x00, 0x01, 0x00] }, // ICO
+  { sig: ascii("RIFF") }, // WebP·WAV·AVI
+  { sig: ascii("ftyp"), at: 4 }, // MP4·MOV·M4A
+  { sig: ascii("ID3") }, // MP3
+  { sig: [0x1a, 0x45, 0xdf, 0xa3] }, // WebM·MKV
+  { sig: ascii("PK") }, // 포함된 Office 파일 등
+  { sig: [0xd0, 0xcf, 0x11, 0xe0] }, // OLE(포함 개체)
+  { sig: ascii("%PDF") },
+];
+
+function isKnownBinary(data: Uint8Array): boolean {
+  return BINARY_SIGNATURES.some(({ sig, at }) => startsWith(data, sig, at));
+}
+
 let crcTable: Uint32Array | null = null;
 function crc32(data: Uint8Array): number {
   if (!crcTable) {
@@ -194,34 +233,34 @@ export async function sanitizeOfficeZip(bytes: Uint8Array, limits: SanitizeLimit
   const files: { name: Uint8Array; data: Uint8Array }[] = [];
   let xmlBytes = 0;
   let totalBytes = 0;
+  const overXml = (): never => {
+    throw new ZipRejected(`압축을 풀면 본문 XML이 ${limits.maxXmlBytes / 1024 / 1024}MB를 넘습니다`, true);
+  };
+  const overTotal = (): never => {
+    throw new ZipRejected(`압축을 풀면 전체가 ${limits.maxTotalBytes / 1024 / 1024}MB를 넘습니다`, true);
+  };
   for (const e of entries) {
     if (e.flags & 0x1) throw new ZipRejected("암호가 걸린 문서는 읽을 수 없습니다");
     if (e.nameText.endsWith("/")) continue; // 디렉터리 항목
-    const isXml = /\.(xml|rels)$/i.test(e.nameText);
-    const budget = Math.min(
-      limits.maxTotalBytes - totalBytes,
-      isXml ? limits.maxXmlBytes - xmlBytes : Number.POSITIVE_INFINITY,
-    );
-    const over = (): never => {
-      throw new ZipRejected(
-        isXml
-          ? `압축을 풀면 본문 XML이 ${limits.maxXmlBytes / 1024 / 1024}MB를 넘습니다`
-          : `압축을 풀면 전체가 ${limits.maxTotalBytes / 1024 / 1024}MB를 넘습니다`,
-        true,
-      );
-    };
+    const budget = limits.maxTotalBytes - totalBytes;
     const raw = compressedData(bytes, e);
     let data: Uint8Array;
     if (e.method === 0) {
-      if (raw.length > budget) over();
+      if (raw.length > budget) overTotal();
       data = raw;
     } else if (e.method === 8) {
-      data = await inflateCapped(raw, budget, over);
+      data = await inflateCapped(raw, budget, overTotal);
     } else {
       throw new ZipRejected(`지원하지 않는 압축 방식(${e.method})입니다`);
     }
-    if (isXml) xmlBytes += data.length;
     totalBytes += data.length;
+    if (isKnownBinary(data)) {
+      // 그림 등은 변환 결과에 자리표시로만 나오므로 내용 없이 이름만 남긴다.
+      data = new Uint8Array(0);
+    } else {
+      xmlBytes += data.length;
+      if (xmlBytes > limits.maxXmlBytes) overXml();
+    }
     files.push({ name: e.name, data });
   }
   return { bytes: buildStoredZip(files), xmlBytes, totalBytes };

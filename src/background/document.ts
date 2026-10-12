@@ -1,7 +1,10 @@
-import initDocling, { convert } from "docling.rs-wasm/web";
-import doclingWasmUrl from "docling.rs-wasm/web/docling_wasm_bg.wasm?url";
 import { parseDocumentUrl } from "@/lib/documentUrl";
-import { sanitizeOfficeZip, ZipRejected } from "@/lib/zipSanitize";
+import {
+  CONVERT_TIMEOUT_MS,
+  OFFSCREEN_PATH,
+  type DocumentJob,
+  type DocumentJobResult,
+} from "@/lib/documentJob";
 import type { DocumentContent } from "@/lib/messages";
 import { debugLog, timeSpan } from "./debug";
 
@@ -9,30 +12,145 @@ const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_CHARS = 40_000;
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_XML_BYTES = 6 * 1024 * 1024;
-// 이미지 등 포함 전체. 변환기는 이미지를 쓰지 않지만 다시 만든 zip이 메모리에 올라간다.
+// 이미지 등 포함 전체. 압축 해제 작업량을 묶는다.
 const MAX_TOTAL_BYTES = 40 * 1024 * 1024;
+// offscreen 문서가 응답하지 않을 때를 대비한 서비스 워커 쪽 상한(wasm 첫 컴파일 시간 포함 여유).
+const JOB_GUARD_MS = CONVERT_TIMEOUT_MS + 10_000;
+// 마지막 변환 뒤 이 시간 동안 새 작업이 없으면 offscreen 문서를 닫아 wasm 메모리를 돌려준다.
+const OFFSCREEN_IDLE_MS = 60_000;
 
-// wasm(약 15MB)은 처음 문서를 읽을 때 한 번만 컴파일한다. 서비스 워커가 다시 뜨면 다시 초기화된다.
-let doclingReady: Promise<unknown> | null = null;
+interface OffscreenClient {
+  url: string;
+  postMessage(message: unknown, transfer: Transferable[]): void;
+}
 
-function ensureDocling(): Promise<unknown> {
-  if (!doclingReady) {
-    const end = timeSpan("document:wasm_init");
-    // Vite가 주는 경로는 "/assets/…" 형태라 확장 루트 기준 URL로 바꾼다.
-    const wasmUrl = chrome.runtime.getURL(doclingWasmUrl.replace(/^\//, ""));
-    doclingReady = initDocling({ module_or_path: wasmUrl }).then(
-      (r) => {
-        end("ok");
-        return r;
-      },
-      (err: unknown) => {
-        end("fail");
-        doclingReady = null;
-        throw err;
-      },
-    );
+// 서비스 워커 전역의 clients(타입 정의는 DOM lib 기준이라 필요한 부분만 적는다).
+const swClients = (globalThis as unknown as {
+  clients: { matchAll(options: { includeUncontrolled: boolean; type: "window" }): Promise<readonly OffscreenClient[]> };
+}).clients;
+
+let activeJobs = 0;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let creating: Promise<void> | null = null;
+let closing: Promise<void> | null = null;
+
+async function hasOffscreen(): Promise<boolean> {
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+    documentUrls: [chrome.runtime.getURL(OFFSCREEN_PATH)],
+  });
+  return contexts.length > 0;
+}
+
+async function ensureOffscreen(): Promise<void> {
+  if (closing) await closing;
+  if (await hasOffscreen()) return;
+  if (!creating) {
+    const end = timeSpan("document:offscreen_create");
+    creating = chrome.offscreen
+      .createDocument({
+        url: OFFSCREEN_PATH,
+        reasons: [chrome.offscreen.Reason.WORKERS],
+        justification: "Word·Excel·PowerPoint 문서를 강제 종료할 수 있는 Worker에서 변환한다.",
+      })
+      .then(
+        () => end("ok"),
+        (err: unknown) => {
+          end("fail");
+          throw err;
+        },
+      )
+      .finally(() => {
+        creating = null;
+      });
   }
-  return doclingReady;
+  await creating;
+}
+
+async function offscreenClient(): Promise<OffscreenClient> {
+  const url = chrome.runtime.getURL(OFFSCREEN_PATH);
+  const all = await swClients.matchAll({ includeUncontrolled: true, type: "window" });
+  const client = all.find((c) => c.url === url);
+  if (!client) throw new Error("문서 변환기(offscreen 문서)를 찾지 못했습니다.");
+  return client;
+}
+
+function scheduleIdleClose(): void {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    idleTimer = null;
+    if (activeJobs > 0 || closing) return;
+    closing = chrome.offscreen
+      .closeDocument()
+      .catch(() => {})
+      .finally(() => {
+        closing = null;
+      });
+  }, OFFSCREEN_IDLE_MS);
+}
+
+// 변환을 offscreen 문서의 Worker에 맡긴다. 중단·시간 초과 시 Worker가 강제 종료된다.
+async function convertInWorker(
+  bytes: Uint8Array,
+  filename: string,
+  maxChars: number,
+  signal?: AbortSignal,
+): Promise<DocumentJobResult> {
+  activeJobs++;
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+  const end = timeSpan("document:convert");
+  try {
+    await ensureOffscreen();
+    if (signal?.aborted) return { ok: false, kind: "cancelled" };
+    const client = await offscreenClient();
+    const channel = new MessageChannel();
+    const buffer =
+      bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+        ? (bytes.buffer as ArrayBuffer)
+        : (bytes.slice().buffer as ArrayBuffer);
+    const job: DocumentJob = {
+      kind: "document_convert",
+      bytes: buffer,
+      filename,
+      maxChars,
+      limits: { maxXmlBytes: MAX_XML_BYTES, maxTotalBytes: MAX_TOTAL_BYTES },
+    };
+    const result = await new Promise<DocumentJobResult>((resolve) => {
+      let settled = false;
+      const settle = (r: DocumentJobResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(guard);
+        signal?.removeEventListener("abort", onAbort);
+        channel.port1.close();
+        resolve(r);
+      };
+      const onAbort = () => {
+        channel.port1.postMessage({ kind: "cancel" });
+        settle({ ok: false, kind: "cancelled" });
+      };
+      const guard = setTimeout(() => {
+        // offscreen 문서가 멈췄으면 닫아서 Worker까지 함께 끝낸다.
+        channel.port1.postMessage({ kind: "cancel" });
+        chrome.offscreen.closeDocument().catch(() => {});
+        settle({ ok: false, kind: "timeout" });
+      }, JOB_GUARD_MS);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      channel.port1.onmessage = (ev: MessageEvent<DocumentJobResult>) => settle(ev.data);
+      client.postMessage(job, [channel.port2, buffer]);
+    });
+    end(result.ok ? "ok" : result.kind);
+    return result;
+  } catch (err) {
+    end("fail");
+    throw err;
+  } finally {
+    activeJobs--;
+    if (activeJobs === 0) scheduleIdleClose();
+  }
 }
 
 function tooLarge(bytes: number): Error {
@@ -116,48 +234,43 @@ export async function readDocument(
       "read_document는 경로가 .docx, .xlsx, .pptx로 끝나는 http(s) URL만 읽을 수 있습니다. 확장자가 없는 다운로드 링크나 미리보기 페이지는 지원하지 않습니다.",
     );
   }
-  const [bytes] = await Promise.all([fetchDocument(target.url, target.filename, signal), ensureDocling()]);
-  // 중단된 턴이면 (동기라 끊을 수 없는) 변환을 시작하지 않는다.
-  if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
-  // 변환은 서비스 워커에서 동기로 돌고 비용이 XML 크기에 비례한다(실측: 8MB → 약 0.5초·375MB).
-  // zip 목차의 크기 값은 꾸밀 수 있으므로 직접 풀며 세고, 검증된 내용으로 다시 만든 zip만 변환기에 넘긴다.
-  let sanitized: Uint8Array;
-  try {
-    sanitized = (await sanitizeOfficeZip(bytes, { maxXmlBytes: MAX_XML_BYTES, maxTotalBytes: MAX_TOTAL_BYTES })).bytes;
-  } catch (err) {
-    if (!(err instanceof ZipRejected)) throw err;
-    const hint = err.tooLarge
-      ? "문서를 나누거나 필요한 부분만 복사해 붙여 주세요."
-      : "파일이 손상됐거나 지원하지 않는 형식일 수 있습니다.";
-    throw new Error(`${target.filename}을(를) 읽을 수 없습니다: ${err.message}. ${hint}`);
-  }
+  const bytes = await fetchDocument(target.url, target.filename, signal);
+  const size = bytes.byteLength;
   if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
 
-  const endConvert = timeSpan("document:convert");
-  let markdown: string;
-  try {
-    markdown = convert(sanitized, target.filename, "md");
-    endConvert("ok");
-  } catch (err) {
-    endConvert("fail");
-    const msg = err instanceof Error ? err.message : String(err);
-    debugLog("document:convert_error", msg, "warn");
-    throw new Error(`${target.filename}을(를) 해석하지 못했습니다: ${msg}. 파일이 손상됐거나 암호가 걸려 있을 수 있습니다.`);
+  const result = await convertInWorker(bytes, target.filename, args.maxChars ?? DEFAULT_MAX_CHARS, signal);
+  if (!result.ok) {
+    if (result.kind !== "cancelled") debugLog("document:convert_error", JSON.stringify(result), "warn");
+    throw new Error(failureMessage(target.filename, result));
   }
-  markdown = markdown.trim();
-  if (!markdown) {
-    throw new Error(`${target.filename}에서 텍스트를 찾지 못했습니다. 이미지·차트만 있는 문서일 수 있습니다.`);
-  }
-
-  const maxChars = args.maxChars ?? DEFAULT_MAX_CHARS;
-  const truncated = markdown.length > maxChars;
   return {
     url: target.url,
     filename: target.filename,
     format: target.extension,
-    bytes: bytes.byteLength,
-    totalChars: markdown.length,
-    markdown: truncated ? markdown.slice(0, maxChars) : markdown,
-    truncated,
+    bytes: size,
+    totalChars: result.totalChars,
+    markdown: result.markdown,
+    truncated: result.truncated,
   };
+}
+
+function failureMessage(filename: string, result: Exclude<DocumentJobResult, { ok: true }>): string {
+  switch (result.kind) {
+    case "rejected": {
+      const hint = result.tooLarge
+        ? "문서를 나누거나 필요한 부분만 복사해 붙여 주세요."
+        : "파일이 손상됐거나 지원하지 않는 형식일 수 있습니다.";
+      return `${filename}을(를) 읽을 수 없습니다: ${result.message}. ${hint}`;
+    }
+    case "convert":
+      return `${filename}을(를) 해석하지 못했습니다: ${result.message}. 파일이 손상됐거나 암호가 걸려 있을 수 있습니다.`;
+    case "empty":
+      return `${filename}에서 텍스트를 찾지 못했습니다. 이미지·차트만 있는 문서일 수 있습니다.`;
+    case "timeout":
+      return `${filename} 변환이 ${CONVERT_TIMEOUT_MS / 1000}초 안에 끝나지 않아 중단했습니다. 내용이 매우 많거나(같은 값이 아주 많은 셀에 반복되는 엑셀 등) 비정상적인 파일일 수 있습니다. 다시 시도하지 마세요.`;
+    case "cancelled":
+      return "사용자가 중단해 문서 읽기를 취소했습니다.";
+    case "crashed":
+      return `${filename}을(를) 변환하다 변환기가 비정상 종료됐습니다: ${result.message}`;
+  }
 }

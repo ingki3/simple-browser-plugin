@@ -48,9 +48,11 @@ export default defineManifest({
     "alarms",
     "webNavigation",
     "identity",
+    // read_document 변환을 강제 종료할 수 있는 Worker에서 돌리기 위한 offscreen 문서.
+    "offscreen",
   ],
   host_permissions: ["<all_urls>"],
-  // read_document의 문서 변환기(docling.rs-wasm)가 WebAssembly를 쓴다. MV3는 'wasm-unsafe-eval'만 따로 허용할 수 있다.
+  // read_document의 문서 변환기(docling.rs-wasm)가 offscreen 문서의 Worker에서 WebAssembly를 쓴다. MV3는 'wasm-unsafe-eval'만 따로 허용할 수 있다.
   content_security_policy: {
     extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
   },
