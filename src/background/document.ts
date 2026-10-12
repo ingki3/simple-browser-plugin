@@ -215,11 +215,14 @@ async function fetchDocument(url: string, filename: string, signal?: AbortSignal
 
 async function readResponse(res: Response, filename: string): Promise<Uint8Array> {
   if (!res.ok) {
+    // 본문을 끊지 않으면 도구는 실패했는데 요청은 시간 제한까지 남는다.
+    await res.body?.cancel().catch(() => {});
     throw new Error(`문서 가져오기 실패: HTTP ${res.status} ${res.statusText}`);
   }
   // 로그인이 필요하면 문서 대신 HTML 로그인 페이지가 오는 경우가 많다.
   const contentType = res.headers.get("content-type") ?? "";
   if (/text\/html/i.test(contentType)) {
+    await res.body?.cancel().catch(() => {});
     throw new Error(
       `${filename} 대신 웹 페이지(HTML)가 응답으로 왔습니다. 로그인이 필요하거나 미리보기 페이지 링크일 수 있습니다. 브라우저에서 파일이 바로 내려받아지는 링크인지 확인해 주세요.`,
     );
