@@ -51,3 +51,13 @@ test("an HWP stream that inflates to 150MB stops at kordoc's limit instead of be
   assert.ok(!r.success || r.markdown.trim() === "");
   assert.ok(process.memoryUsage().arrayBuffers - before < 140 * 1024 * 1024);
 });
+
+test("a corrupt second section is reported as a lossy note, not silently dropped", async () => {
+  const { lossyNote } = await import("../src/offscreen/engines/hwp.ts");
+  const r = await kordoc.parseHwp(ab(fixture("partial.hwp")), { ocr: false });
+  assert.ok(r.success);
+  assert.match(r.markdown, /주간업무보고서/);
+  assert.ok(r.warnings.some((w) => w.code === "PARTIAL_PARSE"));
+  assert.match(lossyNote(r.warnings), /건너뛰었습니다.*섹션 2/);
+  assert.equal(lossyNote([{ code: "SKIPPED_IMAGE", message: "그림" }]), null);
+});

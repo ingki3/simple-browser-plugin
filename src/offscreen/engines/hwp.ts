@@ -1,7 +1,12 @@
 // 한글(HWP 3·5, HWPX)을 kordoc로 읽는다. kordoc는 Node용이라 vendor/kordoc에서 브라우저용으로 묶은 번들을 쓴다.
 import type { DocumentJobFailure } from "@/lib/documentJob";
 
-export async function convertHwp(bytes: Uint8Array): Promise<DocumentJobFailure | { ok: true; markdown: string }> {
+// 내용이 빠졌을 수 있는 경고. 손상된 구역·표를 건너뛰고도 kordoc는 성공으로 돌려준다.
+const LOSSY_WARNINGS = new Set(["PARTIAL_PARSE", "TRUNCATED_TABLE", "MALFORMED_XML", "BROKEN_ZIP_RECOVERY"]);
+
+export async function convertHwp(
+  bytes: Uint8Array,
+): Promise<DocumentJobFailure | { ok: true; markdown: string; note?: string }> {
   const kordoc = await import("kordoc-hwp");
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const detected = kordoc.detectFormat(buffer);
@@ -23,5 +28,17 @@ export async function convertHwp(bytes: Uint8Array): Promise<DocumentJobFailure 
     return { ok: false, kind: "convert", message: result.error };
   }
   // 그림은 내용 없이 자리표시만 남긴다(docling과 같은 표기).
-  return { ok: true, markdown: result.markdown.replace(/!\[image\]\([^)]*\)/g, "<!-- image -->") };
+  const markdown = result.markdown.replace(/!\[image\]\([^)]*\)/g, "<!-- image -->");
+  const note = lossyNote(result.warnings ?? []);
+  return note ? { ok: true, markdown, note } : { ok: true, markdown };
+}
+
+export function lossyNote(warnings: { code: string; message: string }[]): string | null {
+  const lossy = warnings.filter((w) => LOSSY_WARNINGS.has(w.code));
+  if (!lossy.length) return null;
+  const detail = lossy
+    .slice(0, 3)
+    .map((w) => w.message)
+    .join("; ");
+  return `문서 일부가 손상돼 그 부분을 건너뛰었습니다(내용이 빠졌을 수 있음): ${detail}`;
 }

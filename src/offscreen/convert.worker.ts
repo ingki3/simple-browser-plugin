@@ -11,7 +11,9 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function toMarkdown(job: WorkerJob): Promise<DocumentJobFailure | { ok: true; markdown: string }> {
+async function toMarkdown(
+  job: WorkerJob,
+): Promise<DocumentJobFailure | { ok: true; markdown: string; note?: string }> {
   let bytes: Uint8Array = new Uint8Array(job.bytes);
   // zip 목차의 크기 값은 꾸밀 수 있으므로 직접 풀며 세고, 검증된 내용으로 다시 만든 zip만 변환기에 넘긴다.
   if (isZipFormat(job.format)) {
@@ -46,6 +48,7 @@ async function run(job: WorkerJob): Promise<DocumentJobResult> {
     markdown: truncated ? markdown.slice(0, job.maxChars) : markdown,
     totalChars: markdown.length,
     truncated,
+    ...(result.note ? { note: result.note } : {}),
   };
 }
 
