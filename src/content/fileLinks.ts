@@ -51,8 +51,9 @@ export function listFileLinks(args: { query?: string; limit?: number }): FileLin
       const isFile =
         format !== null || a.hasAttribute("download") || DOWNLOAD_URL.test(url) || DOWNLOAD_TEXT.test(text);
       if (!isFile) return;
-      seen.add(url);
+      // 같은 URL의 다른 링크("다운로드" 뒤의 "보고서.hwp" 등)가 검색어와 맞을 수 있으므로, 검색어를 통과한 뒤에 등록한다.
       if (query && !`${text} ${url}`.toLowerCase().includes(query)) return;
+      seen.add(url);
       if (links.length >= limit) {
         omitted++;
         return;
