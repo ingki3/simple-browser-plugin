@@ -53,3 +53,15 @@ test("one huge quoted field doesn't grow past maxChars", () => {
   assert.equal(t.rows, 3);
   assert.ok(t.truncated);
 });
+
+test("padding cells and the header separator count toward maxChars", () => {
+  const header = Array.from({ length: 240 }, () => "a").join(",");
+  assert.equal(csvToMarkdown(header + "\n", ",", 1000).markdown, "");
+  const t = csvToMarkdown(header + "\nx\ny\n", ",", 1900);
+  assert.ok(t.markdown.length <= 1900, String(t.markdown.length));
+  for (const max of [1000, 1500, 2000, 3000, 5000]) {
+    const r = csvToMarkdown("h1,h2,h3\n" + "1\n".repeat(2000), ",", max);
+    assert.ok(r.markdown.length <= max, `${max}: ${r.markdown.length}`);
+    assert.ok(r.truncated);
+  }
+});
