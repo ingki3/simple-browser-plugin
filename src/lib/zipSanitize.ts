@@ -230,6 +230,22 @@ function buildStoredZip(files: { name: Uint8Array; data: Uint8Array }[]): Uint8A
   return concat(parts, parts.reduce((s, p) => s + p.length, 0));
 }
 
+// 형식 판별용으로 zip 목차의 항목 이름과 mimetype 항목(OpenDocument·HWPX가 압축 없이 맨 앞에 둔다)을 읽는다.
+// 압축을 풀지 않으므로 큰 파일에도 비용이 거의 없다. zip이 아니거나 목차가 손상됐으면 ZipRejected.
+export function peekZip(bytes: Uint8Array): { names: string[]; mimetype: string | null } {
+  const entries = readEntries(bytes);
+  const mimeEntry = entries.find((e) => e.nameText === "mimetype" && e.method === 0 && e.compressedSize <= 200);
+  let mimetype: string | null = null;
+  if (mimeEntry) {
+    try {
+      mimetype = new TextDecoder().decode(compressedData(bytes, mimeEntry));
+    } catch {
+      mimetype = null;
+    }
+  }
+  return { names: entries.map((e) => e.nameText), mimetype };
+}
+
 export async function sanitizeOfficeZip(bytes: Uint8Array, limits: SanitizeLimits): Promise<SanitizedZip> {
   const entries = readEntries(bytes);
   const files: { name: Uint8Array; data: Uint8Array }[] = [];

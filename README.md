@@ -15,7 +15,11 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `navigate_to_url` — 현재 탭을 지정한 URL이나 사이트 홈으로 직접 이동 (승인 카드)
   - `query_dom` — CSS 선택자 기반 DOM 조회
   - `get_youtube_transcript` — YouTube 영상의 "스크립트 표시" 패널을 열어 타임스탬프 포함 자막 추출
-  - `read_document` — Word·Excel·PowerPoint(.docx/.xlsx/.pptx) 파일 URL을 내려받아 Markdown으로 변환 ([docling.rs-wasm](https://github.com/docling-project/docling.rs), 브라우저 안에서 처리, 최대 20MB) (승인 카드)
+  - `list_file_links` — 페이지의 첨부·다운로드 파일 링크와 짐작한 형식 목록
+  - `read_document` — 링크된 파일을 화면 이동 없이 내려받아 텍스트로 읽기 (브라우저 안에서 처리, 최대 20MB, 한 요청에 5개까지) (승인 카드)
+    - Word·Excel·PowerPoint(.docx/.xlsx/.pptx), OpenDocument(.odt/.ods/.odp), CSV/TSV → Markdown ([docling.rs-wasm](https://github.com/docling-project/docling.rs))
+    - PDF → 쪽별 글자 ([pdf.js](https://github.com/mozilla/pdf.js)), 한글(.hwp/.hwpx) → Markdown ([kordoc](https://github.com/chrisryugj/kordoc)), TXT/MD → 원문
+    - 확장자 없는 다운로드 링크(`download.do?fileId=…`)는 응답 헤더와 파일 서명으로 형식 판별. CSV·TXT의 EUC-KR(CP949) 자동 인식
 - **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경과 문서 URL 요청(쿠키 포함)은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
 - **OpenRouter 모델 지원** — `provider/model` 형식의 모델 ID를 직접 선택하며, reasoning과 tool calling 결과를 실시간 스트리밍
 - **사용자 기본 지침** — "모든 출력은 한글로" 같은 시스템 지침을 설정해 모든 대화에 적용
@@ -47,7 +51,7 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
 - "PXG 골프공 검색해서 가장 싼 스토어로 이동해줘"
 - PDF 탭에서: "이 논문 요약해줘", "결론 부분만 번역해줘", "첨부된 계약서의 핵심 조항 뽑아줘"
 - YouTube 영상에서: "이 영상 요약해줘", "가격 얘기는 몇 분쯤 나와?"
-- 문서 링크가 있는 페이지에서: "이 페이지의 엑셀 파일 내용 정리해줘", "https://…/report.docx 요약해줘"
+- 첨부 파일이 있는 페이지에서: "이 공고의 첨부 한글 파일 요약해줘", "이 페이지의 엑셀 파일 내용 정리해줘", "https://…/report.pdf 요약해줘"
 
 ## 개발
 
@@ -86,7 +90,9 @@ gh pr create --base main --title "..." --body "..."
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
 - **webNavigation 기반 settle 대기** — URL 이동·클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록
-- **문서 변환 격리** — `read_document`는 offscreen 문서 안의 Worker에서 변환하고, 10초가 지나거나 사용자가 중단하면 Worker를 강제 종료. zip은 직접 풀어 크기를 센 뒤(본문 6MB·전체 40MB) 다시 만들어 넘기며, 이미지 등 바이너리는 비워서 넘김. 1분 동안 쓰지 않으면 offscreen 문서를 닫음
+- **문서 변환 격리** — `read_document`는 offscreen 문서 안의 Worker에서 변환하고(형식에 맞는 변환기만 불러옴), 10초가 지나거나 사용자가 중단하면 Worker를 강제 종료. zip 기반 문서(Office·OpenDocument·HWPX)는 직접 풀어 크기를 센 뒤(본문 6MB·전체 40MB) 다시 만들어 넘기며, 이미지 등 바이너리는 비워서 넘김. 1분 동안 쓰지 않으면 offscreen 문서를 닫음
+- **문서 요청 안전장치** — 쿠키를 실은 요청은 리다이렉트를 따라가지 않고, 리다이렉트되는 링크는 쿠키 없이 다시 받음. 웹 페이지·이미지·압축 파일 등 문서가 아닌 확장자는 요청하지 않음. 확장자 없는 링크는 승인 카드에 따로 경고
+- **kordoc 브라우저 번들** — kordoc는 Node용이라 `vendor/kordoc/`에서 따로 설치해 브라우저용으로 묶은 결과물을 커밋해 씀(`npm run vendor:kordoc`로 다시 만듦, [vendor/kordoc/README.md](vendor/kordoc/README.md))
 
 ## 보안 / 프라이버시
 
@@ -97,7 +103,7 @@ gh pr create --base main --title "..." --body "..."
 
 ## 스택
 
-Vite · TypeScript · React 18 · zustand · zod · OpenRouter API · `@crxjs/vite-plugin`
+Vite · TypeScript · React 18 · zustand · zod · OpenRouter API · `@crxjs/vite-plugin` · docling.rs-wasm · pdf.js · kordoc
 
 ## 라이선스
 

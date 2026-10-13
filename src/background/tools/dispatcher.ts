@@ -1,5 +1,6 @@
 import type {
   ClickableElement,
+  FileLinkList,
   FormField,
   PageContent,
   PageDescription,
@@ -22,7 +23,7 @@ import {
 } from "../google/sheets";
 import { exportFile, listRecent, searchFiles } from "../google/drive";
 import { readDocument } from "../document";
-import { parseDocumentUrl } from "@/lib/documentUrl";
+import { checkFileUrl } from "@/lib/fileFormat";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -75,12 +76,21 @@ export async function buildToolPreview(
     }
     case "read_document": {
       const args = parsedArgs as ToolArgs["read_document"];
-      const target = parseDocumentUrl(args.url);
-      if (!target) throw new Error("read_document: 지원하지 않는 URL입니다(.docx/.xlsx/.pptx로 끝나는 http(s) URL만 가능).");
+      const checked = checkFileUrl(args.url);
+      if (!checked.ok) throw new Error(`read_document: ${checked.reason}`);
+      const target = checked.target;
       const host = new URL(target.url).host;
+      const warning = `URL 전체(쿼리 포함)가 ${host}로 전송됩니다. 모르는 사이트이거나 쿼리에 대화 내용이 들어 있으면 거부하세요.`;
+      if (!target.hint) {
+        // 확장자가 없으면 이 주소가 파일인지 미리 알 수 없다. 승인 카드가 주된 방어선이다.
+        return {
+          summary: `${host}의 다운로드 링크를 로그인 쿠키와 함께 호출해, 받은 파일을 읽습니다(형식은 받은 뒤 판별).`,
+          details: `${target.url}\n\n확장자가 없는 링크라 파일 다운로드가 아닌 다른 동작(로그아웃·삭제·신청 등)을 하는 주소일 수도 있습니다. 페이지에 보이는 첨부 파일 링크가 맞을 때만 허용하세요.\n${warning}`,
+        };
+      }
       return {
-        summary: `${host}에서 문서 '${truncate(target.filename, 60)}'를 로그인 쿠키와 함께 내려받아 읽습니다.`,
-        details: `${target.url}\n\nURL 전체(쿼리 포함)가 ${host}로 전송됩니다. 모르는 사이트이거나 쿼리에 대화 내용이 들어 있으면 거부하세요.`,
+        summary: `${host}에서 파일 '${truncate(target.filename, 60)}'을(를) 로그인 쿠키와 함께 내려받아 읽습니다.`,
+        details: `${target.url}\n\n${warning}`,
       };
     }
     case "navigate_to_url": {
@@ -182,8 +192,21 @@ export async function executeTool(
       return {
         ok: true,
         summary:
-          `문서 변환: ${truncate(data.filename, 60)} (${data.format}, ${data.totalChars}자)` +
-          (data.truncated ? ` (앞 ${data.markdown.length}자만 전달)` : ""),
+          `문서 읽기: ${truncate(data.filename, 60)} (${data.format}, ${data.totalChars}자)` +
+          (data.truncated ? ` (앞 ${data.markdown.length}자만 전달)` : "") +
+          (data.redirectedTo ? " (리다이렉트, 로그인 정보 없이 받음)" : ""),
+        data,
+      };
+    }
+    case "list_file_links": {
+      const data = await callContentTool<FileLinkList>(toolName, parsedArgs, callId, turnTab);
+      return {
+        ok: true,
+        summary:
+          `파일 링크 ${data.links.length}개 발견` +
+          (data.omitted ? ` (그 외 ${data.omitted}개 생략)` : "") +
+          (data.scriptDownloads ? `, 스크립트 다운로드 버튼 ${data.scriptDownloads}개(읽기 불가)` : "") +
+          ".",
         data,
       };
     }

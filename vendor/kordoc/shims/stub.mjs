@@ -1,0 +1,15 @@
+import * as cfbModule from "cfb";
+const no = (name) => () => { throw new Error(`${name}: 브라우저에서 사용할 수 없음`); };
+export const readFile = no("readFile"), readFileSync = no("readFileSync"), existsSync = () => false, writeFile = no("writeFile"), mkdir = no("mkdir"), stat = no("stat"), readdir = no("readdir"), unlink = no("unlink"), rm = no("rm"), mkdtemp = no("mkdtemp"), access = no("access"), writeFileSync = no("writeFileSync"), mkdirSync = no("mkdirSync"), statSync = no("statSync"), createReadStream = no("createReadStream"), createWriteStream = no("createWriteStream");
+export const execFileSync = no("execFileSync"), execFile = no("execFile"), spawn = no("spawn"), spawnSync = no("spawnSync");
+export const platform = () => "browser", tmpdir = () => "/tmp", homedir = () => "/", cpus = () => [], EOL = "\n";
+export const createRequire = () => (m) => { if (m === "cfb") return cfbModule.default ?? cfbModule; throw new Error(`require(${m}) 불가`); };
+export const fileURLToPath = (u) => String(u), pathToFileURL = (p) => new URL("file://" + p);
+export const dirname = (p) => p.replace(/\/[^/]*$/, ""), join = (...a) => a.join("/"), resolve = (...a) => a.join("/"), basename = (p) => p.split("/").pop(), extname = (p) => (p.match(/\.[^./]*$/) || [""])[0], sep = "/";
+export const Worker = class { constructor() { throw new Error("worker_threads 불가"); } }, isMainThread = true, parentPort = null, workerData = null;
+export const Readable = class {}, Writable = class {}, Transform = class {}, PassThrough = class {}, pipeline = no("pipeline"), finished = no("finished");
+export const EventEmitter = class { on() { return this; } emit() { return false; } once() { return this; } off() { return this; } };
+export const promisify = (f) => f, inspect = (x) => String(x), TextDecoder = globalThis.TextDecoder, format = (...a) => a.join(" ");
+export const createHash = no("createHash"), createDecipheriv = no("createDecipheriv"), createCipheriv = no("createCipheriv"), pbkdf2Sync = no("pbkdf2Sync"), timingSafeEqual = no("timingSafeEqual"), randomBytes = no("randomBytes");
+export default new Proxy({}, { get: (_, k) => (k === "promises" ? {} : no(String(k))) });
+export const hostname = () => "browser", randomUUID = () => crypto.randomUUID(), readlinkSync = no("readlinkSync"), rename = no("rename");

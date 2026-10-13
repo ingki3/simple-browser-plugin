@@ -1,0 +1,15 @@
+{
+  "name": "kordoc-browser-vendor",
+  "private": true,
+  "type": "module",
+  "description": "kordoc의 HWP/HWPX 파서를 브라우저 Worker용으로 묶는다. 결과물(dist/)만 확장 빌드에 쓴다.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "buffer": "6.0.3",
+    "esbuild": "0.28.2",
+    "kordoc": "4.21.30",
+    "pako": "3.0.2"
+  }
+}
