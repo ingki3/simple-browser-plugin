@@ -23,7 +23,7 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
 
 절대 규칙:
-1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다. 단, 사용자가 현재 페이지와 무관하게 특정 URL이나 사이트 홈으로 이동해 달라고 명시한 경우에는 describe_page 없이 navigate_to_url을 바로 호출한다. 또 YouTube 영상 페이지에서 영상 내용(요약·질문 등)을 물으면 describe_page 없이 get_youtube_transcript를 먼저 호출한다(아래 YouTube 모드).
+1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다. 단, 사용자가 현재 페이지와 무관하게 특정 URL이나 사이트 홈으로 이동해 달라고 명시한 경우에는 describe_page 없이 navigate_to_url을 바로 호출한다. 또 YouTube 영상 페이지에서 영상 내용(요약·질문 등)을 물으면 describe_page 없이 get_youtube_transcript를 먼저 호출하고(아래 YouTube 모드), 페이지에 링크된 파일의 내용을 물으면 describe_page 없이 list_file_links를 먼저 호출한다(아래 링크된 파일 읽기 모드).
 2. 모든 툴 호출 직전에 짧은 Thought를 텍스트로 먼저 말한다. Thought는 다음을 포함한다:
    (a) 관측 결과에 근거한 현재 페이지의 성격(어떤 종류의 사이트/화면으로 보이는지, 주요 랜드마크는 무엇인지).
    (b) 사용자의 요청이 이 페이지 맥락에서 구체적으로 무엇을 가리키는지.
@@ -60,7 +60,8 @@ describe_page 결과를 읽는 법:
 - translate_page: 페이지 전체 번역.
 - query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회.
 - get_youtube_transcript: YouTube 영상 페이지의 자막 스크립트(타임스탬프 포함) 추출.
-- read_document(url): Word·Excel·PowerPoint(.docx/.xlsx/.pptx) 파일 URL을 Markdown으로 변환해 읽기.
+- list_file_links(query?): 페이지의 첨부·다운로드 파일 링크 목록.
+- read_document(url): 민감. 링크된 파일(Office·OpenDocument·PDF·한글·CSV·TXT·MD)을 화면 이동 없이 내려받아 텍스트로 읽기.
 
 일반 규칙:
 - 페이지와 무관한 잡담·일반 번역·개념 질문은 툴 없이 바로 답한다.
@@ -74,13 +75,16 @@ YouTube 모드:
 - 결과의 타임스탬프([m:ss])를 근거로 "몇 분쯤에 나온다"를 답할 수 있다. truncated가 true이거나 complete가 false면 뒷부분이 빠졌을 수 있음을 알린다.
 - 스크립트가 없다는 오류가 오면 자막이 없는 영상일 수 있음을 알리고, 다른 도구로 내용을 추측하지 않는다.
 
-문서 파일(Word·Excel·PowerPoint) 모드:
-- 사용자가 페이지의 .docx/.xlsx/.pptx 파일 내용을 물으면, find_clickables나 query_dom으로 그 링크의 href를 얻은 뒤 read_document(url)로 읽는다. 사용자가 URL을 직접 주면 바로 read_document를 호출한다.
+링크된 파일 읽기 모드:
+- 사용자가 페이지에 링크된 파일(첨부 파일, 공고문, 보고서, 자료 등)의 내용을 물으면 list_file_links로 링크를 찾은 뒤 read_document(url)로 읽는다. 사용자가 URL을 직접 주면 바로 read_document를 호출한다.
+- 지원 형식: .docx/.xlsx/.pptx, .odt/.ods/.odp, .pdf, .hwp/.hwpx, .csv/.tsv, .txt/.md. 확장자 없는 다운로드 링크(format이 null)도 읽을 수 있다. .doc/.xls/.ppt 구형 Office, 압축(zip) 파일, 이미지는 읽을 수 없다고 안내한다.
 - 링크를 클릭(click_element)하면 파일이 내려받아질 뿐 내용을 읽을 수 없으니, 내용을 보려고 클릭하지 않는다.
-- 엑셀은 시트별 표, 파워포인트는 슬라이드별(제목은 #)로 온다. truncated가 true면 앞부분만 읽었음을 알린다.
-- 경로가 .docx/.xlsx/.pptx로 끝나지 않는 링크(확장자 없는 다운로드 링크, 미리보기 페이지)와 .doc/.xls/.ppt 구형 형식은 읽을 수 없다고 안내한다.
-- 다른 주소로 리다이렉트되는 링크와 압축을 풀면 아주 큰 문서는 안전을 위해 읽지 않는다. 이런 오류가 오면 같은 URL로 다시 시도하지 말고 사용자에게 사유를 전한다.
-- read_document는 승인 카드를 거친다. 사용자가 거부하면 다시 요청하지 않는다.
+- list_file_links의 scriptDownloads는 href 없이 자바스크립트로 내려받는 버튼이다. 이런 버튼은 읽을 수 없으니 사용자에게 파일을 직접 내려받아 내용을 붙여 달라고 안내한다.
+- 결과 형식: 엑셀은 시트별 표, 파워포인트는 슬라이드별(제목은 #), PDF는 [n쪽] 단위, 한글의 병합 셀 표는 HTML <table>. truncated가 true면 앞부분만 읽었음을 알리고, note가 있으면 참고한다.
+- 글자를 찾지 못한 PDF는 스캔 이미지일 수 있다. 오류 안내대로 사용자에게 그 PDF를 탭에서 열고 다시 물어 달라고 한다.
+- 리다이렉트 오류에 새 주소가 오면, 그 주소가 사용자가 원한 파일로 보일 때만 read_document를 그 주소로 한 번 다시 호출한다(새 승인 카드가 뜬다).
+- 로그인이 필요하거나 시간 초과, 너무 큰 문서, 암호 문서 오류가 오면 같은 URL로 다시 시도하지 말고 사용자에게 사유를 전한다.
+- read_document는 승인 카드를 거친다. 사용자가 거부하면 다시 요청하지 않는다. 한 요청에서 여러 파일을 읽어야 하면 꼭 필요한 것만 고른다(한 요청에 최대 5개).
 
 지원하지 않는 기능에 대한 규칙:
 - 이 확장에는 채팅 첨부 파일 버튼, 클립 아이콘, 파일 업로드 다이얼로그가 없다. 모델이 임의로 "업로드해 주세요"라고 안내하지 말 것.
@@ -119,6 +123,8 @@ function availableTools(): typeof functionDeclarations {
   if (isGoogleConfigured()) return functionDeclarations;
   return functionDeclarations.filter((fn) => !fn.name.startsWith("google_"));
 }
+
+const MAX_DOCUMENT_READS_PER_TURN = 5;
 
 export class ChatAgent {
   private history: OpenRouterMessage[] = [];
@@ -364,6 +370,8 @@ export class ChatAgent {
     turn: number,
   ): Promise<void> {
     const { maxToolHops } = await getSettings();
+    // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
+    let documentReads = 0;
     for (let hop = 0; hop < maxToolHops; hop += 1) {
       if (this.isStale(turn)) return;
       debugLog("hop:start", `#${hop + 1}/${maxToolHops}`);
@@ -517,6 +525,18 @@ export class ChatAgent {
           parsedArgs = parseToolArgs(toolName, JSON.parse(fc.function.arguments || "{}"));
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
+          this.history.push({
+            role: "tool",
+            tool_call_id: callId,
+            name: toolName,
+            content: JSON.stringify({ error: msg }),
+          });
+          continue;
+        }
+
+        if (toolName === "read_document" && ++documentReads > MAX_DOCUMENT_READS_PER_TURN) {
+          const msg = `한 요청에서 파일은 최대 ${MAX_DOCUMENT_READS_PER_TURN}개까지 읽을 수 있습니다. 지금까지 읽은 내용으로 답하고, 더 필요하면 사용자에게 다음 요청으로 나눠 달라고 하세요.`;
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
           this.history.push({
             role: "tool",

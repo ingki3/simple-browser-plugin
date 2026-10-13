@@ -7,6 +7,7 @@ import { queryDom } from "./dom";
 import { findClickables, clickElement } from "./clickables";
 import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
+import { listFileLinks } from "./fileLinks";
 
 async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
   switch (toolName) {
@@ -26,6 +27,8 @@ async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
       return fillFormFields(args as { fills: Array<{ id: string; value: string }> });
     case "list_page_images":
       return listPageImages((args ?? {}) as { minWidth?: number });
+    case "list_file_links":
+      return listFileLinks((args ?? {}) as { query?: string; limit?: number });
     case "query_dom":
       return queryDom(args as { selector: string; attr?: string; limit?: number });
     case "find_clickables":

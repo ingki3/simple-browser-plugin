@@ -1,10 +1,12 @@
 import type { ModelId } from "./models";
+import type { ReadableFormat } from "./fileFormat";
 
 export type ToolName =
   | "describe_page"
   | "get_page_content"
   | "get_youtube_transcript"
   | "read_document"
+  | "list_file_links"
   | "translate_page"
   | "find_form_fields"
   | "fill_form_fields"
@@ -94,13 +96,33 @@ export interface YoutubeTranscript {
 
 export interface DocumentContent {
   url: string;
+  // Content-Disposition 또는 URL에서 얻은 파일 이름.
   filename: string;
-  format: "docx" | "xlsx" | "pptx";
+  // 받은 파일의 서명(텍스트면 이름·Content-Type)으로 정한 형식.
+  format: ReadableFormat;
   bytes: number;
   // 변환된 Markdown 전체 길이. truncated면 markdown은 앞부분만 담는다.
+  // PDF는 글자 수가 차면 남은 쪽을 읽지 않으므로 읽은 부분까지의 길이다(note에 쪽 수).
   totalChars: number;
   markdown: string;
   truncated: boolean;
+  // 인코딩·읽은 쪽 수 등 덧붙임.
+  note?: string;
+}
+
+export interface FileLink {
+  text: string;
+  url: string;
+  // 이름으로 짐작한 형식. null이면 확장자 없는 다운로드 링크(받은 뒤 판별).
+  format: ReadableFormat | null;
+}
+
+export interface FileLinkList {
+  links: FileLink[];
+  // 개수 제한으로 빠진 링크 수.
+  omitted: number;
+  // href 없이 자바스크립트로 내려받는 버튼 수. read_document로 읽을 수 없다.
+  scriptDownloads: number;
 }
 
 export interface PageContent {

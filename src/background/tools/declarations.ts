@@ -42,15 +42,33 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "list_file_links",
+    description:
+      "현재 페이지에서 파일 링크(첨부 파일·다운로드 링크)를 찾아 링크 글자, URL, 짐작한 형식을 반환한다. 페이지에 링크된 문서를 read_document로 읽기 전에 URL을 얻을 때 쓴다. 형식이 null이면 확장자 없는 다운로드 링크다.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "링크 글자·파일 이름·URL에 이 말이 들어간 것만 고른다(대소문자 무시). 생략하면 전부.",
+        },
+        limit: {
+          type: "number",
+          description: "최대 개수. 기본 50, 최대 200.",
+        },
+      },
+    },
+  },
+  {
     name: "read_document",
     description:
-      "Word(.docx)·Excel(.xlsx)·PowerPoint(.pptx) 파일 URL을 내려받아 Markdown 텍스트로 변환해 반환한다(제목·목록·표 유지, 엑셀은 시트별 표, 파워포인트는 슬라이드별). URL 경로가 .docx/.xlsx/.pptx로 끝나야 한다. 페이지에 있는 문서 링크는 find_clickables나 query_dom으로 href를 먼저 얻는다. 이미지·차트 안의 내용은 읽지 못한다.",
+      "파일 URL을 내려받아 텍스트로 읽는다. 지원: Word(.docx)·Excel(.xlsx)·PowerPoint(.pptx)·OpenDocument(.odt/.ods/.odp)는 Markdown(제목·목록·표 유지), PDF는 쪽별 글자, 한글(.hwp/.hwpx)은 Markdown(병합 셀 표는 HTML), CSV/TSV는 표, TXT/MD는 원문. 확장자 없는 다운로드 링크(download.do?fileId=… 등)도 받은 뒤 형식을 판별한다. 페이지에 있는 파일 링크는 list_file_links로 URL을 먼저 얻는다. 이미지·스캔 PDF 속 글자는 읽지 못한다.",
     parameters: {
       type: "object",
       properties: {
         url: {
           type: "string",
-          description: "문서 파일의 http(s) URL. 경로가 .docx, .xlsx, .pptx로 끝나야 한다.",
+          description: "파일의 http(s) URL(링크의 href 그대로).",
         },
         maxChars: {
           type: "number",
