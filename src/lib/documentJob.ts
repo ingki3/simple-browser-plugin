@@ -10,8 +10,8 @@ export const OFFSCREEN_PATH = "src/offscreen/index.html";
 // 악성 입력은 이 동안 계속 메모리를 늘린다(공유 문자열 10만 참조: 60초에 약 1.9GB).
 export const CONVERT_TIMEOUT_MS = 10_000;
 
-// 텍스트(txt·md)는 변환 없이 서비스 워커에서 처리하므로 Worker로 오지 않는다.
-export type WorkerEngine = Exclude<ConvertEngine, "text">;
+// 텍스트(txt·md)와 표(csv·tsv)는 서비스 워커에서 처리하므로 Worker로 오지 않는다.
+export type WorkerEngine = Exclude<ConvertEngine, "text" | "table">;
 
 export interface DocumentJob {
   kind: "document_convert";

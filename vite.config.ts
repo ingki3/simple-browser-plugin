@@ -6,38 +6,34 @@ import path from "node:path";
 import manifest from "./manifest.config";
 import { patchPdfWorker } from "./scripts/pdfjsWorkerPatch";
 
-// pdf.js가 한·중·일 글꼴의 글자 코드를 해석할 때 읽는 표(약 1.6MB). 확장 안 pdfjs/cmaps/로 넣는다.
-function pdfjsCmaps(): Plugin {
-  const dir = path.resolve(__dirname, "node_modules/pdfjs-dist/cmaps");
+// pdf.js 자원을 public/pdfjs/에 만든다(생성물, git 제외). 개발 서버(crx)와 빌드 모두 public/을 확장에 넣는다.
+// - pdf.worker.mjs: 압축 해제 한도를 넣은 pdf.js 워커(legacy 빌드, scripts/pdfjsWorkerPatch.ts)
+// - cmaps/: 한·중·일 글꼴의 글자 코드를 해석할 때 읽는 표(약 1.6MB)
+function pdfjsAssets(): Plugin {
+  const pkg = path.resolve(__dirname, "node_modules/pdfjs-dist");
+  const out = path.resolve(__dirname, "public/pdfjs");
   return {
-    name: "pdfjs-cmaps",
-    apply: "build",
-    generateBundle() {
-      for (const name of fs.readdirSync(dir)) {
-        if (!name.endsWith(".bcmap")) continue;
-        this.emitFile({ type: "asset", fileName: `pdfjs/cmaps/${name}`, source: fs.readFileSync(path.join(dir, name)) });
+    name: "pdfjs-assets",
+    async config() {
+      const source = fs.readFileSync(path.join(pkg, "legacy/build/pdf.worker.mjs"), "utf8");
+      const { code } = await transformWithEsbuild(patchPdfWorker(source), "pdf.worker.mjs", {
+        minify: true,
+        format: "esm",
+        legalComments: "inline",
+      });
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.mkdirSync(path.join(out, "cmaps"), { recursive: true });
+      fs.writeFileSync(path.join(out, "pdf.worker.mjs"), code);
+      for (const name of fs.readdirSync(path.join(pkg, "cmaps"))) {
+        fs.copyFileSync(path.join(pkg, "cmaps", name), path.join(out, "cmaps", name));
       }
-      this.emitFile({ type: "asset", fileName: "pdfjs/cmaps/LICENSE", source: fs.readFileSync(path.join(dir, "LICENSE")) });
-    },
-  };
-}
-
-// pdf.js 워커(legacy 빌드)에 압축 해제 한도를 넣어 pdfjs/pdf.worker.mjs로 넣는다(scripts/pdfjsWorkerPatch.ts).
-function pdfjsWorker(): Plugin {
-  const file = path.resolve(__dirname, "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs");
-  return {
-    name: "pdfjs-worker",
-    apply: "build",
-    async generateBundle() {
-      const patched = patchPdfWorker(fs.readFileSync(file, "utf8"));
-      const { code } = await transformWithEsbuild(patched, "pdf.worker.mjs", { minify: true, format: "esm", legalComments: "inline" });
-      this.emitFile({ type: "asset", fileName: "pdfjs/pdf.worker.mjs", source: code });
+      fs.copyFileSync(path.join(pkg, "LICENSE"), path.join(out, "LICENSE"));
     },
   };
 }
 
 export default defineConfig({
-  plugins: [react(), crx({ manifest }), pdfjsCmaps(), pdfjsWorker()],
+  plugins: [pdfjsAssets(), react(), crx({ manifest })],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

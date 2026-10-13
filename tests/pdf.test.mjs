@@ -56,7 +56,9 @@ test("normal PDFs still read with the patch (Korean CID font via CMap)", async (
   assert.equal(r.text, "가나다", JSON.stringify(r));
 });
 
-test("without the patch the same PDF inflates far past the budget (the test can tell)", async () => {
+test("without the patch pdf.js inflates the whole 200MB stream (the bomb test can tell)", async () => {
+  // 패치가 없으면 끝까지 풀고 글자를 돌려준다. 패치가 있으면 한도에서 멈춰 글자가 없다(위 테스트).
+  // 메모리 사용량은 GC 시점에 따라 흔들려서 여기서는 비교하지 않는다.
   const r = await textOf(fixture("bomb.pdf"), workerSource);
-  assert.ok(r.grew > PDF_DECODE_BUDGET + 32 * 1024 * 1024, `grew ${r.grew}`);
+  assert.equal(r.text, "hello bomb", JSON.stringify(r).slice(0, 200));
 });

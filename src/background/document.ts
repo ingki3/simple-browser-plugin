@@ -10,6 +10,7 @@ import {
   type SniffHints,
 } from "@/lib/fileFormat";
 import { peekZip } from "@/lib/zipSanitize";
+import { csvToMarkdown, detectDelimiter } from "@/lib/csvTable";
 import {
   CONVERT_TIMEOUT_MS,
   OFFSCREEN_PATH,
@@ -344,15 +345,25 @@ export async function readDocument(
     };
   }
 
-  let bytes = got.bytes;
-  let note: string | undefined;
-  if (format === "csv" || format === "tsv") {
-    // 변환기는 UTF-8만 읽는다. 한국어 엑셀이 저장한 CSV(CP949)도 여기서 UTF-8로 바꿔 넘긴다.
-    const { text, encoding } = decodeText(bytes);
-    bytes = new TextEncoder().encode(text);
-    if (encoding !== "utf-8") note = `${encoding} 인코딩으로 읽었습니다.`;
+  if (engine === "table") {
+    const { text, encoding } = decodeText(got.bytes);
+    const delimiter = format === "tsv" ? "\t" : detectDelimiter(text);
+    const table = csvToMarkdown(text, delimiter, maxChars);
+    if (!table.markdown) throw new Error(`${label}에 표로 읽을 내용이 없습니다(한 행이 너무 길 수도 있습니다).`);
+    const notes = [
+      encoding !== "utf-8" ? `${encoding} 인코딩으로 읽었습니다.` : "",
+      table.truncated ? `전체 ${table.rows}행 중 ${table.shownRows}행까지 읽었습니다(첫 행은 머리글).` : `전체 ${table.rows}행(첫 행은 머리글).`,
+    ].filter(Boolean);
+    return {
+      ...base,
+      totalChars: table.markdown.length,
+      markdown: table.markdown,
+      truncated: table.truncated,
+      note: notes.join(" "),
+    };
   }
-  const result = await convertInWorker(bytes, engine, format, convertName(filename, format), maxChars, signal);
+
+  const result = await convertInWorker(got.bytes, engine, format, convertName(filename, format), maxChars, signal);
   if (!result.ok) {
     if (result.kind !== "cancelled") debugLog("document:convert_error", JSON.stringify(result), "warn");
     throw new Error(failureMessage(label, format, result));
@@ -362,7 +373,7 @@ export async function readDocument(
     totalChars: result.totalChars,
     markdown: result.markdown,
     truncated: result.truncated,
-    ...(result.note || note ? { note: [note, result.note].filter(Boolean).join(" ") } : {}),
+    ...(result.note ? { note: result.note } : {}),
   };
 }
 

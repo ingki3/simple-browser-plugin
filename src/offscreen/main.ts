@@ -51,7 +51,7 @@ function runJob(job: DocumentJob, port: MessagePort): void {
     ev.preventDefault();
     finish({ ok: false, kind: "crashed", message: ev.message || "변환기 Worker 오류" });
   };
-  // docling wasm은 docling으로 변환하는 형식(Office·OpenDocument·CSV)에만 컴파일한다.
+  // docling wasm은 docling으로 변환하는 형식(Office·OpenDocument)에만 컴파일한다.
   const loaded = job.engine === "docling" ? doclingModule() : Promise.resolve(null);
   loaded.then(
     (module) => {

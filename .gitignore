@@ -9,3 +9,5 @@ node_modules
 *.jpeg
 !public/icons/*.png
 __pycache__/
+# vite.config.ts가 node_modules/pdfjs-dist에서 만든다.
+/public/pdfjs/

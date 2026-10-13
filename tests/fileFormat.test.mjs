@@ -161,7 +161,8 @@ test("decodeText falls back to EUC-KR (CP949) and honours BOMs", () => {
 
 test("engineFor routes formats to converters", () => {
   assert.equal(engineFor("docx"), "docling");
-  assert.equal(engineFor("csv"), "docling");
+  assert.equal(engineFor("csv"), "table");
+  assert.equal(engineFor("tsv"), "table");
   assert.equal(engineFor("pdf"), "pdf");
   assert.equal(engineFor("hwp"), "hwp");
   assert.equal(engineFor("hwpx"), "hwp");

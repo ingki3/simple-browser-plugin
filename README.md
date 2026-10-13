@@ -17,8 +17,8 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `get_youtube_transcript` — YouTube 영상의 "스크립트 표시" 패널을 열어 타임스탬프 포함 자막 추출
   - `list_file_links` — 페이지의 첨부·다운로드 파일 링크와 짐작한 형식 목록
   - `read_document` — 링크된 파일을 화면 이동 없이 내려받아 텍스트로 읽기 (브라우저 안에서 처리, 최대 20MB, 한 요청에 5개까지) (승인 카드)
-    - Word·Excel·PowerPoint(.docx/.xlsx/.pptx), OpenDocument(.odt/.ods/.odp), CSV/TSV → Markdown ([docling.rs-wasm](https://github.com/docling-project/docling.rs))
-    - PDF → 쪽별 글자 ([pdf.js](https://github.com/mozilla/pdf.js)), 한글(.hwp/.hwpx) → Markdown ([kordoc](https://github.com/chrisryugj/kordoc)), TXT/MD → 원문
+    - Word·Excel·PowerPoint(.docx/.xlsx/.pptx), OpenDocument(.odt/.ods/.odp) → Markdown ([docling.rs-wasm](https://github.com/docling-project/docling.rs))
+    - PDF → 쪽별 글자 ([pdf.js](https://github.com/mozilla/pdf.js)), 한글(.hwp/.hwpx) → Markdown ([kordoc](https://github.com/chrisryugj/kordoc)), CSV/TSV → Markdown 표(구분자 자동 판별, 글자 수 한도에서 멈춤), TXT/MD → 원문
     - 확장자 없는 다운로드 링크(`download.do?fileId=…`)는 응답 헤더와 파일 서명으로 형식 판별. CSV·TXT의 EUC-KR(CP949) 자동 인식
 - **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경과 문서 URL 요청(쿠키 포함)은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
 - **OpenRouter 모델 지원** — `provider/model` 형식의 모델 ID를 직접 선택하며, reasoning과 tool calling 결과를 실시간 스트리밍

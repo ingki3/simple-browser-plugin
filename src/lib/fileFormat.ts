@@ -18,8 +18,9 @@ export const READABLE_FORMATS = [
 ] as const;
 export type ReadableFormat = (typeof READABLE_FORMATS)[number];
 
-// docling: Office·OpenDocument·CSV, pdf: pdf.js, hwp: kordoc, text: 변환 없이 원문.
-export type ConvertEngine = "docling" | "pdf" | "hwp" | "text";
+// docling: Office·OpenDocument, pdf: pdf.js, hwp: kordoc, table: CSV·TSV(csvTable), text: 변환 없이 원문.
+// table·text는 서비스 워커에서 바로 처리한다.
+export type ConvertEngine = "docling" | "pdf" | "hwp" | "table" | "text";
 
 export function engineFor(format: ReadableFormat): ConvertEngine {
   switch (format) {
@@ -28,6 +29,9 @@ export function engineFor(format: ReadableFormat): ConvertEngine {
     case "hwp":
     case "hwpx":
       return "hwp";
+    case "csv":
+    case "tsv":
+      return "table";
     case "txt":
     case "md":
       return "text";
