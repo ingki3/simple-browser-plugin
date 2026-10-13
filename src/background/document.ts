@@ -213,54 +213,62 @@ interface Downloaded {
   contentType: string | null;
   // Content-Disposition의 파일 이름.
   dispositionName: string | null;
-  // 리다이렉트를 따라 쿠키 없이 다시 받았으면 최종 URL.
-  redirectedTo: string | null;
 }
 
-function fetchFailed(err: unknown, signal: AbortSignal | undefined, timeout: AbortSignal): Error {
-  if (signal?.aborted) return new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
-  if (timeout.aborted) return new Error(`문서를 ${FETCH_TIMEOUT_MS / 1000}초 안에 내려받지 못했습니다.`);
-  return new Error(`문서를 내려받지 못했습니다(${err instanceof Error ? err.message : String(err)}).`);
+// 이 서비스 워커가 보낸 요청이 받은 리다이렉트 응답의 Location을 기록한다. fetch는 redirect: "error"면 목적지를
+// 알려 주지 않으므로 webRequest로 본다(관찰만 하고 요청을 바꾸지 않는다).
+function watchRedirect(url: string): { location(): string | null; stop(): void } {
+  let location: string | null = null;
+  const listener = (d: chrome.webRequest.WebResponseHeadersDetails) => {
+    if (d.tabId !== -1 || d.url !== url || d.statusCode < 300 || d.statusCode >= 400) return;
+    const value = d.responseHeaders?.find((h) => h.name.toLowerCase() === "location")?.value;
+    if (!value) return;
+    try {
+      location = new URL(value, url).href;
+    } catch {
+      location = null;
+    }
+  };
+  chrome.webRequest.onHeadersReceived.addListener(listener, { urls: ["<all_urls>"] }, ["responseHeaders"]);
+  return { location: () => location, stop: () => chrome.webRequest.onHeadersReceived.removeListener(listener) };
 }
 
 async function fetchDocument(url: string, signal?: AbortSignal): Promise<Downloaded> {
   const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  let res: Response;
-  let redirectedTo: string | null = null;
+  const redirect = watchRedirect(url);
   try {
-    // 쿠키를 실은 요청은 리다이렉트를 따라가지 않는다. 승인한 URL이 로그인된 다른 사이트의 상태 변경 GET으로
-    // 302를 보내면 쿠키를 실어 그대로 실행되기 때문이다(승인 카드에는 시작 URL만 보인다).
-    res = await fetch(url, { credentials: "include", redirect: "error", signal: combined });
-  } catch (err) {
-    if (!(err instanceof TypeError) || combined.aborted) throw fetchFailed(err, signal, timeout);
-    // 리다이렉트(CDN 서명 주소·단축 주소 등)는 TypeError로 온다. 쿠키 없이 다시 받으면 다른 사이트에
-    // 로그인한 사용자로 요청이 가지 않는다. 네트워크 오류였어도 같은 URL을 한 번 더 보낼 뿐이다.
-    try {
-      res = await fetch(url, { credentials: "omit", redirect: "follow", signal: combined });
-    } catch (retryErr) {
-      throw fetchFailed(retryErr, signal, timeout);
-    }
-    if (res.redirected) redirectedTo = res.url;
-    debugLog("document:redirect_retry", res.redirected ? new URL(res.url).host : "no redirect");
-  }
-  try {
-    return await readResponse(res, redirectedTo);
+    // 리다이렉트는 따라가지 않는다. 승인 카드에는 시작 URL만 보이므로, 목적지(상태를 바꾸는 GET일 수 있다)로는
+    // 쿠키가 있든 없든 요청을 보내지 않는다. 목적지를 알면 알려 주고, 모델이 그 주소로 다시 요청하면 새 승인 카드가 뜬다.
+    const res = await fetch(url, { credentials: "include", redirect: "error", signal: combined });
+    return await readResponse(res);
   } catch (err) {
     if (signal?.aborted) throw new Error("사용자가 중단해 문서 읽기를 취소했습니다.");
     if (timeout.aborted) throw new Error(`문서를 ${FETCH_TIMEOUT_MS / 1000}초 안에 내려받지 못했습니다.`);
+    if (err instanceof TypeError) {
+      const location = redirect.location();
+      if (location) {
+        const next = checkFileUrl(location);
+        if (!next.ok) {
+          throw new Error(`이 링크는 다른 주소(${location})로 리다이렉트되는데, 그 주소는 읽을 수 없습니다: ${next.reason}`);
+        }
+        throw new Error(
+          `이 링크는 다른 주소로 리다이렉트됩니다: ${next.target.url}\n안전을 위해 리다이렉트는 따라가지 않았습니다. 이 주소가 사용자가 원한 파일이면 read_document를 이 주소로 한 번 다시 호출하세요(새 승인 카드가 뜹니다). 로그인·다운로드 중계 페이지로 가는 주소면 다시 호출하지 마세요.`,
+        );
+      }
+      throw new Error(`문서를 내려받지 못했습니다(${err.message}).`);
+    }
     throw err;
+  } finally {
+    redirect.stop();
   }
 }
 
-async function readResponse(res: Response, redirectedTo: string | null): Promise<Downloaded> {
-  const loginHint = redirectedTo
-    ? " 리다이렉트되는 링크는 안전을 위해 로그인 정보 없이 다시 받았으므로, 로그인이 필요한 파일이면 읽을 수 없습니다."
-    : "";
+async function readResponse(res: Response): Promise<Downloaded> {
   if (!res.ok) {
     // 본문을 끊지 않으면 도구는 실패했는데 요청은 시간 제한까지 남는다.
     await res.body?.cancel().catch(() => {});
-    throw new Error(`문서 가져오기 실패: HTTP ${res.status} ${res.statusText}.${loginHint}`);
+    throw new Error(`문서 가져오기 실패: HTTP ${res.status} ${res.statusText}`);
   }
   const contentType = res.headers.get("content-type");
   const dispositionName = filenameFromDisposition(res.headers.get("content-disposition"));
@@ -269,7 +277,7 @@ async function readResponse(res: Response, redirectedTo: string | null): Promise
   if (/text\/html/i.test(contentType ?? "") && !dispositionName) {
     await res.body?.cancel().catch(() => {});
     throw new Error(
-      `파일 대신 웹 페이지(HTML)가 응답으로 왔습니다. 로그인이 필요하거나 미리보기 페이지 링크일 수 있습니다. 브라우저에서 파일이 바로 내려받아지는 링크인지 확인해 주세요.${loginHint}`,
+      "파일 대신 웹 페이지(HTML)가 응답으로 왔습니다. 로그인이 필요하거나 미리보기 페이지 링크일 수 있습니다. 브라우저에서 파일이 바로 내려받아지는 링크인지 확인해 주세요.",
     );
   }
   const declared = Number(res.headers.get("content-length") ?? "0");
@@ -279,7 +287,7 @@ async function readResponse(res: Response, redirectedTo: string | null): Promise
   }
   const bytes = await readCapped(res);
   if (bytes.byteLength === 0) throw new Error("문서가 비어 있습니다.");
-  return { bytes, contentType, dispositionName, redirectedTo };
+  return { bytes, contentType, dispositionName };
 }
 
 // 변환기는 이름의 확장자로 형식을 고르므로(docling) 실제 형식과 맞는 이름을 넘긴다.
@@ -319,7 +327,6 @@ export async function readDocument(
     filename: label,
     format,
     bytes: got.bytes.byteLength,
-    ...(got.redirectedTo ? { redirectedTo: got.redirectedTo } : {}),
   };
 
   const engine = engineFor(format);

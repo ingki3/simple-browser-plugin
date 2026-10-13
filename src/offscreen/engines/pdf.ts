@@ -1,13 +1,15 @@
 // PDF의 글자 층을 pdf.js로 읽는다. 글자만 뽑고(렌더링·스크립트·글꼴 로딩 없음) 변환 Worker 안에서만 돈다.
 // docling.rs의 PDF 변환은 한국어 띄어쓰기와 표가 깨져서 쓰지 않는다.
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+// 현대 브라우저용 빌드는 Chrome 140에서 생긴 Uint8Array.prototype.toHex()를 쓴다. manifest의 최소 버전(116)에서도
+// 돌도록 호환(legacy) 빌드를 쓴다.
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import type { DocumentJobResult } from "@/lib/documentJob";
 
 // CID 글꼴(한·중·일)의 글자 코드를 유니코드로 바꾸는 표. 빌드 때 확장 안 pdfjs/cmaps/로 복사한다.
 const CMAP_URL = new URL("/pdfjs/cmaps/", self.location.href).href;
 
 export async function convertPdf(bytes: Uint8Array, maxChars: number): Promise<DocumentJobResult> {
-  const pdfjs = await import("pdfjs-dist");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   // pdf.js는 해석을 자기 Worker에서 한다. 이 변환 Worker 안에 만든 하위 Worker라, 시간 초과·중단으로
   // 변환 Worker가 끝나면 함께 끝난다. workerSrc만 주면 pdf.js가 window.location을 읽다 실패해 같은 스레드에서
   // 돌리는데, 그때 pdf.js 워커 코드가 이 Worker의 부모(offscreen 문서)로 메시지를 보내므로 Worker를 직접 만들어 넘긴다.
@@ -20,7 +22,7 @@ export async function convertPdf(bytes: Uint8Array, maxChars: number): Promise<D
 }
 
 async function extract(
-  pdfjs: typeof import("pdfjs-dist"),
+  pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs"),
   pdfWorker: Worker,
   bytes: Uint8Array,
   maxChars: number,
@@ -32,6 +34,9 @@ async function extract(
     worker,
     cMapUrl: CMAP_URL,
     cMapPacked: true,
+    // CMap은 pdf.js Worker가 직접 fetch로 읽게 한다. 기본값이면 이 Worker에서 document.baseURI를 쓰는 로더로 읽다가
+    // 실패해, 글꼴을 내장하지 않은 한국어 PDF의 글자가 빠진다.
+    useWorkerFetch: true,
     // 글자만 뽑으므로 글꼴 로딩·XFA가 필요 없다. CVE-2024-4367(글꼴 경로의 eval)은 pdf.js 6에서 eval 경로가
     // 없어졌고, 확장 CSP도 eval을 막는다.
     disableFontFace: true,

@@ -193,8 +193,7 @@ export async function executeTool(
         ok: true,
         summary:
           `문서 읽기: ${truncate(data.filename, 60)} (${data.format}, ${data.totalChars}자)` +
-          (data.truncated ? ` (앞 ${data.markdown.length}자만 전달)` : "") +
-          (data.redirectedTo ? " (리다이렉트, 로그인 정보 없이 받음)" : ""),
+          (data.truncated ? ` (앞 ${data.markdown.length}자만 전달)` : ""),
         data,
       };
     }

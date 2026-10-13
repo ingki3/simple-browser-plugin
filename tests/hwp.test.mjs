@@ -42,3 +42,12 @@ test("password-protected HWPX reports ENCRYPTED", async () => {
   assert.equal(r.success, false);
   assert.equal(r.code, "ENCRYPTED");
 });
+
+test("an HWP stream that inflates to 150MB stops at kordoc's limit instead of being fully inflated", async () => {
+  // BodyText/Section0이 150MB의 0으로 풀리는 문서(157KB). 셰임이 maxOutputLength를 버리면 끝까지 푼다.
+  const bytes = fixture("bomb.hwp");
+  const before = process.memoryUsage().arrayBuffers;
+  const r = await kordoc.parseHwp(ab(bytes), { ocr: false });
+  assert.ok(!r.success || r.markdown.trim() === "");
+  assert.ok(process.memoryUsage().arrayBuffers - before < 140 * 1024 * 1024);
+});

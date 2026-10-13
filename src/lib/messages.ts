@@ -106,8 +106,6 @@ export interface DocumentContent {
   totalChars: number;
   markdown: string;
   truncated: boolean;
-  // 리다이렉트를 따라 로그인 정보 없이 다시 받았으면 최종 URL.
-  redirectedTo?: string;
   // 인코딩·읽은 쪽 수 등 덧붙임.
   note?: string;
 }

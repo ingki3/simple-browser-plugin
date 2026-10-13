@@ -11,7 +11,7 @@ kordoc는 Node용이고 설치하면 OCR·PDF 렌더러 등 선택 의존성까�
 ```sh
 cd vendor/kordoc
 npm ci --ignore-scripts
-npm run build
+npm run build          # shim.test.mjs(압축 해제 한도) 통과 후 묶는다
 cd ../.. && npm test   # tests/hwp.test.mjs가 번들을 검사한다
 ```
 
@@ -22,7 +22,7 @@ cd ../.. && npm test   # tests/hwp.test.mjs가 번들을 검사한다
 
 - `entry.mjs`: HWP 3·5·HWPX 파서와 형식 판별 함수만 내보낸다.
 - Node 내장 모듈(`fs`, `path`, `crypto` 등) → `shims/stub.mjs`(호출하면 오류). `createRequire("cfb")`만 실제 cfb를 돌려준다.
-- `zlib` → `shims/zlib.mjs`(pako). kordoc가 Node `Buffer` 메서드를 쓰므로 결과를 `Buffer`로 감싼다.
+- `zlib` → `shims/zlib.mjs`(pako). Node처럼 `maxOutputLength`를 지키고(넘으면 `ERR_BUFFER_TOO_LARGE`), 문서 한 건이 푸는 합계를 256MB로 묶는다. kordoc가 Node `Buffer` 메서드를 쓰므로 결과를 `Buffer`로 감싼다.
 - `Buffer`·`process` 전역 → `shims/globals.mjs`(buffer 패키지).
 - `pdfjs-dist` → `shims/pdfjs.mjs`(빈 모듈). PDF는 확장이 pdf.js로 따로 읽는다.
 - OCR·이미지·MCP·CLI용 선택 의존성 → 빈 모듈.

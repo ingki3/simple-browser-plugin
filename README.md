@@ -86,12 +86,12 @@ gh pr create --base main --title "..." --body "..."
 
 ### 주요 구성
 
-- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation`, `identity`, `offscreen` 권한 + `host_permissions: ["<all_urls>"]`
+- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation`, `identity`, `offscreen`, `webRequest` 권한 + `host_permissions: ["<all_urls>"]`
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
 - **webNavigation 기반 settle 대기** — URL 이동·클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록
 - **문서 변환 격리** — `read_document`는 offscreen 문서 안의 Worker에서 변환하고(형식에 맞는 변환기만 불러옴), 10초가 지나거나 사용자가 중단하면 Worker를 강제 종료. zip 기반 문서(Office·OpenDocument·HWPX)는 직접 풀어 크기를 센 뒤(본문 6MB·전체 40MB) 다시 만들어 넘기며, 이미지 등 바이너리는 비워서 넘김. 1분 동안 쓰지 않으면 offscreen 문서를 닫음
-- **문서 요청 안전장치** — 쿠키를 실은 요청은 리다이렉트를 따라가지 않고, 리다이렉트되는 링크는 쿠키 없이 다시 받음. 웹 페이지·이미지·압축 파일 등 문서가 아닌 확장자는 요청하지 않음. 확장자 없는 링크는 승인 카드에 따로 경고
+- **문서 요청 안전장치** — 리다이렉트는 따라가지 않고 목적지 주소만 알려 줌(`webRequest`로 관찰). 그 주소로 다시 읽으면 새 승인 카드가 뜸. 웹 페이지·이미지·압축 파일 등 문서가 아닌 확장자는 요청하지 않음. 확장자 없는 링크는 승인 카드에 따로 경고
 - **kordoc 브라우저 번들** — kordoc는 Node용이라 `vendor/kordoc/`에서 따로 설치해 브라우저용으로 묶은 결과물을 커밋해 씀(`npm run vendor:kordoc`로 다시 만듦, [vendor/kordoc/README.md](vendor/kordoc/README.md))
 
 ## 보안 / 프라이버시
