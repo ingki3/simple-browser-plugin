@@ -1,7 +1,7 @@
 // 조작 대상 등록·확인. find_clickables·find_form_fields가 돌려준 id를 그때의 대상 기술(TargetInfo)과 함께
 // 이 content script 메모리에 둔다(페이지 스크립트는 볼 수 없다). 승인 카드를 띄울 때 지금 요소가 그때와 같은지
 // 확인하고 승인할 기술을 남기며, 실행 직전에 다시 그 기술과 같을 때만 실행한다.
-// 요소가 다시 그려져 사라졌으면 같은 기술의 요소가 정확히 하나일 때만 그 요소로 바꾼다. 비슷한 요소로 대신하지 않는다.
+// 요소가 다시 그려져 사라졌으면 멈춘다. 비슷한 요소로 대신하지 않는다.
 
 import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
@@ -11,8 +11,6 @@ export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸)와 요소에 붙이는 속성.
   prefix: string;
   attr: string;
-  // 다시 찾을 때 훑는 요소.
-  selector: string;
   visible(el: HTMLElement): boolean;
   name(el: HTMLElement): string;
   fieldType(el: HTMLElement): string;
@@ -167,55 +165,17 @@ function staleError(id: string): Error {
 }
 
 // 사라진 요소를 같은 기술로 다시 찾는다. 정확히 하나일 때만.
-// 목록 안 요소는 바꾸지 않는다. 행마다 같은 '삭제' 버튼이 있으면 이름·순번이 같아도 다른 행일 수 있다
-// (승인한 행이 지워지고 다음 행이 그 순번으로 올라온 경우). 목록 밖의 고정 컨트롤만 다시 찾는다.
-function relocate(entry: Entry, want: TargetInfo, match: (a: TargetInfo, b: TargetInfo) => boolean): HTMLElement {
-  if (want.list) {
-    throw new Error(`목록 안의 대상 '${want.name}'이(가) 다시 그려져 같은 항목인지 확인할 수 없습니다. 다시 찾으세요.`);
-  }
-  const hits: HTMLElement[] = [];
-  for (const root of getAccessibleRoots()) {
-    for (const el of root.querySelectorAll<HTMLElement>(entry.kind.selector)) {
-      if (el.localName !== want.tag || !entry.kind.visible(el)) continue;
-      if (entry.kind.name(el) !== want.name) continue;
-      const info = fullInfo(entry.kind, el);
-      if (info.list) {
-        throw new Error(`대상 '${want.name}'이(가) 다시 그려졌는데 같은 이름의 요소가 목록 안에 있어 어느 것인지 확정할 수 없습니다. 다시 찾으세요.`);
-      }
-      if (match(info, want)) hits.push(el);
-      if (hits.length > 1) break;
-    }
-    if (hits.length > 1) break;
-  }
-  if (hits.length === 0) throw new Error(`대상 '${want.name}'이(가) 페이지에서 사라졌습니다. 다시 찾으세요.`);
-  if (hits.length > 1) {
-    throw new Error(`대상 '${want.name}'이(가) 다시 그려졌는데 같은 모양의 요소가 여러 개라 어느 것인지 확정할 수 없습니다. 다시 찾으세요.`);
-  }
-  return hits[0];
-}
-
-function resolve(id: string, want: TargetInfo, match: (a: TargetInfo, b: TargetInfo) => boolean): {
-  entry: Entry;
-  el: HTMLElement;
-} {
+// 등록한 그 요소만 쓴다. 다시 그려져 사라졌으면 비슷한 요소로 바꾸지 않고 멈춘다 — 같은 이름·순번의 요소가
+// 다른 행일 수 있다(승인한 행이 지워지고 다음 행이 올라온 경우). 모델이 다시 찾아 새 승인을 받는다.
+function resolve(id: string): { entry: Entry; el: HTMLElement } {
   const entry = registry.get(id);
   if (!entry) throw staleError(id);
-  let el = entry.ref.deref();
-  if (el && el.isConnected && el.getAttribute(entry.kind.attr) !== id) {
-    // 페이지가 속성만 지우거나 바꿨다. 등록한 요소는 그대로 있으니 표시만 되돌린다(기술 확인은 호출한 쪽이 한다).
-    el.setAttribute(entry.kind.attr, id);
-  }
+  const el = entry.ref.deref();
   if (!el || !el.isConnected) {
-    el = relocate(entry, want, match);
-    // 페이지가 같은 속성을 다른 요소에 붙여 놓았을 수 있으니 이전 표시는 지운다.
-    for (const root of getAccessibleRoots()) {
-      for (const other of root.querySelectorAll<HTMLElement>(`[${entry.kind.attr}="${CSS.escape(id)}"]`)) {
-        if (other !== el) other.removeAttribute(entry.kind.attr);
-      }
-    }
-    el.setAttribute(entry.kind.attr, id);
-    entry.ref = new WeakRef(el);
+    throw new Error(`대상 '${entry.base.name || id}'이(가) 페이지에서 다시 그려지거나 사라졌습니다. 다시 찾으세요.`);
   }
+  // 페이지가 속성만 지우거나 바꿨으면 표시만 되돌린다(기술 확인은 호출한 쪽이 한다).
+  if (el.getAttribute(entry.kind.attr) !== id) el.setAttribute(entry.kind.attr, id);
   return { entry, el };
 }
 
@@ -223,7 +183,7 @@ function resolve(id: string, want: TargetInfo, match: (a: TargetInfo, b: TargetI
 export function inspectTarget(id: string, callId: string): TargetInfo {
   const known = registry.get(id);
   if (!known) throw staleError(id);
-  const { entry, el } = resolve(id, known.base, sameBase);
+  const { entry, el } = resolve(id);
   const now = baseInfo(entry.kind, el);
   if (!sameBase(now, entry.base)) {
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
@@ -242,7 +202,7 @@ export function takeApproved(id: string, callId: string): HTMLElement {
   if (!approved || approved.callId !== callId) {
     throw new Error(`대상 '${id}'은(는) 이 호출에서 승인되지 않았습니다.`);
   }
-  const { entry, el } = resolve(id, approved.info, sameApproved);
+  const { entry, el } = resolve(id);
   entry.approved = null;
   const now = fullInfo(entry.kind, el);
   if (!sameApproved(now, approved.info)) {
@@ -260,7 +220,7 @@ export function peekApproved(id: string, callId: string): void {
   if (!approved || approved.callId !== callId) {
     throw new Error(`대상 '${id}'은(는) 이 호출에서 승인되지 않았습니다.`);
   }
-  const { entry, el } = resolve(id, approved.info, sameApproved);
+  const { entry, el } = resolve(id);
   const now = fullInfo(entry.kind, el);
   if (!sameApproved(now, approved.info)) {
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);

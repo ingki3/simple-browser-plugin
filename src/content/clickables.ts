@@ -34,7 +34,6 @@ function clickText(el: HTMLElement): string {
 const CLICK_KIND: TargetKind = {
   prefix: "c",
   attr: "data-sbp-cid",
-  selector: CLICK_SELECTOR,
   visible: isVisible,
   name: clickText,
   fieldType: () => "",

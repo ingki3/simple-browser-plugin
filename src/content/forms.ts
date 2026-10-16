@@ -75,7 +75,6 @@ function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
 const FIELD_KIND: TargetKind = {
   prefix: "f",
   attr: "data-sbp-fid",
-  selector: "input, textarea, select",
   visible: isVisible,
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
@@ -181,16 +180,20 @@ export interface FillResult {
   note?: string;
 }
 
+// 페이지가 값을 고치거나 되돌리는 처리(마이크로태스크·타이머·다시 그리기)가 끝날 틈을 준 뒤 최종 값을 본다.
+const SETTLE_MS = 150;
+
 // 승인 카드에서 확인한 칸들이 모두 그대로일 때만 채운다. 하나라도 바뀌었으면 아무것도 채우지 않는다.
-export function fillFormFields(
+export async function fillFormFields(
   args: { fills: Array<{ id: string; value: string }> },
   callId: string,
-): { filledCount: number; results: FillResult[] } {
+): Promise<{ filledCount: number; results: FillResult[] }> {
   const ids = args.fills.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("같은 칸 id가 두 번 들어 있습니다. 칸마다 한 번만 지정하세요.");
   for (const id of ids) peekApproved(id, callId);
 
   const results: FillResult[] = [];
+  const written: Array<{ el: FieldElement; value: string; result: FillResult }> = [];
   for (const f of args.fills) {
     let el: HTMLElement;
     try {
@@ -206,17 +209,21 @@ export function fillFormFields(
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
     }
+    const result: FillResult = { id: f.id, label, applied: false };
+    results.push(result);
+    written.push({ el, value: f.value, result });
+  }
+
+  await new Promise((r) => setTimeout(r, SETTLE_MS));
+  for (const { el, value, result } of written) {
     // input·change 처리기가 칸을 새로 그렸으면 떨어져 나간 이전 요소의 값은 화면과 무관하다.
     if (!el.isConnected) {
-      results.push({ id: f.id, label, applied: false, note: "입력 뒤 페이지가 칸을 새로 그려 값이 남았는지 확인하지 못했습니다" });
-      continue;
+      result.note = "입력 뒤 페이지가 칸을 새로 그려 값이 남았는지 확인하지 못했습니다";
+    } else if (appliedValue(el, value)) {
+      result.applied = true;
+    } else {
+      result.note = "페이지가 값을 바꾸거나 받아들이지 않았습니다(최대 길이·서식 등)";
     }
-    const applied = appliedValue(el, f.value);
-    results.push(
-      applied
-        ? { id: f.id, label, applied }
-        : { id: f.id, label, applied, note: "페이지가 값을 바꾸거나 받아들이지 않았습니다(최대 길이·서식 등)" },
-    );
   }
   return { filledCount: results.filter((r) => r.applied).length, results };
 }
