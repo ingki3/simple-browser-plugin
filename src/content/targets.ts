@@ -5,7 +5,7 @@
 
 import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
-import { getAccessibleRoots, isShadowRoot } from "./docs";
+import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸)와 요소에 붙이는 속성.
@@ -233,7 +233,8 @@ function resolve(id: string): { entry: Entry; el: HTMLElement } {
   const entry = registry.get(id);
   if (!entry) throw staleError(id);
   const el = entry.ref.deref();
-  if (!el || !el.isConnected) {
+  // iframe이 다른 문서로 이동하면 이전 문서의 요소도 그 문서 안에서는 isConnected다. 지금 보이는 문서인지도 본다.
+  if (!el || !el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) {
     throw new Error(`대상 '${entry.base.name || id}'이(가) 페이지에서 다시 그려지거나 사라졌습니다. 다시 찾으세요.`);
   }
   // 페이지가 속성만 지우거나 바꿨으면 표시만 되돌린다(기술 확인은 호출한 쪽이 한다).
@@ -294,7 +295,7 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
 // 같으면 null, 다르면 이유.
 export function recheckApproved(kind: TargetKind, el: HTMLElement, info: TargetInfo): string | null {
-  if (!el.isConnected) return "대상이 페이지에서 사라짐";
+  if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const now = fullInfo(kind, el);
   if (!sameApproved(now, info)) return describeDifference(info, now);
   if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";

@@ -1,7 +1,7 @@
 import type { FormField } from "@/lib/messages";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
-import { peekApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
+import { peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
 const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
@@ -198,12 +198,13 @@ export async function fillFormFields(
   for (const id of ids) peekApproved(id, callId, FIELD_KIND.prefix);
 
   const results: FillResult[] = [];
-  const written: Array<{ el: FieldElement; value: string; result: FillResult }> = [];
+  const written: Array<{ el: FieldElement; info: TargetInfo; value: string; result: FillResult }> = [];
   for (const f of args.fills) {
     let el: HTMLElement;
+    let info: TargetInfo;
     try {
       // 앞 칸을 채우면서 페이지가 행을 바꿨을 수 있어 칸마다 행 글자까지 다시 확인한다. 바뀐 칸만 건너뛴다.
-      el = takeApproved(f.id, callId, FIELD_KIND.prefix).el;
+      ({ el, info } = takeApproved(f.id, callId, FIELD_KIND.prefix));
     } catch (err) {
       results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
       continue;
@@ -216,14 +217,20 @@ export async function fillFormFields(
     }
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
-    written.push({ el, value: f.value, result });
+    written.push({ el, info, value: f.value, result });
   }
 
   await new Promise((r) => setTimeout(r, SETTLE_MS));
-  for (const { el, value, result } of written) {
+  for (const { el, info, value, result } of written) {
     // input·change 처리기가 칸을 새로 그렸으면 떨어져 나간 이전 요소의 값은 화면과 무관하다.
     if (!el.isConnected) {
       result.note = "입력 뒤 페이지가 칸을 새로 그려 값이 남았는지 확인하지 못했습니다";
+      continue;
+    }
+    // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다.
+    const changed = recheckApproved(FIELD_KIND, el, info);
+    if (changed) {
+      result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
     } else if (appliedValue(el, value)) {
       result.applied = true;
     } else {
