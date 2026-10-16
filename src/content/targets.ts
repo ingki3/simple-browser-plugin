@@ -102,17 +102,24 @@ function repeated(cur: Element): boolean {
   return false;
 }
 
+// 부모 요소. shadow root 맨 위에서는 host로 넘어간다(웹 컴포넌트 안의 버튼도 바깥 행까지 본다).
+function parentAcross(el: Element): Element | null {
+  if (el.parentElement) return el.parentElement;
+  const root = el.getRootNode();
+  return isShadowRoot(root) ? root.host : null;
+}
+
 // 대상 자신의 글자만 있는 단계(같은 모양 버튼이 나란히 있는 '수정'·'삭제' 묶음 등)는 행이 아니니 더 올라간다.
 function rowContext(el: HTMLElement): string {
   const own = textOf(el);
   let cur: Element | null = el;
-  for (let depth = 0; cur && depth < 8; depth++) {
+  for (let depth = 0; cur && depth < 10; depth++) {
     if (cur === cur.ownerDocument.body) break;
     if (cur.matches(ROW_SELECTOR) || repeated(cur)) {
       const text = textOf(cur);
       if (text !== own) return text;
     }
-    cur = cur.parentElement;
+    cur = parentAcross(cur);
   }
   return "";
 }
@@ -156,9 +163,14 @@ function semanticList(item: Element, container: Element): boolean {
 
 function listPosition(el: HTMLElement): TargetInfo["list"] {
   let cur: Element | null = el;
-  for (let depth = 0; cur && depth < 6; depth++) {
+  for (let depth = 0; cur && depth < 8; depth++) {
     const parent: Element | null = cur.parentElement;
-    if (!parent || parent === cur.ownerDocument.body) break;
+    if (!parent) {
+      // shadow root 맨 위: 형제를 셀 부모가 없으니 host로 넘어가 바깥 목록을 본다.
+      cur = parentAcross(cur);
+      continue;
+    }
+    if (parent === cur.ownerDocument.body) break;
     const shape = shapeOf(cur);
     let index = 0;
     let count = 0;
@@ -263,14 +275,7 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 }
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
-// loose: 여러 칸을 채우는 도중의 확인. 앞 칸을 채워 생긴 변화(검증 문구가 행에 붙음 등)로 뒤 칸이 막히지 않게
-// 행 글자와 목록 순번은 보지 않고 칸 자체의 기술만 본다. 채우기 전에 모든 칸을 엄격히 확인한 뒤에만 쓴다.
-export function takeApproved(
-  id: string,
-  callId: string,
-  prefix: string,
-  loose = false,
-): { el: HTMLElement; info: TargetInfo } {
+export function takeApproved(id: string, callId: string, prefix: string): { el: HTMLElement; info: TargetInfo } {
   const known = entryOf(id, prefix);
   const approved = known.approved;
   if (!approved || approved.callId !== callId) {
@@ -279,10 +284,7 @@ export function takeApproved(
   const { entry, el } = resolve(id);
   entry.approved = null;
   const now = fullInfo(entry.kind, el);
-  const same = loose
-    ? sameBase({ ...now, context: approved.info.context }, approved.info)
-    : sameApproved(now, approved.info);
-  if (!same) {
+  if (!sameApproved(now, approved.info)) {
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
   checkVisible(entry, el, approved.info.name, true);

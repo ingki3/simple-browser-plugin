@@ -202,8 +202,8 @@ export async function fillFormFields(
   for (const f of args.fills) {
     let el: HTMLElement;
     try {
-      // 앞 칸을 채우면서 페이지가 다시 그려졌을 수 있어 칸마다 다시 확인한다(칸 자체 기술만). 바뀐 칸만 건너뛴다.
-      el = takeApproved(f.id, callId, FIELD_KIND.prefix, true).el;
+      // 앞 칸을 채우면서 페이지가 행을 바꿨을 수 있어 칸마다 행 글자까지 다시 확인한다. 바뀐 칸만 건너뛴다.
+      el = takeApproved(f.id, callId, FIELD_KIND.prefix).el;
     } catch (err) {
       results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
       continue;
