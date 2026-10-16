@@ -167,13 +167,21 @@ function staleError(id: string): Error {
 }
 
 // 사라진 요소를 같은 기술로 다시 찾는다. 정확히 하나일 때만.
+// 목록 안 요소는 바꾸지 않는다. 행마다 같은 '삭제' 버튼이 있으면 이름·순번이 같아도 다른 행일 수 있다
+// (승인한 행이 지워지고 다음 행이 그 순번으로 올라온 경우). 목록 밖의 고정 컨트롤만 다시 찾는다.
 function relocate(entry: Entry, want: TargetInfo, match: (a: TargetInfo, b: TargetInfo) => boolean): HTMLElement {
+  if (want.list) {
+    throw new Error(`목록 안의 대상 '${want.name}'이(가) 다시 그려져 같은 항목인지 확인할 수 없습니다. 다시 찾으세요.`);
+  }
   const hits: HTMLElement[] = [];
   for (const root of getAccessibleRoots()) {
     for (const el of root.querySelectorAll<HTMLElement>(entry.kind.selector)) {
       if (el.localName !== want.tag || !entry.kind.visible(el)) continue;
       if (entry.kind.name(el) !== want.name) continue;
-      const info = want.list === undefined ? baseInfo(entry.kind, el) : fullInfo(entry.kind, el);
+      const info = fullInfo(entry.kind, el);
+      if (info.list) {
+        throw new Error(`대상 '${want.name}'이(가) 다시 그려졌는데 같은 이름의 요소가 목록 안에 있어 어느 것인지 확정할 수 없습니다. 다시 찾으세요.`);
+      }
       if (match(info, want)) hits.push(el);
       if (hits.length > 1) break;
     }
@@ -193,7 +201,11 @@ function resolve(id: string, want: TargetInfo, match: (a: TargetInfo, b: TargetI
   const entry = registry.get(id);
   if (!entry) throw staleError(id);
   let el = entry.ref.deref();
-  if (!el || !el.isConnected || el.getAttribute(entry.kind.attr) !== id) {
+  if (el && el.isConnected && el.getAttribute(entry.kind.attr) !== id) {
+    // 페이지가 속성만 지우거나 바꿨다. 등록한 요소는 그대로 있으니 표시만 되돌린다(기술 확인은 호출한 쪽이 한다).
+    el.setAttribute(entry.kind.attr, id);
+  }
+  if (!el || !el.isConnected) {
     el = relocate(entry, want, match);
     // 페이지가 같은 속성을 다른 요소에 붙여 놓았을 수 있으니 이전 표시는 지운다.
     for (const root of getAccessibleRoots()) {
@@ -287,11 +299,10 @@ export function startEffectWatch(token: string): void {
     dialogsBefore: openDialogs(),
     timer: setTimeout(() => stopEffectWatch(token), WATCH_MAX_MS),
   };
-  const seen = new Set<Document>();
+  // 문서의 subtree 관찰은 shadow root 안으로 이어지지 않아, 열린 shadow root마다 따로 관찰한다.
   for (const root of getAccessibleRoots()) {
-    const doc = isShadowRoot(root) ? root.ownerDocument : root;
-    if (seen.has(doc) || !doc.documentElement) continue;
-    seen.add(doc);
+    const target = isShadowRoot(root) ? root : root.documentElement;
+    if (!target) continue;
     const obs = new MutationObserver((records) => {
       for (const r of records) {
         // 우리가 붙이는 id 속성은 세지 않는다.
@@ -299,7 +310,7 @@ export function startEffectWatch(token: string): void {
         watch.mutations++;
       }
     });
-    obs.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    obs.observe(target, { subtree: true, childList: true, attributes: true, characterData: true });
     watch.observers.push(obs);
   }
   watches.set(token, watch);

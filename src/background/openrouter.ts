@@ -565,6 +565,8 @@ export class ChatAgent {
             });
             continue;
           }
+          // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
+          if (this.isStale(turn)) return;
           debugLog("tool:awaiting_approval", `${toolName}`);
           this.send({
             kind: "tool_pending",

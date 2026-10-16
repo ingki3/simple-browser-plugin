@@ -206,6 +206,11 @@ export function fillFormFields(
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
     }
+    // input·change 처리기가 칸을 새로 그렸으면 떨어져 나간 이전 요소의 값은 화면과 무관하다.
+    if (!el.isConnected) {
+      results.push({ id: f.id, label, applied: false, note: "입력 뒤 페이지가 칸을 새로 그려 값이 남았는지 확인하지 못했습니다" });
+      continue;
+    }
     const applied = appliedValue(el, f.value);
     results.push(
       applied
