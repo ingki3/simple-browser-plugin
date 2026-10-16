@@ -1,8 +1,9 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
-import { findElementByAttr, getAccessibleRoots, isShadowRoot, isTag } from "./docs";
+import { getAccessibleRoots, isTag } from "./docs";
+import { detectRegion, registerTarget, startEffectWatch, takeApproved, type TargetKind } from "./targets";
 
-const CLICK_ATTR = "data-sbp-cid";
-let counter = 0;
+const CLICK_SELECTOR =
+  'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
 
 function isVisible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
@@ -15,38 +16,30 @@ function isVisible(el: HTMLElement): boolean {
   return true;
 }
 
-function ensureId(el: HTMLElement): string {
-  let id = el.getAttribute(CLICK_ATTR);
-  if (id) return id;
-  counter += 1;
-  id = `c${counter}`;
-  el.setAttribute(CLICK_ATTR, id);
-  return id;
-}
-
 function cleanText(raw: string): string {
   return raw.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-function detectRegion(el: Element): PageRegion {
-  let cur: Element | null = el;
-  let depth = 0;
-  while (cur && cur !== cur.ownerDocument.body && depth < 40) {
-    const tag = cur.tagName.toLowerCase();
-    const role = (cur.getAttribute("role") ?? "").toLowerCase();
-    if (tag === "article" || role === "article") return "article";
-    if (tag === "main" || role === "main") return "main";
-    if (tag === "nav" || role === "navigation") return "nav";
-    if (tag === "aside" || role === "complementary") return "aside";
-    if (tag === "header" || role === "banner") return "header";
-    if (tag === "footer" || role === "contentinfo") return "footer";
-    // shadow root 경계에서는 parentElement가 null이므로 host로 넘어간다.
-    const rootNode = cur.getRootNode();
-    cur = cur.parentElement ?? (isShadowRoot(rootNode) ? rootNode.host : null);
-    depth += 1;
-  }
-  return "other";
+function clickText(el: HTMLElement): string {
+  return cleanText(
+    el.innerText ||
+      el.textContent ||
+      el.getAttribute("aria-label") ||
+      el.getAttribute("title") ||
+      (isTag(el, "input") ? el.value : "") ||
+      "",
+  );
 }
+
+const CLICK_KIND: TargetKind = {
+  prefix: "c",
+  attr: "data-sbp-cid",
+  selector: CLICK_SELECTOR,
+  visible: isVisible,
+  name: clickText,
+  fieldType: () => "",
+  sensitive: () => null,
+};
 
 function rectInViewport(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
@@ -68,9 +61,7 @@ export function findClickables(args: {
   const seenKeys = new Set<string>();
   for (const root of getAccessibleRoots()) {
     if (out.length >= limit) break;
-    const nodes = root.querySelectorAll<HTMLElement>(
-      'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]',
-    );
+    const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
     for (const el of nodes) {
       if (out.length >= limit) break;
       if (!isVisible(el)) continue;
@@ -84,14 +75,7 @@ export function findClickables(args: {
       const tag = el.tagName.toLowerCase();
       const role = el.getAttribute("role") ?? "";
       const href = isTag(el, "a") ? el.href : "";
-      const text = cleanText(
-        el.innerText ||
-          el.textContent ||
-          el.getAttribute("aria-label") ||
-          el.getAttribute("title") ||
-          (isTag(el, "input") ? el.value : "") ||
-          "",
-      );
+      const text = clickText(el);
       if (!text && !href) continue;
 
       if (q) {
@@ -103,7 +87,7 @@ export function findClickables(args: {
       if (seenKeys.has(key)) continue;
       seenKeys.add(key);
 
-      const id = ensureId(el);
+      const id = registerTarget(CLICK_KIND, el);
       out.push({ id, text, href, tag, role, region, inViewport });
     }
   }
@@ -111,12 +95,15 @@ export function findClickables(args: {
   return out;
 }
 
-export function clickElement(args: { id: string }): { clicked: boolean; text: string; href: string } {
-  const el = findElementByAttr(CLICK_ATTR, args.id);
-  if (!el) throw new Error(`id '${args.id}'에 해당하는 요소를 찾지 못했습니다.`);
-
-  const text = cleanText(el.innerText || el.textContent || "");
+// 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
+export function clickElement(
+  args: { id: string },
+  callId: string,
+): { clicked: boolean; text: string; href: string; effectToken: string } {
+  const el = takeApproved(args.id, callId);
+  const text = clickText(el);
   const href = isTag(el, "a") ? el.href : "";
+  const effectToken = `${callId}:${Date.now()}`;
 
   // Defer actual click so the content-script response can fly back to the
   // background before a potential navigation tears down this context.
@@ -135,6 +122,8 @@ export function clickElement(args: { id: string }): { clicked: boolean; text: st
     } catch {
       /* ignore */
     }
+    // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
+    startEffectWatch(effectToken);
     try {
       el.click();
     } catch (err) {
@@ -142,5 +131,5 @@ export function clickElement(args: { id: string }): { clicked: boolean; text: st
     }
   }, 0);
 
-  return { clicked: true, text, href };
+  return { clicked: true, text, href, effectToken };
 }

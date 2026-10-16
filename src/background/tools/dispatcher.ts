@@ -11,9 +11,18 @@ import type {
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
 import { normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
-import { callContentTool, resolveTurnTab, type TurnTab } from "./handlers";
+import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
 import { startImageDownloads } from "./downloads";
-import { markOptimisticNavigation } from "../navigation";
+import { markOptimisticNavigation, waitForNavigationSettle } from "../navigation";
+import {
+  clickCard,
+  describeEffect,
+  fillCard,
+  navKind,
+  type ClickEffect,
+  type DomEffect,
+  type TargetInfo,
+} from "@/lib/actionTarget";
 import {
   appendRows,
   listSheets,
@@ -36,25 +45,36 @@ export interface ToolPreview {
   details?: unknown;
 }
 
-function fmtCount(n: number, unit: string): string {
-  return `${n}${unit}`;
+// 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
+// content script는 이 기술을 이 호출(callId)의 승인 대상으로 남기고, 실행 직전에 다시 같은지 본다.
+async function inspectTargets(ids: string[], callId: string, turnTab: TurnTab): Promise<TargetInfo[]> {
+  const tabId = await resolveTurnTab(turnTab);
+  await waitForNavigationSettle(tabId, 10_000);
+  try {
+    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId }, 5_000, "대상 확인");
+  } catch (err) {
+    if (isMissingReceiver(err)) {
+      throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
+    }
+    throw err;
+  }
 }
 
 export async function buildToolPreview(
   toolName: ToolName,
   parsedArgs: unknown,
+  callId: string,
+  turnTab: TurnTab,
 ): Promise<ToolPreview> {
   switch (toolName) {
     case "fill_form_fields": {
       const args = parsedArgs as ToolArgs["fill_form_fields"];
-      const lines = args.fills
-        .slice(0, 10)
-        .map((f) => `• ${f.id}: ${truncate(f.value, 80)}`);
-      const extra = args.fills.length > 10 ? `\n… 그 외 ${args.fills.length - 10}개` : "";
-      return {
-        summary: `${fmtCount(args.fills.length, "개")} 필드에 값을 채웁니다.`,
-        details: lines.join("\n") + extra,
-      };
+      const infos = await inspectTargets(
+        args.fills.map((f) => f.id),
+        callId,
+        turnTab,
+      );
+      return fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value })));
     }
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
@@ -69,10 +89,8 @@ export async function buildToolPreview(
     }
     case "click_element": {
       const args = parsedArgs as ToolArgs["click_element"];
-      return {
-        summary: `페이지 요소를 클릭합니다 (id: ${args.id}).`,
-        details: `대상 id: ${args.id}\n\nfind_clickables 결과의 id로 매핑된 요소가 클릭됩니다. 링크면 해당 페이지로 이동합니다.`,
-      };
+      const [info] = await inspectTargets([args.id], callId, turnTab);
+      return clickCard(info);
     }
     case "read_document": {
       const args = parsedArgs as ToolArgs["read_document"];
@@ -132,6 +150,52 @@ export async function buildToolPreview(
     default:
       return { summary: `도구 ${toolName} 실행` };
   }
+}
+
+// 클릭 뒤 이동이 시작될 틈. markOptimisticNavigation은 500ms 안에 이동이 시작되지 않으면 기다림을 푼다.
+const CLICK_SETTLE_MS = 700;
+
+async function tabUrl(tabId: number): Promise<string> {
+  try {
+    return (await chrome.tabs.get(tabId)).url ?? "";
+  } catch {
+    return "";
+  }
+}
+
+// 이 탭이 연 새 탭(target=_blank, window.open)을 센다. 돌려준 함수를 부르면 관찰을 끝내고 결과를 준다.
+function watchNewTabs(tabId: number): () => boolean {
+  let opened = false;
+  const onCreated = (tab: chrome.tabs.Tab) => {
+    if (tab.openerTabId === tabId) opened = true;
+  };
+  chrome.tabs.onCreated.addListener(onCreated);
+  return () => {
+    chrome.tabs.onCreated.removeListener(onCreated);
+    return opened;
+  };
+}
+
+async function observeClickEffect(
+  tabId: number,
+  before: string,
+  token: string,
+  newTabs: () => boolean,
+): Promise<ClickEffect> {
+  await new Promise((r) => setTimeout(r, CLICK_SETTLE_MS));
+  await waitForNavigationSettle(tabId, 10_000);
+  const url = (await tabUrl(tabId)) || before;
+  let dom: DomEffect | null = null;
+  let sameDocument: boolean | null;
+  try {
+    dom = await queryContent<DomEffect | null>(tabId, { kind: "action_effect", token }, 1_500, "클릭 결과 확인");
+    // 관찰 기록이 없으면 클릭한 문서가 아니다(새 페이지가 떴다).
+    sameDocument = dom !== null;
+  } catch (err) {
+    // 받는 쪽이 없으면 문서가 바뀌는 중이거나 content script가 없는 페이지다. 시간 초과는 페이지가 멈춘 것(알림창 등).
+    sameDocument = isMissingReceiver(err) ? false : null;
+  }
+  return { navigation: navKind(before, url), url, sameDocument, newTab: newTabs(), dom };
 }
 
 function truncate(s: string, max: number): string {
@@ -247,15 +311,20 @@ export async function executeTool(
       };
     }
     case "fill_form_fields": {
-      const data = await callContentTool<{ filledCount: number }>(
-        toolName,
-        parsedArgs,
-        callId,
-        turnTab,
-      );
+      const data = await callContentTool<{
+        filledCount: number;
+        results: Array<{ id: string; label: string; applied: boolean; note?: string }>;
+      }>(toolName, parsedArgs, callId, turnTab);
+      const failed = data.results.filter((r) => !r.applied);
+      const failNote = failed.length
+        ? ` 반영 안 됨 ${failed.length}개: ${failed
+            .slice(0, 3)
+            .map((r) => `${r.label || r.id}(${truncate(r.note ?? "", 60)})`)
+            .join(", ")}`
+        : "";
       return {
-        ok: true,
-        summary: `${data.filledCount}개 필드 채움 완료.`,
+        ok: data.filledCount > 0,
+        summary: `${data.results.length}개 중 ${data.filledCount}개 칸에 값이 반영됐습니다.${failNote}`,
         data,
       };
     }
@@ -312,25 +381,22 @@ export async function executeTool(
       };
     }
     case "click_element": {
-      const data = await callContentTool<{ clicked: boolean; text: string; href: string }>(
-        toolName,
-        parsedArgs,
-        callId,
-        turnTab,
-      );
-      if (data.clicked) {
-        try {
-          const tabId = await resolveTurnTab(turnTab);
-          markOptimisticNavigation(tabId);
-        } catch {
-          /* ignore */
-        }
+      const tabId = await resolveTurnTab(turnTab);
+      const before = await tabUrl(tabId);
+      const newTabs = watchNewTabs(tabId);
+      let data: { clicked: boolean; text: string; href: string; effectToken: string };
+      try {
+        data = await callContentTool(toolName, parsedArgs, callId, turnTab);
+      } catch (err) {
+        newTabs();
+        throw err;
       }
-      const hint = data.href ? ` → ${truncate(data.href, 80)}` : "";
+      markOptimisticNavigation(tabId);
+      const effect = await observeClickEffect(tabId, before, data.effectToken, newTabs);
       return {
         ok: data.clicked,
-        summary: `클릭 완료: "${truncate(data.text, 60) || "(텍스트 없음)"}"${hint}`,
-        data,
+        summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}`,
+        data: { text: data.text, href: data.href, effect },
       };
     }
     case "google_sheets_list": {

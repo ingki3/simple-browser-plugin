@@ -115,7 +115,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "fill_form_fields",
     description:
-      "사용자 승인 후 지정된 id의 폼 필드에 값을 채운다. id는 반드시 find_form_fields에서 받은 값을 사용해야 한다. 민감 작업이라 실행 전 사용자 승인 카드가 표시된다.",
+      "사용자 승인 후 지정된 id의 폼 필드에 값을 채운다. id는 반드시 find_form_fields에서 받은 값을 사용해야 한다. 민감 작업이라 실행 전 사용자 승인 카드가 표시된다. 승인 카드를 띄울 때와 채우기 직전에 각 칸이 find_form_fields 때와 같은지 확인하며, 바뀐 칸은 채우지 않는다. 결과의 results에 칸마다 값이 실제로 반영됐는지(applied)가 담긴다.",
     parameters: {
       type: "object",
       properties: {
@@ -346,7 +346,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "click_element",
     description:
-      "사용자 승인 후 find_clickables가 반환한 id의 요소를 클릭한다. 링크면 해당 링크로 이동, 버튼이면 동작 실행. 민감 작업이라 실행 전 승인 카드가 표시된다. id는 반드시 find_clickables에서 얻은 값이어야 한다.",
+      "사용자 승인 후 find_clickables가 반환한 id의 요소를 클릭한다. 링크면 해당 링크로 이동, 버튼이면 동작 실행. 민감 작업이라 실행 전 승인 카드가 표시된다. id는 반드시 find_clickables에서 얻은 값이어야 한다. 승인 카드를 띄울 때와 클릭 직전에 그 요소가 find_clickables 때와 같은지 확인하며, 바뀌었으면 누르지 않고 실패한다. 결과의 effect에 클릭 뒤 이동(navigation)·새 탭(newTab)·화면 변화(dom)가 담긴다.",
     parameters: {
       type: "object",
       properties: {
