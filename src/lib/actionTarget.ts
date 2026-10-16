@@ -22,6 +22,8 @@ export interface TargetInfo {
   // semantic은 ul·ol·표·role=list 같은 목록 표시가 있는지. 없으면 나란히 놓인 버튼 몇 개일 수도 있어,
   // 카드에는 목록 표시가 있거나 항목이 5개 이상일 때만 보여 준다(확인에는 늘 쓴다).
   list?: { index: number; count: number; semantic: boolean } | null;
+  // 승인 카드에 경고만 하는 표시(비교에는 쓰지 않음): 화면에 보이지 않는 입력 칸.
+  hidden?: boolean;
 }
 
 // find_* 때와 같은 요소인지: 목록 위치를 뺀 기본 항목이 모두 같아야 한다.
@@ -116,8 +118,9 @@ export function fillCard(
     const name = info.name ? clip(info.name, 40) : "(이름 없는 칸)";
     const shownValue =
       info.sensitive === "password" ? `${"●".repeat(Math.min(value.length, 8))} (${value.length}자)` : clip(value, 80);
-    const warn =
+    let warn =
       info.sensitive === "password" ? " ⚠ 비밀번호 칸" : info.sensitive === "payment" ? " ⚠ 결제 정보 칸" : "";
+    if (info.hidden) warn += " ⚠ 화면에 보이지 않는 칸";
     const where = [info.fieldType, REGION_LABELS[info.region]];
     if (info.inFrame) where.push("프레임 안");
     return `• ${name} (${where.join(", ")}): ${shownValue}${warn}`;
@@ -130,7 +133,8 @@ export function fillCard(
 // 실행 결과 확인
 // ---------------------------------------------------------------------------
 
-export type NavKind = "none" | "same_origin" | "cross_origin" | "error";
+// fragment: #뒤만 바뀜(같은 문서 안 위치로 이동, 해시 라우터).
+export type NavKind = "none" | "fragment" | "same_origin" | "cross_origin" | "error";
 
 function originOf(url: string): string {
   try {
@@ -141,11 +145,12 @@ function originOf(url: string): string {
   }
 }
 
-// 클릭 전후 탭 주소로 이동 종류를 판정한다. #뒤만 바뀐 것은 이동으로 보지 않는다.
+// 클릭 전후 탭 주소로 이동 종류를 판정한다.
 export function navKind(before: string, after: string): NavKind {
+  if (!after || after === before) return "none";
   const b = before.split("#")[0];
   const a = after.split("#")[0];
-  if (!a || a === b) return "none";
+  if (a === b) return "fragment";
   const oa = originOf(a);
   if (!oa) return "error";
   return oa === originOf(b) ? "same_origin" : "cross_origin";
@@ -188,6 +193,10 @@ function hostOf(url: string): string {
 export function describeEffect(e: ClickEffect): string {
   const parts: string[] = [];
   if (e.newTab) parts.push("새 탭이 열렸습니다(이 탭은 그대로)");
+  if (e.navigation === "fragment") {
+    const hash = e.url.includes("#") ? e.url.slice(e.url.indexOf("#")) : "#";
+    parts.push(`페이지 안 위치(${clip(hash, 60)})로 이동했습니다`);
+  }
   if (e.navigation === "error") parts.push("이동했지만 오류 페이지입니다");
   else if (e.navigation === "cross_origin") parts.push(`다른 사이트(${hostOf(e.url)})로 이동했습니다`);
   else if (e.navigation === "same_origin") {
@@ -199,7 +208,7 @@ export function describeEffect(e: ClickEffect): string {
   } else if (e.sameDocument === false) {
     parts.push("같은 주소로 페이지를 다시 불러왔습니다");
   }
-  if (e.navigation === "none" && e.sameDocument) {
+  if ((e.navigation === "none" || e.navigation === "fragment") && e.sameDocument) {
     if (e.dom?.dialogOpened) parts.push("대화상자가 열렸습니다");
     if (e.dom && e.dom.mutations > 0) parts.push(`화면이 바뀌었습니다(변경 ${e.dom.mutations}건)`);
   }

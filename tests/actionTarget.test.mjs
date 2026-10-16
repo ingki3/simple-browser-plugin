@@ -86,6 +86,7 @@ test("fillCard: 비밀번호는 가리고 결제 칸은 경고한다", () => {
   assert.match(card.details, /• 비밀번호 \(password, 본문\): ●{8} \(8자\) ⚠ 비밀번호 칸/);
   assert.doesNotMatch(card.details, /hunter22/);
   assert.match(card.details, /카드 번호 .*: 1234 ⚠ 결제 정보 칸/);
+  assert.match(fillCard([{ info: { ...field, name: "숨은 칸", hidden: true }, value: "x" }]).details, /⚠ 화면에 보이지 않는 칸/);
 });
 
 test("fillCard: 10개 넘으면 나머지는 개수만", () => {
@@ -98,7 +99,8 @@ test("fillCard: 10개 넘으면 나머지는 개수만", () => {
 
 test("navKind", () => {
   assert.equal(navKind("https://a.test/x", "https://a.test/x"), "none");
-  assert.equal(navKind("https://a.test/x", "https://a.test/x#top"), "none");
+  assert.equal(navKind("https://a.test/x", "https://a.test/x#top"), "fragment");
+  assert.equal(navKind("https://a.test/x#a", "https://a.test/x#b"), "fragment");
   assert.equal(navKind("https://a.test/x", "https://a.test/y"), "same_origin");
   assert.equal(navKind("https://a.test/x", "https://b.test/x"), "cross_origin");
   assert.equal(navKind("https://a.test/x", "chrome-error://chromewebdata/"), "error");
@@ -126,6 +128,10 @@ test("describeEffect", () => {
   );
   assert.match(describeEffect({ ...base, sameDocument: false }), /다시 불러왔습니다/);
   assert.match(describeEffect({ ...base, newTab: true }), /새 탭이 열렸습니다/);
+  assert.equal(
+    describeEffect({ ...base, navigation: "fragment", url: "https://a.test/x#install" }),
+    "페이지 안 위치(#install)로 이동했습니다.",
+  );
   assert.match(describeEffect({ ...base, sameDocument: null }), /응답하지 않습니다/);
   assert.equal(describeEffect({ ...base, navigation: "error", sameDocument: false }), "이동했지만 오류 페이지입니다.");
 });

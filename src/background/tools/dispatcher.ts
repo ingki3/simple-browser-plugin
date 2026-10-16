@@ -47,11 +47,16 @@ export interface ToolPreview {
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
 // content script는 이 기술을 이 호출(callId)의 승인 대상으로 남기고, 실행 직전에 다시 같은지 본다.
-async function inspectTargets(ids: string[], callId: string, turnTab: TurnTab): Promise<TargetInfo[]> {
+async function inspectTargets(
+  ids: string[],
+  prefix: "c" | "f",
+  callId: string,
+  turnTab: TurnTab,
+): Promise<TargetInfo[]> {
   const tabId = await resolveTurnTab(turnTab);
   await waitForNavigationSettle(tabId, 10_000);
   try {
-    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId }, 5_000, "대상 확인");
+    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId, prefix }, 5_000, "대상 확인");
   } catch (err) {
     if (isMissingReceiver(err)) {
       throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
@@ -71,6 +76,7 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["fill_form_fields"];
       const infos = await inspectTargets(
         args.fills.map((f) => f.id),
+        "f",
         callId,
         turnTab,
       );
@@ -89,7 +95,7 @@ export async function buildToolPreview(
     }
     case "click_element": {
       const args = parsedArgs as ToolArgs["click_element"];
-      const [info] = await inspectTargets([args.id], callId, turnTab);
+      const [info] = await inspectTargets([args.id], "c", callId, turnTab);
       return clickCard(info);
     }
     case "read_document": {

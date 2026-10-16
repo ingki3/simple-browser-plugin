@@ -12,6 +12,9 @@ export interface TargetKind {
   prefix: string;
   attr: string;
   visible(el: HTMLElement): boolean;
+  // 클릭은 보이는 요소만. 입력 칸은 find_form_fields({onlyVisible:false})로 숨은 칸도 고를 수 있어
+  // 막지 않고 승인 카드에 경고만 한다.
+  requireVisible: boolean;
   name(el: HTMLElement): string;
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
@@ -180,24 +183,41 @@ function resolve(id: string): { entry: Entry; el: HTMLElement } {
 }
 
 // 승인 카드용: 지금 요소가 find_* 때와 같은지 확인하고, 목록 위치까지 담은 기술을 이 호출(callId)의 승인 대상으로 남긴다.
-export function inspectTarget(id: string, callId: string): TargetInfo {
-  const known = registry.get(id);
-  if (!known) throw staleError(id);
+function entryOf(id: string, prefix: string): Entry {
+  const entry = registry.get(id);
+  if (!entry) throw staleError(id);
+  if (entry.kind.prefix !== prefix) {
+    throw new Error(
+      prefix === "f"
+        ? `id '${id}'는 입력 칸이 아닙니다. find_form_fields가 준 id를 쓰세요.`
+        : `id '${id}'는 클릭 대상이 아닙니다. find_clickables가 준 id를 쓰세요.`,
+    );
+  }
+  return entry;
+}
+
+function checkVisible(entry: Entry, el: HTMLElement, name: string, acting: boolean): void {
+  if (entry.kind.requireVisible && !entry.kind.visible(el)) {
+    throw new Error(`대상 '${name}'이(가) 지금 화면에 보이지 않${acting ? "아 실행하지 않았" : ""}습니다.`);
+  }
+}
+
+export function inspectTarget(id: string, callId: string, prefix: string): TargetInfo {
+  entryOf(id, prefix);
   const { entry, el } = resolve(id);
   const now = baseInfo(entry.kind, el);
   if (!sameBase(now, entry.base)) {
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
-  if (!entry.kind.visible(el)) throw new Error(`대상 '${entry.base.name}'이(가) 지금 화면에 보이지 않습니다.`);
-  const info = fullInfo(entry.kind, el);
+  checkVisible(entry, el, entry.base.name, false);
+  const info: TargetInfo = { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el) };
   entry.approved = { callId, info };
   return info;
 }
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
-export function takeApproved(id: string, callId: string): HTMLElement {
-  const known = registry.get(id);
-  if (!known) throw staleError(id);
+export function takeApproved(id: string, callId: string, prefix: string): HTMLElement {
+  const known = entryOf(id, prefix);
   const approved = known.approved;
   if (!approved || approved.callId !== callId) {
     throw new Error(`대상 '${id}'은(는) 이 호출에서 승인되지 않았습니다.`);
@@ -208,14 +228,13 @@ export function takeApproved(id: string, callId: string): HTMLElement {
   if (!sameApproved(now, approved.info)) {
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
-  if (!entry.kind.visible(el)) throw new Error(`대상 '${approved.info.name}'이(가) 지금 화면에 보이지 않아 실행하지 않았습니다.`);
+  checkVisible(entry, el, approved.info.name, true);
   return el;
 }
 
 // 승인된 대상이 아직 같은지 실행 없이 확인만 한다(여러 칸을 채우기 전에 모두 확인).
-export function peekApproved(id: string, callId: string): void {
-  const known = registry.get(id);
-  if (!known) throw staleError(id);
+export function peekApproved(id: string, callId: string, prefix: string): void {
+  const known = entryOf(id, prefix);
   const approved = known.approved;
   if (!approved || approved.callId !== callId) {
     throw new Error(`대상 '${id}'은(는) 이 호출에서 승인되지 않았습니다.`);

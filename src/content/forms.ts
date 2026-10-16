@@ -76,6 +76,7 @@ const FIELD_KIND: TargetKind = {
   prefix: "f",
   attr: "data-sbp-fid",
   visible: isVisible,
+  requireVisible: false,
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
@@ -190,7 +191,7 @@ export async function fillFormFields(
 ): Promise<{ filledCount: number; results: FillResult[] }> {
   const ids = args.fills.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("같은 칸 id가 두 번 들어 있습니다. 칸마다 한 번만 지정하세요.");
-  for (const id of ids) peekApproved(id, callId);
+  for (const id of ids) peekApproved(id, callId, FIELD_KIND.prefix);
 
   const results: FillResult[] = [];
   const written: Array<{ el: FieldElement; value: string; result: FillResult }> = [];
@@ -198,7 +199,7 @@ export async function fillFormFields(
     let el: HTMLElement;
     try {
       // 앞 칸을 채우면서 페이지가 다시 그려졌을 수 있어 칸마다 다시 확인한다. 바뀐 칸만 건너뛴다.
-      el = takeApproved(f.id, callId);
+      el = takeApproved(f.id, callId, FIELD_KIND.prefix);
     } catch (err) {
       results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
       continue;

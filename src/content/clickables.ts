@@ -35,6 +35,7 @@ const CLICK_KIND: TargetKind = {
   prefix: "c",
   attr: "data-sbp-cid",
   visible: isVisible,
+  requireVisible: true,
   name: clickText,
   fieldType: () => "",
   sensitive: () => null,
@@ -99,7 +100,7 @@ export function clickElement(
   args: { id: string },
   callId: string,
 ): { clicked: boolean; text: string; href: string; effectToken: string } {
-  const el = takeApproved(args.id, callId);
+  const el = takeApproved(args.id, callId, CLICK_KIND.prefix);
   const text = clickText(el);
   const href = isTag(el, "a") ? el.href : "";
   const effectToken = `${callId}:${Date.now()}`;

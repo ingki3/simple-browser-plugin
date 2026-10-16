@@ -53,7 +53,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind === "target_inspect") {
     try {
-      const data = msg.ids.map((id) => inspectTarget(id, msg.callId));
+      const data = msg.ids.map((id) => inspectTarget(id, msg.callId, msg.prefix));
       sendResponse({ ok: true, data } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);

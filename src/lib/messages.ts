@@ -179,7 +179,8 @@ export type BgToContent =
   | { kind: "translate_batch"; texts: string[]; targetLang: string }
   | { kind: "translate_stop" }
   // 승인 카드용: id들이 find_* 때와 같은 요소인지 확인하고 이 호출의 승인 대상으로 남긴다.
-  | { kind: "target_inspect"; ids: string[]; callId: string }
+  // prefix는 기대하는 대상 종류("c" 클릭, "f" 입력 칸).
+  | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f" }
   // click_element 뒤 같은 문서에서 관찰한 변화를 읽는다.
   | { kind: "action_effect"; token: string };
 
