@@ -139,6 +139,10 @@ test("describeEffect", () => {
     "페이지 안 위치(#install)로 이동했습니다.",
   );
   assert.match(describeEffect({ ...base, sameDocument: null }), /응답하지 않습니다/);
+  assert.equal(
+    describeEffect({ ...base, dom: { mutations: 0, dialogOpened: false, frameNavigated: true } }),
+    "페이지 안 프레임이 다른 문서로 이동했습니다.",
+  );
   assert.match(
     describeEffect({ ...base, dom: { mutations: 0, dialogOpened: false, aborted: "링크 주소가 바뀜" } }),
     /^누르기 직전에 대상이 바뀌어 클릭하지 않았습니다\(링크 주소가 바뀜\)/,

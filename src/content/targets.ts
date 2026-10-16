@@ -85,24 +85,36 @@ function hrefOf(el: HTMLElement): string {
 const ROW_SELECTOR =
   "li, tr, dt, dd, article, [role='listitem'], [role='row'], [role='option'], [role='article'], [role='treeitem']";
 
-function rowContext(el: HTMLElement): string {
-  let item: Element | null = el.closest(ROW_SELECTOR);
-  if (!item) {
-    let cur: Element | null = el;
-    for (let depth = 0; cur && depth < 6 && !item; depth++) {
-      const parent: Element | null = cur.parentElement;
-      if (!parent || parent === cur.ownerDocument.body) break;
-      const shape = shapeOf(cur);
-      let count = 0;
-      for (const sib of parent.children) {
-        if (sib.localName === cur.localName && shapeOf(sib) === shape) count++;
-      }
-      if (count >= 2) item = cur;
-      cur = parent;
-    }
+const CONTEXT_MAX = 2000;
+
+function textOf(el: Element): string {
+  return (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
+}
+
+function repeated(cur: Element): boolean {
+  const parent = cur.parentElement;
+  if (!parent || parent === cur.ownerDocument.body) return false;
+  const shape = shapeOf(cur);
+  let count = 0;
+  for (const sib of parent.children) {
+    if (sib.localName === cur.localName && shapeOf(sib) === shape && ++count >= 2) return true;
   }
-  if (!item) return "";
-  return (item.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  return false;
+}
+
+// 대상 자신의 글자만 있는 단계(같은 모양 버튼이 나란히 있는 '수정'·'삭제' 묶음 등)는 행이 아니니 더 올라간다.
+function rowContext(el: HTMLElement): string {
+  const own = textOf(el);
+  let cur: Element | null = el;
+  for (let depth = 0; cur && depth < 8; depth++) {
+    if (cur === cur.ownerDocument.body) break;
+    if (cur.matches(ROW_SELECTOR) || repeated(cur)) {
+      const text = textOf(cur);
+      if (text !== own) return text;
+    }
+    cur = cur.parentElement;
+  }
+  return "";
 }
 
 function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
@@ -119,18 +131,13 @@ function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
   };
 }
 
-// 목록 판별용 틀: 태그 + 숫자 없는 class + 자식 태그 모양. 같은 틀 형제가 3개 이상이면 목록으로 본다.
+// 목록 판별용 틀: 태그 + role + 자식 태그 모양. 같은 틀 형제가 3개 이상이면 목록으로 본다.
+// class는 보지 않는다 — focus·filled·valid 같은 상태 class가 붙었다 떨어지면 목록 구성과 순번이 흔들린다.
 function shapeOf(el: Element): string {
-  const raw = el.getAttribute("class") ?? "";
-  const cls = raw
-    .trim()
-    .split(/\s+/)
-    .filter((c) => c && !/\d{2,}/.test(c))
-    .sort()
-    .join(".");
+  const role = el.getAttribute("role") ?? "";
   const kids = new Set<string>();
   for (const k of el.children) kids.add(k.localName);
-  return `${el.localName}.${cls}(${[...kids].sort().join(",")})`;
+  return `${el.localName}[${role}](${[...kids].sort().join(",")})`;
 }
 
 const LIST_MIN_ITEMS = 3;
@@ -256,7 +263,14 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 }
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
-export function takeApproved(id: string, callId: string, prefix: string): { el: HTMLElement; info: TargetInfo } {
+// loose: 여러 칸을 채우는 도중의 확인. 앞 칸을 채워 생긴 변화(검증 문구가 행에 붙음 등)로 뒤 칸이 막히지 않게
+// 행 글자와 목록 순번은 보지 않고 칸 자체의 기술만 본다. 채우기 전에 모든 칸을 엄격히 확인한 뒤에만 쓴다.
+export function takeApproved(
+  id: string,
+  callId: string,
+  prefix: string,
+  loose = false,
+): { el: HTMLElement; info: TargetInfo } {
   const known = entryOf(id, prefix);
   const approved = known.approved;
   if (!approved || approved.callId !== callId) {
@@ -265,7 +279,10 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
   const { entry, el } = resolve(id);
   entry.approved = null;
   const now = fullInfo(entry.kind, el);
-  if (!sameApproved(now, approved.info)) {
+  const same = loose
+    ? sameBase({ ...now, context: approved.info.context }, approved.info)
+    : sameApproved(now, approved.info);
+  if (!same) {
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
   checkVisible(entry, el, approved.info.name, true);
@@ -306,6 +323,8 @@ interface EffectWatch {
   dialogsBefore: number;
   // 클릭 직전 재확인에서 멈췄으면 그 이유(클릭하지 않음).
   aborted: string | null;
+  // 대상이 같은 출처 iframe 안이면 그 프레임과 클릭 당시 문서. 프레임만 이동하면 탭 주소는 그대로라 따로 본다.
+  frame: { el: Element; doc: Document } | null;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -323,11 +342,14 @@ function openDialogs(): number {
   return n;
 }
 
-export function startEffectWatch(token: string, aborted: string | null = null): void {
+export function startEffectWatch(token: string, target: HTMLElement, aborted: string | null = null): void {
+  const doc = target.ownerDocument;
+  const frameEl = doc !== document ? doc.defaultView?.frameElement : null;
   const watch: EffectWatch = {
     observers: [],
     mutations: 0,
     aborted,
+    frame: frameEl ? { el: frameEl, doc } : null,
     dialogsBefore: openDialogs(),
     timer: setTimeout(() => stopEffectWatch(token), WATCH_MAX_MS),
   };
@@ -367,12 +389,19 @@ function stopEffectWatch(token: string): EffectWatch | undefined {
 // 같은 문서면 변화를, 이 문서에서 시작한 관찰이 아니면(페이지가 바뀜) null을 돌려준다.
 export function readEffect(
   token: string,
-): { mutations: number; dialogOpened: boolean; aborted: string | null } | null {
+): { mutations: number; dialogOpened: boolean; aborted: string | null; frameNavigated: boolean } | null {
   const watch = stopEffectWatch(token);
   if (!watch) return null;
+  let frameNavigated = false;
+  if (watch.frame) {
+    // 프레임이 다른 문서로 바뀌면 contentDocument가 달라진다(다른 출처면 null).
+    const f = watch.frame.el as HTMLIFrameElement;
+    frameNavigated = !f.isConnected || f.contentDocument !== watch.frame.doc;
+  }
   return {
     mutations: watch.mutations,
     dialogOpened: openDialogs() > watch.dialogsBefore,
     aborted: watch.aborted,
+    frameNavigated,
   };
 }

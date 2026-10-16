@@ -140,7 +140,7 @@ export function clickElement(
     // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
     const changed = recheckApproved(CLICK_KIND, el, info);
     // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
-    startEffectWatch(effectToken, changed);
+    startEffectWatch(effectToken, el, changed);
     if (changed) return;
     try {
       el.click();

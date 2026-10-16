@@ -167,6 +167,8 @@ export interface DomEffect {
   dialogOpened: boolean;
   // 누르기 바로 앞 재확인에서 대상이 바뀌어 누르지 않았으면 그 이유.
   aborted?: string | null;
+  // 대상이 든 같은 출처 iframe이 다른 문서로 이동했는지(탭 주소는 그대로).
+  frameNavigated?: boolean;
 }
 
 export interface ClickEffect {
@@ -201,6 +203,7 @@ export function describeEffect(e: ClickEffect): string {
   if (e.dom?.aborted) return `누르기 직전에 대상이 바뀌어 클릭하지 않았습니다(${e.dom.aborted}). 다시 찾으세요.`;
   const parts: string[] = [];
   if (e.newTab) parts.push("새 탭이 열렸습니다(이 탭은 그대로)");
+  if (e.dom?.frameNavigated) parts.push("페이지 안 프레임이 다른 문서로 이동했습니다");
   if (e.navigation === "fragment") {
     const hash = e.url.includes("#") ? e.url.slice(e.url.indexOf("#")) : "#";
     parts.push(`페이지 안 위치(${clip(hash, 60)})로 이동했습니다`);
