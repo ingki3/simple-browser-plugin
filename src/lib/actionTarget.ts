@@ -18,6 +18,8 @@ export interface TargetInfo {
   fieldType: string;
   // 결제·비밀번호처럼 값을 보여 줄 때 조심해야 하는 칸.
   sensitive: "password" | "payment" | null;
+  // 대상이 든 목록 항목(행)의 글자. 목록 밖이면 "". 같은 버튼 노드를 다른 행에 다시 쓰는 목록에서 행이 바뀐 것을 잡는다.
+  context: string;
   // 같은 틀의 형제가 3개 이상인 목록 안이면 항목 순번(1부터)과 항목 수. 승인 카드를 띄울 때 계산한다.
   // semantic은 ul·ol·표·role=list 같은 목록 표시가 있는지. 없으면 나란히 놓인 버튼 몇 개일 수도 있어,
   // 카드에는 목록 표시가 있거나 항목이 5개 이상일 때만 보여 준다(확인에는 늘 쓴다).
@@ -36,7 +38,8 @@ export function sameBase(a: TargetInfo, b: TargetInfo): boolean {
     a.region === b.region &&
     a.inFrame === b.inFrame &&
     a.fieldType === b.fieldType &&
-    a.sensitive === b.sensitive
+    a.sensitive === b.sensitive &&
+    a.context === b.context
   );
 }
 
@@ -52,6 +55,7 @@ export function describeDifference(before: TargetInfo, after: TargetInfo): strin
   if (before.tag !== after.tag || before.role !== after.role) return "요소 종류가 바뀜";
   if (before.fieldType !== after.fieldType || before.sensitive !== after.sensitive) return "입력 칸 종류가 바뀜";
   if (before.region !== after.region) return "페이지 영역이 바뀜";
+  if (before.context !== after.context) return "대상이 든 행의 내용이 바뀜";
   if ((before.list?.index ?? null) !== (after.list?.index ?? null)) return "목록 안 순서가 바뀜";
   return "요소 속성이 바뀜";
 }
@@ -105,6 +109,7 @@ export function clickCard(info: TargetInfo): { summary: string; details: string 
   const label = roleLabel(info);
   const name = info.name ? `'${clip(info.name, 60)}'` : "(글자 없음)";
   const lines = [`대상: ${label} ${name}`, `위치: ${placeLine(info)}`];
+  if (info.context && info.context !== info.name) lines.push(`행 내용: '${clip(info.context, 100)}'`);
   if (info.href) lines.push(`주소: ${clip(info.href, 300)}`);
   if (!info.name) lines.push("⚠ 글자가 없는 요소입니다. 무엇을 누르는지 확인하기 어렵습니다.");
   return { summary: `${label} ${name}을(를) 클릭합니다.`, details: lines.join("\n") };
@@ -160,6 +165,8 @@ export function navKind(before: string, after: string): NavKind {
 export interface DomEffect {
   mutations: number;
   dialogOpened: boolean;
+  // 누르기 바로 앞 재확인에서 대상이 바뀌어 누르지 않았으면 그 이유.
+  aborted?: string | null;
 }
 
 export interface ClickEffect {
@@ -191,6 +198,7 @@ function hostOf(url: string): string {
 
 // 모델과 사람이 읽을 클릭 결과 한 줄.
 export function describeEffect(e: ClickEffect): string {
+  if (e.dom?.aborted) return `누르기 직전에 대상이 바뀌어 클릭하지 않았습니다(${e.dom.aborted}). 다시 찾으세요.`;
   const parts: string[] = [];
   if (e.newTab) parts.push("새 탭이 열렸습니다(이 탭은 그대로)");
   if (e.navigation === "fragment") {

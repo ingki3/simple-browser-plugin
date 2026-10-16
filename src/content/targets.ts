@@ -25,6 +25,8 @@ interface Entry {
   ref: WeakRef<HTMLElement>;
   base: TargetInfo;
   approved: { callId: string; info: TargetInfo } | null;
+  // 이 항목을 마지막으로 돌려준 탐색 회차. 한도를 넘어 정리할 때 이번 탐색 결과는 지우지 않는다.
+  gen: number;
 }
 
 // content script가 새로 뜰 때마다(페이지 이동) 바뀐다. 이전 페이지의 id가 새 페이지의 다른 요소를 가리키지 않게 한다.
@@ -32,6 +34,7 @@ const TOKEN = Math.random().toString(36).slice(2, 5).padEnd(3, "0");
 const MAX_ENTRIES = 3000;
 const registry = new Map<string, Entry>();
 let counter = 0;
+let generation = 0;
 
 export function detectRegion(el: Element): PageRegion {
   let cur: Element | null = el;
@@ -76,6 +79,32 @@ function hrefOf(el: HTMLElement): string {
   return (el as HTMLAnchorElement).href || "";
 }
 
+// 행 문맥: 대상이 든 목록 항목(li·tr·role=row 등, 또는 같은 틀 형제가 2개 이상인 반복 구조)의 글자.
+// 가상 목록이나 순번으로 그리는 목록은 같은 버튼 노드를 다른 행에 다시 쓰므로, 이름·순번만으로는
+// 행이 바뀐 것을 모른다. 행 글자가 달라지면 다른 대상으로 본다.
+const ROW_SELECTOR =
+  "li, tr, dt, dd, article, [role='listitem'], [role='row'], [role='option'], [role='article'], [role='treeitem']";
+
+function rowContext(el: HTMLElement): string {
+  let item: Element | null = el.closest(ROW_SELECTOR);
+  if (!item) {
+    let cur: Element | null = el;
+    for (let depth = 0; cur && depth < 6 && !item; depth++) {
+      const parent: Element | null = cur.parentElement;
+      if (!parent || parent === cur.ownerDocument.body) break;
+      const shape = shapeOf(cur);
+      let count = 0;
+      for (const sib of parent.children) {
+        if (sib.localName === cur.localName && shapeOf(sib) === shape) count++;
+      }
+      if (count >= 2) item = cur;
+      cur = parent;
+    }
+  }
+  if (!item) return "";
+  return (item.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
 function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
   return {
     tag: el.localName,
@@ -86,6 +115,7 @@ function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
     inFrame: el.ownerDocument !== document,
     fieldType: kind.fieldType(el),
     sensitive: kind.sensitive(el),
+    context: rowContext(el),
   };
 }
 
@@ -140,6 +170,20 @@ function fullInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
   return { ...baseInfo(kind, el), list: listPosition(el) };
 }
 
+// 탐색(find_clickables·find_form_fields) 한 번을 감싼다. 한도를 넘은 오래된 항목은 탐색이 끝난 뒤,
+// 이번 탐색에서 돌려주지 않은 것만 지운다(방금 돌려준 id가 같은 탐색 안에서 밀려나지 않게).
+export function scanTargets<T>(fn: () => T): T {
+  generation += 1;
+  try {
+    return fn();
+  } finally {
+    for (const [id, entry] of registry) {
+      if (registry.size <= MAX_ENTRIES) break;
+      if (entry.gen !== generation) registry.delete(id);
+    }
+  }
+}
+
 export function registerTarget(kind: TargetKind, el: HTMLElement): string {
   const existing = el.getAttribute(kind.attr);
   const entry = existing ? registry.get(existing) : undefined;
@@ -148,16 +192,13 @@ export function registerTarget(kind: TargetKind, el: HTMLElement): string {
     // 다시 찾을 때 글자 등이 바뀌었으면 새 기술로 갱신한다(모델은 지금 결과를 보고 고른다).
     entry.base = base;
     entry.approved = null;
+    entry.gen = generation;
     return existing;
   }
   counter += 1;
   const id = `${kind.prefix}${counter}-${TOKEN}`;
   el.setAttribute(kind.attr, id);
-  registry.set(id, { kind, ref: new WeakRef(el), base, approved: null });
-  if (registry.size > MAX_ENTRIES) {
-    const oldest = registry.keys().next().value;
-    if (oldest !== undefined) registry.delete(oldest);
-  }
+  registry.set(id, { kind, ref: new WeakRef(el), base, approved: null, gen: generation });
   return id;
 }
 
@@ -167,7 +208,6 @@ function staleError(id: string): Error {
   );
 }
 
-// 사라진 요소를 같은 기술로 다시 찾는다. 정확히 하나일 때만.
 // 등록한 그 요소만 쓴다. 다시 그려져 사라졌으면 비슷한 요소로 바꾸지 않고 멈춘다 — 같은 이름·순번의 요소가
 // 다른 행일 수 있다(승인한 행이 지워지고 다음 행이 올라온 경우). 모델이 다시 찾아 새 승인을 받는다.
 function resolve(id: string): { entry: Entry; el: HTMLElement } {
@@ -182,7 +222,6 @@ function resolve(id: string): { entry: Entry; el: HTMLElement } {
   return { entry, el };
 }
 
-// 승인 카드용: 지금 요소가 find_* 때와 같은지 확인하고, 목록 위치까지 담은 기술을 이 호출(callId)의 승인 대상으로 남긴다.
 function entryOf(id: string, prefix: string): Entry {
   const entry = registry.get(id);
   if (!entry) throw staleError(id);
@@ -202,6 +241,7 @@ function checkVisible(entry: Entry, el: HTMLElement, name: string, acting: boole
   }
 }
 
+// 승인 카드용: 지금 요소가 find_* 때와 같은지 확인하고, 목록 위치까지 담은 기술을 이 호출(callId)의 승인 대상으로 남긴다.
 export function inspectTarget(id: string, callId: string, prefix: string): TargetInfo {
   entryOf(id, prefix);
   const { entry, el } = resolve(id);
@@ -216,7 +256,7 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 }
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
-export function takeApproved(id: string, callId: string, prefix: string): HTMLElement {
+export function takeApproved(id: string, callId: string, prefix: string): { el: HTMLElement; info: TargetInfo } {
   const known = entryOf(id, prefix);
   const approved = known.approved;
   if (!approved || approved.callId !== callId) {
@@ -229,7 +269,17 @@ export function takeApproved(id: string, callId: string, prefix: string): HTMLEl
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
   checkVisible(entry, el, approved.info.name, true);
-  return el;
+  return { el, info: approved.info };
+}
+
+// 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
+// 같으면 null, 다르면 이유.
+export function recheckApproved(kind: TargetKind, el: HTMLElement, info: TargetInfo): string | null {
+  if (!el.isConnected) return "대상이 페이지에서 사라짐";
+  const now = fullInfo(kind, el);
+  if (!sameApproved(now, info)) return describeDifference(info, now);
+  if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";
+  return null;
 }
 
 // 승인된 대상이 아직 같은지 실행 없이 확인만 한다(여러 칸을 채우기 전에 모두 확인).
@@ -254,6 +304,8 @@ interface EffectWatch {
   observers: MutationObserver[];
   mutations: number;
   dialogsBefore: number;
+  // 클릭 직전 재확인에서 멈췄으면 그 이유(클릭하지 않음).
+  aborted: string | null;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -271,15 +323,16 @@ function openDialogs(): number {
   return n;
 }
 
-export function startEffectWatch(token: string): void {
+export function startEffectWatch(token: string, aborted: string | null = null): void {
   const watch: EffectWatch = {
     observers: [],
     mutations: 0,
+    aborted,
     dialogsBefore: openDialogs(),
     timer: setTimeout(() => stopEffectWatch(token), WATCH_MAX_MS),
   };
   // 문서의 subtree 관찰은 shadow root 안으로 이어지지 않아, 열린 shadow root마다 따로 관찰한다.
-  for (const root of getAccessibleRoots()) {
+  for (const root of aborted ? [] : getAccessibleRoots()) {
     const target = isShadowRoot(root) ? root : root.documentElement;
     if (!target) continue;
     const obs = new MutationObserver((records) => {
@@ -312,8 +365,14 @@ function stopEffectWatch(token: string): EffectWatch | undefined {
 }
 
 // 같은 문서면 변화를, 이 문서에서 시작한 관찰이 아니면(페이지가 바뀜) null을 돌려준다.
-export function readEffect(token: string): { mutations: number; dialogOpened: boolean } | null {
+export function readEffect(
+  token: string,
+): { mutations: number; dialogOpened: boolean; aborted: string | null } | null {
   const watch = stopEffectWatch(token);
   if (!watch) return null;
-  return { mutations: watch.mutations, dialogOpened: openDialogs() > watch.dialogsBefore };
+  return {
+    mutations: watch.mutations,
+    dialogOpened: openDialogs() > watch.dialogsBefore,
+    aborted: watch.aborted,
+  };
 }

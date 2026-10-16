@@ -20,6 +20,7 @@ const link = {
   inFrame: false,
   fieldType: "",
   sensitive: null,
+  context: "",
 };
 
 test("sameBase: 기본 항목 중 하나라도 다르면 다른 대상", () => {
@@ -28,6 +29,8 @@ test("sameBase: 기본 항목 중 하나라도 다르면 다른 대상", () => {
   assert.equal(sameBase(link, { ...link, href: "https://ex.test/board/view?id=13" }), false);
   assert.equal(sameBase(link, { ...link, region: "nav" }), false);
   assert.equal(sameBase(link, { ...link, inFrame: true }), false);
+  // 같은 버튼 노드가 다른 행에 다시 쓰이면 행 글자가 달라진다.
+  assert.equal(sameBase({ ...link, context: "A 문서 삭제" }, { ...link, context: "B 문서 삭제" }), false);
   // 목록 위치는 기본 비교에서 보지 않는다.
   assert.equal(sameBase(link, { ...link, list: { index: 2, count: 5 } }), true);
 });
@@ -44,6 +47,7 @@ test("describeDifference는 바뀐 항목을 짚는다", () => {
   assert.match(describeDifference(link, { ...link, name: "광고" }), /'다음 글' → '광고'/);
   assert.equal(describeDifference(link, { ...link, href: "x" }), "링크 주소가 바뀜");
   assert.equal(describeDifference(link, { ...link, sensitive: "password" }), "입력 칸 종류가 바뀜");
+  assert.equal(describeDifference(link, { ...link, context: "다른 행" }), "대상이 든 행의 내용이 바뀜");
   assert.equal(
     describeDifference(
       { ...link, list: { index: 1, count: 3, semantic: true } },
@@ -59,6 +63,8 @@ test("clickCard: 역할·이름·위치·주소를 보여 준다", () => {
   assert.match(card.details, /대상: 링크 '다음 글'/);
   assert.match(card.details, /위치: 본문 · 목록 10개 중 3번째/);
   assert.match(card.details, /주소: https:\/\/ex\.test\/board\/view\?id=12/);
+  assert.doesNotMatch(card.details, /행 내용/);
+  assert.match(clickCard({ ...link, name: "삭제", context: "보고서.hwp 3KB 삭제" }).details, /행 내용: '보고서\.hwp 3KB 삭제'/);
 });
 
 test("clickCard: 목록 표시가 없는 3~4개 묶음은 목록으로 말하지 않는다", () => {
@@ -133,5 +139,9 @@ test("describeEffect", () => {
     "페이지 안 위치(#install)로 이동했습니다.",
   );
   assert.match(describeEffect({ ...base, sameDocument: null }), /응답하지 않습니다/);
+  assert.match(
+    describeEffect({ ...base, dom: { mutations: 0, dialogOpened: false, aborted: "링크 주소가 바뀜" } }),
+    /^누르기 직전에 대상이 바뀌어 클릭하지 않았습니다\(링크 주소가 바뀜\)/,
+  );
   assert.equal(describeEffect({ ...base, navigation: "error", sameDocument: false }), "이동했지만 오류 페이지입니다.");
 });

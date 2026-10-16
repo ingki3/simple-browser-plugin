@@ -400,7 +400,7 @@ export async function executeTool(
       markOptimisticNavigation(tabId);
       const effect = await observeClickEffect(tabId, before, data.effectToken, newTabs);
       return {
-        ok: data.clicked,
+        ok: data.clicked && !effect.dom?.aborted,
         summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}`,
         data: { text: data.text, href: data.href, effect },
       };

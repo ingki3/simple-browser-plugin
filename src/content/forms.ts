@@ -1,7 +1,7 @@
 import type { FormField } from "@/lib/messages";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
-import { peekApproved, registerTarget, takeApproved, type TargetKind } from "./targets";
+import { peekApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
 const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
@@ -90,6 +90,10 @@ function currentValueOf(el: FieldElement): string {
 }
 
 export function findFormFields(args: { onlyVisible?: boolean }): FormField[] {
+  return scanTargets(() => collectFormFields(args));
+}
+
+function collectFormFields(args: { onlyVisible?: boolean }): FormField[] {
   const onlyVisible = args.onlyVisible !== false;
   const fields: FormField[] = [];
 
@@ -199,7 +203,7 @@ export async function fillFormFields(
     let el: HTMLElement;
     try {
       // 앞 칸을 채우면서 페이지가 다시 그려졌을 수 있어 칸마다 다시 확인한다. 바뀐 칸만 건너뛴다.
-      el = takeApproved(f.id, callId, FIELD_KIND.prefix);
+      el = takeApproved(f.id, callId, FIELD_KIND.prefix).el;
     } catch (err) {
       results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
       continue;

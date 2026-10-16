@@ -1,6 +1,14 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isTag } from "./docs";
-import { detectRegion, registerTarget, startEffectWatch, takeApproved, type TargetKind } from "./targets";
+import {
+  detectRegion,
+  recheckApproved,
+  registerTarget,
+  scanTargets,
+  startEffectWatch,
+  takeApproved,
+  type TargetKind,
+} from "./targets";
 
 const CLICK_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
@@ -49,12 +57,18 @@ function rectInViewport(el: HTMLElement): boolean {
   return rect.bottom > 0 && rect.right > 0 && rect.top < vh && rect.left < vw;
 }
 
-export function findClickables(args: {
+type FindClickablesArgs = {
   query?: string;
   region?: PageRegion;
   onlyViewport?: boolean;
   limit?: number;
-}): ClickableElement[] {
+};
+
+export function findClickables(args: FindClickablesArgs): ClickableElement[] {
+  return scanTargets(() => collectClickables(args));
+}
+
+function collectClickables(args: FindClickablesArgs): ClickableElement[] {
   const limit = Math.min(args.limit ?? 50, 200);
   const q = args.query?.toLowerCase().trim() ?? "";
   const out: ClickableElement[] = [];
@@ -100,7 +114,7 @@ export function clickElement(
   args: { id: string },
   callId: string,
 ): { clicked: boolean; text: string; href: string; effectToken: string } {
-  const el = takeApproved(args.id, callId, CLICK_KIND.prefix);
+  const { el, info } = takeApproved(args.id, callId, CLICK_KIND.prefix);
   const text = clickText(el);
   const href = isTag(el, "a") ? el.href : "";
   const effectToken = `${callId}:${Date.now()}`;
@@ -122,8 +136,12 @@ export function clickElement(
     } catch {
       /* ignore */
     }
+    // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
+    // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
+    const changed = recheckApproved(CLICK_KIND, el, info);
     // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
-    startEffectWatch(effectToken);
+    startEffectWatch(effectToken, changed);
+    if (changed) return;
     try {
       el.click();
     } catch (err) {
