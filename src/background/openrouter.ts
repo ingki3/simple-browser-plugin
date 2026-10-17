@@ -10,7 +10,7 @@ import {
   type OpenRouterToolCall,
 } from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
-import { buildToolPreview, executeTool, parseToolArgs } from "./tools/dispatcher";
+import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction } from "./tools/dispatcher";
 import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
@@ -587,6 +587,7 @@ export class ChatAgent {
           );
 
           if (!approved) {
+            recordCancelledAction(callId, this.turnTab);
             this.send({
               kind: "tool_result",
               callId,

@@ -33,6 +33,18 @@ import {
 import { exportFile, listRecent, searchFiles } from "../google/drive";
 import { readDocument } from "../document";
 import { checkFileUrl } from "@/lib/fileFormat";
+import {
+  isPreActionStop,
+  logTarget,
+  reasonCode,
+  summarizeClickEffect,
+  urlPattern,
+  type ActionLogEntry,
+  type ActionOutcome,
+  type LoggedTarget,
+  type PageKey,
+} from "@/lib/actionLog";
+import { finishAction, notePendingAction } from "../actionLog";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -65,6 +77,34 @@ async function inspectTargets(
   }
 }
 
+// 동작 기록을 시작한다: 기록을 켰고 시크릿 창이 아니면 페이지 키를 구해 이 호출의 기록을 열어 둔다.
+// 기록은 부가 기능이라 실패해도 승인 카드와 실행을 막지 않는다.
+async function beginActionLog(
+  callId: string,
+  tool: "click_element" | "fill_form_fields",
+  turnTab: TurnTab,
+  targets: LoggedTarget[],
+): Promise<void> {
+  try {
+    if (!(await getSettings()).actionLogEnabled) return;
+    const tabId = await resolveTurnTab(turnTab);
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.incognito) return;
+    const pattern = urlPattern(tab.url ?? "");
+    if (!pattern) return;
+    let page: PageKey | null = null;
+    try {
+      const skeleton = await queryContent<string>(tabId, { kind: "page_skeleton" }, 2_000, "페이지 뼈대");
+      page = { ...pattern, skeleton };
+    } catch {
+      page = { ...pattern, skeleton: "" };
+    }
+    notePendingAction(turnTab, callId, tool, page, targets);
+  } catch {
+    /* 기록 없이 진행 */
+  }
+}
+
 export async function buildToolPreview(
   toolName: ToolName,
   parsedArgs: unknown,
@@ -79,6 +119,12 @@ export async function buildToolPreview(
         "f",
         callId,
         turnTab,
+      );
+      await beginActionLog(
+        callId,
+        "fill_form_fields",
+        turnTab,
+        infos.map((info, i) => logTarget(info, args.fills[i].value)),
       );
       return fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value })));
     }
@@ -96,6 +142,7 @@ export async function buildToolPreview(
     case "click_element": {
       const args = parsedArgs as ToolArgs["click_element"];
       const [info] = await inspectTargets([args.id], "c", callId, turnTab);
+      await beginActionLog(callId, "click_element", turnTab, [logTarget(info)]);
       return clickCard(info);
     }
     case "read_document": {
@@ -220,7 +267,53 @@ export function parseToolArgs<T extends ToolName>(
   return result.data as ToolArgs[T];
 }
 
+// 사용자가 승인 카드에서 취소한 동작을 기록한다.
+export function recordCancelledAction(callId: string, turnTab: TurnTab): void {
+  void finishAction(turnTab, callId, "cancelled");
+}
+
 export async function executeTool(
+  toolName: ToolName,
+  parsedArgs: unknown,
+  callId: string,
+  turnTab: TurnTab,
+  signal?: AbortSignal,
+): Promise<ToolExecResult> {
+  if (toolName !== "click_element" && toolName !== "fill_form_fields") {
+    return runTool(toolName, parsedArgs, callId, turnTab, signal);
+  }
+  let result: ToolExecResult;
+  try {
+    result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+  } catch (err) {
+    const reason = reasonCode(err instanceof Error ? err.message : String(err));
+    void finishAction(turnTab, callId, isPreActionStop(reason) ? "aborted" : "failed", { reason });
+    throw err;
+  }
+  const { outcome, extra } = actionOutcome(toolName, result);
+  void finishAction(turnTab, callId, outcome, extra);
+  return result;
+}
+
+function actionOutcome(
+  toolName: "click_element" | "fill_form_fields",
+  result: ToolExecResult,
+): { outcome: ActionOutcome; extra: Pick<ActionLogEntry, "effect" | "fill" | "reason"> } {
+  if (toolName === "click_element") {
+    const effect = (result.data as { effect: ClickEffect }).effect;
+    if (effect.dom?.aborted) return { outcome: "aborted", extra: { reason: "target_changed" } };
+    return { outcome: result.ok ? "done" : "failed", extra: { effect: summarizeClickEffect(effect) } };
+  }
+  const data = result.data as { filledCount: number; results: Array<{ applied: boolean; note?: string }> };
+  const fill = { applied: data.filledCount, total: data.results.length };
+  const reasons = data.results.filter((r) => !r.applied).map((r) => reasonCode(r.note ?? ""));
+  if (!reasons.length) return { outcome: "done", extra: { fill } };
+  const outcome: ActionOutcome =
+    fill.applied > 0 ? "partial" : reasons.every(isPreActionStop) ? "aborted" : "failed";
+  return { outcome, extra: { fill, reason: reasons[0] } };
+}
+
+async function runTool(
   toolName: ToolName,
   parsedArgs: unknown,
   callId: string,

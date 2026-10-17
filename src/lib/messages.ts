@@ -182,7 +182,9 @@ export type BgToContent =
   // prefix는 기대하는 대상 종류("c" 클릭, "f" 입력 칸).
   | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f" }
   // click_element 뒤 같은 문서에서 관찰한 변화를 읽는다.
-  | { kind: "action_effect"; token: string };
+  | { kind: "action_effect"; token: string }
+  // 동작 기록용 페이지 뼈대 해시(최상위 문서).
+  | { kind: "page_skeleton" };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;
@@ -192,6 +194,9 @@ export interface ContentResponse<T = unknown> {
 
 export type RuntimeMsg =
   | { kind: "settings_updated" }
+  // 설정 화면의 동작 기록 개수 보기·지우기. 쓰기를 백그라운드 한곳으로 모은다.
+  | { kind: "action_log_count" }
+  | { kind: "action_log_clear" }
   | { kind: "translate_text_batch"; texts: string[]; targetLang: string };
 
 export interface Settings {
@@ -201,6 +206,8 @@ export interface Settings {
   translationTargetLang: string;
   downloadFolderPrefix: string;
   maxToolHops: number;
+  // 클릭·입력 동작을 이 브라우저에 기록할지(입력 값은 남기지 않음). 시크릿 창은 늘 기록하지 않는다.
+  actionLogEnabled: boolean;
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;
@@ -211,6 +218,7 @@ export const MAX_MAX_TOOL_HOPS = 30;
 
 export const SETTINGS_KEY = "settings";
 export const FLAGS_KEY = "flags";
+export const ACTION_LOG_KEY = "actionLog";
 
 export const PORT_NAME = "chat";
 

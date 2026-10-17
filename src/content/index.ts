@@ -9,6 +9,7 @@ import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks } from "./fileLinks";
 import { inspectTarget, readEffect } from "./targets";
+import { pageSkeleton } from "./skeleton";
 
 async function execTool(toolName: ToolName, args: unknown, callId: string): Promise<unknown> {
   switch (toolName) {
@@ -62,6 +63,14 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind === "action_effect") {
     sendResponse({ ok: true, data: readEffect(msg.token) } satisfies ContentResponse);
+    return false;
+  }
+  if (msg.kind === "page_skeleton") {
+    try {
+      sendResponse({ ok: true, data: pageSkeleton() } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
     return false;
   }
   if (msg.kind !== "tool_exec") return false;

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ActionLogField } from "@/sidepanel/components/ActionLogField";
 import {
   DEFAULT_MODEL,
   MODEL_IDS,
@@ -22,6 +23,7 @@ const DEFAULTS: Settings = {
   translationTargetLang: "ko",
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
+  actionLogEnabled: true,
 };
 
 export function Options() {
@@ -47,6 +49,7 @@ export function Options() {
           typeof raw.maxToolHops === "number" && Number.isFinite(raw.maxToolHops)
             ? Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, Math.floor(raw.maxToolHops)))
             : DEFAULTS.maxToolHops,
+        actionLogEnabled: raw.actionLogEnabled !== false,
       });
     });
   }, []);
@@ -212,6 +215,11 @@ export function Options() {
           한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 8).
         </span>
       </label>
+
+      <ActionLogField
+        enabled={draft.actionLogEnabled}
+        onToggle={(actionLogEnabled) => setDraft({ ...draft, actionLogEnabled })}
+      />
 
       <div className="actions">
         <button className="primary" onClick={save}>
