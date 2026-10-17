@@ -565,6 +565,18 @@ body,
   flex: 1;
 }
 
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.field .key-row .field-help {
+  flex: 1;
+  align-self: center;
+}
+
 .ghost-btn {
   padding: 6px 10px;
   background: transparent;

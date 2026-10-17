@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ActionLogField } from "./ActionLogField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
@@ -266,6 +267,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
             />
             <span className="field-help">{KO.maxToolHopsHelp}</span>
           </label>
+
+          <ActionLogField
+            enabled={draft.actionLogEnabled}
+            onToggle={(actionLogEnabled) => setDraft({ ...draft, actionLogEnabled })}
+          />
 
           <div className="field">
             <span className="field-label">Google Workspace (Sheets / Docs / Drive)</span>
