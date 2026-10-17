@@ -109,14 +109,18 @@ test("maskName: 이름에 섞인 주소·이메일·값을 가림", () => {
   assert.equal(maskName("code=1234 확인"), "{kv} 확인");
   assert.equal(maskName("010-1234-5678 전화"), "{n} 전화");
   assert.equal(maskName("보고서 2024 다음 글"), "보고서 2024 다음 글");
+  assert.equal(maskName("키 복사 sk-or-v1-abcd1234ef"), "키 복사 {secret}");
+  assert.equal(maskName("임시 암호 Xk9pQ2wz 복사"), "임시 암호 {secret} 복사");
+  assert.equal(maskName("item_45 열기"), "item_45 열기");
   const t = logTarget({ ...info, name: "https://example.test/?token=secret", href: "https://example.test/?token=secret" });
   assert.doesNotMatch(JSON.stringify(t), /secret/);
 });
 
 test("logTarget: 입력 값은 있음/없음만", () => {
   const field = { ...info, tag: "input", role: "textbox", href: "", fieldType: "password", sensitive: "password" };
-  const t = logTarget(field, "hunter22");
+  const t = logTarget({ ...field, name: "비밀번호: hunter22" }, "hunter22");
   assert.equal(t.hasValue, true);
+  assert.equal(t.name, "");
   assert.equal(logTarget(field, "").hasValue, false);
   assert.doesNotMatch(JSON.stringify(t), /hunter22/);
 });

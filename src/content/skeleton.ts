@@ -88,7 +88,11 @@ export function pageSkeleton(doc: Document = document): string {
           out.push(inner.length ? `${own}(${inner.join(",")})` : own);
         }
       } else {
-        out.push(...childSigs(child, depth));
+        // 구조 요소가 아닌 감싸개(div 등) 안에 구조 요소가 여럿이면 한 묶음으로 둔다. 그래야 div로 만든 반복 목록
+        // (<div><h2/><button/></div> × N)도 항목 단위로 접혀 항목 수와 상관없이 같은 뼈대가 된다.
+        const inner = collapseRepeats(childSigs(child, depth));
+        if (inner.length > 1) out.push(`{${inner.join(",")}}`);
+        else out.push(...inner);
       }
     }
     return out;

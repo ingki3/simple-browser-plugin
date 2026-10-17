@@ -179,7 +179,10 @@ export function maskName(s: string): string {
     .replace(/\b(?:https?:\/\/|www\.)\S+/gi, "{url}")
     .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, "{email}")
     .replace(/\S+=\S+/g, "{kv}")
-    .replace(/\d[\d\s-]{5,}\d/g, "{n}");
+    .replace(/\d[\d\s-]{5,}\d/g, "{n}")
+    // 비밀 값처럼 보이는 낱말: 알려진 키 접두사, 또는 글자와 숫자가 섞인 8자 이상 낱말.
+    .replace(/\b(?:sk|pk|rk|ghp|gho|xox[abp]|AKIA|AIza)[-_A-Za-z0-9]{6,}/g, "{secret}")
+    .replace(/\S*(?=\S*[A-Za-z])(?=\S*\d)[A-Za-z0-9_\-+/=]{8,}\S*/g, "{secret}");
 }
 
 export function logTarget(info: TargetInfo, value?: string): LoggedTarget {
@@ -187,7 +190,8 @@ export function logTarget(info: TargetInfo, value?: string): LoggedTarget {
   const t: LoggedTarget = {
     tag: info.tag,
     role: info.role,
-    name: clipText(maskName(info.name), 80),
+    // 비밀번호·결제 칸은 페이지가 라벨에 값을 되비칠 수 있어 이름을 남기지 않는다.
+    name: info.sensitive ? "" : clipText(maskName(info.name), 80),
     region: info.region,
     inFrame: info.inFrame,
     fieldType: info.fieldType,
