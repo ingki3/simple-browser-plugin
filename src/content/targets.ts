@@ -290,8 +290,20 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
   if (!sameApproved(now, approved.info)) {
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
+  const added = riskAdded(entry.kind, el, approved.info);
+  if (added) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
   checkVisible(entry, el, approved.info.name, true);
   return { el, info: approved.info };
+}
+
+// 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
+// 자동 완성·페이지 스크립트가 승인 뒤에 칸을 채우면, 자동 실행이든 사람이 승인한 카드든 그대로 실행하지 않는다.
+function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string | null {
+  const now = kind.risk?.(el);
+  if (!now) return null;
+  if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
+  if (now.submitsPersonal && !info.submitsPersonal) return "승인 뒤 양식에 개인정보가 채워짐";
+  return null;
 }
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
@@ -300,6 +312,8 @@ export function recheckApproved(kind: TargetKind, el: HTMLElement, info: TargetI
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const now = fullInfo(kind, el);
   if (!sameApproved(now, info)) return describeDifference(info, now);
+  const added = riskAdded(kind, el, info);
+  if (added) return added;
   if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";
   return null;
 }
@@ -316,6 +330,8 @@ export function peekApproved(id: string, callId: string, prefix: string): void {
   if (!sameApproved(now, approved.info)) {
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
+  const added = riskAdded(entry.kind, el, approved.info);
+  if (added) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
 }
 
 // ---------------------------------------------------------------------------

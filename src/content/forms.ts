@@ -87,13 +87,14 @@ export function isPersonalField(el: HTMLElement): boolean {
   return PERSONAL_HINT_RE.test(hint);
 }
 
-// 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 제출 버튼은 자동 실행하지 않는다).
+// 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).
+// 제출되는 값이면 종류를 가리지 않는다: 숨은 칸(로그인한 사용자 이메일 등)·선택 칸(생년월일)·체크한 칸도 본다.
 export function formHasPersonalValues(form: HTMLFormElement): boolean {
   for (const el of Array.from(form.elements)) {
     if (!isFieldElement(el as HTMLElement)) continue;
     const f = el as FieldElement;
-    if (isTag(f, "input") && ["checkbox", "radio", "hidden", "submit", "button", "image", "reset"].includes(f.type)) continue;
-    if (isTag(f, "select")) continue;
+    if (isTag(f, "input") && ["submit", "button", "image", "reset"].includes(f.type)) continue;
+    if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio") && !f.checked) continue;
     if (!(f.value ?? "").trim()) continue;
     if (sensitivityOf(f) || isPersonalField(f)) return true;
   }
