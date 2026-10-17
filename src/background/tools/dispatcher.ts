@@ -36,6 +36,7 @@ import { checkFileUrl } from "@/lib/fileFormat";
 import {
   isPreActionStop,
   logTarget,
+  pageKeyId,
   reasonCode,
   summarizeClickEffect,
   urlPattern,
@@ -45,6 +46,8 @@ import {
   type PageKey,
 } from "@/lib/actionLog";
 import { finishAction, notePendingAction } from "../actionLog";
+import { noteRead, readHintsFor } from "../readRecipes";
+import { recipeArgs, usefulResult } from "@/lib/readRecipe";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -77,7 +80,28 @@ async function inspectTargets(
   }
 }
 
-// 동작 기록을 시작한다: 기록을 켰고 시크릿 창이 아니면 페이지 키를 구해 이 호출의 기록을 열어 둔다.
+// 지금 탭의 페이지 키. 기록을 껐거나 시크릿 창이거나 http(s)가 아니면 null(기록도 레시피도 쓰지 않음).
+// 뼈대를 못 구하면 skeleton은 ""(레시피 후보는 내지 않는다).
+async function pageKeyFor(turnTab: TurnTab): Promise<PageKey | null> {
+  try {
+    if (!(await getSettings()).actionLogEnabled) return null;
+    const tabId = await resolveTurnTab(turnTab);
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.incognito) return null;
+    const pattern = urlPattern(tab.url ?? "");
+    if (!pattern) return null;
+    try {
+      const skeleton = await queryContent<string>(tabId, { kind: "page_skeleton" }, 2_000, "페이지 뼈대");
+      return { ...pattern, skeleton };
+    } catch {
+      return { ...pattern, skeleton: "" };
+    }
+  } catch {
+    return null;
+  }
+}
+
+// 동작 기록을 시작한다: 페이지 키를 구해 이 호출의 기록을 열어 둔다.
 // 기록은 부가 기능이라 실패해도 승인 카드와 실행을 막지 않는다.
 async function beginActionLog(
   callId: string,
@@ -85,24 +109,23 @@ async function beginActionLog(
   turnTab: TurnTab,
   targets: LoggedTarget[],
 ): Promise<void> {
-  try {
-    if (!(await getSettings()).actionLogEnabled) return;
-    const tabId = await resolveTurnTab(turnTab);
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.incognito) return;
-    const pattern = urlPattern(tab.url ?? "");
-    if (!pattern) return;
-    let page: PageKey | null = null;
-    try {
-      const skeleton = await queryContent<string>(tabId, { kind: "page_skeleton" }, 2_000, "페이지 뼈대");
-      page = { ...pattern, skeleton };
-    } catch {
-      page = { ...pattern, skeleton: "" };
-    }
-    notePendingAction(turnTab, callId, tool, page, targets);
-  } catch {
-    /* 기록 없이 진행 */
-  }
+  const page = await pageKeyFor(turnTab);
+  if (page) notePendingAction(turnTab, callId, tool, page, targets);
+}
+
+// 읽기 도구 결과를 읽기 레시피 관찰로 남긴다(턴이 끝날 때 반영). before는 실행 전에 구한 페이지 키.
+// 실행 뒤에 다시 구한 키가 다르면 그 사이 페이지가 바뀐 것이라 어느 페이지의 결과인지 알 수 없어 버린다.
+async function observeRead(
+  turnTab: TurnTab,
+  before: PageKey | null,
+  picked: NonNullable<ReturnType<typeof recipeArgs>>,
+  data: unknown,
+  failed: boolean,
+) {
+  if (!before?.skeleton) return;
+  const after = await pageKeyFor(turnTab);
+  if (!after || pageKeyId(after) !== pageKeyId(before)) return;
+  noteRead(turnTab, before, picked.tool, picked.args, !failed && usefulResult(picked.tool, data));
 }
 
 export async function buildToolPreview(
@@ -272,6 +295,8 @@ export function recordCancelledAction(callId: string, turnTab: TurnTab): void {
   void finishAction(turnTab, callId, "cancelled");
 }
 
+const RECIPE_TOOLS = new Set<ToolName>(["query_dom", "list_file_links", "find_clickables"]);
+
 export async function executeTool(
   toolName: ToolName,
   parsedArgs: unknown,
@@ -279,6 +304,24 @@ export async function executeTool(
   turnTab: TurnTab,
   signal?: AbortSignal,
 ): Promise<ToolExecResult> {
+  if (RECIPE_TOOLS.has(toolName)) {
+    const picked = recipeArgs(toolName, parsedArgs);
+    if (!picked) return runTool(toolName, parsedArgs, callId, turnTab, signal);
+    const before = await pageKeyFor(turnTab);
+    let result: ToolExecResult;
+    try {
+      result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+    } catch (err) {
+      await observeRead(turnTab, before, picked, null, true);
+      throw err;
+    }
+    await observeRead(turnTab, before, picked, result.data, false);
+    return result;
+  }
+  if (toolName === "describe_page") {
+    const result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+    return attachReadHints(result, turnTab);
+  }
   if (toolName !== "click_element" && toolName !== "fill_form_fields") {
     return runTool(toolName, parsedArgs, callId, turnTab, signal);
   }
@@ -293,6 +336,27 @@ export async function executeTool(
   const { outcome, extra } = actionOutcome(toolName, result);
   void finishAction(turnTab, callId, outcome, extra);
   return result;
+}
+
+// describe_page 결과에 같은 구조의 페이지에서 전에 통한 읽기 방법을 붙인다. 실패해도 결과는 그대로 돌려준다.
+async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promise<ToolExecResult> {
+  try {
+    // 관측한 뒤 탭이 다른 주소로 옮겼으면, 지금 페이지의 후보를 관측 결과에 섞지 않는다.
+    const observed = (result.data as PageDescription).url;
+    const tab = await chrome.tabs.get(await resolveTurnTab(turnTab));
+    if (!observed || tab.url !== observed) return result;
+    const page = await pageKeyFor(turnTab);
+    if (!page?.skeleton) return result;
+    const hints = await readHintsFor(page);
+    if (!hints.length) return result;
+    return {
+      ...result,
+      summary: `${result.summary} / 전에 통한 읽기 방법 ${hints.length}개`,
+      data: { ...(result.data as PageDescription), readHints: hints },
+    };
+  } catch {
+    return result;
+  }
 }
 
 function actionOutcome(

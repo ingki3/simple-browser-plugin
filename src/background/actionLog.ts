@@ -1,4 +1,4 @@
-import { ACTION_LOG_KEY } from "@/lib/messages";
+import { ACTION_LOG_KEY, READ_RECIPES_KEY } from "@/lib/messages";
 import {
   capTargets,
   pruneLog,
@@ -10,6 +10,7 @@ import {
 import { getSettings } from "./storage";
 import type { TurnTab } from "./tools/handlers";
 import { debugLog } from "./debug";
+import { clearPendingReads, readRecipeCount } from "./readRecipes";
 
 // 승인 카드를 띄울 때 정한 대상과 페이지를 실행 결과가 나올 때까지 들고 있는다.
 // callId는 모델이 정해 패널(대화)끼리 겹칠 수 있으므로, 턴마다 새로 만드는 TurnTab 객체와 함께 키로 쓴다.
@@ -25,13 +26,18 @@ const MAX_PENDING = 20;
 const pending = new Map<string, Pending>();
 const turnIds = new WeakMap<TurnTab, string>();
 
-function keyOf(turnTab: TurnTab, callId: string): string {
+// 턴마다 하나인 식별자(같은 TurnTab 객체면 같은 값). 읽기 레시피도 턴 단위로 모을 때 쓴다.
+export function turnKey(turnTab: TurnTab): string {
   let id = turnIds.get(turnTab);
   if (!id) {
     id = crypto.randomUUID();
     turnIds.set(turnTab, id);
   }
-  return `${id}:${callId}`;
+  return id;
+}
+
+function keyOf(turnTab: TurnTab, callId: string): string {
+  return `${turnKey(turnTab)}:${callId}`;
 }
 
 export function notePendingAction(
@@ -54,7 +60,8 @@ export function notePendingAction(
 // 쓰기를 한 줄로 세운다(읽고-고쳐-쓰는 사이에 다른 쓰기가 끼면 항목이 사라진다).
 let writeChain: Promise<unknown> = Promise.resolve();
 
-function enqueue<T>(job: () => Promise<T>): Promise<T> {
+// 동작 기록과 읽기 레시피가 같이 쓴다(지우기와 쓰기의 순서를 맞추려고).
+export function enqueue<T>(job: () => Promise<T>): Promise<T> {
   const next = writeChain.then(job, job);
   writeChain = next.catch(() => undefined);
   return next;
@@ -107,7 +114,7 @@ export function finishAction(
 }
 
 // 개수를 셀 때도 만료된 항목을 저장소에서 지운다(새 동작이 없어도 30일 뒤에는 남지 않게).
-export function actionLogCount(): Promise<number> {
+function actionLogCount(): Promise<number> {
   return enqueue(async () => {
     const obj = await chrome.storage.local.get(ACTION_LOG_KEY);
     const raw = obj[ACTION_LOG_KEY];
@@ -120,12 +127,20 @@ export function actionLogCount(): Promise<number> {
   });
 }
 
+// 설정 화면에 보이는 개수: 동작 기록과 읽기 레시피. 셀 때 만료 항목도 지운다.
+export async function storedCounts(): Promise<{ log: number; recipes: number }> {
+  const log = await actionLogCount();
+  const recipes = await readRecipeCount();
+  return { log, recipes };
+}
+
 // 확장이 시작될 때 만료 항목을 정리한다.
 export function pruneActionLog(): void {
-  void actionLogCount().catch(() => undefined);
+  void storedCounts().catch(() => undefined);
 }
 
 export function clearActionLog(): Promise<void> {
   pending.clear();
-  return enqueue(() => chrome.storage.local.remove(ACTION_LOG_KEY));
+  clearPendingReads();
+  return enqueue(() => chrome.storage.local.remove([ACTION_LOG_KEY, READ_RECIPES_KEY]));
 }

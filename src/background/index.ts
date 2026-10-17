@@ -1,7 +1,7 @@
 import { PORT_NAME, type PanelToBg } from "@/lib/messages";
 import { ChatAgent } from "./openrouter";
 import { invalidateSettingsCache } from "./storage";
-import { actionLogCount, clearActionLog, pruneActionLog } from "./actionLog";
+import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";
 import {
@@ -88,7 +88,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   }
 
   if (m.kind === "action_log_count" || m.kind === "action_log_clear") {
-    (m.kind === "action_log_clear" ? clearActionLog().then(() => 0) : actionLogCount())
+    (m.kind === "action_log_clear" ? clearActionLog().then(() => ({ log: 0, recipes: 0 })) : storedCounts())
       .then((count) => sendResponse({ ok: true, data: count }))
       .catch((err: unknown) =>
         sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),

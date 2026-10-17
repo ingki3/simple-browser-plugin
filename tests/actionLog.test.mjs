@@ -47,6 +47,8 @@ test("urlPattern: 토큰·이메일·한글 이름·대소문자 섞인 식별�
   assert.equal(p("https://ex.test/reset/kq3-Zx9_pL2m"), "/reset/{id}");
   assert.equal(p("https://ex.test/t/xkcd-qwrtz-plmnb"), "/t/{id}");
   assert.equal(p("https://ex.test/?Abcd_efghijklmnopqrstuv=1&page[size]=2"), "/?{k}&page[size]");
+  // 쿼리 이름 안의 숫자도 가린다.
+  assert.equal(p("https://ex.test/filter?phone[01012345678]=selected"), "/filter?phone[{n}]");
   assert.equal(p("https://ex.test/settings/notifications/administration"), "/settings/notifications/administration");
   // 흔한 경로 낱말은 남긴다.
   assert.equal(p("https://ex.test/my-account/order_history/item_45.html"), "/my-account/order_history/item_{n}.html");
@@ -116,22 +118,32 @@ test("maskName: 이름에 섞인 주소·이메일·값을 가림", () => {
   assert.doesNotMatch(JSON.stringify(t), /secret/);
 });
 
-test("logTarget: 입력 값은 있음/없음만", () => {
+test("logTarget: 입력 칸은 이름 대신 해시, 값은 있음/없음만", () => {
   const field = { ...info, tag: "input", role: "textbox", href: "", fieldType: "password", sensitive: "password" };
   const t = logTarget({ ...field, name: "비밀번호: hunter22" }, "hunter22");
   assert.equal(t.hasValue, true);
   assert.equal(t.name, "");
-  // 민감 칸이 아니어도 라벨에 되비친 값은 가린다.
-  const otp = logTarget({ ...field, fieldType: "text", sensitive: null, name: "현재 값: 123456" }, "123456");
-  assert.equal(otp.name, "현재 값: {value}");
-  // 여러 줄 값은 공백을 줄인 라벨에서도, 일부만 보여 주는 라벨에서도 가린다.
-  const phrase = "correct\nhorse\n  battery\nstaple";
-  const multi = logTarget({ ...field, fieldType: "textarea", sensitive: null, name: "메모 correct horse battery staple" }, phrase);
-  assert.doesNotMatch(multi.name, /correct|horse|battery|staple/);
-  const part = logTarget({ ...field, fieldType: "textarea", sensitive: null, name: "미리보기: horse battery…" }, phrase);
-  assert.doesNotMatch(part.name, /horse|battery/);
-  assert.equal(logTarget(field, "").hasValue, false);
+  assert.equal(t.nameHash, undefined);
   assert.doesNotMatch(JSON.stringify(t), /hunter22/);
+  assert.equal(logTarget(field, "").hasValue, false);
+
+  const text = { ...field, fieldType: "text", sensitive: null };
+  const a = logTarget({ ...text, name: "이름" }, "홍길동");
+  assert.equal(a.name, "");
+  assert.match(a.nameHash, /^[0-9a-f]{8}$/);
+  // 같은 칸은 같은 해시, 공백 차이는 무시, 다른 칸은 다른 해시.
+  assert.equal(logTarget({ ...text, name: " 이름 " }, "x").nameHash, a.nameHash);
+  assert.notEqual(logTarget({ ...text, name: "주소" }, "x").nameHash, a.nameHash);
+  // 라벨에 이전·지금 값이 보여도 글자는 남지 않고, 해시는 값·숫자를 지운 뒤 계산한다.
+  const otp1 = logTarget({ ...text, name: "현재 값: 123456" }, "");
+  const otp2 = logTarget({ ...text, name: "현재 값: 987654" }, "987654");
+  assert.equal(otp1.name, "");
+  assert.equal(otp1.nameHash, otp2.nameHash);
+  const phrase = "correct\nhorse\n  battery\nstaple";
+  const multi = logTarget({ ...text, fieldType: "textarea", name: "메모 correct horse battery staple" }, phrase);
+  assert.doesNotMatch(JSON.stringify(multi), /correct|horse|battery|staple/);
+  // 클릭 대상은 이름을 남긴다(가린 뒤).
+  assert.equal(logTarget(info).nameHash, undefined);
 });
 
 test("summarizeClickEffect: 도착 주소는 틀만", () => {
