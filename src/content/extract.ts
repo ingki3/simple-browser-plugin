@@ -129,27 +129,34 @@ function collectFlowText(root: HTMLElement): string {
     if (seg) segments.push(seg);
     buf = "";
   };
-  const visit = (parent: Node) => {
-    for (let child = parent.firstChild; child; child = child.nextSibling) {
-      if (child.nodeType === Node.TEXT_NODE) {
-        buf += child.nodeValue ?? "";
-        continue;
-      }
-      if (child.nodeType !== Node.ELEMENT_NODE) continue;
-      const tag = (child as Element).tagName.toUpperCase();
-      if (SKIP_TAGS.has(tag)) continue;
-      if (tag === "BR") {
-        buf += "\n";
-      } else if (FLOW_BREAK_TAGS.has(tag)) {
-        flush();
-        visit(child);
-        flush();
-      } else {
-        visit(child);
+  // 재귀 대신 형제·부모 포인터로 돈다(아주 깊게 겹친 DOM에서도 호출 스택이 넘치지 않게).
+  const isBreak = (n: Node) => n.nodeType === Node.ELEMENT_NODE && FLOW_BREAK_TAGS.has((n as Element).tagName.toUpperCase());
+  let node: Node | null = root.firstChild;
+  while (node) {
+    let descend = false;
+    if (node.nodeType === Node.TEXT_NODE) {
+      buf += node.nodeValue ?? "";
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const tag = (node as Element).tagName.toUpperCase();
+      if (tag === "BR") buf += "\n";
+      else if (!SKIP_TAGS.has(tag)) {
+        if (isBreak(node)) flush();
+        descend = !!node.firstChild;
+        if (!descend && isBreak(node)) flush();
       }
     }
-  };
-  visit(root);
+    if (descend) {
+      node = node.firstChild;
+      continue;
+    }
+    // 다음 형제로. 형제가 없으면 부모로 올라가며 블록을 닫는다.
+    while (node && node !== root && !node.nextSibling) {
+      node = node.parentNode;
+      if (node && node !== root && isBreak(node)) flush();
+    }
+    if (!node || node === root) break;
+    node = node.nextSibling;
+  }
   flush();
   return segments.join("\n\n");
 }
