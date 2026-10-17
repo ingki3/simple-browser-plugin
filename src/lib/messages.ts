@@ -208,9 +208,20 @@ export interface Settings {
   maxToolHops: number;
   // 클릭·입력 동작을 이 브라우저에 기록할지(입력 값은 남기지 않음). 시크릿 창은 늘 기록하지 않는다.
   actionLogEnabled: boolean;
+  // read_document가 CSV·TSV 파일을 표로 읽을 때 모델에 넘기는 최대 글자 수(모델이 따로 정하지 않았을 때).
+  csvMaxChars: number;
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;
+
+export const DEFAULT_CSV_MAX_CHARS = 40_000;
+export const MIN_CSV_MAX_CHARS = 1_000;
+export const MAX_CSV_MAX_CHARS = 100_000;
+
+export function normalizeCsvMaxChars(v: unknown): number {
+  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : DEFAULT_CSV_MAX_CHARS;
+  return Math.min(MAX_CSV_MAX_CHARS, Math.max(MIN_CSV_MAX_CHARS, n));
+}
 
 export const DEFAULT_MAX_TOOL_HOPS = 8;
 export const MIN_MAX_TOOL_HOPS = 1;

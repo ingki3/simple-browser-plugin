@@ -36,7 +36,8 @@ export const functionDeclarations: FunctionDeclaration[] = [
         },
         maxChars: {
           type: "number",
-          description: "반환할 최대 글자 수. 기본 40000, 최대 100000.",
+          description:
+            "반환할 최대 글자 수. 기본 40000(CSV·TSV는 사용자 설정값), 최대 100000. CSV·TSV는 사용자가 더 많이 읽어 달라고 할 때만 지정한다.",
         },
       },
     },

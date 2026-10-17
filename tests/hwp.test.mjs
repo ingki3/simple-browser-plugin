@@ -44,12 +44,16 @@ test("password-protected HWPX reports ENCRYPTED", async () => {
 });
 
 test("an HWP stream that inflates to 150MB stops at kordoc's limit instead of being fully inflated", async () => {
-  // BodyText/Section0이 150MB의 0으로 풀리는 문서(157KB). 셰임이 maxOutputLength를 버리면 끝까지 푼다.
-  const bytes = fixture("bomb.hwp");
-  const before = process.memoryUsage().arrayBuffers;
-  const r = await kordoc.parseHwp(ab(bytes), { ocr: false });
-  assert.ok(!r.success || r.markdown.trim() === "");
-  assert.ok(process.memoryUsage().arrayBuffers - before < 140 * 1024 * 1024);
+  // BodyText/Section0이 150MB의 0으로 풀리는 문서(157KB). 셰임이 maxOutputLength(100MB)를 지키면 그 구역은
+  // ERR_BUFFER_TOO_LARGE로 실패하고 kordoc가 PARTIAL_PARSE 경고를 남긴다. 셰임이 옵션을 버리면 끝까지 풀어 경고가 없다.
+  // (메모리 사용량은 GC 시점에 따라 흔들려서 비교하지 않는다.)
+  const r = await kordoc.parseHwp(ab(fixture("bomb.hwp")), { ocr: false });
+  assert.ok(r.success);
+  assert.equal(r.markdown.trim(), "");
+  assert.ok(
+    r.warnings?.some((w) => w.code === "PARTIAL_PARSE" && /larger than/.test(w.message)),
+    JSON.stringify(r.warnings),
+  );
 });
 
 test("a corrupt second section is reported as a lossy note, not silently dropped", async () => {

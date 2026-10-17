@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "@/sidepanel/components/ActionLogField";
+import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
 import {
   DEFAULT_MODEL,
   MODEL_IDS,
@@ -8,11 +9,13 @@ import {
   normalizeModelId,
 } from "@/lib/models";
 import {
+  DEFAULT_CSV_MAX_CHARS,
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
   MIN_MAX_TOOL_HOPS,
   SETTINGS_KEY,
+  normalizeCsvMaxChars,
   type Settings,
 } from "@/lib/messages";
 
@@ -24,6 +27,7 @@ const DEFAULTS: Settings = {
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
   actionLogEnabled: true,
+  csvMaxChars: DEFAULT_CSV_MAX_CHARS,
 };
 
 export function Options() {
@@ -50,6 +54,7 @@ export function Options() {
             ? Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, Math.floor(raw.maxToolHops)))
             : DEFAULTS.maxToolHops,
         actionLogEnabled: raw.actionLogEnabled !== false,
+        csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
       });
     });
   }, []);
@@ -58,6 +63,7 @@ export function Options() {
     const normalized: Settings = {
       ...draft,
       systemPrompt: draft.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
+      csvMaxChars: normalizeCsvMaxChars(draft.csvMaxChars),
       maxToolHops: Math.min(
         MAX_MAX_TOOL_HOPS,
         Math.max(
@@ -215,6 +221,11 @@ export function Options() {
           한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 8).
         </span>
       </label>
+
+      <CsvMaxCharsField
+        value={draft.csvMaxChars}
+        onChange={(csvMaxChars) => setDraft({ ...draft, csvMaxChars })}
+      />
 
       <ActionLogField
         enabled={draft.actionLogEnabled}

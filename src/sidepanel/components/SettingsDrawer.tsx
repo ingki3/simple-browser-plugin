@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
+import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import {
   DEFAULT_MAX_TOOL_HOPS,
@@ -267,6 +268,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
             />
             <span className="field-help">{KO.maxToolHopsHelp}</span>
           </label>
+
+          <CsvMaxCharsField
+            value={draft.csvMaxChars}
+            onChange={(csvMaxChars) => setDraft({ ...draft, csvMaxChars })}
+          />
 
           <ActionLogField
             enabled={draft.actionLogEnabled}

@@ -20,6 +20,7 @@ import {
 } from "@/lib/documentJob";
 import type { DocumentContent } from "@/lib/messages";
 import { debugLog, timeSpan } from "./debug";
+import { getSettings } from "./storage";
 
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_CHARS = 40_000;
@@ -348,7 +349,9 @@ export async function readDocument(
   if (engine === "table") {
     const { text, encoding } = decodeText(got.bytes);
     const delimiter = format === "tsv" ? "\t" : detectDelimiter(text);
-    const table = csvToMarkdown(text, delimiter, maxChars);
+    // 모델이 maxChars를 정하지 않았으면 사용자가 설정한 CSV 한도를 쓴다.
+    const tableMaxChars = args.maxChars ?? (await getSettings()).csvMaxChars;
+    const table = csvToMarkdown(text, delimiter, tableMaxChars);
     if (!table.markdown) throw new Error(`${label}에 표로 읽을 내용이 없습니다(한 행이 너무 길 수도 있습니다).`);
     const notes = [
       encoding !== "utf-8" ? `${encoding} 인코딩으로 읽었습니다.` : "",

@@ -76,16 +76,20 @@ export function csvToMarkdown(text: string, delimiter: string, maxChars: number)
     endField();
     if (hasContent) rows++;
     if (hasContent && !full) {
-      if (lines.length === 0) width = row.length;
+      const first = lines.length === 0;
+      if (first) width = row.length;
       while (row.length < width) row.push("");
       const line = `| ${row.join(" | ")} |`;
-      lines.push(line);
-      size += line.length + 1;
-      shownRows++;
-      if (lines.length === 1) {
-        const sep = `|${" --- |".repeat(width)}`;
-        lines.push(sep);
-        size += sep.length + 1;
+      const sep = first ? `|${" --- |".repeat(width)}` : "";
+      // 채운 빈 칸과 머리글 구분선까지 넣은 실제 길이로 한도를 본다(줄바꿈 포함).
+      const added = (size ? 1 : 0) + line.length + (sep ? sep.length + 1 : 0);
+      if (size + added > maxChars) {
+        full = true;
+      } else {
+        lines.push(line);
+        if (sep) lines.push(sep);
+        size += added;
+        shownRows++;
       }
     }
     row = [];
