@@ -36,6 +36,7 @@ import { checkFileUrl } from "@/lib/fileFormat";
 import {
   isPreActionStop,
   logTarget,
+  pageKeyId,
   reasonCode,
   summarizeClickEffect,
   urlPattern,
@@ -112,13 +113,19 @@ async function beginActionLog(
   if (page) notePendingAction(turnTab, callId, tool, page, targets);
 }
 
-// 읽기 도구 결과를 읽기 레시피 관찰로 남긴다(턴이 끝날 때 반영).
-async function observeRead(turnTab: TurnTab, toolName: ToolName, args: unknown, data: unknown, failed: boolean) {
-  const picked = recipeArgs(toolName, args);
-  if (!picked) return;
-  const page = await pageKeyFor(turnTab);
-  if (!page?.skeleton) return;
-  noteRead(turnTab, page, picked.tool, picked.args, !failed && usefulResult(picked.tool, data));
+// 읽기 도구 결과를 읽기 레시피 관찰로 남긴다(턴이 끝날 때 반영). before는 실행 전에 구한 페이지 키.
+// 실행 뒤에 다시 구한 키가 다르면 그 사이 페이지가 바뀐 것이라 어느 페이지의 결과인지 알 수 없어 버린다.
+async function observeRead(
+  turnTab: TurnTab,
+  before: PageKey | null,
+  picked: NonNullable<ReturnType<typeof recipeArgs>>,
+  data: unknown,
+  failed: boolean,
+) {
+  if (!before?.skeleton) return;
+  const after = await pageKeyFor(turnTab);
+  if (!after || pageKeyId(after) !== pageKeyId(before)) return;
+  noteRead(turnTab, before, picked.tool, picked.args, !failed && usefulResult(picked.tool, data));
 }
 
 export async function buildToolPreview(
@@ -298,14 +305,17 @@ export async function executeTool(
   signal?: AbortSignal,
 ): Promise<ToolExecResult> {
   if (RECIPE_TOOLS.has(toolName)) {
+    const picked = recipeArgs(toolName, parsedArgs);
+    if (!picked) return runTool(toolName, parsedArgs, callId, turnTab, signal);
+    const before = await pageKeyFor(turnTab);
     let result: ToolExecResult;
     try {
       result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
     } catch (err) {
-      await observeRead(turnTab, toolName, parsedArgs, null, true);
+      await observeRead(turnTab, before, picked, null, true);
       throw err;
     }
-    await observeRead(turnTab, toolName, parsedArgs, result.data, false);
+    await observeRead(turnTab, before, picked, result.data, false);
     return result;
   }
   if (toolName === "describe_page") {

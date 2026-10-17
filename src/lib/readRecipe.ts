@@ -2,7 +2,7 @@
 // 다음에 describe_page 결과에 후보로 붙인다. 자동 실행하지 않고 모델이 고른다.
 // 여기에는 DOM·chrome API 없이 계산하는 부분만 둔다. 저장은 src/background/readRecipes.ts.
 
-import { ACTION_LOG_MAX_AGE_MS, maskName, pageKeyId, type PageKey } from "./actionLog.ts";
+import { ACTION_LOG_MAX_AGE_MS, maskName, pageKeyId, plainWord, type PageKey } from "./actionLog.ts";
 
 export type RecipeTool = "query_dom" | "list_file_links" | "find_clickables";
 
@@ -43,12 +43,15 @@ function safeString(s: string, max: number): boolean {
 }
 
 // CSS 선택자는 [href*="download"]처럼 =를 쓰므로 따로 본다: 이메일·주소·긴 숫자가 없고,
-// 따옴표 안 속성 값도 safeString을 통과해야 한다.
+// 따옴표 안 속성 값은 safeString을, 따옴표 밖의 이름·값 낱말(#id, .class, [attr=값])은 모두 plainWord를 통과해야 한다.
+// 해시로 만든 class(css-1x2y3z)도 걸러지지만, 그런 선택자는 어차피 오래 가지 않는다.
 function safeSelector(s: string, max: number): boolean {
   if (!s.trim() || s.length > max) return false;
   if (/@|:\/\/|\d{5,}/.test(s)) return false;
   const quoted = Array.from(s.matchAll(/(["'])(.*?)\1/g), (m) => m[2]);
-  return quoted.every((q) => q === "" || safeString(q, 40));
+  if (!quoted.every((q) => q === "" || safeString(q, 40))) return false;
+  const bare = s.replace(/(["'])(.*?)\1/g, " ");
+  return (bare.match(/[A-Za-z0-9_-]+/g) ?? []).every((w) => plainWord(w));
 }
 
 // 레시피로 남길 인자만 골라 정규화한다. 남길 수 없으면 null.
@@ -101,30 +104,29 @@ export function usefulResult(tool: RecipeTool, data: unknown): boolean {
 
 const argsKey = (tool: string, args: ReadRecipe["args"]) => `${tool} ${JSON.stringify(args)}`;
 
-// 한 턴의 관찰을 레시피에 반영한다.
-// - 같은 페이지·같은 도구에서 마지막으로 쓸모 있었던 호출만 성공으로 센다(앞선 시도는 모델이 고쳐 부른 것).
+// 한 턴의 관찰을 레시피에 반영한다. 관찰 순서대로 처리해 연속 실패 수가 시간 순서를 따르게 한다.
+// - 같은 페이지·같은 도구에서 마지막으로 쓸모 있었던 호출만 성공으로 센다(앞선 시도는 모델이 고쳐 부른 것이라 세지 않음).
 // - 이미 있는 레시피와 같은 호출이 빈 결과를 내면 실패로 센다.
 export function applyObservations(recipes: ReadRecipe[], obs: ReadObservation[], now: number): ReadRecipe[] {
   const out = recipes.map((r) => ({ ...r }));
   const find = (page: string, tool: string, args: ReadRecipe["args"]) =>
     out.find((r) => r.page === page && argsKey(r.tool, r.args) === argsKey(tool, args));
 
-  const lastUseful = new Map<string, ReadObservation>();
-  for (const o of obs) {
+  const lastUseful = new Map<string, number>();
+  obs.forEach((o, i) => {
+    if (o.useful) lastUseful.set(`${pageKeyId(o.page)} ${o.tool}`, i);
+  });
+  obs.forEach((o, i) => {
     const page = pageKeyId(o.page);
-    if (o.useful) {
-      lastUseful.set(`${page} ${o.tool}`, o);
-    } else {
-      const r = find(page, o.tool, o.args);
+    const r = find(page, o.tool, o.args);
+    if (!o.useful) {
       if (r) {
         r.failures++;
         r.lastUsed = now;
       }
+      return;
     }
-  }
-  for (const o of lastUseful.values()) {
-    const page = pageKeyId(o.page);
-    const r = find(page, o.tool, o.args);
+    if (lastUseful.get(`${page} ${o.tool}`) !== i) return;
     if (r) {
       r.successes++;
       r.failures = 0;
@@ -132,7 +134,7 @@ export function applyObservations(recipes: ReadRecipe[], obs: ReadObservation[],
     } else {
       out.push({ page, tool: o.tool, args: o.args, successes: 1, failures: 0, lastUsed: now });
     }
-  }
+  });
   return pruneRecipes(out, now);
 }
 

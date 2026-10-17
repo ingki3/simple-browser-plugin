@@ -28,6 +28,14 @@ test("recipeArgs: 남길 인자만 고르고 개인정보가 보이면 거부", 
   assert.equal(recipeArgs("query_dom", { selector: 'a[href^="https://ex.test/"]' }), null);
   assert.equal(recipeArgs("query_dom", { selector: "#post-1234567" }), null);
   assert.equal(recipeArgs("query_dom", { selector: '[data-token="Xk9pQ2wzAbc"]' }), null);
+  // 따옴표 없는 속성 값·id·class의 토큰도 거부.
+  assert.equal(recipeArgs("query_dom", { selector: "[data-token=Xk9pQ2wzAbc]" }), null);
+  assert.equal(recipeArgs("query_dom", { selector: "#sk-proj-AbCdEfGhIjKlMnOp" }), null);
+  assert.equal(recipeArgs("query_dom", { selector: ".u-a1b2c3d4e5 p" }), null);
+  // 흔한 선택자는 통과.
+  for (const sel of ["div.col-md-12 > p", "#content .board_view", "table.list tr td:nth-child(2) a", "[role=main] h2", "ul li:first-child"]) {
+    assert.ok(recipeArgs("query_dom", { selector: sel }), sel);
+  }
   assert.deepEqual(recipeArgs("list_file_links", { query: "첨부", limit: 10 }), { tool: "list_file_links", args: { query: "첨부" } });
   assert.equal(recipeArgs("list_file_links", {}), null);
   assert.equal(recipeArgs("list_file_links", { query: "alice@example.com" }), null);
@@ -69,6 +77,14 @@ test("applyObservations: 있는 레시피가 빈 결과면 실패, 3번이면 �
   assert.equal(r.length, 0);
   // 레시피가 없는 빈 결과는 아무것도 남기지 않는다.
   assert.deepEqual(applyObservations([], [q(".x", false)], 1), []);
+});
+
+test("applyObservations: 같은 턴에서 성공 뒤 연속 실패는 순서대로 셈", () => {
+  let r = applyObservations([], [q(".v", true)], 1);
+  r = applyObservations(r, [q(".v", true), q(".v", false), q(".v", false)], 2);
+  assert.equal(r[0].failures, 2);
+  r = applyObservations(r, [q(".v", true), q(".v", false), q(".v", false), q(".v", false)], 3);
+  assert.equal(r.length, 0);
 });
 
 test("hintsFor: 뼈대까지 같은 페이지만, 성공 많은 순", () => {

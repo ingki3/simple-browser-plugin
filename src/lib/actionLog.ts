@@ -29,7 +29,7 @@ function plainPart(part: string): boolean {
 }
 
 // 사람이 붙인 이름처럼 보이는 낱말인지(32자 이하, 조각 6개 이하, 조각마다 plainPart).
-function plainWord(s: string): boolean {
+export function plainWord(s: string): boolean {
   if (s.length > 32) return false;
   const parts = s.split(/[._~-]/);
   return parts.length <= 6 && parts.every((p) => p === "" || plainPart(p));

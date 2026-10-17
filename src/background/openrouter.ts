@@ -352,9 +352,9 @@ export class ChatAgent {
       this.closeDanglingToolCalls();
       this.history.push({ role: "user", content: userContent });
 
-      await this.streamLoop(apiKey, model, systemPrompt, turn);
-      // 읽기 레시피: 정상으로 끝난 턴에서 통한 읽기 방법만 남긴다.
-      commitReads(turnTab, !this.isStale(turn));
+      const completed = await this.streamLoop(apiKey, model, systemPrompt, turn);
+      // 읽기 레시피: 답을 마친 턴에서 통한 읽기 방법만 남긴다(중단·도구 호출 한도 초과는 버림).
+      commitReads(turnTab, completed && !this.isStale(turn));
       endTurn(this.isStale(turn) ? "aborted" : "ok");
     } catch (err) {
       commitReads(turnTab, false);
@@ -376,12 +376,12 @@ export class ChatAgent {
     model: ModelId,
     systemPrompt: string,
     turn: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { maxToolHops } = await getSettings();
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
     let documentReads = 0;
     for (let hop = 0; hop < maxToolHops; hop += 1) {
-      if (this.isStale(turn)) return;
+      if (this.isStale(turn)) return false;
       debugLog("hop:start", `#${hop + 1}/${maxToolHops}`);
 
       const CONNECT_TIMEOUT_MS = 20_000;
@@ -421,7 +421,7 @@ export class ChatAgent {
             `OpenRouter 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
           );
         }
-        if (this.isStale(turn)) return;
+        if (this.isStale(turn)) return false;
         throw err;
       } finally {
         clearTimeout(connectTimer);
@@ -489,7 +489,7 @@ export class ChatAgent {
         );
       } catch (err) {
         controller.abort();
-        if (this.isStale(turn)) return;
+        if (this.isStale(turn)) return false;
         throw err;
       } finally {
         if (this.activeRequest === controller) this.activeRequest = null;
@@ -504,7 +504,7 @@ export class ChatAgent {
         "stream:done",
         `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
       );
-      if (this.isStale(turn)) return;
+      if (this.isStale(turn)) return false;
 
       this.history.push({
         role: "assistant",
@@ -520,11 +520,11 @@ export class ChatAgent {
       if (functionCalls.length === 0) {
         this.send({ kind: "status", text: null });
         this.send({ kind: "assistant_done", finishReason });
-        return;
+        return true;
       }
 
       for (const fc of functionCalls) {
-        if (this.isStale(turn)) return;
+        if (this.isStale(turn)) return false;
         const toolName = fc.function.name as ToolName;
         const callId = fc.id;
 
@@ -561,7 +561,7 @@ export class ChatAgent {
             preview = await buildToolPreview(toolName, parsedArgs, callId, this.turnTab);
           } catch (err) {
             // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
-            if (this.isStale(turn)) return;
+            if (this.isStale(turn)) return false;
             const msg = err instanceof Error ? err.message : String(err);
             this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
             this.history.push({
@@ -573,7 +573,7 @@ export class ChatAgent {
             continue;
           }
           // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
-          if (this.isStale(turn)) return;
+          if (this.isStale(turn)) return false;
           debugLog("tool:awaiting_approval", `${toolName}`);
           this.send({
             kind: "tool_pending",
@@ -587,7 +587,7 @@ export class ChatAgent {
             this.pendingApprovals.set(callId, resolve);
           });
           this.pendingApprovals.delete(callId);
-          if (this.isStale(turn)) return;
+          if (this.isStale(turn)) return false;
           debugLog(
             "tool:approval_result",
             `${toolName} ${approved ? "approved" : "cancelled"}`,
@@ -620,7 +620,7 @@ export class ChatAgent {
         this.activeTool = toolAbort;
         try {
           const result = await executeTool(toolName, parsedArgs, callId, this.turnTab, toolAbort.signal);
-          if (this.isStale(turn)) return;
+          if (this.isStale(turn)) return false;
           debugLog(
             "tool:result",
             `${toolName} ${result.ok ? "ok" : "fail"} · ${result.summary.slice(0, 140)}`,
@@ -639,7 +639,7 @@ export class ChatAgent {
             content: JSON.stringify({ result: result.data }),
           });
         } catch (err) {
-          if (this.isStale(turn)) return;
+          if (this.isStale(turn)) return false;
           const msg = err instanceof Error ? err.message : String(err);
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
           this.history.push({
@@ -654,11 +654,12 @@ export class ChatAgent {
       }
     }
 
-    if (this.isStale(turn)) return;
+    if (this.isStale(turn)) return false;
 
     this.send({
       kind: "error",
       message: `도구 호출 순환 한도(${maxToolHops})에 도달했습니다.`,
     });
+    return false;
   }
 }
