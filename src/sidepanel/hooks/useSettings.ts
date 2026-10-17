@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  DEFAULT_CSV_MAX_CHARS,
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
   MIN_MAX_TOOL_HOPS,
   SETTINGS_KEY,
+  normalizeCsvMaxChars,
   type Settings,
 } from "@/lib/messages";
 import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
@@ -17,6 +19,7 @@ const DEFAULTS: Settings = {
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
   actionLogEnabled: true,
+  csvMaxChars: DEFAULT_CSV_MAX_CHARS,
 };
 
 function normalizeMaxHops(v: unknown): number {
@@ -45,6 +48,7 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
         : DEFAULTS.downloadFolderPrefix,
     maxToolHops: normalizeMaxHops(raw?.maxToolHops),
     actionLogEnabled: raw?.actionLogEnabled !== false,
+    csvMaxChars: normalizeCsvMaxChars(raw?.csvMaxChars),
   };
 }
 
@@ -73,6 +77,7 @@ export function useSettings() {
     const normalized = {
       ...next,
       systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
+      csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     };
     await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
     await chrome.runtime.sendMessage({ kind: "settings_updated" }).catch(() => {

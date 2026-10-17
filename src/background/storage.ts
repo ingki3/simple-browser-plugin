@@ -1,11 +1,13 @@
 import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
 import {
+  DEFAULT_CSV_MAX_CHARS,
   DEFAULT_MAX_TOOL_HOPS,
   FLAGS_KEY,
   MAX_MAX_TOOL_HOPS,
   MIN_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
   SETTINGS_KEY,
+  normalizeCsvMaxChars,
   type Flags,
   type Settings,
 } from "@/lib/messages";
@@ -18,6 +20,7 @@ export const DEFAULT_SETTINGS: Settings = {
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
   actionLogEnabled: true,
+  csvMaxChars: DEFAULT_CSV_MAX_CHARS,
 };
 
 function normalizeMaxHops(v: unknown): number {
@@ -46,6 +49,7 @@ export async function readSettings(): Promise<Settings> {
         : DEFAULT_SETTINGS.downloadFolderPrefix,
     maxToolHops: normalizeMaxHops(raw.maxToolHops),
     actionLogEnabled: raw.actionLogEnabled !== false,
+    csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
   };
 }
 
@@ -55,6 +59,7 @@ export async function writeSettings(next: Settings): Promise<void> {
       ...next,
       systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
       maxToolHops: normalizeMaxHops(next.maxToolHops),
+      csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     },
   });
 }
