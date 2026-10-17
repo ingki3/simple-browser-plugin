@@ -1,7 +1,7 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
-import { agentReasoningConfig } from "@/lib/models";
+import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
   readOpenRouterStream,
@@ -59,6 +59,7 @@ describe_page 결과를 읽는 법:
 - find_clickables(query?, region?, onlyViewport?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
 - click_element(id): 민감. id는 반드시 find_clickables에서 얻은 값. 결과의 effect가 클릭 뒤 일어난 일을 알려 준다(navigation: none/fragment(같은 페이지 안 위치)/same_origin/cross_origin/error, sameDocument, newTab, dom.mutations·dialogOpened). 이것으로 이동 여부를 판단하고, 이동했거나 화면이 바뀐 뒤 내용을 말하려면 다시 관측한다. "화면 변화가 감지되지 않았습니다"면 성공했다고 말하지 않는다.
 - find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감). 결과의 results[].applied가 false인 칸은 값이 반영되지 않은 것이니 사용자에게 알린다.
+  채우기만으로는 검색·필터가 적용되지 않는 페이지가 많다. 값을 채운 뒤 결과가 바뀌어야 하는 경우(검색어, 가격 범위 같은 필터)에는 find_clickables로 그 칸 근처의 적용·검색·확인 버튼을 찾아 누른 뒤에 결과를 읽는다. 버튼을 누르기 전에 get_page_content로 결과를 다시 읽지 않는다.
 - list_page_images / download_images: 이미지 목록 → 저장(민감).
 - translate_page: 페이지 전체 번역.
 - query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회.
@@ -380,6 +381,9 @@ export class ChatAgent {
     const { maxToolHops } = await getSettings();
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
     let documentReads = 0;
+    // 생각만 하다 응답 상한에 걸려 빈 답이 나오면 생각을 줄여 한 번 더 시도한다(턴마다 한 번).
+    let lengthRetried = false;
+    let lowReasoning = false;
     for (let hop = 0; hop < maxToolHops; hop += 1) {
       if (this.isStale(turn)) return false;
       debugLog("hop:start", `#${hop + 1}/${maxToolHops}`);
@@ -409,8 +413,8 @@ export class ChatAgent {
             })),
             tool_choice: "auto",
             parallel_tool_calls: false,
-            reasoning: agentReasoningConfig(model),
-            max_tokens: 8192,
+            reasoning: lowReasoning ? agentRetryReasoningConfig(model) : agentReasoningConfig(model),
+            max_tokens: AGENT_MAX_TOKENS,
             stream: true,
           },
           controller.signal,
@@ -506,6 +510,22 @@ export class ChatAgent {
       );
       if (this.isStale(turn)) return false;
 
+      // 응답 상한에 걸렸는데 답도 도구 호출도 없으면, 기록에 남기지 않고 생각을 줄여 다시 묻는다.
+      if (finishReason === "length" && functionCalls.length === 0 && !assistantText.trim()) {
+        if (!lengthRetried) {
+          lengthRetried = true;
+          lowReasoning = true;
+          debugLog("stream:length_retry", `thought=${thoughtChars}`, "warn");
+          this.send({ kind: "status", text: "생각이 길어져 응답 한도에 걸렸습니다. 생각을 줄여 다시 시도하는 중…" });
+          // 재시도는 도구 호출 순환 한도를 쓰지 않는다(마지막 순환에서도 실제로 다시 묻게).
+          hop -= 1;
+          continue;
+        }
+        throw new Error(
+          "모델이 생각만 하다 응답 길이 한도에 걸려 답을 만들지 못했습니다. 요청을 나눠서 다시 보내거나 다른 모델을 골라 주세요.",
+        );
+      }
+
       this.history.push({
         role: "assistant",
         content: assistantText || null,
@@ -520,6 +540,12 @@ export class ChatAgent {
       if (functionCalls.length === 0) {
         this.send({ kind: "status", text: null });
         this.send({ kind: "assistant_done", finishReason });
+        if (finishReason === "length") {
+          this.send({
+            kind: "error",
+            message: "답이 응답 길이 한도에서 잘렸습니다. \"이어서\"라고 보내면 계속 씁니다.",
+          });
+        }
         return true;
       }
 
