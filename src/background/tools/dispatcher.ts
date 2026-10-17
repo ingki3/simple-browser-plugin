@@ -341,6 +341,10 @@ export async function executeTool(
 // describe_page 결과에 같은 구조의 페이지에서 전에 통한 읽기 방법을 붙인다. 실패해도 결과는 그대로 돌려준다.
 async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promise<ToolExecResult> {
   try {
+    // 관측한 뒤 탭이 다른 주소로 옮겼으면, 지금 페이지의 후보를 관측 결과에 섞지 않는다.
+    const observed = (result.data as PageDescription).url;
+    const tab = await chrome.tabs.get(await resolveTurnTab(turnTab));
+    if (!observed || tab.url !== observed) return result;
     const page = await pageKeyFor(turnTab);
     if (!page?.skeleton) return result;
     const hints = await readHintsFor(page);

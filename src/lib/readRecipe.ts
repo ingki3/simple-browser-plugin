@@ -47,7 +47,8 @@ function safeString(s: string, max: number): boolean {
 // 해시로 만든 class(css-1x2y3z)도 걸러지지만, 그런 선택자는 어차피 오래 가지 않는다.
 function safeSelector(s: string, max: number): boolean {
   if (!s.trim() || s.length > max) return false;
-  if (/@|:\/\/|\d{5,}/.test(s)) return false;
+  // 이메일·주소·긴 숫자, 그리고 -·공백으로 끊은 전화번호 같은 숫자 묶음(010-1234-5678)은 거부.
+  if (/@|:\/\/|\d{5,}|\d[\d\s-]{5,}\d/.test(s)) return false;
   const quoted = Array.from(s.matchAll(/(["'])(.*?)\1/g), (m) => m[2]);
   if (!quoted.every((q) => q === "" || safeString(q, 40))) return false;
   const bare = s.replace(/(["'])(.*?)\1/g, " ");
@@ -56,8 +57,8 @@ function safeSelector(s: string, max: number): boolean {
 
 // 레시피로 남길 인자만 골라 정규화한다. 남길 수 없으면 null.
 // - query_dom: selector(필수)·attr·limit
-// - list_file_links: query(있을 때만 — 검색어 없는 호출은 기억할 것이 없다)
-// - find_clickables: query(있을 때만)·region
+// - list_file_links: query(있을 때만 — 검색어 없는 호출은 기억할 것이 없다)·limit
+// - find_clickables: query(있을 때만)·region·onlyViewport·limit
 export function recipeArgs(tool: string, raw: unknown): { tool: RecipeTool; args: ReadRecipe["args"] } | null {
   if (!raw || typeof raw !== "object") return null;
   const a = raw as Record<string, unknown>;
@@ -78,8 +79,13 @@ export function recipeArgs(tool: string, raw: unknown): { tool: RecipeTool; args
   if (tool === "list_file_links" || tool === "find_clickables") {
     const query = str("query", 60);
     if (!query) return null;
+    // 결과를 바꾸는 옵션은 함께 남긴다(그대로 다시 불러야 같은 결과가 나온다).
     const args: ReadRecipe["args"] = { query };
-    if (tool === "find_clickables" && typeof a.region === "string") args.region = a.region;
+    if (typeof a.limit === "number") args.limit = a.limit;
+    if (tool === "find_clickables") {
+      if (typeof a.region === "string") args.region = a.region;
+      if (typeof a.onlyViewport === "boolean") args.onlyViewport = a.onlyViewport;
+    }
     return { tool, args };
   }
   return null;

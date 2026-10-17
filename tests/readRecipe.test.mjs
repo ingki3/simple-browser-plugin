@@ -32,14 +32,23 @@ test("recipeArgs: 남길 인자만 고르고 개인정보가 보이면 거부", 
   assert.equal(recipeArgs("query_dom", { selector: "[data-token=Xk9pQ2wzAbc]" }), null);
   assert.equal(recipeArgs("query_dom", { selector: "#sk-proj-AbCdEfGhIjKlMnOp" }), null);
   assert.equal(recipeArgs("query_dom", { selector: ".u-a1b2c3d4e5 p" }), null);
+  assert.equal(recipeArgs("query_dom", { selector: "#phone-010-1234-5678" }), null);
+  assert.equal(recipeArgs("query_dom", { selector: "[data-tel=010 1234 5678]" }), null);
   // 흔한 선택자는 통과.
   for (const sel of ["div.col-md-12 > p", "#content .board_view", "table.list tr td:nth-child(2) a", "[role=main] h2", "ul li:first-child"]) {
     assert.ok(recipeArgs("query_dom", { selector: sel }), sel);
   }
-  assert.deepEqual(recipeArgs("list_file_links", { query: "첨부", limit: 10 }), { tool: "list_file_links", args: { query: "첨부" } });
+  assert.deepEqual(recipeArgs("list_file_links", { query: "첨부" }), { tool: "list_file_links", args: { query: "첨부" } });
   assert.equal(recipeArgs("list_file_links", {}), null);
   assert.equal(recipeArgs("list_file_links", { query: "alice@example.com" }), null);
   assert.deepEqual(recipeArgs("find_clickables", { query: "다음 글", region: "main" }).args, { query: "다음 글", region: "main" });
+  // 결과를 바꾸는 옵션도 남긴다.
+  assert.deepEqual(recipeArgs("find_clickables", { query: "다음", onlyViewport: true, limit: 200 }).args, {
+    query: "다음",
+    limit: 200,
+    onlyViewport: true,
+  });
+  assert.deepEqual(recipeArgs("list_file_links", { query: "첨부", limit: 100 }).args, { query: "첨부", limit: 100 });
   assert.equal(recipeArgs("get_page_content", {}), null);
   assert.equal(recipeArgs("click_element", { id: "c1" }), null);
 });
