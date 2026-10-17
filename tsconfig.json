@@ -8,6 +8,8 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    // npm test(Node 타입 제거 실행)가 lib 모듈끼리의 import를 따라갈 수 있게 .ts 확장자를 붙여 쓸 수 있다.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,

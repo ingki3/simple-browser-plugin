@@ -1,5 +1,6 @@
 import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
+import type { ReadHint } from "./readRecipe";
 
 export type ToolName =
   | "describe_page"
@@ -64,6 +65,8 @@ export interface PageDescription {
   landmarks: LandmarkSnapshot[];
   headings: string[];
   fallbackExcerpt: string;
+  // 같은 구조의 페이지에서 전에 쓸모 있었던 읽기 도구 호출(읽기 레시피). 백그라운드가 붙인다.
+  readHints?: ReadHint[];
 }
 
 export interface FormField {
@@ -206,7 +209,7 @@ export interface Settings {
   translationTargetLang: string;
   downloadFolderPrefix: string;
   maxToolHops: number;
-  // 클릭·입력 동작을 이 브라우저에 기록할지(입력 값은 남기지 않음). 시크릿 창은 늘 기록하지 않는다.
+  // 클릭·입력 동작과 읽기 레시피를 이 브라우저에 기록할지(입력 값·페이지 내용은 남기지 않음). 시크릿 창은 늘 기록하지 않는다.
   actionLogEnabled: boolean;
   // read_document가 CSV·TSV 파일을 표로 읽을 때 모델에 넘기는 최대 글자 수(모델이 따로 정하지 않았을 때).
   csvMaxChars: number;
@@ -230,6 +233,7 @@ export const MAX_MAX_TOOL_HOPS = 30;
 export const SETTINGS_KEY = "settings";
 export const FLAGS_KEY = "flags";
 export const ACTION_LOG_KEY = "actionLog";
+export const READ_RECIPES_KEY = "readRecipes";
 
 export const PORT_NAME = "chat";
 

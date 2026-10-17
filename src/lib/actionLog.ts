@@ -53,7 +53,8 @@ export function normalizeSegment(seg: string): string {
 
 // 쿼리 이름도 같은 기준으로(이름 자리에 값을 넣는 사이트가 있다). page[size] 같은 대괄호는 허용.
 function normalizeQueryKey(k: string): string {
-  return plainWord(k.replace(/[[\]]/g, "_")) ? k : "{k}";
+  // phone[01012345678]처럼 이름 안에 값이 든 경우가 있어 두 자리 이상 숫자는 자리표시로 바꾼다.
+  return plainWord(k.replace(/[[\]]/g, "_")) ? k.replace(/\d{2,}/g, "{n}") : "{k}";
 }
 
 function normalizePath(path: string): string {
@@ -119,6 +120,9 @@ export interface LoggedTarget {
   sensitive: "password" | "payment" | null;
   hrefPattern: string;
   list: { index: number; count: number } | null;
+  // 입력 칸은 이름 대신 이름의 해시만 남긴다(name은 ""). 라벨에 지금·이전 값을 보여 주는 페이지가 있어
+  // 글자를 걸러 남기는 방식으로는 값이 새는 경우를 다 막을 수 없다. 같은 칸인지 비교하는 데는 해시로 충분하다.
+  nameHash?: string;
   // 입력 칸에 넣으려던 값이 비어 있지 않았는지(값 자체는 남기지 않음). 클릭 대상은 없음.
   hasValue?: boolean;
 }
@@ -201,9 +205,8 @@ export function logTarget(info: TargetInfo, value?: string): LoggedTarget {
   const t: LoggedTarget = {
     tag: info.tag,
     role: info.role,
-    // 비밀번호·결제 칸은 페이지가 라벨에 값을 되비칠 수 있어 이름을 남기지 않는다.
-    // 그 밖의 칸도 넣으려는 값이 이름에 그대로 들어 있으면 그 부분을 가린다(라벨에 현재 값을 보여 주는 페이지).
-    name: info.sensitive ? "" : clipText(maskName(stripValue(info.name, value)), 80),
+    // 입력 칸(value가 있음)과 비밀번호·결제 칸은 이름 글자를 남기지 않는다(아래 nameHash).
+    name: value !== undefined || info.sensitive ? "" : clipText(maskName(info.name), 80),
     region: info.region,
     inFrame: info.inFrame,
     fieldType: info.fieldType,
@@ -211,7 +214,17 @@ export function logTarget(info: TargetInfo, value?: string): LoggedTarget {
     hrefPattern: href ? href.origin + href.pattern : "",
     list: info.list ? { index: info.list.index, count: info.list.count } : null,
   };
-  if (value !== undefined) t.hasValue = value.length > 0;
+  if (value !== undefined) {
+    t.hasValue = value.length > 0;
+    // 비밀번호·결제 칸은 해시도 남기지 않는다(라벨이 값을 그대로 보여 주면 짧은 값은 해시로 되짚을 수 있다).
+    // 해시 전에도 넣으려는 값과 숫자를 지운다: 라벨에 짧은 값(인증번호 등)이 섞이면 해시를 대입해 되짚을 수 있다.
+    if (!info.sensitive) t.nameHash = fnv1a(
+      stripValue(info.name, value)
+        .replace(/\{value\}|\d+/g, "#")
+        .replace(/#+/g, "#")
+        .trim(),
+    );
+  }
   return t;
 }
 
