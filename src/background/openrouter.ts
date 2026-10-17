@@ -517,6 +517,8 @@ export class ChatAgent {
           lowReasoning = true;
           debugLog("stream:length_retry", `thought=${thoughtChars}`, "warn");
           this.send({ kind: "status", text: "생각이 길어져 응답 한도에 걸렸습니다. 생각을 줄여 다시 시도하는 중…" });
+          // 재시도는 도구 호출 순환 한도를 쓰지 않는다(마지막 순환에서도 실제로 다시 묻게).
+          hop -= 1;
           continue;
         }
         throw new Error(
