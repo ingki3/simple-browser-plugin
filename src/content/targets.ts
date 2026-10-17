@@ -19,7 +19,7 @@ export interface TargetKind {
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext">;
 }
 
 interface Entry {
@@ -303,6 +303,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
   if (now.submitsPersonal && !info.submitsPersonal) return "승인 뒤 양식에 개인정보가 채워짐";
+  if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   return null;
 }
 

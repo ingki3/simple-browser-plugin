@@ -76,7 +76,7 @@ function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
 const PERSONAL_AC_RE =
   /\b(name|given-name|family-name|additional-name|honorific-\w+|nickname|email|tel|tel-\w+|street-address|address-line\d|address-level\d|postal-code|bday|bday-\w+|sex|username)\b/;
 const PERSONAL_HINT_RE =
-  /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e-?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name)/i;
+  /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e-?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name|user\s*name|nick\s*name|(?<![a-z])name(?![a-z]))/i;
 
 export function isPersonalField(el: HTMLElement): boolean {
   if (!isFieldElement(el)) return false;

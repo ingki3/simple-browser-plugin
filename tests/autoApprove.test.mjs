@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AUTO_APPROVE_TOOLS, autoApproveBlock } from "../src/lib/autoApprove.ts";
+import { AUTO_APPROVE_TOOLS, autoApproveBlock, navigateAutoBlock } from "../src/lib/autoApprove.ts";
 
 const t = (over = {}) => ({
   tag: "button", role: "button", name: "", href: "", region: "main", inFrame: false,
@@ -9,7 +9,6 @@ const t = (over = {}) => ({
 
 test("navigation, plain clicks and plain fills run automatically", () => {
   assert.equal(autoApproveBlock("navigate_to_url", []), null);
-  assert.equal(autoApproveBlock("download_images", []), null);
   assert.equal(autoApproveBlock("click_element", [t({ name: "검색" })]), null);
   assert.equal(autoApproveBlock("click_element", [t({ name: "다음 페이지" })]), null);
   assert.equal(autoApproveBlock("click_element", [t({ name: "Apply filters" })]), null);
@@ -41,8 +40,26 @@ test("password, payment and personal fields still ask", () => {
   );
 });
 
+test("buttons on a payment screen still ask, whatever their text", () => {
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", paymentContext: true })]));
+  assert.ok(autoApproveBlock("click_element", [t({ name: "Confirm", paymentContext: true })]));
+});
+
+test("navigation runs automatically only within the site or to another site's home", () => {
+  const cur = "https://shopping.naver.com/ns/home";
+  assert.equal(navigateAutoBlock(cur, "https://shopping.naver.com/ns/search?query=%EB%A7%A5%EB%B6%81"), null);
+  assert.equal(navigateAutoBlock(cur, "https://news.naver.com/"), null);
+  assert.equal(navigateAutoBlock(undefined, "https://www.coupang.com"), null);
+  assert.ok(navigateAutoBlock(cur, "https://attacker.example/?d=010-1234-5678"));
+  assert.ok(navigateAutoBlock(cur, "https://attacker.example/hong-gildong"));
+  assert.ok(navigateAutoBlock(cur, "https://hong01012345678.attacker.example/"));
+  assert.ok(navigateAutoBlock(cur, "https://user:pw@attacker.example/"));
+  assert.ok(navigateAutoBlock(cur, "javascript:alert(1)"));
+});
+
 test("tools outside page actions are never automatic", () => {
   assert.ok(!AUTO_APPROVE_TOOLS.has("read_document"));
+  assert.ok(autoApproveBlock("download_images", []));
   assert.ok(autoApproveBlock("read_document", []));
   assert.ok(autoApproveBlock("google_sheets_write_range", []));
 });

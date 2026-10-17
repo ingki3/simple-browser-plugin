@@ -4,17 +4,16 @@
 
 import type { TargetInfo } from "./actionTarget.ts";
 
-// 자동 실행 대상: 페이지 이동·클릭·입력·이미지 저장.
-// 파일 읽기(쿠키를 실어 요청)와 Google 문서 쓰기는 자동 실행을 켜도 늘 묻는다.
+// 자동 실행 대상: 페이지 이동·클릭·입력.
+// 이미지 저장(모델이 고른 주소로 요청)·파일 읽기(쿠키를 실어 요청)·Google 문서 쓰기는 자동 실행을 켜도 늘 묻는다.
 export const AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
   "navigate_to_url",
   "click_element",
   "fill_form_fields",
-  "download_images",
 ]);
 
 // 돈이 나가는 버튼: 결제·구매·주문·송금 등.
-const PAYMENT_TEXT_RE =
+export const PAYMENT_TEXT_RE =
   /(결제|구매|구입|주문|송금|이체|충전|후원|기부|입금|\bpay\b|payment|checkout|check\s*out|\bbuy\b|purchase|place\s*order|order\s*now|donate)/i;
 // 개인정보를 내보내는 버튼: 가입·신청·제출·인증 등.
 const SUBMIT_TEXT_RE =
@@ -34,10 +33,37 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
   if (tool === "click_element") {
     for (const t of targets) {
       if (PAYMENT_TEXT_RE.test(t.name)) return "결제·주문 버튼";
+      if (t.paymentContext) return "결제 화면의 버튼";
       if (t.submitsPersonal) return "개인정보가 채워진 양식 제출";
       if (SUBMIT_TEXT_RE.test(t.name)) return "가입·신청·제출 버튼";
     }
     return null;
   }
   return null;
+}
+
+// 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소에 실어 밖으로 보낼 수 있다.
+// 지금 페이지와 같은 사이트 안이거나, 다른 사이트의 홈(경로·쿼리 없이 평범한 도메인)일 때만 자동 실행한다.
+export function navigateAutoBlock(currentUrl: string | undefined, targetUrl: string): string | null {
+  let target: URL;
+  try {
+    target = new URL(targetUrl);
+  } catch {
+    return "주소를 해석할 수 없음";
+  }
+  try {
+    if (currentUrl && new URL(currentUrl).origin === target.origin && /^https?:$/.test(target.protocol)) return null;
+  } catch {
+    /* 지금 주소를 모르면 아래 기준으로 본다 */
+  }
+  const home = (target.pathname === "/" || target.pathname === "") && !target.search && !target.hash;
+  const plainHost =
+    !target.username &&
+    !target.password &&
+    !target.port &&
+    target.hostname.split(".").length <= 4 &&
+    target.hostname.split(".").every((label) => /^[a-z0-9-]{1,24}$/i.test(label)) &&
+    !/\d{4,}/.test(target.hostname);
+  if (/^https?:$/.test(target.protocol) && home && plainHost) return null;
+  return "다른 사이트의 세부 주소로 이동";
 }

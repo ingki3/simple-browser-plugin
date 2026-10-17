@@ -30,6 +30,8 @@ export interface TargetInfo {
   // personal: 이름·연락처·주소·생년월일 같은 개인정보 칸. submitsPersonal: 개인정보·비밀번호·결제 값이 채워진 양식을 제출하는 버튼.
   personal?: boolean;
   submitsPersonal?: boolean;
+  // 결제 화면(주소·제목이나 버튼이 든 양식·대화상자의 글자에 결제 단서)의 버튼. 저장된 카드로 '확인'만 누르면 결제되는 화면을 잡는다.
+  paymentContext?: boolean;
 }
 
 // find_* 때와 같은 요소인지: 목록 위치를 뺀 기본 항목이 모두 같아야 한다.

@@ -1,6 +1,7 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isTag } from "./docs";
 import { formHasPersonalValues } from "./forms";
+import { PAYMENT_TEXT_RE } from "@/lib/autoApprove";
 import {
   detectRegion,
   recheckApproved,
@@ -40,6 +41,17 @@ function clickText(el: HTMLElement): string {
   );
 }
 
+// 결제 화면인지: 문서 주소·제목, 또는 버튼이 든 양식·대화상자의 글자(앞부분)에 결제 단서가 있으면.
+// section·article은 보지 않는다(상품 목록 구역에 "구매 1,234" 같은 글자가 흔해 목록 안 버튼이 모두 걸린다).
+function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null): boolean {
+  const doc = el.ownerDocument;
+  const loc = doc.defaultView?.location;
+  if (PAYMENT_TEXT_RE.test(`${loc?.pathname ?? ""} ${doc.title}`)) return true;
+  if (/(checkout|payment|\/pay\b|\/order)/i.test(loc?.pathname ?? "")) return true;
+  const scope = form ?? el.closest('dialog, [role="dialog"], [role="alertdialog"]');
+  return !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000));
+}
+
 const CLICK_KIND: TargetKind = {
   prefix: "c",
   attr: "data-sbp-cid",
@@ -51,7 +63,7 @@ const CLICK_KIND: TargetKind = {
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
     const form = (el as HTMLButtonElement).form ?? el.closest("form");
-    return { submitsPersonal: !!form && formHasPersonalValues(form) };
+    return { submitsPersonal: !!form && formHasPersonalValues(form), paymentContext: inPaymentContext(el, form) };
   },
 };
 
