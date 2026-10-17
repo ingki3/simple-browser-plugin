@@ -69,6 +69,15 @@ test("clicks and fills run automatically only on pages and destinations within c
   assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["https://collector.example/next"]));
   assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["https://collector.example/collect"]));
   assert.ok(pageActionSiteBlock(trusted, undefined, []));
+  // 목적지를 확인할 수 없는 링크는 묻고, 아무 데도 가지 않는 자리표시 링크는 일반 버튼처럼 본다.
+  assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["javascript:location.href='https://collector.example/'"]));
+  assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["data:text/html,hi"]));
+  assert.equal(pageActionSiteBlock(trusted, "https://news.naver.com/", ["javascript:void(0)"]), null);
+  assert.equal(pageActionSiteBlock(trusted, "https://news.naver.com/", ["javascript:;"]), null);
+});
+
+test("fields in a form with filled personal values still ask", () => {
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "select", name: "정렬", submitsPersonal: true })]));
 });
 
 test("tools outside page actions are never automatic", () => {

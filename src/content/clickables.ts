@@ -1,6 +1,6 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isTag } from "./docs";
-import { formHasPersonalValues } from "./forms";
+import { formDestination, formHasPersonalValues } from "./forms";
 import { PAYMENT_TEXT_RE } from "@/lib/autoApprove";
 import {
   detectRegion,
@@ -72,17 +72,15 @@ const CLICK_KIND: TargetKind = {
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
     const form = (el as HTMLButtonElement).form ?? el.closest("form");
-    // 버튼에 formaction 속성이 있으면 그것이, 없으면 양식 action이 실제 제출 주소다(둘 다 절대 주소로 돌려받는다).
-    // formAction은 속성이 없을 때 지금 문서 주소를 돌려주므로 속성이 있을 때만 쓴다.
-    const submitTo = form
-      ? el.hasAttribute("formaction")
-        ? (el as HTMLButtonElement).formAction
-        : form.action || ""
-      : "";
+    const submitTo = formDestination(el, form);
+    // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
+    const outer = el.closest("a[href], area[href]") as HTMLAnchorElement | null;
+    const ancestorHref = outer && outer !== el ? outer.href : "";
     return {
       submitsPersonal: !!form && formHasPersonalValues(form),
       paymentContext: inPaymentContext(el, form),
       ...(submitTo ? { submitTo } : {}),
+      ...(ancestorHref ? { ancestorHref } : {}),
     };
   },
 };

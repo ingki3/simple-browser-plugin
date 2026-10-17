@@ -157,6 +157,7 @@ export async function buildToolPreview(
       return {
         ...fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value }))),
         autoBlock: autoApproveBlock("fill_form_fields", infos),
+        linkHrefs: infos.map((info) => info.submitTo ?? "").filter(Boolean),
       };
     }
     case "download_images": {
@@ -177,7 +178,7 @@ export async function buildToolPreview(
       return {
         ...clickCard(info),
         autoBlock: autoApproveBlock("click_element", [info]),
-        linkHrefs: [info.href, info.submitTo ?? ""].filter(Boolean),
+        linkHrefs: [info.href, info.submitTo ?? "", info.ancestorHref ?? ""].filter(Boolean),
       };
     }
     case "read_document": {

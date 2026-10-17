@@ -27,6 +27,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.sensitive === "password") return "비밀번호 칸 입력";
       if (t.sensitive === "payment") return "결제 정보 칸 입력";
       if (t.personal) return `개인정보 칸 입력('${t.name.slice(0, 30) || t.fieldType}')`;
+      // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
+      if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
     }
     return null;
   }
@@ -96,6 +98,8 @@ export function navigateAutoBlock(trustedSites: ReadonlySet<string>, targetUrl: 
   return inside ? null : "요청을 시작한 사이트 밖으로 이동";
 }
 
+const INERT_HREF_RE = /^javascript:\s*(void\s*\(?\s*0\s*\)?\s*;?|;|)\s*$/i;
+
 // 클릭·입력: 사용자가 고르지 않은 사이트의 페이지에서는(자동 클릭으로 들어간 수집 페이지의 검색 칸 등) 묻는다.
 // 다른 사이트로 가는 링크 클릭과 다른 사이트로 제출하는 양식 버튼도 이동과 같게 본다.
 export function pageActionSiteBlock(
@@ -105,7 +109,10 @@ export function pageActionSiteBlock(
 ): string | null {
   if (!pageUrl || withinTrusted(trustedSites, pageUrl) !== true) return "요청을 시작한 사이트 밖의 페이지";
   for (const href of linkHrefs) {
-    if (withinTrusted(trustedSites, href) === false) return "요청을 시작한 사이트 밖으로 가는 링크·양식 제출";
+    // 아무 데도 가지 않는 자리표시 링크(javascript:void(0) 등)는 일반 버튼과 같게 본다.
+    if (INERT_HREF_RE.test(href)) continue;
+    // 웹 주소가 아니어서(javascript:…, data:, mailto:) 목적지를 확인할 수 없으면 묻는다.
+    if (withinTrusted(trustedSites, href) !== true) return "요청을 시작한 사이트 밖으로 가는 링크·양식 제출";
   }
   return null;
 }

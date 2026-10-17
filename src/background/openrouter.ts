@@ -346,15 +346,17 @@ export class ChatAgent {
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
     if ("tabId" in this.turnTab) debugLog("turn:tab", `tab ${this.turnTab.tabId}`);
-    this.turnSite = null;
-    if ("tabId" in this.turnTab) {
+    // 탭 조회를 기다리는 사이 새 턴이 시작됐으면 그 턴의 신뢰 사이트를 덮어쓰지 않는다.
+    let site: string | null = null;
+    if ("tabId" in turnTab) {
       try {
-        const url = (await chrome.tabs.get(this.turnTab.tabId)).url;
-        if (url) this.turnSite = siteOf(url);
+        const url = (await chrome.tabs.get(turnTab.tabId)).url;
+        if (url) site = siteOf(url);
       } catch {
-        /* 탭을 못 읽으면 신뢰 출처 없이 진행(이동은 카드로 묻는다) */
+        /* 탭을 못 읽으면 신뢰 사이트 없이 진행(이동은 카드로 묻는다) */
       }
     }
+    if (!this.isStale(turn)) this.turnSite = site;
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);

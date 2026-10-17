@@ -87,6 +87,14 @@ export function isPersonalField(el: HTMLElement): boolean {
   return PERSONAL_HINT_RE.test(hint);
 }
 
+// 양식이 실제로 제출되는 주소: 버튼에 formaction 속성이 있으면 그것, 없으면 양식 action(둘 다 절대 주소).
+// formAction은 속성이 없을 때 지금 문서 주소를 돌려주므로 속성이 있을 때만 쓴다.
+export function formDestination(el: HTMLElement, form: HTMLFormElement | null): string {
+  if (!form) return "";
+  if (el.hasAttribute("formaction") && "formAction" in el) return (el as HTMLButtonElement).formAction;
+  return form.action || "";
+}
+
 // 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).
 // 제출되는 값이면 종류를 가리지 않는다: 숨은 칸(로그인한 사용자 이메일 등)·선택 칸(생년월일)·체크한 칸도 본다.
 export function formHasPersonalValues(form: HTMLFormElement): boolean {
@@ -109,7 +117,17 @@ const FIELD_KIND: TargetKind = {
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
-  risk: (el) => ({ personal: isPersonalField(el) }),
+  // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
+  // (change 처리기로 바로 제출하는 칸이 있다).
+  risk: (el) => {
+    const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
+    const submitTo = formDestination(el, form);
+    return {
+      personal: isPersonalField(el),
+      submitsPersonal: !!form && formHasPersonalValues(form),
+      ...(submitTo ? { submitTo } : {}),
+    };
+  },
 };
 
 function currentValueOf(el: FieldElement): string {

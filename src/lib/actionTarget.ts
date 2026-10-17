@@ -34,6 +34,8 @@ export interface TargetInfo {
   paymentContext?: boolean;
   // 양식 안 버튼이면 그 양식이 제출되는 주소(formaction 또는 form action을 절대 주소로). 사이트 경계 판정용.
   submitTo?: string;
+  // 대상이 링크 안의 요소면 그 링크 주소(누르면 바깥 링크가 열린다). 사이트 경계 판정용.
+  ancestorHref?: string;
 }
 
 // find_* 때와 같은 요소인지: 목록 위치를 뺀 기본 항목이 모두 같아야 한다.
