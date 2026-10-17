@@ -20,6 +20,7 @@ const DEFAULTS: Settings = {
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
   actionLogEnabled: true,
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
+  autoApprove: false,
 };
 
 function normalizeMaxHops(v: unknown): number {
@@ -49,6 +50,7 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
     maxToolHops: normalizeMaxHops(raw?.maxToolHops),
     actionLogEnabled: raw?.actionLogEnabled !== false,
     csvMaxChars: normalizeCsvMaxChars(raw?.csvMaxChars),
+    autoApprove: raw?.autoApprove === true,
   };
 }
 

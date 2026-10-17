@@ -1,3 +1,4 @@
+import { autoApproveBlock } from "@/lib/autoApprove";
 import type {
   ClickableElement,
   FileLinkList,
@@ -58,6 +59,8 @@ export interface ToolExecResult {
 export interface ToolPreview {
   summary: string;
   details?: unknown;
+  // 자동 실행을 켰을 때도 승인을 받아야 하는 이유(결제·개인정보 제출). 없으면 null. 대상을 보지 않는 도구는 비워 둔다.
+  autoBlock?: string | null;
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -149,7 +152,10 @@ export async function buildToolPreview(
         turnTab,
         infos.map((info, i) => logTarget(info, args.fills[i].value)),
       );
-      return fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value })));
+      return {
+        ...fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value }))),
+        autoBlock: autoApproveBlock("fill_form_fields", infos),
+      };
     }
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
@@ -166,7 +172,7 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["click_element"];
       const [info] = await inspectTargets([args.id], "c", callId, turnTab);
       await beginActionLog(callId, "click_element", turnTab, [logTarget(info)]);
-      return clickCard(info);
+      return { ...clickCard(info), autoBlock: autoApproveBlock("click_element", [info]) };
     }
     case "read_document": {
       const args = parsedArgs as ToolArgs["read_document"];

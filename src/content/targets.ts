@@ -18,6 +18,8 @@ export interface TargetKind {
   name(el: HTMLElement): string;
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
+  // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal">;
 }
 
 interface Entry {
@@ -270,7 +272,7 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
   checkVisible(entry, el, entry.base.name, false);
-  const info: TargetInfo = { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el) };
+  const info: TargetInfo = { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el), ...entry.kind.risk?.(el) };
   entry.approved = { callId, info };
   return info;
 }

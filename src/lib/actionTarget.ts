@@ -26,6 +26,10 @@ export interface TargetInfo {
   list?: { index: number; count: number; semantic: boolean } | null;
   // 승인 카드에 경고만 하는 표시(비교에는 쓰지 않음): 화면에 보이지 않는 입력 칸.
   hidden?: boolean;
+  // 자동 실행 예외 판정용(비교에는 쓰지 않음, 대상 확인 때 계산).
+  // personal: 이름·연락처·주소·생년월일 같은 개인정보 칸. submitsPersonal: 개인정보·비밀번호·결제 값이 채워진 양식을 제출하는 버튼.
+  personal?: boolean;
+  submitsPersonal?: boolean;
 }
 
 // find_* 때와 같은 요소인지: 목록 위치를 뺀 기본 항목이 모두 같아야 한다.

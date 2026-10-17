@@ -1,5 +1,6 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isTag } from "./docs";
+import { formHasPersonalValues } from "./forms";
 import {
   detectRegion,
   recheckApproved,
@@ -47,6 +48,11 @@ const CLICK_KIND: TargetKind = {
   name: clickText,
   fieldType: () => "",
   sensitive: () => null,
+  // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
+  risk: (el) => {
+    const form = (el as HTMLButtonElement).form ?? el.closest("form");
+    return { submitsPersonal: !!form && formHasPersonalValues(form) };
+  },
 };
 
 function rectInViewport(el: HTMLElement): boolean {

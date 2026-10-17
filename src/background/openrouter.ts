@@ -1,6 +1,7 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
+import { autoApproveBlock } from "@/lib/autoApprove";
 import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
@@ -581,6 +582,8 @@ export class ChatAgent {
           continue;
         }
 
+        // 승인 없이 실행한 호출은 결과 카드에 표시한다.
+        let autoRan = false;
         if (SENSITIVE_TOOLS.has(toolName)) {
           let preview: Awaited<ReturnType<typeof buildToolPreview>>;
           try {
@@ -600,24 +603,36 @@ export class ChatAgent {
           }
           // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
           if (this.isStale(turn)) return false;
-          debugLog("tool:awaiting_approval", `${toolName}`);
-          this.send({
-            kind: "tool_pending",
-            callId,
-            toolName,
-            args: parsedArgs,
-            previewSummary: preview.summary,
-            previewDetails: preview.details,
-          });
-          const approved = await new Promise<boolean>((resolve) => {
-            this.pendingApprovals.set(callId, resolve);
-          });
-          this.pendingApprovals.delete(callId);
+          // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
+          const { autoApprove } = await getSettings();
           if (this.isStale(turn)) return false;
-          debugLog(
-            "tool:approval_result",
-            `${toolName} ${approved ? "approved" : "cancelled"}`,
-          );
+          const block = preview.autoBlock !== undefined ? preview.autoBlock : autoApproveBlock(toolName, []);
+          let approved: boolean;
+          if (autoApprove && !block) {
+            debugLog("tool:auto_approved", `${toolName}`);
+            approved = true;
+            autoRan = true;
+          } else {
+            if (autoApprove) debugLog("tool:auto_blocked", `${toolName} · ${block}`);
+            debugLog("tool:awaiting_approval", `${toolName}`);
+            this.send({
+              kind: "tool_pending",
+              callId,
+              toolName,
+              args: parsedArgs,
+              previewSummary: autoApprove ? `${preview.summary} (자동 실행 예외: ${block})` : preview.summary,
+              previewDetails: preview.details,
+            });
+            approved = await new Promise<boolean>((resolve) => {
+              this.pendingApprovals.set(callId, resolve);
+            });
+            this.pendingApprovals.delete(callId);
+            if (this.isStale(turn)) return false;
+            debugLog(
+              "tool:approval_result",
+              `${toolName} ${approved ? "approved" : "cancelled"}`,
+            );
+          }
 
           if (!approved) {
             recordCancelledAction(callId, this.turnTab);
@@ -656,7 +671,7 @@ export class ChatAgent {
             callId,
             toolName,
             ok: result.ok,
-            summary: result.summary,
+            summary: autoRan ? `자동 실행 · ${result.summary}` : result.summary,
           });
           this.history.push({
             role: "tool",

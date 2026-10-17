@@ -213,6 +213,8 @@ export interface Settings {
   actionLogEnabled: boolean;
   // read_document가 CSV·TSV 파일을 표로 읽을 때 모델에 넘기는 최대 글자 수(모델이 따로 정하지 않았을 때).
   csvMaxChars: number;
+  // 페이지 이동·클릭·입력·이미지 저장을 승인 없이 실행할지. 켜도 결제·개인정보 제출은 묻는다(src/lib/autoApprove.ts).
+  autoApprove: boolean;
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;

@@ -72,6 +72,34 @@ function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
   return null;
 }
 
+// 개인정보 칸: 이름·연락처·주소·생년월일·신분 번호·계좌 등. 자동 실행을 켜도 이런 칸에 채우는 것은 묻는다.
+const PERSONAL_AC_RE =
+  /\b(name|given-name|family-name|additional-name|honorific-\w+|nickname|email|tel|tel-\w+|street-address|address-line\d|address-level\d|postal-code|bday|bday-\w+|sex|username)\b/;
+const PERSONAL_HINT_RE =
+  /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e-?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name)/i;
+
+export function isPersonalField(el: HTMLElement): boolean {
+  if (!isFieldElement(el)) return false;
+  if (isTag(el, "input") && (el.type === "email" || el.type === "tel")) return true;
+  const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
+  if (PERSONAL_AC_RE.test(ac)) return true;
+  const hint = `${el.getAttribute("name") ?? ""} ${el.id} ${resolveLabel(el)}`;
+  return PERSONAL_HINT_RE.test(hint);
+}
+
+// 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 제출 버튼은 자동 실행하지 않는다).
+export function formHasPersonalValues(form: HTMLFormElement): boolean {
+  for (const el of Array.from(form.elements)) {
+    if (!isFieldElement(el as HTMLElement)) continue;
+    const f = el as FieldElement;
+    if (isTag(f, "input") && ["checkbox", "radio", "hidden", "submit", "button", "image", "reset"].includes(f.type)) continue;
+    if (isTag(f, "select")) continue;
+    if (!(f.value ?? "").trim()) continue;
+    if (sensitivityOf(f) || isPersonalField(f)) return true;
+  }
+  return false;
+}
+
 const FIELD_KIND: TargetKind = {
   prefix: "f",
   attr: "data-sbp-fid",
@@ -80,6 +108,7 @@ const FIELD_KIND: TargetKind = {
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
+  risk: (el) => ({ personal: isPersonalField(el) }),
 };
 
 function currentValueOf(el: FieldElement): string {
