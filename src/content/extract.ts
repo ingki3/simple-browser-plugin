@@ -51,14 +51,19 @@ function pickMainElement(doc: Document): HTMLElement {
   return best;
 }
 
-function collectText(root: HTMLElement): string {
+const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
+
+// 기존 수집기: root 아래의 블록 요소마다 글을 모은다. 채택한 블록도 함께 돌려줘서,
+// 블록이 담지 못한 글(root 바로 아래의 <br> 본문 등)이 남았는지 따로 셀 수 있게 한다.
+function collectText(root: HTMLElement): { text: string; accepted: Set<Element> } {
   const doc = root.ownerDocument;
   const parts: string[] = [];
+  const accepted = new Set<Element>();
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
     acceptNode: (node) => {
       const el = node as HTMLElement;
       if (!el.tagName) return NodeFilter.FILTER_REJECT;
-      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(el.tagName)) {
+      if (SKIP_TAGS.has(el.tagName)) {
         return NodeFilter.FILTER_REJECT;
       }
       if (!BLOCK_TAGS.has(el.tagName) && !["H1", "H2", "H3", "H4", "H5", "H6"].includes(el.tagName)) {
@@ -73,6 +78,7 @@ function collectText(root: HTMLElement): string {
   const seen = new Set<string>();
   let current = walker.nextNode() as HTMLElement | null;
   while (current) {
+    accepted.add(current);
     const txt = (current.textContent ?? "").replace(/\s+/g, " ").trim();
     if (txt && !seen.has(txt)) {
       seen.add(txt);
@@ -80,15 +86,102 @@ function collectText(root: HTMLElement): string {
     }
     current = walker.nextNode() as HTMLElement | null;
   }
-  return parts.join("\n\n");
+  return { text: parts.join("\n\n"), accepted };
 }
+
+
+// 블록이 담지 못한 글의 길이: 채택한 블록 바깥에 있는 텍스트 노드만 센다.
+function uncoveredLength(root: HTMLElement, accepted: Set<Element>): number {
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return NodeFilter.FILTER_ACCEPT;
+      const el = node as Element;
+      if (accepted.has(el) || SKIP_TAGS.has(el.tagName.toUpperCase())) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_SKIP;
+    },
+  });
+  let len = 0;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    len += (n.nodeValue ?? "").replace(/\s+/g, " ").trim().length;
+  }
+  return len;
+}
+
+// 줄을 나누는 요소. 이 경계에서 글 조각을 끊는다(인라인 요소는 같은 조각으로 이어 붙임).
+const FLOW_BREAK_TAGS = new Set([
+  "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DD", "DETAILS", "DIV", "DL", "DT", "FIELDSET",
+  "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HR",
+  "LI", "MAIN", "NAV", "OL", "P", "PRE", "SECTION", "SUMMARY", "TABLE", "TD", "TH", "TR", "UL",
+]);
+
+// 중복 없는 수집기: 텍스트 노드를 문서 순서대로 한 번씩만 읽는다. <br>은 줄바꿈, 블록 경계는 조각 경계.
+// 부모의 textContent를 통째로 넣지 않으므로 겹친 div가 글을 반복하지 않고, root 바로 아래의 글도 읽힌다.
+// 같은 문장이 서로 다른 곳에 실제로 반복되면 그대로 둔다.
+function collectFlowText(root: HTMLElement): string {
+  const segments: string[] = [];
+  let buf = "";
+  const flush = () => {
+    const seg = buf
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join("\n");
+    if (seg) segments.push(seg);
+    buf = "";
+  };
+  // 재귀 대신 형제·부모 포인터로 돈다(아주 깊게 겹친 DOM에서도 호출 스택이 넘치지 않게).
+  const isBreak = (n: Node) => n.nodeType === Node.ELEMENT_NODE && FLOW_BREAK_TAGS.has((n as Element).tagName.toUpperCase());
+  let node: Node | null = root.firstChild;
+  while (node) {
+    let descend = false;
+    if (node.nodeType === Node.TEXT_NODE) {
+      buf += node.nodeValue ?? "";
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const tag = (node as Element).tagName.toUpperCase();
+      if (tag === "BR") buf += "\n";
+      else if (!SKIP_TAGS.has(tag)) {
+        if (isBreak(node)) flush();
+        descend = !!node.firstChild;
+        if (!descend && isBreak(node)) flush();
+      }
+    }
+    if (descend) {
+      node = node.firstChild;
+      continue;
+    }
+    // 다음 형제로. 형제가 없으면 부모로 올라가며 블록을 닫는다.
+    while (node && node !== root && !node.nextSibling) {
+      node = node.parentNode;
+      if (node && node !== root && isBreak(node)) flush();
+    }
+    if (!node || node === root) break;
+    node = node.nextSibling;
+  }
+  flush();
+  return segments.join("\n\n");
+}
+
+// 블록 바깥에 이만큼 글이 남으면 블록 수집이 본문을 놓친 것으로 본다(<br>로 줄을 나눈 본문, 블록과 섞인 본문).
+const UNCOVERED_MIN_CHARS = 100;
+// 기존 수집 결과가 중복 없이 읽은 글보다 이 배수 이상 길면, 겹친 블록이 글을 반복한 것으로 본다.
+const DUPLICATE_RATIO = 1.5;
+// 고른 본문 영역에서 이만큼도 안 나오면 영역을 잘못 골랐을 수 있으니 페이지 전체를 읽는다(기존 기준 유지).
+const MAIN_MIN_CHARS = 200;
 
 function extractFromDoc(doc: Document): string {
   if (!doc.body) return "";
   const main = pickMainElement(doc);
-  let text = collectText(main);
-  if (text.length < 200) text = collectText(doc.body);
-  return text;
+  if (main !== doc.body) {
+    const { text, accepted } = collectText(main);
+    const flow = collectFlowText(main);
+    // 블록 수집이 글을 놓쳤거나 크게 반복했을 때만 중복 없이 읽은 글로 바꾼다. 아니면 기존 결과 그대로.
+    const missed = !text || uncoveredLength(main, accepted) >= UNCOVERED_MIN_CHARS;
+    const repeated = text.length > flow.length * DUPLICATE_RATIO;
+    const picked = missed || repeated ? flow : text;
+    if (picked.length >= MAIN_MIN_CHARS) return picked;
+  }
+  // 페이지 전체를 읽을 때는 겹친 블록이 글을 반복하지 않게 중복 없는 수집기를 쓴다.
+  return collectFlowText(doc.body);
 }
 
 // 모델에 넘기는 본문 상한. 긴 기술 블로그 한 편(영문 약 6~7천 단어)이 대부분 들어가는 크기.
