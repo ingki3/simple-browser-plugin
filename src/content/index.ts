@@ -8,7 +8,7 @@ import { findClickables, clickElement } from "./clickables";
 import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks } from "./fileLinks";
-import { inspectTarget, readEffect } from "./targets";
+import { inspectTargets, readEffect } from "./targets";
 import { pageSkeleton } from "./skeleton";
 
 async function execTool(toolName: ToolName, args: unknown, callId: string): Promise<unknown> {
@@ -54,7 +54,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind === "target_inspect") {
     try {
-      const data = msg.ids.map((id) => inspectTarget(id, msg.callId, msg.prefix));
+      const data = inspectTargets(msg.ids, msg.callId, msg.prefix);
       sendResponse({ ok: true, data } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);

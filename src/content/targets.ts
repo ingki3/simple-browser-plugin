@@ -277,6 +277,18 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
   return info;
 }
 
+// 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
+export function inspectTargets(ids: string[], callId: string, prefix: string): TargetInfo[] {
+  const infos = ids.map((id) => inspectTarget(id, callId, prefix));
+  if (!infos.some((info) => info.personal || info.sensitive)) return infos;
+  return ids.map((id, i) => {
+    const entry = registry.get(id);
+    const info = { ...infos[i], consentPersonal: true };
+    if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+    return info;
+  });
+}
+
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
 export function takeApproved(id: string, callId: string, prefix: string): { el: HTMLElement; info: TargetInfo } {
   const known = entryOf(id, prefix);
@@ -302,7 +314,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const now = kind.risk?.(el);
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
-  if (now.submitsPersonal && !info.submitsPersonal) return "승인 뒤 양식에 개인정보가 채워짐";
+  if (now.submitsPersonal && !info.submitsPersonal && !info.consentPersonal) return "승인 뒤 양식에 개인정보가 채워짐";
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
   if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";
