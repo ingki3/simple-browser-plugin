@@ -34,7 +34,9 @@ import { exportFile, listRecent, searchFiles } from "../google/drive";
 import { readDocument } from "../document";
 import { checkFileUrl } from "@/lib/fileFormat";
 import {
+  isPreActionStop,
   logTarget,
+  reasonCode,
   summarizeClickEffect,
   urlPattern,
   type ActionLogEntry,
@@ -284,7 +286,8 @@ export async function executeTool(
   try {
     result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
   } catch (err) {
-    void finishAction(callId, "failed", { reason: err instanceof Error ? err.message : String(err) });
+    const reason = reasonCode(err instanceof Error ? err.message : String(err));
+    void finishAction(callId, isPreActionStop(reason) ? "aborted" : "failed", { reason });
     throw err;
   }
   const { outcome, extra } = actionOutcome(toolName, result);
@@ -298,14 +301,16 @@ function actionOutcome(
 ): { outcome: ActionOutcome; extra: Pick<ActionLogEntry, "effect" | "fill" | "reason"> } {
   if (toolName === "click_element") {
     const effect = (result.data as { effect: ClickEffect }).effect;
-    if (effect.dom?.aborted) return { outcome: "aborted", extra: { reason: effect.dom.aborted } };
+    if (effect.dom?.aborted) return { outcome: "aborted", extra: { reason: "target_changed" } };
     return { outcome: result.ok ? "done" : "failed", extra: { effect: summarizeClickEffect(effect) } };
   }
   const data = result.data as { filledCount: number; results: Array<{ applied: boolean; note?: string }> };
   const fill = { applied: data.filledCount, total: data.results.length };
-  const note = data.results.find((r) => !r.applied)?.note;
-  const outcome = fill.applied === fill.total ? "done" : fill.applied > 0 ? "partial" : "failed";
-  return { outcome, extra: note ? { fill, reason: note } : { fill } };
+  const reasons = data.results.filter((r) => !r.applied).map((r) => reasonCode(r.note ?? ""));
+  if (!reasons.length) return { outcome: "done", extra: { fill } };
+  const outcome: ActionOutcome =
+    fill.applied > 0 ? "partial" : reasons.every(isPreActionStop) ? "aborted" : "failed";
+  return { outcome, extra: { fill, reason: reasons[0] } };
 }
 
 async function runTool(

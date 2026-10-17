@@ -1,6 +1,5 @@
 import { ACTION_LOG_KEY } from "@/lib/messages";
 import {
-  clipReason,
   pruneLog,
   type ActionLogEntry,
   type ActionOutcome,
@@ -62,7 +61,6 @@ export function finishAction(
     targets: p.targets,
     outcome,
     ...extra,
-    ...(extra.reason ? { reason: clipReason(extra.reason) } : {}),
   };
   return enqueue(async () => {
     // 끈 뒤에 끝난 동작은 남기지 않는다.
@@ -78,11 +76,23 @@ export function finishAction(
   });
 }
 
+// 개수를 셀 때도 만료된 항목을 저장소에서 지운다(새 동작이 없어도 30일 뒤에는 남지 않게).
 export function actionLogCount(): Promise<number> {
   return enqueue(async () => {
     const obj = await chrome.storage.local.get(ACTION_LOG_KEY);
-    return pruneLog(obj[ACTION_LOG_KEY], Date.now()).length;
+    const raw = obj[ACTION_LOG_KEY];
+    const entries = pruneLog(raw, Date.now());
+    if (raw !== undefined && (!Array.isArray(raw) || raw.length !== entries.length)) {
+      if (entries.length) await chrome.storage.local.set({ [ACTION_LOG_KEY]: entries });
+      else await chrome.storage.local.remove(ACTION_LOG_KEY);
+    }
+    return entries.length;
   });
+}
+
+// 확장이 시작될 때 만료 항목을 정리한다.
+export function pruneActionLog(): void {
+  void actionLogCount().catch(() => undefined);
 }
 
 export function clearActionLog(): Promise<void> {

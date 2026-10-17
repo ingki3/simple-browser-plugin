@@ -1,7 +1,7 @@
 import { PORT_NAME, type PanelToBg } from "@/lib/messages";
 import { ChatAgent } from "./openrouter";
 import { invalidateSettingsCache } from "./storage";
-import { actionLogCount, clearActionLog } from "./actionLog";
+import { actionLogCount, clearActionLog, pruneActionLog } from "./actionLog";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";
 import {
@@ -9,6 +9,8 @@ import {
   connectGoogle,
   getGoogleConnectionState,
 } from "./google/auth";
+
+pruneActionLog();
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel

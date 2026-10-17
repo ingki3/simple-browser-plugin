@@ -69,16 +69,12 @@ export function fnv1a(s: string): string {
   return (h >>> 0).toString(16).padStart(8, "0");
 }
 
-// 같은 서명의 형제가 이어지면 하나로 접는다(목록 항목 수가 달라도 같은 뼈대).
+// 같은 서명의 형제가 이어지면 하나로 접는다. 항목이 하나뿐인 목록과 여럿인 목록도 같은 뼈대가 되도록
+// 반복 표시는 남기지 않는다.
 export function collapseRepeats(children: string[]): string[] {
   const out: string[] = [];
   for (const c of children) {
-    const last = out[out.length - 1];
-    if (last === c || last === c + "*") {
-      out[out.length - 1] = c + "*";
-    } else {
-      out.push(c);
-    }
+    if (out[out.length - 1] !== c) out.push(c);
   }
   return out;
 }
@@ -138,8 +134,8 @@ export interface ActionLogEntry {
   };
   // 입력 결과 요약.
   fill?: { applied: number; total: number };
-  // 실패·중단 이유(잘라서).
-  reason?: string;
+  // 실패·중단 이유. 오류 문구에는 페이지 글자(입력 처리기가 바꾼 칸 이름 등)가 섞일 수 있어 분류만 남긴다.
+  reason?: ReasonCode;
 }
 
 export const ACTION_LOG_MAX_ENTRIES = 500;
@@ -183,8 +179,35 @@ export function summarizeClickEffect(e: ClickEffect): NonNullable<ActionLogEntry
   return out;
 }
 
-export function clipReason(s: string): string {
-  return clipText(s, 200);
+export type ReasonCode =
+  // 승인한 대상이 바뀌거나 사라져 실행하지 않음
+  | "target_changed"
+  // 대상이 화면에 보이지 않아 실행하지 않음
+  | "not_visible"
+  // 이 호출에서 승인하지 않은 대상
+  | "not_approved"
+  // 입력 뒤 칸이 다시 그려지거나 바뀌어 반영 여부를 확인하지 못함
+  | "unverified"
+  // 페이지가 값을 받아들이지 않음(서식·선택지 없음)
+  | "value_rejected"
+  // 탭이 닫히거나 페이지가 바뀌어 대상에 닿지 못함
+  | "page_gone"
+  | "error";
+
+// 오류·메모 문구를 값 없는 분류로 바꾼다. 문구는 src/content/targets.ts·forms.ts·dispatcher가 만든다.
+export function reasonCode(message: string): ReasonCode {
+  if (/확인하지 못했/.test(message)) return "unverified";
+  if (/보이지 않/.test(message)) return "not_visible";
+  if (/승인되지 않았/.test(message)) return "not_approved";
+  if (/받아들이지 않았|선택지가 없/.test(message)) return "value_rejected";
+  if (/다시 그려지거나 사라졌|바뀌어 (실행|클릭)하지 않았|다시 찾으세요/.test(message)) return "target_changed";
+  if (/탭이 닫혀|페이지가 바뀌었|주입할 수 없|응답이 .*오지 않았/.test(message)) return "page_gone";
+  return "error";
+}
+
+// 실행하기 전에 멈춘 이유인지(페이지를 건드리지 않음).
+export function isPreActionStop(code: ReasonCode): boolean {
+  return code === "target_changed" || code === "not_visible";
 }
 
 // 30일 지난 항목을 지우고 최근 500개만 남긴다. 저장된 값이 깨져 있으면 버린다.
