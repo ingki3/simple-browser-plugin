@@ -124,6 +124,12 @@ test("logTarget: 입력 값은 있음/없음만", () => {
   // 민감 칸이 아니어도 라벨에 되비친 값은 가린다.
   const otp = logTarget({ ...field, fieldType: "text", sensitive: null, name: "현재 값: 123456" }, "123456");
   assert.equal(otp.name, "현재 값: {value}");
+  // 여러 줄 값은 공백을 줄인 라벨에서도, 일부만 보여 주는 라벨에서도 가린다.
+  const phrase = "correct\nhorse\n  battery\nstaple";
+  const multi = logTarget({ ...field, fieldType: "textarea", sensitive: null, name: "메모 correct horse battery staple" }, phrase);
+  assert.doesNotMatch(multi.name, /correct|horse|battery|staple/);
+  const part = logTarget({ ...field, fieldType: "textarea", sensitive: null, name: "미리보기: horse battery…" }, phrase);
+  assert.doesNotMatch(part.name, /horse|battery/);
   assert.equal(logTarget(field, "").hasValue, false);
   assert.doesNotMatch(JSON.stringify(t), /hunter22/);
 });

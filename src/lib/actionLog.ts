@@ -185,10 +185,15 @@ export function maskName(s: string): string {
     .replace(/\S*(?=\S*[A-Za-z])(?=\S*\d)[A-Za-z0-9_\-+/=]{8,}\S*/g, "{secret}");
 }
 
-function stripValue(name: string, value: string | undefined): string {
-  const v = value?.trim();
-  if (!v || v.length < 2) return name;
-  return name.split(v).join("{value}");
+// 이름에 섞인 입력 값을 가린다. 칸 이름은 공백을 한 칸으로 줄여 만들므로 값도 같게 줄여 비교하고,
+// 값의 일부만 보여 주는 라벨도 있어 3자 이상 낱말마다 따로 가린다.
+export function stripValue(name: string, value: string | undefined): string {
+  const v = (value ?? "").replace(/\s+/g, " ").trim();
+  if (v.length < 2) return name;
+  let out = name.replace(/\s+/g, " ").split(v).join("{value}");
+  const words = Array.from(new Set(v.split(" ").filter((w) => w.length >= 3))).sort((a, b) => b.length - a.length);
+  for (const w of words) out = out.split(w).join("{value}");
+  return out;
 }
 
 export function logTarget(info: TargetInfo, value?: string): LoggedTarget {
