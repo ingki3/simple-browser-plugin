@@ -42,19 +42,27 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
   return null;
 }
 
-// 자동 실행의 신뢰 경계는 출처가 아니라 사이트(스킴 + 등록 도메인) 단위로 본다.
-// news.naver.com에서 n.news.naver.com 기사로 넘어가는 것처럼 같은 사이트의 하위 도메인은 오가게 하되,
-// 남의 하위 도메인을 나눠 주는 호스팅(github.io 등)은 그 하위 도메인까지를 사이트로 본다.
-const MULTI_PART_SUFFIXES = new Set([
-  "co.kr", "or.kr", "go.kr", "ac.kr", "ne.kr", "re.kr", "pe.kr", "ms.kr", "hs.kr", "es.kr", "sc.kr", "kg.kr",
-  "co.jp", "ne.jp", "or.jp", "ac.jp", "go.jp", "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au",
-  "com.cn", "net.cn", "org.cn", "com.tw", "com.hk", "co.nz", "com.sg", "com.br", "co.in",
+// 자동 실행의 신뢰 경계. 신뢰 사이트는 출처(스킴·호스트·포트)로 기억하고, 대상 주소는
+// 같은 출처이거나 그 호스트의 하위 도메인(news.naver.com → n.news.naver.com)일 때만 안으로 본다.
+// 등록 도메인을 추정하지 않는다(co.za·s3.amazonaws.com처럼 형제 하위 도메인이 남의 것일 수 있다).
+// 남에게 하위 도메인을 나눠 주는 호스팅의 첫 화면(tistory.com 등)은 하위 도메인으로 넓히지 않는다.
+const SHARED_HOSTING_APEXES = new Set([
   "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "web.app", "firebaseapp.com",
   "herokuapp.com", "appspot.com", "blogspot.com", "wordpress.com", "tistory.com", "glitch.me", "onrender.com",
   "azurewebsites.net", "cloudfront.net", "amazonaws.com", "notion.site", "substack.com", "medium.com",
 ]);
 
+// 신뢰 사이트로 기억할 값(웹 주소의 출처). 웹 주소가 아니면 null.
 export function siteOf(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return /^https?:$/.test(u.protocol) ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean | null {
   let u: URL;
   try {
     u = new URL(url);
@@ -62,37 +70,42 @@ export function siteOf(url: string): string | null {
     return null;
   }
   if (!/^https?:$/.test(u.protocol)) return null;
-  const host = u.hostname.toLowerCase();
-  // IP 주소·localhost는 호스트 그대로(포트까지 출처로).
-  if (!host.includes(".") || /^[\d.]+$/.test(host) || host.startsWith("[")) return u.origin;
-  const labels = host.split(".");
-  const last2 = labels.slice(-2).join(".");
-  const keep = MULTI_PART_SUFFIXES.has(last2) ? 3 : 2;
-  return `${u.protocol}//${labels.slice(-keep).join(".")}`;
+  for (const site of trustedSites) {
+    let t: URL;
+    try {
+      t = new URL(site);
+    } catch {
+      continue;
+    }
+    if (t.protocol !== u.protocol || t.port !== u.port) continue;
+    if (u.hostname === t.hostname) return true;
+    const isIp = /^[\d.]+$/.test(t.hostname) || t.hostname.startsWith("[");
+    if (!isIp && t.hostname.includes(".") && !SHARED_HOSTING_APEXES.has(t.hostname) && u.hostname.endsWith(`.${t.hostname}`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소·호스트 이름에 실어 밖으로 보낼 수 있다.
 // 사용자가 고른 사이트(요청을 시작한 탭의 사이트, 승인 카드로 이동을 허락한 사이트) 안에서만 자동 실행한다.
 // 자동 이동·클릭으로 들어간 사이트는 신뢰 사이트가 되지 않는다(두 단계로 나눠 보내는 우회를 막음).
 export function navigateAutoBlock(trustedSites: ReadonlySet<string>, targetUrl: string): string | null {
-  const site = siteOf(targetUrl);
-  if (!site) return "웹 주소가 아님";
-  if (trustedSites.has(site)) return null;
-  return "요청을 시작한 사이트 밖으로 이동";
+  const inside = withinTrusted(trustedSites, targetUrl);
+  if (inside === null) return "웹 주소가 아님";
+  return inside ? null : "요청을 시작한 사이트 밖으로 이동";
 }
 
 // 클릭·입력: 사용자가 고르지 않은 사이트의 페이지에서는(자동 클릭으로 들어간 수집 페이지의 검색 칸 등) 묻는다.
-// 다른 사이트로 가는 링크 클릭도 이동과 같게 본다.
+// 다른 사이트로 가는 링크 클릭과 다른 사이트로 제출하는 양식 버튼도 이동과 같게 본다.
 export function pageActionSiteBlock(
   trustedSites: ReadonlySet<string>,
   pageUrl: string | undefined,
   linkHrefs: string[],
 ): string | null {
-  const page = pageUrl ? siteOf(pageUrl) : null;
-  if (!page || !trustedSites.has(page)) return "요청을 시작한 사이트 밖의 페이지";
+  if (!pageUrl || withinTrusted(trustedSites, pageUrl) !== true) return "요청을 시작한 사이트 밖의 페이지";
   for (const href of linkHrefs) {
-    const site = siteOf(href);
-    if (site && !trustedSites.has(site)) return "요청을 시작한 사이트 밖으로 가는 링크";
+    if (withinTrusted(trustedSites, href) === false) return "요청을 시작한 사이트 밖으로 가는 링크·양식 제출";
   }
   return null;
 }

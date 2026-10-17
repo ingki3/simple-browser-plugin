@@ -72,7 +72,18 @@ const CLICK_KIND: TargetKind = {
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
     const form = (el as HTMLButtonElement).form ?? el.closest("form");
-    return { submitsPersonal: !!form && formHasPersonalValues(form), paymentContext: inPaymentContext(el, form) };
+    // 버튼에 formaction 속성이 있으면 그것이, 없으면 양식 action이 실제 제출 주소다(둘 다 절대 주소로 돌려받는다).
+    // formAction은 속성이 없을 때 지금 문서 주소를 돌려주므로 속성이 있을 때만 쓴다.
+    const submitTo = form
+      ? el.hasAttribute("formaction")
+        ? (el as HTMLButtonElement).formAction
+        : form.action || ""
+      : "";
+    return {
+      submitsPersonal: !!form && formHasPersonalValues(form),
+      paymentContext: inPaymentContext(el, form),
+      ...(submitTo ? { submitTo } : {}),
+    };
   },
 };
 
