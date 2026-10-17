@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  AGENT_MAX_TOKENS,
+  AGENT_REASONING_MAX_TOKENS,
   agentReasoningConfig,
+  agentRetryReasoningConfig,
   translationReasoningConfig,
 } from "../src/lib/models.ts";
 import { readOpenRouterStream } from "../src/lib/openrouter.ts";
@@ -33,6 +36,14 @@ test("gpt-oss uses bounded low reasoning effort", () => {
   assert.deepEqual(agentReasoningConfig("openai/gpt-oss-120b"), {
     effort: "low",
   });
+});
+
+test("other models get a reasoning budget that leaves room for the answer", () => {
+  assert.deepEqual(agentReasoningConfig("deepseek/deepseek-v4.1-flash"), {
+    max_tokens: AGENT_REASONING_MAX_TOKENS,
+  });
+  assert.ok(AGENT_REASONING_MAX_TOKENS < AGENT_MAX_TOKENS);
+  assert.deepEqual(agentRetryReasoningConfig("deepseek/deepseek-v4.1-flash"), { effort: "low" });
 });
 
 test("stream reader resolves at SSE DONE even when the connection stays open", async () => {

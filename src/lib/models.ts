@@ -24,7 +24,14 @@ export interface ReasoningConfig {
   enabled?: boolean;
   effort?: "minimal" | "low" | "medium" | "high";
   exclude?: boolean;
+  // 생각에 쓸 토큰 상한. effort와 함께 쓰지 않는다.
+  max_tokens?: number;
 }
+
+// 에이전트 한 번의 응답 상한(요청의 max_tokens).
+export const AGENT_MAX_TOKENS = 8192;
+// 생각 상한. 응답 상한의 절반으로 묶어 답·도구 호출을 쓸 자리를 남긴다.
+export const AGENT_REASONING_MAX_TOKENS = 4096;
 
 function requiresExplicitEffort(model: ModelId): boolean {
   return /^google\/gemini-3(?:[.-]|$)/i.test(model);
@@ -33,7 +40,13 @@ function requiresExplicitEffort(model: ModelId): boolean {
 export function agentReasoningConfig(model: ModelId): ReasoningConfig {
   if (requiresExplicitEffort(model)) return { effort: "medium" };
   if (/^openai\/gpt-oss-/i.test(model)) return { effort: "low" };
-  return { enabled: true };
+  return { max_tokens: AGENT_REASONING_MAX_TOKENS };
+}
+
+// 생각만 하다 응답 상한에 걸려 답이 비었을 때 한 번 더 시도할 설정. 상한을 지키지 않는 모델도 있어서 강도를 낮춘다.
+export function agentRetryReasoningConfig(model: ModelId): ReasoningConfig {
+  void model;
+  return { effort: "low" };
 }
 
 export function translationReasoningConfig(model: ModelId): ReasoningConfig {
