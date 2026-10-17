@@ -36,6 +36,7 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
    - 같은 툴을 같은 인자로 재시도하지 않는다.
    - Thought에서 실패 원인을 분석하고 (a) 다른 인자·다른 툴로 대안을 시도하거나, (b) 시도해 볼 만한 대안이 없으면 사용자에게 무엇이 안 됐는지 짧게 설명하고 멈춘다.
    - 특히 click_element 이후 페이지가 이동해 후속 툴이 "컨텐트 스크립트 응답이 … 오지 않았습니다" 같은 타임아웃을 내면 네비게이션이 이미 일어난 것으로 간주하고 "페이지 이동이 진행 중입니다. 새 페이지가 로드된 뒤 다시 요청해 주세요."로 사용자에게 알린다.
+   - click_element·fill_form_fields가 "다시 찾으세요"로 실패하면 페이지가 바뀌어 예전 id를 쓸 수 없다는 뜻이다. find_clickables·find_form_fields로 다시 찾아 같은 대상이 맞는지 확인한 뒤에만 새 id로 다시 시도한다.
 7. 현재 가지고 있는 툴로 할 수 없는 작업(예: 페이지 스크롤, 복잡한 편집, 외부 API 호출, 탭 열기·닫기 등)은 지원 범위를 밝히고 불가능함을 말한다. 억지로 다른 툴을 조합하지 않는다.
 
 describe_page 결과를 읽는 법:
@@ -54,8 +55,8 @@ describe_page 결과를 읽는 법:
 - get_page_content: 본문 텍스트 전체 추출 (요약·질의응답 근거 보강).
 - navigate_to_url(url): 민감. 현재 탭을 신뢰할 수 있는 전체 http/https URL로 직접 이동. 현재 페이지 관측 불필요.
 - find_clickables(query?, region?, onlyViewport?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
-- click_element(id): 민감. id는 반드시 find_clickables에서 얻은 값.
-- find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감).
+- click_element(id): 민감. id는 반드시 find_clickables에서 얻은 값. 결과의 effect가 클릭 뒤 일어난 일을 알려 준다(navigation: none/fragment(같은 페이지 안 위치)/same_origin/cross_origin/error, sameDocument, newTab, dom.mutations·dialogOpened). 이것으로 이동 여부를 판단하고, 이동했거나 화면이 바뀐 뒤 내용을 말하려면 다시 관측한다. "화면 변화가 감지되지 않았습니다"면 성공했다고 말하지 않는다.
+- find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감). 결과의 results[].applied가 false인 칸은 값이 반영되지 않은 것이니 사용자에게 알린다.
 - list_page_images / download_images: 이미지 목록 → 저장(민감).
 - translate_page: 페이지 전체 번역.
 - query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회.
@@ -550,7 +551,7 @@ export class ChatAgent {
         if (SENSITIVE_TOOLS.has(toolName)) {
           let preview: Awaited<ReturnType<typeof buildToolPreview>>;
           try {
-            preview = await buildToolPreview(toolName, parsedArgs);
+            preview = await buildToolPreview(toolName, parsedArgs, callId, this.turnTab);
           } catch (err) {
             // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
             if (this.isStale(turn)) return;
@@ -564,6 +565,8 @@ export class ChatAgent {
             });
             continue;
           }
+          // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
+          if (this.isStale(turn)) return;
           debugLog("tool:awaiting_approval", `${toolName}`);
           this.send({
             kind: "tool_pending",

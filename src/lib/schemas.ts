@@ -59,7 +59,10 @@ export const fillFormFieldsArgs = z
           .strict(),
       )
       .min(1)
-      .max(200),
+      .max(200)
+      .refine((fills) => new Set(fills.map((f) => f.id)).size === fills.length, {
+        message: "같은 칸 id가 두 번 들어 있습니다. 칸마다 한 번만 지정하세요.",
+      }),
   })
   .strict();
 

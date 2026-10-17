@@ -66,7 +66,7 @@ async function injectContentScript(tabId: number): Promise<void> {
 // 그 전에 보낸 메시지는 "Receiving end does not exist"로 실패하므로 잠깐씩 기다리며 재시도.
 const INJECT_READY_DELAYS_MS = [50, 100, 200, 400, 800, 1500];
 
-function isMissingReceiver(err: unknown): boolean {
+export function isMissingReceiver(err: unknown): boolean {
   return (
     err instanceof Error &&
     /Could not establish connection|Receiving end does not exist/i.test(err.message)
@@ -161,5 +161,17 @@ export async function callContentTool<T = unknown>(
     throw new Error(res?.error ?? "컨텐트 스크립트 호출 실패");
   }
   endCall("ok");
+  return res.data as T;
+}
+
+// 도구 실행이 아닌 짧은 내부 질의(승인 카드용 대상 확인, 클릭 결과 읽기). 주입·재시도는 하지 않는다 —
+// content script가 없으면 id를 준 페이지가 이미 사라진 것이다.
+export async function queryContent<T>(tabId: number, msg: BgToContent, timeoutMs: number, label: string): Promise<T> {
+  const res = (await withTimeout(
+    chrome.tabs.sendMessage(tabId, msg, { frameId: 0 }) as Promise<ContentResponse<T>>,
+    timeoutMs,
+    label,
+  )) as ContentResponse<T>;
+  if (!res?.ok) throw new Error(res?.error ?? `${label} 실패`);
   return res.data as T;
 }

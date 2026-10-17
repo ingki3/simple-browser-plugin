@@ -8,8 +8,9 @@ import { findClickables, clickElement } from "./clickables";
 import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks } from "./fileLinks";
+import { inspectTarget, readEffect } from "./targets";
 
-async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
+async function execTool(toolName: ToolName, args: unknown, callId: string): Promise<unknown> {
   switch (toolName) {
     case "describe_page":
       return describePage();
@@ -24,7 +25,7 @@ async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
     case "find_form_fields":
       return findFormFields((args ?? {}) as { onlyVisible?: boolean });
     case "fill_form_fields":
-      return fillFormFields(args as { fills: Array<{ id: string; value: string }> });
+      return fillFormFields(args as { fills: Array<{ id: string; value: string }> }, callId);
     case "list_page_images":
       return listPageImages((args ?? {}) as { minWidth?: number });
     case "list_file_links":
@@ -34,7 +35,7 @@ async function execTool(toolName: ToolName, args: unknown): Promise<unknown> {
     case "find_clickables":
       return findClickables((args ?? {}) as { query?: string; limit?: number });
     case "click_element":
-      return clickElement(args as { id: string });
+      return clickElement(args as { id: string }, callId);
     case "download_images":
       throw new Error("download_images는 백그라운드에서 실행해야 합니다.");
     case "navigate_to_url":
@@ -50,9 +51,22 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
     sendResponse({ ok: true } satisfies ContentResponse);
     return false;
   }
+  if (msg.kind === "target_inspect") {
+    try {
+      const data = msg.ids.map((id) => inspectTarget(id, msg.callId, msg.prefix));
+      sendResponse({ ok: true, data } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
+  if (msg.kind === "action_effect") {
+    sendResponse({ ok: true, data: readEffect(msg.token) } satisfies ContentResponse);
+    return false;
+  }
   if (msg.kind !== "tool_exec") return false;
 
-  execTool(msg.toolName, msg.args)
+  execTool(msg.toolName, msg.args, msg.callId)
     .then((data) => {
       const response: ContentResponse = { ok: true, data };
       sendResponse(response);
