@@ -42,28 +42,17 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
   return null;
 }
 
-// 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소에 실어 밖으로 보낼 수 있다.
-// 지금 페이지와 같은 사이트 안이거나, 다른 사이트의 홈(경로·쿼리 없이 평범한 도메인)일 때만 자동 실행한다.
-export function navigateAutoBlock(currentUrl: string | undefined, targetUrl: string): string | null {
+// 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소·호스트 이름에 실어 밖으로 보낼 수 있다.
+// 사용자가 고른 출처(요청을 시작한 탭의 사이트, 승인 카드로 이동을 허락한 사이트) 안에서만 자동 실행한다.
+// 자동 이동·클릭으로 들어간 사이트는 신뢰 출처가 되지 않는다(두 단계로 나눠 보내는 우회를 막음).
+export function navigateAutoBlock(trustedOrigins: ReadonlySet<string>, targetUrl: string): string | null {
   let target: URL;
   try {
     target = new URL(targetUrl);
   } catch {
     return "주소를 해석할 수 없음";
   }
-  try {
-    if (currentUrl && new URL(currentUrl).origin === target.origin && /^https?:$/.test(target.protocol)) return null;
-  } catch {
-    /* 지금 주소를 모르면 아래 기준으로 본다 */
-  }
-  const home = (target.pathname === "/" || target.pathname === "") && !target.search && !target.hash;
-  const plainHost =
-    !target.username &&
-    !target.password &&
-    !target.port &&
-    target.hostname.split(".").length <= 4 &&
-    target.hostname.split(".").every((label) => /^[a-z0-9-]{1,24}$/i.test(label)) &&
-    !/\d{4,}/.test(target.hostname);
-  if (/^https?:$/.test(target.protocol) && home && plainHost) return null;
-  return "다른 사이트의 세부 주소로 이동";
+  if (!/^https?:$/.test(target.protocol)) return "웹 주소가 아님";
+  if (trustedOrigins.has(target.origin)) return null;
+  return "요청을 시작한 사이트 밖으로 이동";
 }

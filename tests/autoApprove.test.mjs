@@ -45,16 +45,14 @@ test("buttons on a payment screen still ask, whatever their text", () => {
   assert.ok(autoApproveBlock("click_element", [t({ name: "Confirm", paymentContext: true })]));
 });
 
-test("navigation runs automatically only within the site or to another site's home", () => {
-  const cur = "https://shopping.naver.com/ns/home";
-  assert.equal(navigateAutoBlock(cur, "https://shopping.naver.com/ns/search?query=%EB%A7%A5%EB%B6%81"), null);
-  assert.equal(navigateAutoBlock(cur, "https://news.naver.com/"), null);
-  assert.equal(navigateAutoBlock(undefined, "https://www.coupang.com"), null);
-  assert.ok(navigateAutoBlock(cur, "https://attacker.example/?d=010-1234-5678"));
-  assert.ok(navigateAutoBlock(cur, "https://attacker.example/hong-gildong"));
-  assert.ok(navigateAutoBlock(cur, "https://hong01012345678.attacker.example/"));
-  assert.ok(navigateAutoBlock(cur, "https://user:pw@attacker.example/"));
-  assert.ok(navigateAutoBlock(cur, "javascript:alert(1)"));
+test("navigation runs automatically only within origins the user chose", () => {
+  const trusted = new Set(["https://shopping.naver.com"]);
+  assert.equal(navigateAutoBlock(trusted, "https://shopping.naver.com/ns/search?query=%EB%A7%A5%EB%B6%81"), null);
+  assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/"));
+  assert.ok(navigateAutoBlock(trusted, "https://honggildong.collector.example/"));
+  assert.ok(navigateAutoBlock(trusted, "https://attacker.example/?d=010-1234-5678"));
+  assert.ok(navigateAutoBlock(new Set(), "https://www.coupang.com/"));
+  assert.ok(navigateAutoBlock(trusted, "javascript:alert(1)"));
 });
 
 test("tools outside page actions are never automatic", () => {

@@ -41,13 +41,21 @@ function clickText(el: HTMLElement): string {
   );
 }
 
-// 결제 화면인지: 문서 주소·제목, 또는 버튼이 든 양식·대화상자의 글자(앞부분)에 결제 단서가 있으면.
+// 결제 화면인지: 문서 주소(경로·쿼리·해시 — SPA는 #/checkout·?route=checkout처럼 라우팅한다)·제목·큰 제목(h1·h2),
+// 또는 버튼이 든 양식·대화상자의 글자(앞부분)에 결제 단서가 있으면.
 // section·article은 보지 않는다(상품 목록 구역에 "구매 1,234" 같은 글자가 흔해 목록 안 버튼이 모두 걸린다).
 function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null): boolean {
   const doc = el.ownerDocument;
   const loc = doc.defaultView?.location;
-  if (PAYMENT_TEXT_RE.test(`${loc?.pathname ?? ""} ${doc.title}`)) return true;
-  if (/(checkout|payment|\/pay\b|\/order)/i.test(loc?.pathname ?? "")) return true;
+  let route = `${loc?.pathname ?? ""}${loc?.search ?? ""}${loc?.hash ?? ""}`;
+  try {
+    route = decodeURIComponent(route);
+  } catch {
+    /* 그대로 */
+  }
+  if (/(checkout|payment|\bpay\b|order)/i.test(route)) return true;
+  const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
+  if (PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`)) return true;
   const scope = form ?? el.closest('dialog, [role="dialog"], [role="alertdialog"]');
   return !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000));
 }

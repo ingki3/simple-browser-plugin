@@ -1,4 +1,4 @@
-import { autoApproveBlock, navigateAutoBlock } from "@/lib/autoApprove";
+import { autoApproveBlock } from "@/lib/autoApprove";
 import type {
   ClickableElement,
   FileLinkList,
@@ -197,16 +197,9 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["navigate_to_url"];
       const url = normalizeNavigationUrl(args.url);
       const destination = new URL(url);
-      let current: string | undefined;
-      try {
-        current = (await chrome.tabs.get(await resolveTurnTab(turnTab))).url;
-      } catch {
-        current = undefined;
-      }
       return {
         summary: `현재 탭을 ${destination.hostname}(으)로 이동합니다.`,
         details: url,
-        autoBlock: navigateAutoBlock(current, url),
       };
     }
     case "google_sheets_write_range": {

@@ -1,7 +1,7 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
-import { autoApproveBlock } from "@/lib/autoApprove";
+import { autoApproveBlock, navigateAutoBlock } from "@/lib/autoApprove";
 import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
@@ -143,6 +143,9 @@ export class ChatAgent {
   // 백그라운드에서 직접 네트워크를 쓰는 도구(read_document)를 중단 시 함께 끊는다.
   private activeTool: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
+  // 자동 실행으로 이동해도 되는 출처: 이 턴을 시작한 탭의 출처와, 이 대화에서 승인 카드로 이동을 허락한 출처.
+  private turnOrigin: string | null = null;
+  private approvedOrigins = new Set<string>();
   private lastAttachedPdfUrl: string | null = null;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
   // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
@@ -211,6 +214,7 @@ export class ChatAgent {
   reset(): void {
     this.history = [];
     this.lastAttachedPdfUrl = null;
+    this.approvedOrigins.clear();
   }
 
   private send(msg: BgToPanel): void {
@@ -342,6 +346,15 @@ export class ChatAgent {
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
     if ("tabId" in this.turnTab) debugLog("turn:tab", `tab ${this.turnTab.tabId}`);
+    this.turnOrigin = null;
+    if ("tabId" in this.turnTab) {
+      try {
+        const url = (await chrome.tabs.get(this.turnTab.tabId)).url;
+        if (url && /^https?:/.test(url)) this.turnOrigin = new URL(url).origin;
+      } catch {
+        /* 탭을 못 읽으면 신뢰 출처 없이 진행(이동은 카드로 묻는다) */
+      }
+    }
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);
@@ -606,7 +619,14 @@ export class ChatAgent {
           // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
           const { autoApprove } = await getSettings();
           if (this.isStale(turn)) return false;
-          const block = preview.autoBlock !== undefined ? preview.autoBlock : autoApproveBlock(toolName, []);
+          const trusted = new Set(this.approvedOrigins);
+          if (this.turnOrigin) trusted.add(this.turnOrigin);
+          const block =
+            toolName === "navigate_to_url"
+              ? navigateAutoBlock(trusted, String(preview.details ?? ""))
+              : preview.autoBlock !== undefined
+                ? preview.autoBlock
+                : autoApproveBlock(toolName, []);
           let approved: boolean;
           if (autoApprove && !block) {
             debugLog("tool:auto_approved", `${toolName}`);
@@ -632,6 +652,14 @@ export class ChatAgent {
               "tool:approval_result",
               `${toolName} ${approved ? "approved" : "cancelled"}`,
             );
+            // 사용자가 카드로 허락한 이동의 출처는 이 대화에서 자동 이동해도 되는 곳으로 둔다.
+            if (approved && toolName === "navigate_to_url") {
+              try {
+                this.approvedOrigins.add(new URL(String(preview.details)).origin);
+              } catch {
+                /* ignore */
+              }
+            }
           }
 
           if (!approved) {
