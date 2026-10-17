@@ -61,6 +61,8 @@ export interface ToolPreview {
   details?: unknown;
   // 자동 실행을 켰을 때도 승인을 받아야 하는 이유(결제·개인정보 제출). 없으면 null. 대상을 보지 않는 도구는 비워 둔다.
   autoBlock?: string | null;
+  // 클릭 대상 링크의 주소(자동 실행 사이트 경계 판정용).
+  linkHrefs?: string[];
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -172,7 +174,11 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["click_element"];
       const [info] = await inspectTargets([args.id], "c", callId, turnTab);
       await beginActionLog(callId, "click_element", turnTab, [logTarget(info)]);
-      return { ...clickCard(info), autoBlock: autoApproveBlock("click_element", [info]) };
+      return {
+        ...clickCard(info),
+        autoBlock: autoApproveBlock("click_element", [info]),
+        linkHrefs: info.href ? [info.href] : [],
+      };
     }
     case "read_document": {
       const args = parsedArgs as ToolArgs["read_document"];

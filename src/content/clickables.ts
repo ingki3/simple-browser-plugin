@@ -56,8 +56,9 @@ function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null): boolea
   if (/(checkout|payment|\bpay\b|order)/i.test(route)) return true;
   const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
   if (PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`)) return true;
-  const scope = form ?? el.closest('dialog, [role="dialog"], [role="alertdialog"]');
-  return !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000));
+  // 양식과 그 바깥 대화상자를 각각 본다(대화상자의 "결제 금액" 문구 아래 양식 속 '확인' 버튼).
+  const dialog = el.closest('dialog, [role="dialog"], [role="alertdialog"]');
+  return [form, dialog].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)));
 }
 
 const CLICK_KIND: TargetKind = {

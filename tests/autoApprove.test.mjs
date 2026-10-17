@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AUTO_APPROVE_TOOLS, autoApproveBlock, navigateAutoBlock } from "../src/lib/autoApprove.ts";
+import { AUTO_APPROVE_TOOLS, autoApproveBlock, navigateAutoBlock, pageActionSiteBlock, siteOf } from "../src/lib/autoApprove.ts";
 
 const t = (over = {}) => ({
   tag: "button", role: "button", name: "", href: "", region: "main", inFrame: false,
@@ -45,14 +45,33 @@ test("buttons on a payment screen still ask, whatever their text", () => {
   assert.ok(autoApproveBlock("click_element", [t({ name: "Confirm", paymentContext: true })]));
 });
 
-test("navigation runs automatically only within origins the user chose", () => {
-  const trusted = new Set(["https://shopping.naver.com"]);
+test("sites group subdomains of one registrable domain, but not shared hosting", () => {
+  assert.equal(siteOf("https://n.news.naver.com/mnews/article/1"), "https://naver.com");
+  assert.equal(siteOf("https://shopping.naver.com/"), "https://naver.com");
+  assert.equal(siteOf("https://www.gmarket.co.kr/x"), "https://gmarket.co.kr");
+  assert.equal(siteOf("https://alice.github.io/"), "https://alice.github.io");
+  assert.equal(siteOf("https://blog.tistory.com/"), "https://blog.tistory.com");
+  assert.equal(siteOf("http://127.0.0.1:8080/a"), "http://127.0.0.1:8080");
+  assert.equal(siteOf("javascript:alert(1)"), null);
+});
+
+test("navigation runs automatically only within sites the user chose", () => {
+  const trusted = new Set(["https://naver.com"]);
   assert.equal(navigateAutoBlock(trusted, "https://shopping.naver.com/ns/search?query=%EB%A7%A5%EB%B6%81"), null);
-  assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/"));
+  assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/"), null);
   assert.ok(navigateAutoBlock(trusted, "https://honggildong.collector.example/"));
   assert.ok(navigateAutoBlock(trusted, "https://attacker.example/?d=010-1234-5678"));
   assert.ok(navigateAutoBlock(new Set(), "https://www.coupang.com/"));
   assert.ok(navigateAutoBlock(trusted, "javascript:alert(1)"));
+});
+
+test("clicks and fills run automatically only on pages and links within chosen sites", () => {
+  const trusted = new Set(["https://naver.com"]);
+  assert.equal(pageActionSiteBlock(trusted, "https://news.naver.com/section/105", ["https://n.news.naver.com/a/1"]), null);
+  assert.equal(pageActionSiteBlock(trusted, "https://shopping.naver.com/", []), null);
+  assert.ok(pageActionSiteBlock(trusted, "https://collector.example/next", []));
+  assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["https://collector.example/next"]));
+  assert.ok(pageActionSiteBlock(trusted, undefined, []));
 });
 
 test("tools outside page actions are never automatic", () => {
