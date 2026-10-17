@@ -99,7 +99,7 @@ async function beginActionLog(
     } catch {
       page = { ...pattern, skeleton: "" };
     }
-    notePendingAction(callId, tool, page, targets);
+    notePendingAction(turnTab, callId, tool, page, targets);
   } catch {
     /* 기록 없이 진행 */
   }
@@ -268,8 +268,8 @@ export function parseToolArgs<T extends ToolName>(
 }
 
 // 사용자가 승인 카드에서 취소한 동작을 기록한다.
-export function recordCancelledAction(callId: string): void {
-  void finishAction(callId, "cancelled");
+export function recordCancelledAction(callId: string, turnTab: TurnTab): void {
+  void finishAction(turnTab, callId, "cancelled");
 }
 
 export async function executeTool(
@@ -287,11 +287,11 @@ export async function executeTool(
     result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
   } catch (err) {
     const reason = reasonCode(err instanceof Error ? err.message : String(err));
-    void finishAction(callId, isPreActionStop(reason) ? "aborted" : "failed", { reason });
+    void finishAction(turnTab, callId, isPreActionStop(reason) ? "aborted" : "failed", { reason });
     throw err;
   }
   const { outcome, extra } = actionOutcome(toolName, result);
-  void finishAction(callId, outcome, extra);
+  void finishAction(turnTab, callId, outcome, extra);
   return result;
 }
 

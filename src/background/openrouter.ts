@@ -587,7 +587,7 @@ export class ChatAgent {
           );
 
           if (!approved) {
-            recordCancelledAction(callId);
+            recordCancelledAction(callId, this.turnTab);
             this.send({
               kind: "tool_result",
               callId,

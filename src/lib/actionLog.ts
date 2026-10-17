@@ -19,11 +19,12 @@ export interface PageKey {
 }
 
 const NUMERIC = /^\d+$/;
-// 해시·UUID·base64 같은 식별자: 16자 이상이고 숫자가 섞였거나, 32자 이상 16진수.
-const OPAQUE = /^(?=.*\d)[A-Za-z0-9_-]{16,}$|^[0-9a-f]{32,}$/i;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// 그대로 남겨도 되는 경로 낱말: 영문·숫자·- _ . ~ 만, 32자 이하.
+const PLAIN = /^[A-Za-z0-9._~-]{1,32}$/;
 
-function normalizeSegment(seg: string): string {
+// 경로 한 칸을 정규화한다. 기록이 개인정보 저장소가 되지 않도록, 흔한 정적 경로 낱말처럼 보이는 것만 남기고
+// 나머지(이메일·한글 이름·토큰·해시·UUID 등)는 자리표시로 바꾼다.
+export function normalizeSegment(seg: string): string {
   let s: string;
   try {
     s = decodeURIComponent(seg);
@@ -31,9 +32,22 @@ function normalizeSegment(seg: string): string {
     s = seg;
   }
   if (NUMERIC.test(s)) return "{n}";
-  if (UUID.test(s) || OPAQUE.test(s)) return "{id}";
+  if (!PLAIN.test(s)) return "{id}";
+  const letters = s.replace(/[^A-Za-z]/g, "");
+  const digits = s.replace(/\D/g, "").length;
+  const hasSeparator = /[._~-]/.test(s);
+  // 구분자 없는 긴 낱말(토큰), 숫자가 많이 섞인 낱말(해시), 대소문자가 뒤섞인 낱말(base64)은 식별자로 본다.
+  if (!hasSeparator && s.length >= 16) return "{id}";
+  if (digits >= 4 && letters.length >= 4 && !/^[A-Za-z_-]+[._-]?\d+(\.[A-Za-z0-9]+)?$/.test(s)) return "{id}";
+  const mixedCase = /[a-z]/.test(s) && /[A-Z]/.test(s);
+  if (!hasSeparator && mixedCase && (s.length >= 12 || (digits > 0 && s.length >= 6))) return "{id}";
   // 숫자 꼬리가 붙은 파일·글 이름(post-123, item_45.html)은 숫자만 자리표시로 바꾼다.
   return s.replace(/\d{2,}/g, "{n}");
+}
+
+// 쿼리 이름도 같은 기준으로(이름 자리에 값을 넣는 사이트가 있다).
+function normalizeQueryKey(k: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_.\[\]-]{0,31}$/.test(k) ? k : "{k}";
 }
 
 function normalizePath(path: string): string {
@@ -52,7 +66,8 @@ export function urlPattern(url: string): { origin: string; pattern: string } | n
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
   let pattern = normalizePath(u.pathname);
   const keys = Array.from(new Set(Array.from(u.searchParams.keys()))).sort();
-  if (keys.length) pattern += "?" + keys.map((k) => k.slice(0, 40)).join("&");
+  const shownKeys = Array.from(new Set(keys.map(normalizeQueryKey)));
+  if (shownKeys.length) pattern += "?" + shownKeys.join("&");
   // 해시 라우터(#/path, #!/path)는 경로로 본다. 그 밖의 #는 페이지 안 위치라 버린다.
   const hashRoute = /^#!?(\/[^?]*)/.exec(u.hash);
   if (hashRoute) pattern += "#" + normalizePath(hashRoute[1]);
@@ -146,12 +161,21 @@ function clipText(s: string, max: number): string {
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 }
 
+// 대상 이름에 섞인 주소·이메일·key=value·긴 숫자를 가린다(링크 글자가 주소 그대로인 경우 등).
+export function maskName(s: string): string {
+  return s
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, "{url}")
+    .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, "{email}")
+    .replace(/\S+=\S+/g, "{kv}")
+    .replace(/\d[\d\s-]{5,}\d/g, "{n}");
+}
+
 export function logTarget(info: TargetInfo, value?: string): LoggedTarget {
   const href = info.href ? urlPattern(info.href) : null;
   const t: LoggedTarget = {
     tag: info.tag,
     role: info.role,
-    name: clipText(info.name, 80),
+    name: clipText(maskName(info.name), 80),
     region: info.region,
     inFrame: info.inFrame,
     fieldType: info.fieldType,

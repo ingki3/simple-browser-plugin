@@ -8,6 +8,7 @@ import {
   fnv1a,
   isPreActionStop,
   logTarget,
+  maskName,
   pruneLog,
   reasonCode,
   summarizeClickEffect,
@@ -29,6 +30,21 @@ test("urlPattern: 글 번호·식별자는 자리표시, 쿼리는 이름만", (
   assert.equal(urlPattern("https://ex.test/settings/notifications").pattern, "/settings/notifications");
   // 쿼리 순서가 달라도 같은 틀.
   assert.equal(urlPattern("https://ex.test/s?b=1&a=2").pattern, urlPattern("https://ex.test/s?a=9&b=8").pattern);
+});
+
+test("urlPattern: 토큰·이메일·한글 이름·대소문자 섞인 식별자는 경로에 남기지 않음", () => {
+  const p = (u) => urlPattern(u).pattern;
+  assert.equal(p("https://ex.test/reset/ABCDEFGHIJKLMNOPQRSTUVWX"), "/reset/{id}");
+  assert.equal(p("https://ex.test/users/alice%40example.com/settings"), "/users/{id}/settings");
+  assert.equal(p("https://ex.test/profile/%ED%99%8D%EA%B8%B8%EB%8F%99"), "/profile/{id}");
+  assert.equal(p("https://ex.test/s/aZ9kQ2mX7pL"), "/s/{id}");
+  assert.equal(p("https://ex.test/s/xYzAbCdEfGhIj"), "/s/{id}");
+  assert.equal(p("https://ex.test/v/a1b2c3d4"), "/v/{id}");
+  // 흔한 경로 낱말은 남긴다.
+  assert.equal(p("https://ex.test/my-account/order_history/item_45.html"), "/my-account/order_history/item_{n}.html");
+  assert.equal(p("https://ex.test/api/v2/Search"), "/api/v2/Search");
+  // 이상한 쿼리 이름도 가린다.
+  assert.equal(p("https://ex.test/s?alice@example.com=1&q=2"), "/s?{k}&q");
 });
 
 test("urlPattern: 해시 라우터는 경로로, 그 밖의 해시는 버림", () => {
@@ -76,6 +92,17 @@ test("logTarget: 행 글자와 주소 값은 남기지 않음", () => {
   assert.equal("context" in t, false);
   assert.equal("hasValue" in t, false);
   assert.doesNotMatch(JSON.stringify(t), /secret|010-1234/);
+});
+
+test("maskName: 이름에 섞인 주소·이메일·값을 가림", () => {
+  assert.equal(maskName("https://example.test/?token=secret"), "{url}");
+  assert.equal(maskName("www.ex.test/a?b=c 열기"), "{url} 열기");
+  assert.equal(maskName("alice@example.com 에게 답장"), "{email} 에게 답장");
+  assert.equal(maskName("code=1234 확인"), "{kv} 확인");
+  assert.equal(maskName("010-1234-5678 전화"), "{n} 전화");
+  assert.equal(maskName("보고서 2024 다음 글"), "보고서 2024 다음 글");
+  const t = logTarget({ ...info, name: "https://example.test/?token=secret", href: "https://example.test/?token=secret" });
+  assert.doesNotMatch(JSON.stringify(t), /secret/);
 });
 
 test("logTarget: 입력 값은 있음/없음만", () => {

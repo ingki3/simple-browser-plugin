@@ -7,9 +7,11 @@ import {
   type PageKey,
 } from "@/lib/actionLog";
 import { getSettings } from "./storage";
+import type { TurnTab } from "./tools/handlers";
 import { debugLog } from "./debug";
 
-// 승인 카드를 띄울 때 정한 대상과 페이지를 실행 결과가 나올 때까지 들고 있는다(callId별).
+// 승인 카드를 띄울 때 정한 대상과 페이지를 실행 결과가 나올 때까지 들고 있는다.
+// callId는 모델이 정해 패널(대화)끼리 겹칠 수 있으므로, 턴마다 새로 만드는 TurnTab 객체와 함께 키로 쓴다.
 // 카드를 띄운 채 턴이 끝나면 결과가 오지 않으므로 오래된 것부터 버린다.
 interface Pending {
   tool: ActionLogEntry["tool"];
@@ -20,15 +22,27 @@ interface Pending {
 
 const MAX_PENDING = 20;
 const pending = new Map<string, Pending>();
+const turnIds = new WeakMap<TurnTab, string>();
+
+function keyOf(turnTab: TurnTab, callId: string): string {
+  let id = turnIds.get(turnTab);
+  if (!id) {
+    id = crypto.randomUUID();
+    turnIds.set(turnTab, id);
+  }
+  return `${id}:${callId}`;
+}
 
 export function notePendingAction(
+  turnTab: TurnTab,
   callId: string,
   tool: ActionLogEntry["tool"],
   page: PageKey | null,
   targets: LoggedTarget[],
 ): void {
-  pending.delete(callId);
-  pending.set(callId, { tool, page, targets, at: Date.now() });
+  const key = keyOf(turnTab, callId);
+  pending.delete(key);
+  pending.set(key, { tool, page, targets, at: Date.now() });
   while (pending.size > MAX_PENDING) {
     const oldest = pending.keys().next().value;
     if (oldest === undefined) break;
@@ -46,13 +60,15 @@ function enqueue<T>(job: () => Promise<T>): Promise<T> {
 }
 
 export function finishAction(
+  turnTab: TurnTab,
   callId: string,
   outcome: ActionOutcome,
   extra: Pick<ActionLogEntry, "effect" | "fill" | "reason"> = {},
 ): Promise<void> {
-  const p = pending.get(callId);
+  const key = keyOf(turnTab, callId);
+  const p = pending.get(key);
   if (!p) return Promise.resolve();
-  pending.delete(callId);
+  pending.delete(key);
   const entry: ActionLogEntry = {
     id: callId,
     at: p.at,
