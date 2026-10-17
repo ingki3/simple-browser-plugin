@@ -1,5 +1,6 @@
 import { ACTION_LOG_KEY } from "@/lib/messages";
 import {
+  capTargets,
   pruneLog,
   type ActionLogEntry,
   type ActionOutcome,
@@ -74,7 +75,7 @@ export function finishAction(
     at: p.at,
     tool: p.tool,
     page: p.page,
-    targets: p.targets,
+    ...capTargets(p.targets),
     outcome,
     ...extra,
   };
@@ -85,7 +86,20 @@ export function finishAction(
     const obj = await chrome.storage.local.get(ACTION_LOG_KEY);
     const entries = pruneLog(obj[ACTION_LOG_KEY], now);
     entries.push(entry);
-    await chrome.storage.local.set({ [ACTION_LOG_KEY]: pruneLog(entries, now) });
+    const next = pruneLog(entries, now);
+    try {
+      await chrome.storage.local.set({ [ACTION_LOG_KEY]: next });
+    } catch (err) {
+      // 저장 공간이 모자라면(설정·대화가 공간을 쓰고 있음) 기록을 절반으로 줄여 한 번 더 써 본다.
+      // 그래도 안 되면 기록을 비워 다른 저장(설정 등)을 막지 않게 한다.
+      debugLog("action_log:quota", err instanceof Error ? err.message : String(err), "warn");
+      const half = next.slice(Math.floor(next.length / 2));
+      try {
+        await chrome.storage.local.set({ [ACTION_LOG_KEY]: half });
+      } catch {
+        await chrome.storage.local.remove(ACTION_LOG_KEY);
+      }
+    }
   }).catch((err) => {
     // 기록 실패가 도구 결과를 바꾸지 않게 한다.
     debugLog("action_log:write_fail", err instanceof Error ? err.message : String(err), "warn");

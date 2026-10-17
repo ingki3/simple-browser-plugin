@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   ACTION_LOG_MAX_AGE_MS,
   ACTION_LOG_MAX_ENTRIES,
+  ACTION_LOG_MAX_TARGETS,
+  capTargets,
   collapseRepeats,
   fnv1a,
   isPreActionStop,
@@ -40,6 +42,12 @@ test("urlPattern: 토큰·이메일·한글 이름·대소문자 섞인 식별�
   assert.equal(p("https://ex.test/s/aZ9kQ2mX7pL"), "/s/{id}");
   assert.equal(p("https://ex.test/s/xYzAbCdEfGhIj"), "/s/{id}");
   assert.equal(p("https://ex.test/v/a1b2c3d4"), "/v/{id}");
+  // 구분자가 섞인 URL-safe 토큰도 가린다.
+  assert.equal(p("https://ex.test/reset/Abcd_efghijklmnopqrstuv"), "/reset/{id}");
+  assert.equal(p("https://ex.test/reset/kq3-Zx9_pL2m"), "/reset/{id}");
+  assert.equal(p("https://ex.test/t/xkcd-qwrtz-plmnb"), "/t/{id}");
+  assert.equal(p("https://ex.test/?Abcd_efghijklmnopqrstuv=1&page[size]=2"), "/?{k}&page[size]");
+  assert.equal(p("https://ex.test/settings/notifications/administration"), "/settings/notifications/administration");
   // 흔한 경로 낱말은 남긴다.
   assert.equal(p("https://ex.test/my-account/order_history/item_45.html"), "/my-account/order_history/item_{n}.html");
   assert.equal(p("https://ex.test/api/v2/Search"), "/api/v2/Search");
@@ -160,4 +168,20 @@ test("reasonCode: 오류 문구를 값 없는 분류로", () => {
   assert.equal(isPreActionStop("target_changed"), true);
   assert.equal(isPreActionStop("not_visible"), true);
   assert.equal(isPreActionStop("value_rejected"), false);
+});
+
+test("pruneLog: 크기 한도를 넘으면 오래된 것부터 버림", () => {
+  const now = 1000;
+  const big = (id) => ({ id, at: now, pad: "x".repeat(300) });
+  const kept = pruneLog([big("a"), big("b"), big("c")], now, 700);
+  assert.deepEqual(kept.map((e) => e.id), ["b", "c"]);
+  assert.ok(JSON.stringify(kept).length <= 700);
+});
+
+test("capTargets: 대상이 많으면 앞쪽만 남기고 수를 적음", () => {
+  const t = Array.from({ length: 200 }, (_, i) => ({ name: String(i) }));
+  const r = capTargets(t);
+  assert.equal(r.targets.length, ACTION_LOG_MAX_TARGETS);
+  assert.equal(r.targetCount, 200);
+  assert.deepEqual(capTargets(t.slice(0, 3)), { targets: t.slice(0, 3) });
 });

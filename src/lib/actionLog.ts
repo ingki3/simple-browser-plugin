@@ -19,11 +19,25 @@ export interface PageKey {
 }
 
 const NUMERIC = /^\d+$/;
-// 그대로 남겨도 되는 경로 낱말: 영문·숫자·- _ . ~ 만, 32자 이하.
-const PLAIN = /^[A-Za-z0-9._~-]{1,32}$/;
+// 경로 낱말을 . _ ~ - 로 나눈 조각 하나가 사람이 붙인 이름처럼 보이는지: 짧은 영단어(소문자, 첫 글자 대문자,
+// 짧은 약어), 숫자, v2·mp3 같은 짧은 버전 표기. 모음 없는 5자 이상 조각은 무작위 글자로 본다.
+const WORD_PART = /^(?:[a-z]{1,14}|[A-Z][a-z]{0,13}|[A-Z]{1,6}|\d+|[a-z]{1,3}\d{1,3})$/;
 
-// 경로 한 칸을 정규화한다. 기록이 개인정보 저장소가 되지 않도록, 흔한 정적 경로 낱말처럼 보이는 것만 남기고
-// 나머지(이메일·한글 이름·토큰·해시·UUID 등)는 자리표시로 바꾼다.
+function plainPart(part: string): boolean {
+  if (!WORD_PART.test(part)) return false;
+  return /\d/.test(part) || part.length < 5 || /[aeiouy]/i.test(part);
+}
+
+// 사람이 붙인 이름처럼 보이는 낱말인지(32자 이하, 조각 6개 이하, 조각마다 plainPart).
+function plainWord(s: string): boolean {
+  if (s.length > 32) return false;
+  const parts = s.split(/[._~-]/);
+  return parts.length <= 6 && parts.every((p) => p === "" || plainPart(p));
+}
+
+// 경로 한 칸을 정규화한다. 기록이 개인정보 저장소가 되지 않도록, 사람이 붙인 이름처럼 보이는 낱말만 남기고
+// 나머지(이메일·한글 이름·토큰·해시·UUID 등)는 자리표시로 바꾼다. 무작위 영단어처럼 보이는 짧은 토큰은
+// 걸러내지 못할 수 있다.
 export function normalizeSegment(seg: string): string {
   let s: string;
   try {
@@ -32,22 +46,14 @@ export function normalizeSegment(seg: string): string {
     s = seg;
   }
   if (NUMERIC.test(s)) return "{n}";
-  if (!PLAIN.test(s)) return "{id}";
-  const letters = s.replace(/[^A-Za-z]/g, "");
-  const digits = s.replace(/\D/g, "").length;
-  const hasSeparator = /[._~-]/.test(s);
-  // 구분자 없는 긴 낱말(토큰), 숫자가 많이 섞인 낱말(해시), 대소문자가 뒤섞인 낱말(base64)은 식별자로 본다.
-  if (!hasSeparator && s.length >= 16) return "{id}";
-  if (digits >= 4 && letters.length >= 4 && !/^[A-Za-z_-]+[._-]?\d+(\.[A-Za-z0-9]+)?$/.test(s)) return "{id}";
-  const mixedCase = /[a-z]/.test(s) && /[A-Z]/.test(s);
-  if (!hasSeparator && mixedCase && (s.length >= 12 || (digits > 0 && s.length >= 6))) return "{id}";
+  if (!plainWord(s)) return "{id}";
   // 숫자 꼬리가 붙은 파일·글 이름(post-123, item_45.html)은 숫자만 자리표시로 바꾼다.
   return s.replace(/\d{2,}/g, "{n}");
 }
 
-// 쿼리 이름도 같은 기준으로(이름 자리에 값을 넣는 사이트가 있다).
+// 쿼리 이름도 같은 기준으로(이름 자리에 값을 넣는 사이트가 있다). page[size] 같은 대괄호는 허용.
 function normalizeQueryKey(k: string): string {
-  return /^[A-Za-z_][A-Za-z0-9_.\[\]-]{0,31}$/.test(k) ? k : "{k}";
+  return plainWord(k.replace(/[[\]]/g, "_")) ? k : "{k}";
 }
 
 function normalizePath(path: string): string {
@@ -135,6 +141,8 @@ export interface ActionLogEntry {
   tool: "click_element" | "fill_form_fields";
   page: PageKey | null;
   targets: LoggedTarget[];
+  // 대상이 ACTION_LOG_MAX_TARGETS보다 많아 잘랐으면 원래 수.
+  targetCount?: number;
   outcome: ActionOutcome;
   // 클릭 결과 요약.
   effect?: {
@@ -154,6 +162,10 @@ export interface ActionLogEntry {
 }
 
 export const ACTION_LOG_MAX_ENTRIES = 500;
+// 전체 기록의 대략적인 크기 한도(JSON 글자 수). chrome.storage.local(10MB)을 설정·대화와 같이 쓰므로 작게 둔다.
+export const ACTION_LOG_MAX_CHARS = 1_000_000;
+// 한 항목에 남기는 대상 수. 칸이 아주 많은 입력도 항목 하나가 커지지 않게 앞쪽만 남기고 수만 센다.
+export const ACTION_LOG_MAX_TARGETS = 20;
 export const ACTION_LOG_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function clipText(s: string, max: number): string {
@@ -234,13 +246,30 @@ export function isPreActionStop(code: ReasonCode): boolean {
   return code === "target_changed" || code === "not_visible";
 }
 
-// 30일 지난 항목을 지우고 최근 500개만 남긴다. 저장된 값이 깨져 있으면 버린다.
-export function pruneLog(entries: unknown, now: number): ActionLogEntry[] {
+// 30일 지난 항목을 지우고 최근 500개, 크기 한도 안만 남긴다. 저장된 값이 깨져 있으면 버린다.
+export function pruneLog(entries: unknown, now: number, maxChars = ACTION_LOG_MAX_CHARS): ActionLogEntry[] {
   if (!Array.isArray(entries)) return [];
-  const fresh = entries.filter(
-    (e): e is ActionLogEntry =>
-      !!e && typeof e === "object" && typeof (e as ActionLogEntry).at === "number" &&
-      now - (e as ActionLogEntry).at <= ACTION_LOG_MAX_AGE_MS,
-  );
-  return fresh.slice(-ACTION_LOG_MAX_ENTRIES);
+  const fresh = entries
+    .filter(
+      (e): e is ActionLogEntry =>
+        !!e && typeof e === "object" && typeof (e as ActionLogEntry).at === "number" &&
+        now - (e as ActionLogEntry).at <= ACTION_LOG_MAX_AGE_MS,
+    )
+    .slice(-ACTION_LOG_MAX_ENTRIES);
+  // 새 항목부터 크기를 더해 한도를 넘는 지점보다 오래된 것은 버린다.
+  let total = 2;
+  let start = fresh.length;
+  while (start > 0) {
+    const size = JSON.stringify(fresh[start - 1]).length + 1;
+    if (total + size > maxChars) break;
+    total += size;
+    start--;
+  }
+  return fresh.slice(start);
+}
+
+// 대상이 너무 많으면 앞쪽만 남긴다.
+export function capTargets(targets: LoggedTarget[]): { targets: LoggedTarget[]; targetCount?: number } {
+  if (targets.length <= ACTION_LOG_MAX_TARGETS) return { targets };
+  return { targets: targets.slice(0, ACTION_LOG_MAX_TARGETS), targetCount: targets.length };
 }
