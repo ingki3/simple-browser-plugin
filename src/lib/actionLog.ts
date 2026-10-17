@@ -185,13 +185,20 @@ export function maskName(s: string): string {
     .replace(/\S*(?=\S*[A-Za-z])(?=\S*\d)[A-Za-z0-9_\-+/=]{8,}\S*/g, "{secret}");
 }
 
+function stripValue(name: string, value: string | undefined): string {
+  const v = value?.trim();
+  if (!v || v.length < 2) return name;
+  return name.split(v).join("{value}");
+}
+
 export function logTarget(info: TargetInfo, value?: string): LoggedTarget {
   const href = info.href ? urlPattern(info.href) : null;
   const t: LoggedTarget = {
     tag: info.tag,
     role: info.role,
     // 비밀번호·결제 칸은 페이지가 라벨에 값을 되비칠 수 있어 이름을 남기지 않는다.
-    name: info.sensitive ? "" : clipText(maskName(info.name), 80),
+    // 그 밖의 칸도 넣으려는 값이 이름에 그대로 들어 있으면 그 부분을 가린다(라벨에 현재 값을 보여 주는 페이지).
+    name: info.sensitive ? "" : clipText(maskName(stripValue(info.name, value)), 80),
     region: info.region,
     inFrame: info.inFrame,
     fieldType: info.fieldType,

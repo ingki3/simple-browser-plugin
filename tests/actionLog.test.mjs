@@ -121,6 +121,9 @@ test("logTarget: 입력 값은 있음/없음만", () => {
   const t = logTarget({ ...field, name: "비밀번호: hunter22" }, "hunter22");
   assert.equal(t.hasValue, true);
   assert.equal(t.name, "");
+  // 민감 칸이 아니어도 라벨에 되비친 값은 가린다.
+  const otp = logTarget({ ...field, fieldType: "text", sensitive: null, name: "현재 값: 123456" }, "123456");
+  assert.equal(otp.name, "현재 값: {value}");
   assert.equal(logTarget(field, "").hasValue, false);
   assert.doesNotMatch(JSON.stringify(t), /hunter22/);
 });
