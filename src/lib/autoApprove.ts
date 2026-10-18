@@ -254,6 +254,7 @@ const PERSONAL_VALUE_RE =
   /(?<!\d)01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|(?<!\d)0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}(?!\d)|(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)|(?<!\d)\d{6}[-\s][1-4]\d{6}(?!\d)/;
 const EMAIL_AROUND_AT_RE = /[^\s@/?#&=]{1,64}@[^\s@/?#&=]{1,253}\.[^\s@/?#&=]{1,63}/;
 // 이메일 모양이 있는지. 긴 값에서 정규식이 위치마다 다시 훑어 오래 걸리지 않게 '@' 주변(최대 100곳)만 본다.
+// 100곳을 넘기면 끝까지 확인하지 못한 것이니 개인정보가 있는 것으로 본다(묻기).
 const EMAIL_RE = {
   test(v: string): boolean {
     let from = 0;
@@ -263,7 +264,7 @@ const EMAIL_RE = {
       if (EMAIL_AROUND_AT_RE.test(v.slice(Math.max(0, at - 64), at + 320))) return true;
       from = at + 1;
     }
-    return false;
+    return v.indexOf("@", from) >= 0;
   },
 };
 

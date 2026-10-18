@@ -1,6 +1,7 @@
 import type { FormField } from "@/lib/messages";
 import {
   FIELD_PAYMENT_HINT_RE as PAYMENT_RE,
+  PAYMENT_TEXT_RE,
   PERSONAL_HINT_RE,
   SECRET_HINT_RE,
   decodeDeepText,
@@ -203,8 +204,8 @@ export function controlHasPersonalValue(control: Element | null): boolean {
     PERSONAL_HINT_RE.test(hint) ||
     SECRET_HINT_RE.test(hint) ||
     PAYMENT_RE.test(hint) ||
-    /\S+@\S+\.\S+/.test(value) ||
-    /\d[\d\s-]{7,}\d/.test(value)
+    // 이름에 개인정보 단서가 있으면 긴 숫자 묶음도 개인정보로 본다(선형 시간 검사).
+    /\d[\d\s-]{7,}\d/.test(value.slice(0, 2000))
   );
 }
 
@@ -322,8 +323,14 @@ const FIELD_KIND: TargetKind = {
             const scope = formlessScope(el);
             return !!scope && personalValuedElements(scope).some((p) => p !== el);
           })(),
-      // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등).
-      paymentContext: inPaymentContext(el, form),
+      // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
+      paymentContext:
+        inPaymentContext(el, form) ||
+        (isTag(el, "select") &&
+          Array.from(el.options).some((o) => {
+            const text = `${o.textContent ?? ""} ${o.value}`;
+            return PAYMENT_TEXT_RE.test(text) || PAYMENT_TEXT_RE.test(splitIdentifier(text));
+          })),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
       ...(choiceUrls.length ? { choiceUrls } : {}),

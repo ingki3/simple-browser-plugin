@@ -131,6 +131,7 @@ test("navigation and links carrying personal data or payment routes still ask", 
   const t1 = Date.now();
   assert.equal(looksPersonalValue("a".repeat(200000)), false);
   assert.equal(looksPersonalValue("a".repeat(100000) + " bob@example.com"), true);
+  assert.equal(looksPersonalValue("@ ".repeat(100) + " ".repeat(400) + "alice@example.com"), true);
   assert.ok(Date.now() - t1 < 500);
   assert.ok(autoApproveBlock("click_element", [t({ name: "계속", href: "https://alice:secret@shop.example/private" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "구매 확정" })]));
