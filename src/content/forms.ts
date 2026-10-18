@@ -1,5 +1,5 @@
 import type { FormField } from "@/lib/messages";
-import { looksPersonalValue, splitIdentifier } from "@/lib/autoApprove";
+import { FIELD_PAYMENT_HINT_RE as PAYMENT_RE, PERSONAL_HINT_RE, SECRET_HINT_RE, looksPersonalValue, splitIdentifier } from "@/lib/autoApprove";
 import { inPaymentContext } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
@@ -63,9 +63,6 @@ function describeType(el: FieldElement): string {
   return "select";
 }
 
-const SECRET_HINT_RE =
-  /(password|passwd|\bpwd\b|passcode|비밀\s*번호|암호|\botp\b|one[\s_-]*time|인증\s*(번호|코드)|보안\s*번호|verification[\s_-]*code|auth[\s_-]*code|\bpin\b)/i;
-const PAYMENT_RE = /(card.?(num|no)|cardnumber|cvc|cvv|카드\s*번호|보안\s*코드)/i;
 
 function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
@@ -81,8 +78,6 @@ function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
 // 개인정보 칸: 이름·연락처·주소·생년월일·신분 번호·계좌 등. 자동 실행을 켜도 이런 칸에 채우는 것은 묻는다.
 const PERSONAL_AC_RE =
   /\b(name|given-name|family-name|additional-name|honorific-\w+|nickname|email|tel|tel-\w+|street-address|address-line\d|address-level\d|postal-code|bday|bday-\w+|sex|username)\b/;
-const PERSONAL_HINT_RE =
-  /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e[\s-]?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name|user\s*name|nick\s*name|(?<![a-z])name(?![a-z]))/i;
 
 export function isPersonalField(el: HTMLElement): boolean {
   if (!isFieldElement(el)) return false;
@@ -261,6 +256,11 @@ export function personalValuedElements(form: HTMLFormElement): Element[] {
     if (!isFieldElement(el as HTMLElement)) continue;
     const f = el as FieldElement;
     if (isTag(f, "input") && ["submit", "button", "image", "reset"].includes(f.type)) continue;
+    // 파일이 선택된 칸은 내용을 볼 수 없으니 늘 민감한 값으로 본다(로컬 파일 업로드).
+    if (isTag(f, "input") && f.type === "file") {
+      if (f.files?.length) out.push(f);
+      continue;
+    }
     if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio") && !f.checked) continue;
     // 다중 선택 칸은 첫 선택값(value)만 보면 빈 값일 수 있어 선택된 값을 모두 본다.
     const value = isTag(f, "select") ? Array.from(f.selectedOptions, (o) => o.value).join(" ") : f.value ?? "";

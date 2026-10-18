@@ -226,6 +226,13 @@ function decodeDeepText(v: string): string {
   return s;
 }
 
+// 칸 이름·주소 매개변수 이름의 단서(입력 칸과 주소가 같은 규칙을 쓴다). 대상 글자는 splitIdentifier로 나눈 뒤 검사한다.
+export const SECRET_HINT_RE =
+  /(password|passwd|\bpwd\b|passcode|비밀\s*번호|암호|\botp\b|one[\s_-]*time|인증\s*(번호|코드)|보안\s*번호|verification[\s_-]*code|auth[\s_-]*code|\bpin\b)/i;
+export const FIELD_PAYMENT_HINT_RE = /(card.?(num|no)|cardnumber|cvc|cvv|카드\s*번호|보안\s*코드)/i;
+export const PERSONAL_HINT_RE =
+  /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e[\s-]?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name|user\s*name|nick\s*name|(?<![a-z])name(?![a-z]))/i;
+
 // 주소 자체가 개인정보를 싣거나 결제로 가는지: 경로·쿼리·해시에 결제 단서, 매개변수 이름에 개인정보·비밀 단서,
 // 값에 이메일·전화번호·카드 번호 모양. 같은 사이트 안이라도 이런 주소로의 이동·링크 클릭은 묻는다
 // (이메일이 든 GET 가입 양식 주소로 바로 이동, 결제를 확정하는 GET 링크).
@@ -288,7 +295,15 @@ export function sensitiveUrlReason(url: string): string | null {
     }
     const personal = params.some(([k, raw]) => {
       const v = decodeDeepText(raw);
-      return !!v.trim() && (PERSONAL_PARAM_RE.test(splitIdentifier(decodeDeepText(k))) || looksPersonalValue(v));
+      const name = splitIdentifier(decodeDeepText(k));
+      return (
+        !!v.trim() &&
+        (PERSONAL_PARAM_RE.test(name) ||
+          SECRET_HINT_RE.test(name) ||
+          PERSONAL_HINT_RE.test(name) ||
+          FIELD_PAYMENT_HINT_RE.test(name) ||
+          looksPersonalValue(v))
+      );
     });
     // 경로에서는 이메일만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
     if (personal || EMAIL_RE.test(route)) return "개인정보가 실린 주소";
