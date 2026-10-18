@@ -115,18 +115,36 @@ export function formDestination(el: HTMLElement, form: HTMLFormElement | null): 
   return formAction(form);
 }
 
-function optionUrls(select: HTMLSelectElement): string[] {
-  const out: string[] = [];
-  for (const o of Array.from(select.options).slice(0, 200)) {
-    const v = o.value.trim();
-    if (!/^(https?:|javascript:|data:|\/|\\)/i.test(v)) continue;
-    try {
-      out.push(/^javascript:|^data:/i.test(v) ? v : new URL(v, select.ownerDocument.baseURI).href);
-    } catch {
-      out.push(v);
-    }
+const MAX_CHOICE_URLS = 50;
+// 검사 한도를 넘었다는 표시. 웹 주소가 아니라 사이트 경계 판정에서 늘 "밖"으로 걸린다(묻기).
+const TOO_MANY_CHOICES = "about:too-many-url-choices";
+
+function urlLike(v: string, doc: Document): string | null {
+  const s = v.trim();
+  if (!/^(https?:|javascript:|data:|\/|\\)/i.test(s)) return null;
+  if (/^javascript:|^data:/i.test(s)) return s;
+  try {
+    return new URL(s, doc.baseURI).href;
+  } catch {
+    return s;
   }
-  return out.slice(0, 50);
+}
+
+// 입력으로 실제 들어갈 수 있는 값 중 주소처럼 보이는 것: select의 모든 선택지, checkbox·radio의 value.
+function choiceUrlsOf(el: HTMLElement): string[] {
+  const values = isTag(el, "select")
+    ? Array.from(el.options, (o) => o.value)
+    : isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")
+      ? [el.value]
+      : [];
+  const out: string[] = [];
+  for (const v of values) {
+    const u = urlLike(v, el.ownerDocument);
+    if (!u) continue;
+    if (out.length >= MAX_CHOICE_URLS) return [...out, TOO_MANY_CHOICES];
+    out.push(u);
+  }
+  return out;
 }
 
 // 양식을 지금 값으로 제출하면 요청하는 주소(action + 칸 값을 쿼리로). GET 양식은 실제로 이 주소로 가고,
@@ -191,9 +209,9 @@ const FIELD_KIND: TargetKind = {
     const submitTo = formDestination(el, form);
     // 기존 칸 값까지 합친 제출 주소(change 처리기로 바로 제출되면 숨은 next=https://… 도 함께 간다).
     const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
-    // 선택 칸은 표시 문구로 고르면 실제 option.value가 들어가므로, 주소처럼 보이는 선택지 값을 미리 풀어 둔다
-    // (change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지).
-    const choiceUrls = isTag(el, "select") ? optionUrls(el) : [];
+    // 선택 칸은 표시 문구로 고르면 실제 option.value가, checkbox·radio는 자기 value가 들어가므로 주소처럼 보이는
+    // 값을 미리 풀어 둔다(change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지). 한도를 넘으면 묻는다.
+    const choiceUrls = choiceUrlsOf(el);
     return {
       personal: isPersonalField(el),
       submitsPersonal: !!form && formHasPersonalValues(form),
