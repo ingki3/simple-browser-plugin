@@ -299,8 +299,16 @@ export function captureHiddenBaselines(): void {
     for (const el of Array.from(root.querySelectorAll('input[type="hidden"], input[type="checkbox"], input[type="radio"]'))) {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, (el as HTMLInputElement).value);
     }
+    // 선택 칸은 처음 살핀 때의 실제 선택 상태를 기준으로 삼는다(selected 속성이 없으면 첫 선택지가 골라져 있다).
+    for (const el of Array.from(root.querySelectorAll("select"))) {
+      if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, selectedSignature(el as HTMLSelectElement));
+    }
   }
   for (const doc of fresh) baselineDocs.add(doc);
+}
+
+function selectedSignature(sel: HTMLSelectElement): string {
+  return Array.from(sel.options, (o) => (o.selected ? "1" : "0")).join("");
 }
 
 // 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
@@ -310,7 +318,9 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
     if (!isFieldElement(el as HTMLElement)) continue;
     const f = el as FieldElement;
     if (isTag(f, "select")) {
-      if (Array.from(f.options).some((o) => o.selected !== o.defaultSelected)) return true;
+      const sig = selectedSignature(f);
+      if (!hiddenBaseline.has(f)) hiddenBaseline.set(f, sig);
+      else if (hiddenBaseline.get(f) !== sig) return true;
     } else if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio")) {
       if (f.checked !== f.defaultChecked) return true;
       // 체크 상태가 그대로여도 제출될 value가 처음 살핀 값에서 바뀌었으면(처리기가 내용을 복사) 바뀐 것.

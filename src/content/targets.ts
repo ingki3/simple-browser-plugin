@@ -382,13 +382,22 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const filled = kind.personalElements?.(el) ?? [];
   // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
   const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
-  // 이 호출이 써 넣은 값과 같은 값이 다른 칸에 복사된 것(처리기의 같은 값 동기화)도 승인한 변화로 본다.
-  const writtenValues = new Set(written ? [...written.values()].filter(Boolean) : []);
+  // 이 호출이 써 넣은 값과 같은 값이 같은 양식의 다른 칸에 복사된 것(처리기의 같은 값 동기화)도 승인한 변화로 본다.
+  // 개인정보 칸을 카드로 승인받은 묶음(consentPersonal)이고, 직접 쓴 칸과 같은 양식일 때만.
+  const formOf = (e: Element) => (e as HTMLInputElement).form ?? e.closest("form");
+  const syncAllowed = (p: Element) => {
+    if (!info.consentPersonal || !written) return false;
+    const sig = fieldValueSignature(p);
+    const pf = formOf(p);
+    if (!pf || !sig) return false;
+    for (const [w, v] of written) if (v === sig && formOf(w) === pf) return true;
+    return false;
+  };
   const explained = (p: Element) =>
     (allowed?.has(p) && allowed.get(p) === fieldValueSignature(p)) ||
     // 선택 칸은 선택 상태 전체(다중 선택에 처리기가 더한 선택지 포함)를 비교한다.
     (written?.has(p) && written.get(p) === fieldValueSignature(p)) ||
-    (!written?.has(p) && writtenValues.has(fieldValueSignature(p)));
+    (!written?.has(p) && syncAllowed(p));
   if (allowed && filled.some((p) => !explained(p))) return "승인 뒤 양식에 개인정보가 채워짐";
   // 클릭은 묶음 입력이 아니므로, 승인 뒤 개인정보 제출로 바뀌었으면(버튼 자신의 값 포함) 그대로 멈춘다.
   // 입력 칸은 허용 목록으로 판정하고, 목록이 없을 때만(오래되어 지워진 경우 등) 양식 단위로 본다.
