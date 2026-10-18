@@ -119,9 +119,11 @@ const MAX_CHOICE_URLS = 50;
 // 검사 한도를 넘었다는 표시. 웹 주소가 아니라 사이트 경계 판정에서 늘 "밖"으로 걸린다(묻기).
 const TOO_MANY_CHOICES = "about:too-many-url-choices";
 
+// 주소로 쓰일 수 있는 값: 스킴·/·\로 시작하거나, 상대 경로처럼 /·?·=·%·:가 섞인 값(redirect?next=…).
+// "ko", "seoul" 같은 평범한 값은 아니다.
 function urlLike(v: string, doc: Document): string | null {
   const s = v.trim();
-  if (!/^(https?:|javascript:|data:|\/|\\)/i.test(s)) return null;
+  if (!s || !/^(https?:|javascript:|data:|\/|\\)|[/?=%:]/i.test(s)) return null;
   if (/^javascript:|^data:/i.test(s)) return s;
   try {
     return new URL(s, doc.baseURI).href;
@@ -196,12 +198,30 @@ export function controlHasPersonalValue(control: Element | null): boolean {
   );
 }
 
-// 제출 주소의 매개변수 값 중 주소처럼 보이는 것(입력 직전 새로 생겼는지 보려고).
+// 값을 여러 번 인코딩한 경우까지 풀어 본다(https%253A%252F%252F…).
+function decodeDeep(v: string): string {
+  let s = v.trim();
+  for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(s); i++) {
+    try {
+      s = decodeURIComponent(s);
+    } catch {
+      break;
+    }
+  }
+  return s;
+}
+
+function urlLikeValue(v: string): boolean {
+  const s = decodeDeep(v);
+  return /^[/\\]|^[a-z][a-z0-9+.-]*:|:[/\\]{2}|[/?=]/i.test(s);
+}
+
+// 제출 주소의 매개변수 값 중 주소로 쓰일 수 있는 것(풀어 쓴 값). 입력 직전 새로 생겼는지 보려고.
 function urlLikeParams(submitUrl: string): Set<string> {
   const out = new Set<string>();
   try {
     new URL(submitUrl).searchParams.forEach((v) => {
-      if (/^[/\\]|^[a-z][a-z0-9+.-]*:|:\/\/|%2f%2f/i.test(v.trim())) out.add(v.trim());
+      if (urlLikeValue(v)) out.add(decodeDeep(v));
     });
   } catch {
     /* ignore */
@@ -368,6 +388,7 @@ export async function fillFormFields(
 
   const results: FillResult[] = [];
   const written: Array<{ el: FieldElement; info: TargetInfo; value: string; result: FillResult }> = [];
+  const applied = new Set<string>();
   for (const f of args.fills) {
     let el: HTMLElement;
     let info: TargetInfo;
@@ -384,7 +405,11 @@ export async function fillFormFields(
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
     const nowUrl = FIELD_KIND.risk?.(el).submitUrl ?? "";
     if (nowUrl) {
-      const known = new Set([...urlLikeParams(info.submitUrl ?? ""), ...args.fills.map((x) => x.value.trim())]);
+      const known = new Set([
+        ...urlLikeParams(info.submitUrl ?? ""),
+        ...args.fills.map((x) => decodeDeep(x.value)),
+        ...applied,
+      ]);
       const added = [...urlLikeParams(nowUrl)].filter((v) => !known.has(v));
       if (added.length) {
         results.push({ id: f.id, label, applied: false, note: "승인한 뒤 양식에 주소 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요." });
@@ -395,6 +420,8 @@ export async function fillFormFields(
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
     }
+    // 앞선 입력이 실제로 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
+    applied.add(decodeDeep(el.value ?? ""));
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
     written.push({ el, info, value: f.value, result });
