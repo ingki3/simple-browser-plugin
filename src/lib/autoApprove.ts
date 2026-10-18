@@ -47,6 +47,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const text = `${t.name} ${t.outerText ?? ""}`;
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
+      // 파일을 내려받는 링크(download 속성)는 이미지 저장처럼 묻는다.
+      if (t.download) return "파일 내려받기 링크";
       // 누르면 가는 링크·양식 제출 주소에 결제 경로나 개인정보가 실려 있으면 묻는다.
       for (const href of [t.href, t.ancestorHref ?? "", t.submitTo ?? "", t.submitUrl ?? "", ...(t.choiceUrls ?? [])]) {
         const why = href ? sensitiveUrlReason(href) : null;
@@ -281,7 +283,8 @@ export function sensitiveUrlReason(url: string): string | null {
   for (const u of urls) {
     // 경로·쿼리·해시를 따로 풀어 본다(한 부분의 잘못된 인코딩이 다른 부분 해석을 막지 않게).
     const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join("");
-    if (PAYMENT_ROUTE_RE.test(route)) return "결제·주문 주소";
+    // 이어 붙인 표기(pay_now, confirm_order, placeOrder)도 낱말로 나눠 본다.
+    if (PAYMENT_ROUTE_RE.test(route) || PAYMENT_ROUTE_RE.test(splitIdentifier(route))) return "결제·주문 주소";
     if (u.username || u.password) return "계정 정보가 실린 주소";
     // 쿼리와 해시(#a=b, #/path?a=b — 해시 값을 읽는 SPA) 매개변수 모두 본다.
     const params: Array<[string, string]> = [...u.searchParams];

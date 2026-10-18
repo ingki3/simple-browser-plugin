@@ -36,6 +36,8 @@ test("identifier hints are split on underscores and camel case", async () => {
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/login?verification_code=123456"));
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/#/login?otp_code=123456"));
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/%70ayment/confirm?x=%ZZ"));
+  for (const p of ["/pay_now", "/confirm_order", "/placeOrder"]) assert.ok(navigateAutoBlock(trusted, "https://shop.example" + p), p);
+  assert.ok(autoApproveBlock("click_element", [t({ name: "다음", tag: "a", download: true })]));
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/redirect?next=https%253A%252F%252Fcollector.example%252F%253Fd%253Dprivate-chat%25ZZ"));
 });
 

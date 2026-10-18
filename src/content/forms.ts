@@ -1,5 +1,12 @@
 import type { FormField } from "@/lib/messages";
-import { FIELD_PAYMENT_HINT_RE as PAYMENT_RE, PERSONAL_HINT_RE, SECRET_HINT_RE, looksPersonalValue, splitIdentifier } from "@/lib/autoApprove";
+import {
+  FIELD_PAYMENT_HINT_RE as PAYMENT_RE,
+  PERSONAL_HINT_RE,
+  SECRET_HINT_RE,
+  decodeDeepText,
+  looksPersonalValue,
+  splitIdentifier,
+} from "@/lib/autoApprove";
 import { inPaymentContext } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
@@ -122,6 +129,8 @@ function urlLike(v: string, doc: Document): string | null {
   // 인코딩된 값(https%3A%2F%2F…)은 먼저 풀어 본다(change 처리기·서버가 풀어 쓰는 경우).
   const s = decodeDeep(v);
   if (!s || !/^(https?:|javascript:|data:|\/|\\)|[/?=%:]/i.test(s)) return null;
+  // 다 풀고도 인코딩된 주소 흔적이 남으면 목적지를 확인할 수 없다(사이트 경계에서 늘 밖 → 묻기).
+  if (/%3a|%2f%2f|%5c/i.test(s)) return "about:undecodable";
   if (/^javascript:|^data:/i.test(s)) return s;
   try {
     return new URL(s, doc.baseURI).href;
@@ -200,16 +209,9 @@ export function controlHasPersonalValue(control: Element | null): boolean {
 }
 
 // 값을 여러 번 인코딩한 경우까지 풀어 본다(https%253A%252F%252F…).
+// 공통 디코더(잘못된 %ZZ가 섞여도 올바른 %XX는 푼다)를 쓴다.
 function decodeDeep(v: string): string {
-  let s = v.trim();
-  for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(s); i++) {
-    try {
-      s = decodeURIComponent(s);
-    } catch {
-      break;
-    }
-  }
-  return s;
+  return decodeDeepText(v.trim());
 }
 
 function urlLikeValue(v: string): boolean {

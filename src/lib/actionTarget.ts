@@ -42,6 +42,8 @@ export interface TargetInfo {
   ancestorHref?: string;
   // 대상이 버튼·링크 안의 요소면 실제로 작동하는 그 바깥 버튼·링크의 글자. 결제·제출 문구 판정용.
   outerText?: string;
+  // 대상이나 감싼 링크에 download 속성이 있는지(누르면 파일을 내려받는다).
+  download?: boolean;
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
   // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
   consentPersonal?: boolean;

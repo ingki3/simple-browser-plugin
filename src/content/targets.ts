@@ -21,7 +21,7 @@ export interface TargetKind {
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
   // 그 칸의 양식에서 값이 채워진 개인정보·비밀 칸들(묶음 승인 예외 판정용).
   personalElements?(el: HTMLElement): Element[];
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download">;
 }
 
 interface Entry {
@@ -379,6 +379,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   // (기존 값에 실린 바깥 주소는 승인 카드 판정 때 이미 본다). 클릭은 값이 바뀌면 멈춘다.
   if (kind.prefix !== "f" && (now.submitUrl ?? "") !== (info.submitUrl ?? "")) return "양식에 담긴 값이 바뀜";
   if ((now.outerText ?? "") !== (info.outerText ?? "")) return "감싼 버튼 글자가 바뀜";
+  if (now.download && !info.download) return "내려받기 링크로 바뀜";
   if ((now.choiceUrls ?? []).join(" ") !== (info.choiceUrls ?? []).join(" ")) return "선택지 주소가 바뀜";
   return null;
 }

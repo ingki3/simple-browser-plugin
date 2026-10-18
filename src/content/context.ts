@@ -1,5 +1,5 @@
 // 조작 대상 주변의 맥락 판정(결제 화면인지 등). 클릭 대상과 입력 칸이 함께 쓴다.
-import { PAYMENT_TEXT_RE, decodeDeepText } from "@/lib/autoApprove";
+import { PAYMENT_TEXT_RE, decodeDeepText, splitIdentifier } from "@/lib/autoApprove";
 import { isShadowRoot } from "./docs";
 
 function parentDocument(doc: Document): Document | null {
@@ -16,7 +16,8 @@ function paymentDocument(doc: Document): boolean {
   const loc = doc.defaultView?.location;
   // 경로·쿼리·해시를 따로, 잘못된 인코딩이 섞여도 올바른 부분은 풀어 본다.
   const route = [loc?.pathname ?? "", loc?.search ?? "", loc?.hash ?? ""].map(decodeDeepText).join("");
-  if (/(checkout|payment|\bpay\b|order)/i.test(route)) return true;
+  const words = splitIdentifier(route);
+  if (/(checkout|payment|\bpay\b|order)/i.test(route) || /(\bpay\b|\border\b)/i.test(words)) return true;
   const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
   return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
 }

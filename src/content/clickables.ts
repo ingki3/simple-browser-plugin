@@ -157,6 +157,7 @@ const CLICK_KIND: TargetKind = {
       ...(ancestorHref ? { ancestorHref } : {}),
       ...(outerText ? { outerText } : {}),
       ...(choiceUrls.length ? { choiceUrls } : {}),
+      ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
     };
   },
 };
