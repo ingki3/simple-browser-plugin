@@ -512,7 +512,7 @@ const FIELD_KIND: TargetKind = {
       // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
       ...(() => {
         const full = isFieldElement(el)
-          ? `${resolveLabel(el)} ${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""}`.replace(/\s+/g, " ").trim()
+          ? `${resolveLabel(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
           : "";
         return full ? { outerText: full } : {};
       })(),

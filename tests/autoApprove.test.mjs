@@ -204,3 +204,10 @@ test("destinations wrapped in the path are checked against the trusted site", ()
   assert.equal(navigateAutoBlock(trusted, "https://trusted.example/out/https%3A%2F%2Fsub.trusted.example%2Fa"), null);
   assert.equal(navigateAutoBlock(trusted, "https://trusted.example/docs/http-guide"), null);
 });
+
+test("common English order confirmation buttons ask", () => {
+  for (const name of ["Confirm order", "Complete order", "Place your order", "Submit Order"]) {
+    assert.ok(autoApproveBlock("click_element", [t({ name })]), name);
+  }
+  assert.equal(autoApproveBlock("click_element", [t({ name: "Ordering tips" })]), null);
+});

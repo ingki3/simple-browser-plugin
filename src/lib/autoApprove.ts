@@ -12,9 +12,9 @@ export const AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
   "fill_form_fields",
 ]);
 
-// 돈이 나가는 버튼: 결제·구매·주문·송금 등.
+// 돈이 나가는 버튼: 결제·구매·주문·송금 등. 영문 order는 단어로 따로 본다(Confirm order, Place your order).
 export const PAYMENT_TEXT_RE =
-  /(결제|구매|구입|주문|송금|이체|충전|후원|기부|입금|\bpay\b|payment|checkout|check\s*out|\bbuy\b|purchase|place\s*order|order\s*now|donate)/i;
+  /(결제|구매|구입|주문|송금|이체|충전|후원|기부|입금|\bpay\b|payment|checkout|check\s*out|\bbuy\b|purchase|\border\b|donate)/i;
 // 개인정보를 내보내는 버튼: 가입·신청·제출·인증 등.
 const SUBMIT_TEXT_RE =
   /(가입|신청|제출|접수|본인\s*인증|인증\s*(번호|요청|하기)|예약\s*하기|문의\s*(하기|등록)|sign\s*up|register|submit|verify)/i;
