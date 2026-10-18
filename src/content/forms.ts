@@ -307,8 +307,9 @@ export function captureHiddenBaselines(): void {
   for (const doc of fresh) baselineDocs.add(doc);
 }
 
+// 선택 상태와 선택된 선택지의 실제 값을 함께 요약한다(선택은 그대로인데 option.value가 바뀌는 경우도 잡게).
 function selectedSignature(sel: HTMLSelectElement): string {
-  return Array.from(sel.options, (o) => (o.selected ? "1" : "0")).join("");
+  return Array.from(sel.options, (o) => (o.selected ? `1:${o.value}` : "0")).join("\u0001");
 }
 
 // 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
