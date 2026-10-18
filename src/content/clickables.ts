@@ -9,7 +9,7 @@ import {
   isPersonalField,
   personalValuedElements,
 } from "./forms";
-import { closestAcross, eventParent, inPaymentContext } from "./context";
+import { closestAcross, eventParent, formlessScope, inPaymentContext, linkHrefOf } from "./context";
 import {
   detectRegion,
   recheckApproved,
@@ -56,7 +56,7 @@ function clickText(el: HTMLElement): string {
 function enclosingLinkHref(el: HTMLElement): string {
   const parent = eventParent(el);
   const link = parent ? closestAcross(parent, "a[href], area[href]") : null;
-  return link ? (link as HTMLAnchorElement).href : "";
+  return link ? linkHrefOf(link) : "";
 }
 
 const CONTROL_SELECTOR =
@@ -97,14 +97,7 @@ function submitScope(el: HTMLElement): Element | null {
   const control = activatedControl(el) ?? labelControl(el);
   const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
   if (form) return form;
-  const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
-  if (dialog) return dialog;
-  let cur: Element | null = eventParent(el);
-  for (let depth = 0; cur && depth < 6; depth++, cur = eventParent(cur)) {
-    if (cur === cur.ownerDocument.body) break;
-    if (cur.querySelector("input, textarea, select")) return cur;
-  }
-  return null;
+  return formlessScope(el);
 }
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).

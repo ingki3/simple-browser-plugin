@@ -62,3 +62,30 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
   const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
   return [form, dialog].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)));
 }
+
+// 링크 요소의 실제 목적지 문자열. SVG <a>의 href는 문자열이 아니라 SVGAnimatedString이라 속성에서 읽어
+// 문서 주소 기준으로 푼다. 풀 수 없으면 속성 값 그대로(웹 주소가 아니면 사이트 판정에서 묻는다).
+export function linkHrefOf(el: Element): string {
+  if (el.localName !== "a" && el.localName !== "area") return "";
+  const raw = el.getAttribute("href") ?? el.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+  if (raw === null) return "";
+  try {
+    return new URL(raw, el.baseURI).href;
+  } catch {
+    return raw;
+  }
+}
+
+// 양식 없는 화면에서 대상 주변의 입력 칸 묶음: 감싼 대화상자, 아니면 위로 올라가며(최대 6단계, body 전)
+// 처음 만나는 입력 칸이 든 조상. self는 그 자신(입력 칸)이 있어도 다른 칸이 있어야 범위로 본다.
+export function formlessScope(el: Element): Element | null {
+  const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
+  if (dialog) return dialog;
+  let cur: Element | null = eventParent(el);
+  for (let depth = 0; cur && depth < 6; depth++, cur = eventParent(cur)) {
+    if (cur === cur.ownerDocument.body) break;
+    const fields = Array.from(cur.querySelectorAll("input, textarea, select")).filter((f) => f !== el);
+    if (fields.length) return cur;
+  }
+  return null;
+}

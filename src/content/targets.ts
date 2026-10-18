@@ -6,6 +6,7 @@
 import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
+import { linkHrefOf } from "./context";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸)와 요소에 붙이는 속성.
@@ -79,8 +80,7 @@ function implicitRole(el: HTMLElement): string {
 }
 
 function hrefOf(el: HTMLElement): string {
-  if (el.localName !== "a") return "";
-  return (el as HTMLAnchorElement).href || "";
+  return linkHrefOf(el);
 }
 
 // 행 문맥: 대상이 든 목록 항목(li·tr·role=row 등, 또는 같은 틀 형제가 2개 이상인 반복 구조)의 글자.
