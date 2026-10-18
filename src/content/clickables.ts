@@ -89,7 +89,9 @@ function enclosingControlTexts(el: HTMLElement): string {
   // label을 누르면 연결된 컨트롤이 작동하므로 그 이름도 본다.
   const control = labelControl(el);
   if (control) texts.push(clickText(control), accessibleNames(control));
-  return texts.filter(Boolean).join(" ").slice(0, 400);
+  // 판정에는 전체 글자를 쓴다(앞부분만 보면 긴 aria-label 뒤의 'Buy now'를 놓친다). 대상 자신의 전체 글자도 넣는다.
+  texts.push((el.innerText || el.textContent || "").replace(/\s+/g, " "));
+  return texts.filter(Boolean).join(" ");
 }
 
 // 버튼이 제출할 값의 범위: 연결된 양식, 없으면 감싼 대화상자, 그것도 없으면 위로 올라가며 처음 만나는
@@ -98,7 +100,11 @@ function submitScopes(el: HTMLElement): FormlessScope[] {
   const control = activatedControl(el) ?? labelControl(el);
   const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
   if (form) return [{ node: form, includeFormFields: true }];
-  return formlessScopes(el);
+  // 양식 밖 버튼은 처리기가 다른 양식을 requestSubmit할 수 있으니 범위 안 양식 칸까지 본다. 다만 목적지가 있는
+  // 일반 링크(href로 이동)는 양식 칸을 끌어오지 않는다(주변 양식의 숨은 값 때문에 모든 링크가 묻게 되지 않게).
+  const link = closestAcross(el, "a[href], area[href], a[*|href]");
+  const navLink = !!link && !/^javascript:/i.test((link.getAttribute("href") ?? "").trim());
+  return formlessScopes(el).map((s) => (navLink ? s : { ...s, includeFormFields: true }));
 }
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).

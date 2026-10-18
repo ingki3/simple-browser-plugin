@@ -113,10 +113,9 @@ export function formlessScopes(el: Element): FormlessScope[] {
   const base = dialog ?? el.ownerDocument.body;
   if (base) {
     nodes.push(base);
-    // 범위 안 다른 웹 컴포넌트의 열린 shadow root도 본다(querySelectorAll은 shadow 안으로 들어가지 않는다).
-    for (const root of openShadowRootsIn(base)) if (!nodes.includes(root)) nodes.push(root);
-    // 범위 안 같은 출처 iframe의 문서도 본다(대화상자 안 iframe의 로그인 양식을 바깥 버튼이 제출).
-    for (const body of frameBodiesIn(base)) if (!nodes.includes(body)) nodes.push(body);
+    // 범위 안 다른 웹 컴포넌트의 열린 shadow root와 같은 출처 iframe 문서도 서로 교차해 본다
+    // (querySelectorAll은 shadow·iframe 안으로 들어가지 않는다).
+    for (const n of nestedContainersIn(base)) if (!nodes.includes(n)) nodes.push(n);
   }
   const scopes = nodes.map((node) => ({ node, includeFormFields: inDialog }));
   // 같은 출처 iframe 안의 대상이면 iframe 요소를 부모 문서의 대상으로 보고 부모 쪽 범위도 더한다
@@ -126,43 +125,33 @@ export function formlessScopes(el: Element): FormlessScope[] {
   return scopes;
 }
 
-// 범위 안 같은 출처 iframe(중첩 포함, 최대 20개)의 body.
-function frameBodiesIn(scope: Element | ShadowRoot): Element[] {
-  const out: Element[] = [];
+// 범위 안의 하위 컨테이너들: 열린 shadow root와 같은 출처 iframe 문서 body를 서로 교차해 따라 들어간다
+// (iframe 안 컴포넌트의 shadow root, shadow root 안 iframe). 전체 최대 220개.
+export function nestedContainersIn(scope: Element | ShadowRoot): Array<Element | ShadowRoot> {
+  const out: Array<Element | ShadowRoot> = [];
   const queue: Array<Element | ShadowRoot> = [scope];
-  while (queue.length && out.length < 20) {
+  while (queue.length && out.length < 220) {
     const node = queue.shift()!;
-    for (const frame of Array.from(node.querySelectorAll("iframe, frame"))) {
-      let body: Element | null = null;
-      try {
-        body = (frame as HTMLIFrameElement).contentDocument?.body ?? null;
-      } catch {
-        body = null;
+    for (const child of Array.from(node.querySelectorAll("*"))) {
+      let next: Element | ShadowRoot | null = (child as HTMLElement).shadowRoot ?? null;
+      if (!next && (child.localName === "iframe" || child.localName === "frame")) {
+        try {
+          next = (child as HTMLIFrameElement).contentDocument?.body ?? null;
+        } catch {
+          next = null;
+        }
       }
-      if (body && !out.includes(body)) {
-        out.push(body);
-        queue.push(body);
-        if (out.length >= 20) break;
+      if (next && !out.includes(next)) {
+        out.push(next);
+        queue.push(next);
+        if (out.length >= 220) break;
       }
     }
   }
   return out;
 }
 
-// 범위 안의 열린 shadow root들(중첩 포함, 최대 200개).
+// 범위 안의 열린 shadow root들(iframe 안 것 포함).
 export function openShadowRootsIn(scope: Element | ShadowRoot): ShadowRoot[] {
-  const out: ShadowRoot[] = [];
-  const queue: Array<Element | ShadowRoot> = [scope];
-  while (queue.length && out.length < 200) {
-    const node = queue.shift()!;
-    for (const child of Array.from(node.querySelectorAll("*"))) {
-      const sr = (child as HTMLElement).shadowRoot;
-      if (sr && !out.includes(sr)) {
-        out.push(sr);
-        queue.push(sr);
-        if (out.length >= 200) break;
-      }
-    }
-  }
-  return out;
+  return nestedContainersIn(scope).filter((n): n is ShadowRoot => isShadowRoot(n));
 }
