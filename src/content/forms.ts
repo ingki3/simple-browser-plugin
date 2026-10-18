@@ -6,6 +6,7 @@ import {
   SECRET_HINT_RE,
   decodeDeepText,
   looksPersonalValue,
+  sensitiveUrlReason,
   splitIdentifier,
 } from "@/lib/autoApprove";
 import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
@@ -158,22 +159,28 @@ export function formDestinations(form: HTMLFormElement): string[] {
   return out;
 }
 
-// 이 제출 주소 말고 양식이 제출될 수 있는 다른 주소들(다른 제출 버튼의 formaction)과 지금 값을 합친 주소.
-// 칸의 change 처리기나 다른 버튼의 클릭 처리기가 form.requestSubmit(그 버튼)으로 보낼 수 있다.
-export function otherDestinations(
-  form: HTMLFormElement,
-  submitTo: string,
-): { scopeFormActions?: string[]; scopeSubmitUrls?: string[] } {
-  const extra = formDestinations(form).filter((u) => u !== submitTo);
-  // 제출 버튼마다 실제로 보낼 주소(그 버튼의 action + 양식 값 + 버튼 자신의 name=value). 같은 action이어도
-  // 버튼 값(operation=pay)이 다를 수 있다. 50개를 넘으면 한도 표시를 넣는다.
+// 이름 있는 제출 버튼마다 실제로 보낼 주소(그 버튼의 action + 버튼 자신의 name=value, withValues면 양식 값도).
+// 같은 action이어도 버튼 값(operation=pay)이 다를 수 있다. 50개를 넘으면 한도 표시를 넣는다.
+function submitterUrls(form: HTMLFormElement, withValues: boolean): string[] {
   const urls: string[] = [];
   for (const el of formElements(form)) {
     const submitter =
       (isTag(el, "button") && ((el as HTMLButtonElement).type || "submit") === "submit") ||
       (isTag(el, "input") && ["submit", "image"].includes((el as HTMLInputElement).type));
-    if (!submitter || !(el as HTMLButtonElement).name) continue;
-    const url = formSubmissionUrl(form, formDestination(el as HTMLElement, form), el);
+    const b = el as HTMLButtonElement;
+    if (!submitter || !b.name) continue;
+    const dest = formDestination(b, form);
+    let url = "";
+    if (withValues) url = formSubmissionUrl(form, dest, b);
+    else {
+      try {
+        const u = new URL(dest);
+        u.searchParams.append(b.name, b.value ?? "");
+        url = u.href;
+      } catch {
+        url = dest;
+      }
+    }
     if (!url || urls.includes(url)) continue;
     if (urls.length >= 50) {
       urls.push("about:too-many-forms");
@@ -181,6 +188,17 @@ export function otherDestinations(
     }
     urls.push(url);
   }
+  return urls;
+}
+
+// 이 제출 주소 말고 양식이 제출될 수 있는 다른 주소들(다른 제출 버튼의 formaction)과 지금 값을 합친 주소.
+// 칸의 change 처리기나 다른 버튼의 클릭 처리기가 form.requestSubmit(그 버튼)으로 보낼 수 있다.
+export function otherDestinations(
+  form: HTMLFormElement,
+  submitTo: string,
+): { scopeFormActions?: string[]; scopeSubmitUrls?: string[] } {
+  const extra = formDestinations(form).filter((u) => u !== submitTo);
+  const urls = submitterUrls(form, true);
   for (const u of extra) {
     const url = u.startsWith("about:") ? u : formSubmissionUrl(form, u);
     if (!urls.includes(url)) urls.push(url);
@@ -433,7 +451,8 @@ export function scopeSubmitUrls(scopes: Array<{ node: Element | ShadowRoot }>): 
     for (const f of Array.from(s.node.querySelectorAll("form"))) {
       // 기본 action뿐 아니라 제출 버튼들의 formaction도 본다.
       const dests = formDestinations(f as HTMLFormElement);
-      for (const action of dests) {
+      // 제출 버튼 자신의 name=value(operation=pay)를 붙인 주소도 결제·개인정보 주소인지 본다.
+      for (const action of [...dests, ...submitterUrls(f as HTMLFormElement, false)]) {
         if (actions.includes(action)) continue;
         if (actions.length >= 50) {
           actions.push(TOO_MANY_FORMS);
@@ -442,6 +461,14 @@ export function scopeSubmitUrls(scopes: Array<{ node: Element | ShadowRoot }>): 
         actions.push(action);
       }
       if (!formHasChangedValues(f as HTMLFormElement)) continue;
+      for (const url of submitterUrls(f as HTMLFormElement, true)) {
+        if (changed.includes(url)) continue;
+        if (changed.length >= 50) {
+          changed.push(TOO_MANY_FORMS);
+          return { changed, actions };
+        }
+        changed.push(url);
+      }
       for (const action of dests) {
         const url = formSubmissionUrl(f as HTMLFormElement, action);
         for (const u of [action, url]) {
@@ -783,6 +810,33 @@ export async function fillFormFields(
           label,
           applied: false,
           note: "승인한 뒤 양식에 주소·개인정보 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요.",
+        });
+        continue;
+      }
+      // 앞선 입력의 처리기가 숨은 값을 바꿔(operation=browse → pay) 제출 주소가 결제·민감 주소로 바뀌었으면 멈춘다.
+      // 이 묶음이 넣는 값 자체(검색어 'buy milk' 등)는 승인한 것이니 빼고 본다.
+      const withoutKnown = (u: string) => {
+        try {
+          const x = new URL(u);
+          const kept = new URLSearchParams();
+          x.searchParams.forEach((v, k) => {
+            if (!known.has(decodeDeep(v))) kept.append(k, v);
+          });
+          x.search = kept.toString();
+          return x.href;
+        } catch {
+          return u;
+        }
+      };
+      const sensitiveIn = (list: string[]) => list.some((u) => !!u && !!sensitiveUrlReason(withoutKnown(u)));
+      const nowList = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? []), ...(nowRisk?.scopeFormActions ?? [])];
+      const approvedList = [info.submitUrl ?? "", ...(info.scopeSubmitUrls ?? []), ...(info.scopeFormActions ?? [])];
+      if (sensitiveIn(nowList) && !sensitiveIn(approvedList)) {
+        results.push({
+          id: f.id,
+          label,
+          applied: false,
+          note: "승인한 뒤 양식의 제출 주소가 결제·개인정보 주소로 바뀌어 채우지 않았습니다. 다시 찾으세요.",
         });
         continue;
       }
