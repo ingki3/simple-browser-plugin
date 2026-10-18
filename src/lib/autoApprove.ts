@@ -221,7 +221,7 @@ function decodeDeepText(v: string): string {
 // (이메일이 든 GET 가입 양식 주소로 바로 이동, 결제를 확정하는 GET 링크).
 const PAYMENT_ROUTE_RE = /(checkout|payment|\bpay\b|\border\b|결제|구매|주문|송금|이체)/i;
 const PERSONAL_PARAM_RE =
-  /(e-?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|password|passwd|\bpwd\b|\botp\b|card|cvc|cvv|(?<![a-z])name(?![a-z])|username|이름|성명|전화|휴대|연락처|이메일|주소|생년|주민|계좌|비밀번호|카드|인증)/i;
+  /(e[\s-]?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|password|passwd|\bpwd\b|\botp\b|card|cvc|cvv|(?<![a-z])name(?![a-z])|username|이름|성명|전화|휴대|연락처|이메일|주소|생년|주민|계좌|비밀번호|카드|인증)/i;
 // 휴대전화(01x)·구분자 있는 일반 전화·카드 번호·주민등록번호 모양. 기사 번호 같은 긴 숫자와 헷갈리지 않게 좁게 잡는다.
 const PERSONAL_VALUE_RE =
   /(?<!\d)01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|(?<!\d)0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}(?!\d)|(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)|(?<!\d)\d{6}[-\s][1-4]\d{6}(?!\d)/;
@@ -245,6 +245,12 @@ function hasCardNumber(v: string): boolean {
   return false;
 }
 
+// 식별자 단서(name·id·매개변수 이름)를 낱말로 나눈다: otp_code → "otp code", userPin → "user Pin".
+// \b 경계가 _를 단어 글자로 보는 문제를 피한다.
+export function splitIdentifier(s: string): string {
+  return s.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.[\]:]+/g, " ");
+}
+
 // 값 자체가 개인정보 모양인지(이메일·휴대전화·구분자 있는 전화·카드·주민번호). 인코딩된 값은 풀어 본다.
 export function looksPersonalValue(raw: string): boolean {
   const v = decodeDeepText(raw);
@@ -262,7 +268,7 @@ export function sensitiveUrlReason(url: string): string | null {
     let personal = false;
     u.searchParams.forEach((raw, k) => {
       const v = decodeDeepText(raw);
-      if (v.trim() && (PERSONAL_PARAM_RE.test(k) || looksPersonalValue(v))) personal = true;
+      if (v.trim() && (PERSONAL_PARAM_RE.test(splitIdentifier(k)) || looksPersonalValue(v))) personal = true;
     });
     // 경로에서는 이메일만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
     if (personal || EMAIL_RE.test(route)) return "개인정보가 실린 주소";

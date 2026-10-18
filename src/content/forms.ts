@@ -1,5 +1,5 @@
 import type { FormField } from "@/lib/messages";
-import { looksPersonalValue } from "@/lib/autoApprove";
+import { looksPersonalValue, splitIdentifier } from "@/lib/autoApprove";
 import { inPaymentContext } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
@@ -71,7 +71,7 @@ function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
   if ((isTag(el, "input") && el.type === "password") || /password|one-time-code/.test(ac)) return "password";
   if (/\bcc-/.test(ac)) return "payment";
-  const hint = `${el.getAttribute("name") ?? ""} ${el.id} ${isFieldElement(el) ? resolveLabel(el) : ""}`;
+  const hint = splitIdentifier(`${el.getAttribute("name") ?? ""} ${el.id} ${isFieldElement(el) ? resolveLabel(el) : ""}`);
   if (PAYMENT_RE.test(hint)) return "payment";
   // 비밀번호 표시로 type이 text가 된 칸, 일회용 인증 코드 칸도 비밀 값으로 본다.
   if (SECRET_HINT_RE.test(hint)) return "password";
@@ -82,14 +82,14 @@ function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
 const PERSONAL_AC_RE =
   /\b(name|given-name|family-name|additional-name|honorific-\w+|nickname|email|tel|tel-\w+|street-address|address-line\d|address-level\d|postal-code|bday|bday-\w+|sex|username)\b/;
 const PERSONAL_HINT_RE =
-  /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e-?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name|user\s*name|nick\s*name|(?<![a-z])name(?![a-z]))/i;
+  /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e[\s-]?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name|user\s*name|nick\s*name|(?<![a-z])name(?![a-z]))/i;
 
 export function isPersonalField(el: HTMLElement): boolean {
   if (!isFieldElement(el)) return false;
   if (isTag(el, "input") && (el.type === "email" || el.type === "tel")) return true;
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
   if (PERSONAL_AC_RE.test(ac)) return true;
-  const hint = `${el.getAttribute("name") ?? ""} ${el.id} ${resolveLabel(el)}`;
+  const hint = splitIdentifier(`${el.getAttribute("name") ?? ""} ${el.id} ${resolveLabel(el)}`);
   return PERSONAL_HINT_RE.test(hint);
 }
 
@@ -194,7 +194,7 @@ export function controlHasPersonalValue(control: Element | null): boolean {
   // 값 자체가 개인정보 모양이면 name이 없어도(스크립트가 값을 읽어 보내는 경우) 개인정보로 본다.
   if (looksPersonalValue(value)) return true;
   if (!b.name) return false;
-  const hint = `${b.name} ${b.id}`;
+  const hint = splitIdentifier(`${b.name} ${b.id}`);
   return (
     PERSONAL_HINT_RE.test(hint) ||
     SECRET_HINT_RE.test(hint) ||

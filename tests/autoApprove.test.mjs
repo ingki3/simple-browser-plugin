@@ -25,6 +25,14 @@ test("the text of the enclosing control counts too", () => {
   assert.ok(autoApproveBlock("click_element", [t({ name: "확인", outerText: "구매 확인" })]));
 });
 
+test("identifier hints are split on underscores and camel case", async () => {
+  const { splitIdentifier } = await import("../src/lib/autoApprove.ts");
+  assert.equal(splitIdentifier("otp_code"), "otp code");
+  assert.equal(splitIdentifier("userPin"), "user Pin");
+  const trusted = new Set([siteOf("https://shop.example/")]);
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/verify?otp_code=123456"));
+});
+
 test("sign-up, application and submit buttons still ask", () => {
   for (const name of ["회원가입", "신청하기", "제출", "본인인증", "인증번호 요청", "Sign up", "Submit"]) {
     assert.ok(autoApproveBlock("click_element", [t({ name })]), name);

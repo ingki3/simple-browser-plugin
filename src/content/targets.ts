@@ -299,8 +299,8 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
     const entry = registry.get(id);
     const el = entry?.ref.deref();
     if (!entry || !el) return;
-    // 묶음에 개인정보 칸이 있으면(늘 카드 승인) 이 묶음이 채울 칸도 허용한다.
-    if (batchHasPersonal) allowed.add(el);
+    // 이 묶음이 채울 칸 자체는 허용한다(승인한 입력 값이 개인정보 모양이어도 — 그런 값은 늘 카드로 승인받는다).
+    allowed.add(el);
     for (const p of entry.kind.personalElements?.(el) ?? []) allowed.add(p);
   });
   consentAllowed.set(callId, allowed);
@@ -367,9 +367,8 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const filled = kind.personalElements?.(el) ?? [];
   // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
   if (allowed && filled.some((p) => !allowed.has(p))) return "승인 뒤 양식에 개인정보가 채워짐";
-  if (now.submitsPersonal && !info.submitsPersonal && !(info.consentPersonal && allowed)) {
-    return "승인 뒤 양식에 개인정보가 채워짐";
-  }
+  // 허용 목록이 없으면(오래되어 지워진 경우 등) 양식 단위로만 본다.
+  if (!allowed && now.submitsPersonal && !info.submitsPersonal) return "승인 뒤 양식에 개인정보가 채워짐";
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
   if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";
