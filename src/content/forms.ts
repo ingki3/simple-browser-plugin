@@ -379,6 +379,7 @@ const baselineDocs = new WeakSet<Document>();
 // 기준을 기록할 때 있던 칸들. 그 뒤 새로 생긴 칸(값이 있는)은 종류와 관계없이 바뀐 값으로 본다.
 const seenFields = new WeakSet<Element>();
 const textBaseline = new WeakMap<Element, string>();
+const submitterBaseline = new WeakMap<Element, string>();
 
 export function captureHiddenBaselines(): void {
   // 기준은 문서마다 처음 살필 때 한 번만 기록한다(그 뒤에 생긴 숨은 칸을 기준으로 삼지 않게).
@@ -392,6 +393,11 @@ export function captureHiddenBaselines(): void {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, (el as HTMLInputElement).value);
     }
     for (const el of Array.from(root.querySelectorAll("input, textarea, select"))) seenFields.add(el);
+    // 제출 버튼의 값도 기록한다(처리기가 대화 내용을 <button name=q>.value에 복사해 그 버튼으로 제출할 수 있다).
+    for (const el of Array.from(root.querySelectorAll("button"))) {
+      seenFields.add(el);
+      if (!submitterBaseline.has(el)) submitterBaseline.set(el, (el as HTMLButtonElement).value);
+    }
     // 일반 칸은 처음 살핀 값을 따로 기록한다(React 등이 value와 defaultValue를 함께 바꾸면 defaultValue 비교로는 못 잡는다).
     for (const el of Array.from(root.querySelectorAll("input, textarea"))) {
       const t = (el as HTMLInputElement).type;
@@ -414,6 +420,19 @@ function selectedSignature(sel: HTMLSelectElement): string {
 // 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
 // (페이지가 처음부터 넣어 둔 값은 페이지의 것이다). 모든 페이지 머리의 빈 검색 양식 같은 것은 빼려는 것.
 function formHasChangedValues(form: HTMLFormElement): boolean {
+  // 제출 버튼(button·submit·image)의 값: 처음 살핀 값에서 바뀌었거나, 그 뒤 새로 생긴 버튼에 값이 있으면 바뀐 것.
+  for (const el of formSubmitters(form)) {
+    if (!(el as HTMLButtonElement).name) continue;
+    const v = (el as HTMLButtonElement).value ?? "";
+    const known = isTag(el, "button") ? submitterBaseline : textBaseline;
+    if (known.has(el)) {
+      if (known.get(el) !== v) return true;
+    } else if (baselineDocs.has(el.ownerDocument) && !seenFields.has(el) && v) {
+      return true;
+    } else if (!known.has(el)) {
+      known.set(el, v);
+    }
+  }
   for (const el of formElements(form)) {
     if (!isFieldElement(el as HTMLElement)) continue;
     const f = el as FieldElement;
