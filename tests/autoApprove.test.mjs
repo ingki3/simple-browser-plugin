@@ -85,6 +85,11 @@ test("navigation and links carrying personal data or payment routes still ask", 
   assert.equal(autoApproveBlock("click_element", [t({ name: "다음 글", href: "https://shop.example/board/3" })]), null);
   assert.ok(autoApproveBlock("click_element", [t({ name: "확인", submitTo: "https://shop.example/payment/confirm" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "select", name: "수량", submitTo: "https://shop.example/order/place" })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "select", name: "정렬", submitUrl: "https://shop.example/list?payload=alice%40example.com" })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "select", name: "가기", choiceUrls: ["https://shop.example/checkout/confirm"] })]));
+  const wrapped = `https://shop.example/redirect?next=${encodeURIComponent("https://shop.example/continue?email=alice%40example.com")}`;
+  assert.ok(navigateAutoBlock(trusted, wrapped));
+  assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["alice@example.com"]));
 });
 
 test("clicks and fills run automatically only on pages and destinations within chosen sites", () => {

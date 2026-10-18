@@ -29,9 +29,12 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.personal) return `개인정보 칸 입력('${t.name.slice(0, 30) || t.fieldType}')`;
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
-      // 같은 이유로 결제·개인정보 주소로 제출되는 양식의 칸도 묻는다.
-      const why = t.submitTo ? sensitiveUrlReason(t.submitTo) : null;
-      if (why) return `${why}로 제출되는 양식의 칸 입력`;
+      // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
+      // 결제·개인정보 주소를 가리키는 선택지가 있는 칸도 묻는다.
+      for (const url of [t.submitTo ?? "", t.submitUrl ?? "", ...(t.choiceUrls ?? [])]) {
+        const why = url ? sensitiveUrlReason(url) : null;
+        if (why) return `${why}로 이어지는 칸 입력`;
+      }
     }
     return null;
   }
@@ -42,7 +45,7 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
       // 누르면 가는 링크·양식 제출 주소에 결제 경로나 개인정보가 실려 있으면 묻는다.
-      for (const href of [t.href, t.ancestorHref ?? "", t.submitTo ?? "", t.submitUrl ?? ""]) {
+      for (const href of [t.href, t.ancestorHref ?? "", t.submitTo ?? "", t.submitUrl ?? "", ...(t.choiceUrls ?? [])]) {
         const why = href ? sensitiveUrlReason(href) : null;
         if (why) return `${why}로 가는 링크`;
       }
@@ -174,12 +177,19 @@ const PERSONAL_VALUE_RE =
   /(?<!\d)01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|(?<!\d)0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}(?!\d)|(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)|(?<!\d)\d{6}[-\s][1-4]\d{6}(?!\d)/;
 const EMAIL_RE = /[^\s@/?#&=]+@[^\s@/?#&=]+\.[^\s@/?#&=]+/;
 
-export function sensitiveUrlReason(url: string): string | null {
+export function sensitiveUrlReason(url: string, depth = 0): string | null {
   let u: URL;
   try {
     u = new URL(normalizeUrlText(url));
   } catch {
     return null;
+  }
+  // 리다이렉트 매개변수에 감싼 주소도 같은 기준으로 본다.
+  if (depth < 3) {
+    for (const inner of embeddedUrls(u)) {
+      const why = sensitiveUrlReason(inner, depth + 1);
+      if (why) return why;
+    }
   }
   let route = `${u.pathname}${u.search}${u.hash}`;
   try {
@@ -221,6 +231,8 @@ export function pageActionSiteBlock(
 ): string | null {
   if (!pageUrl || withinTrusted(trustedSites, pageUrl) !== true) return "요청을 시작한 사이트 밖의 페이지";
   for (const v of values) {
+    // 개인정보 모양의 값(이메일·전화·카드 번호)을 넣는 것은 칸 이름과 관계없이 묻는다.
+    if (PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v)) return "개인정보 모양의 값 입력";
     let probe: URL;
     try {
       probe = new URL(pageUrl);
