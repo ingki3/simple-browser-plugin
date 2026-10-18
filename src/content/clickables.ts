@@ -1,4 +1,5 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
+import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { getAccessibleRoots, isTag } from "./docs";
 import {
   choiceUrlsOf,
@@ -226,7 +227,13 @@ const CLICK_KIND: TargetKind = {
         [control, linked].some(
           (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),
         ),
-      paymentContext: inPaymentContext(el, form),
+      // 클릭으로 바뀌는 checkbox·radio(직접 또는 label 연결)의 name=value에 결제 문구가 있으면 입력 도구와 같이 본다.
+      paymentContext:
+        inPaymentContext(el, form) ||
+        (!!toggled &&
+          [(toggled as HTMLInputElement).value, (toggled as HTMLInputElement).name].some(
+            (v) => PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v)),
+          )),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
       ...(ancestorHref ? { ancestorHref } : {}),

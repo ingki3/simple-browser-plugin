@@ -143,6 +143,18 @@ export function formlessScopes(el: Element): FormlessScope[] {
     for (const n of scan.containers) if (!nodes.includes(n)) nodes.push(n);
     if (scan.incomplete) incomplete = true;
   }
+  // shadow 안 대화상자의 <slot>에 배치된 light DOM 칸(이메일 입력·버튼)도 범위에 넣는다. 배치된 요소는
+  // 그 shadow root의 host 아래에 있으므로 host를 범위로 더한다.
+  for (const n of [...nodes]) {
+    for (const slot of Array.from(n.querySelectorAll("slot"))) {
+      const r = slot.getRootNode();
+      if (!isShadowRoot(r) || nodes.includes(r.host)) continue;
+      nodes.push(r.host);
+      const scan = nestedContainerScan(r.host);
+      for (const c of scan.containers) if (!nodes.includes(c)) nodes.push(c);
+      if (scan.incomplete) incomplete = true;
+    }
+  }
   const scopes: FormlessScope[] = nodes.map((node) => ({ node, includeFormFields: inDialog, incomplete }));
   // 같은 출처 iframe 안의 대상이면 iframe 요소를 부모 문서의 대상으로 보고 부모 쪽 범위도 더한다
   // (부모 대화상자의 이메일·비밀번호를 iframe 안 버튼이 부모 함수로 제출).
