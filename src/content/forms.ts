@@ -857,6 +857,8 @@ export async function fillFormFields(
       const known = new Set([
         ...urlLikeParamsAll(approvedUrl),
         ...args.fills.map((x) => decodeDeep(x.value)),
+        // 이 칸에 실제로 넣을 값(선택 칸을 표시 문구로 고르면 option.value)도 승인한 값이다.
+        decodeDeep(intended),
         ...applied,
       ]);
       const approvedPersonal = personalParamsAll(approvedUrl);
