@@ -165,10 +165,29 @@ export function otherDestinations(
   submitTo: string,
 ): { scopeFormActions?: string[]; scopeSubmitUrls?: string[] } {
   const extra = formDestinations(form).filter((u) => u !== submitTo);
-  if (!extra.length) return {};
+  // 제출 버튼마다 실제로 보낼 주소(그 버튼의 action + 양식 값 + 버튼 자신의 name=value). 같은 action이어도
+  // 버튼 값(operation=pay)이 다를 수 있다. 50개를 넘으면 한도 표시를 넣는다.
+  const urls: string[] = [];
+  for (const el of formElements(form)) {
+    const submitter =
+      (isTag(el, "button") && ((el as HTMLButtonElement).type || "submit") === "submit") ||
+      (isTag(el, "input") && ["submit", "image"].includes((el as HTMLInputElement).type));
+    if (!submitter || !(el as HTMLButtonElement).name) continue;
+    const url = formSubmissionUrl(form, formDestination(el as HTMLElement, form), el);
+    if (!url || urls.includes(url)) continue;
+    if (urls.length >= 50) {
+      urls.push("about:too-many-forms");
+      break;
+    }
+    urls.push(url);
+  }
+  for (const u of extra) {
+    const url = u.startsWith("about:") ? u : formSubmissionUrl(form, u);
+    if (!urls.includes(url)) urls.push(url);
+  }
   return {
-    scopeFormActions: extra,
-    scopeSubmitUrls: extra.map((u) => (u.startsWith("about:") ? u : formSubmissionUrl(form, u))),
+    ...(extra.length ? { scopeFormActions: extra } : {}),
+    ...(urls.length ? { scopeSubmitUrls: urls } : {}),
   };
 }
 

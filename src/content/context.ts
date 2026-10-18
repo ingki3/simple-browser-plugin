@@ -19,7 +19,12 @@ function paymentDocument(doc: Document): boolean {
   const words = splitIdentifier(route);
   // order·pay는 낱말 단위로만(border-collie, display 같은 단어 속 글자는 아님).
   if (/(checkout|payment)/i.test(route) || /(\bpay\b|\border\b)/i.test(words)) return true;
-  const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ");
+  // 컴포넌트의 열린 shadow root 안 제목(<checkout-title>의 <h1>결제 금액</h1>)도 본다.
+  const roots: Array<Document | Element | ShadowRoot> = [doc];
+  if (doc.documentElement) roots.push(...nestedContainersIn(doc.documentElement).filter((n) => isShadowRoot(n)));
+  const headings = roots
+    .flatMap((r) => Array.from(r.querySelectorAll("h1, h2"), (h) => h.textContent ?? ""))
+    .join(" ");
   return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
 }
 
