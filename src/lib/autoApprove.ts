@@ -104,13 +104,12 @@ function embeddedUrls(u: URL, maxValues = Infinity): string[] {
   const out: string[] = [];
   if (values.length > maxValues) return [OVER_BUDGET];
   for (const raw of values) {
-    let v = normalizeUrlText(raw);
-    for (let i = 0; i < 2 && /%[0-9a-f]{2}/i.test(v); i++) {
-      try {
-        v = normalizeUrlText(decodeURIComponent(v));
-      } catch {
-        break;
-      }
+    // 잘못된 %ZZ가 섞여도 올바른 %XX는 풀어 본다(decodeDeepText). 다 풀고도 인코딩된 주소 흔적(%3A%2F%2F)이 남으면
+    // 목적지를 확인하지 못한 것으로 본다(사이트 경계 판정에서 늘 밖 → 묻기).
+    const v = normalizeUrlText(decodeDeepText(normalizeUrlText(raw)));
+    if (/%3a|%2f%2f|%5c/i.test(v)) {
+      out.push(UNDECODABLE);
+      continue;
     }
     // 글 속에 박힌 절대 주소("see https://…").
     const mid = v.search(/https?:[/\\]{2}/i);
@@ -144,6 +143,7 @@ const MAX_EXPANDED = 200;
 // 펼치면서 살펴볼 매개변수 값의 총량. 넘으면 끝까지 확인하지 못한 것으로 본다(서비스 워커가 오래 멈추지 않게).
 const MAX_VALUES_TOTAL = 2000;
 const OVER_BUDGET = "about:over-budget";
+const UNDECODABLE = "about:undecodable";
 
 function expandUrls(url: string): { urls: URL[]; overflow: boolean } {
   const urls: URL[] = [];
