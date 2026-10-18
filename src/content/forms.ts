@@ -10,7 +10,7 @@ import {
 import { inPaymentContext } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
-import { peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
+import { noteWritten, peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
 const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
@@ -482,6 +482,7 @@ export async function fillFormFields(
     }
     // 앞선 입력이 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
     applied.add(decodeDeep(intended));
+    noteWritten(callId, el, intended);
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
     written.push({ el, info, value: f.value, result });

@@ -281,6 +281,22 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 
 // 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
 const consentAllowed = new Map<string, Set<Element>>();
+// 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
+const writtenByCall = new Map<string, Map<Element, string>>();
+
+export function noteWritten(callId: string, el: Element, value: string): void {
+  let m = writtenByCall.get(callId);
+  if (!m) {
+    m = new Map();
+    writtenByCall.set(callId, m);
+    while (writtenByCall.size > 50) {
+      const oldest = writtenByCall.keys().next().value;
+      if (oldest === undefined) break;
+      writtenByCall.delete(oldest);
+    }
+  }
+  m.set(el, value);
+}
 
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
 export function inspectTargets(ids: string[], callId: string, prefix: string): TargetInfo[] {
@@ -299,8 +315,6 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
     const entry = registry.get(id);
     const el = entry?.ref.deref();
     if (!entry || !el) return;
-    // 이 묶음이 채울 칸 자체는 허용한다(승인한 입력 값이 개인정보 모양이어도 — 그런 값은 늘 카드로 승인받는다).
-    allowed.add(el);
     for (const p of entry.kind.personalElements?.(el) ?? []) allowed.add(p);
   });
   consentAllowed.set(callId, allowed);
@@ -366,7 +380,10 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const allowed = info.consentCall ? consentAllowed.get(info.consentCall) : undefined;
   const filled = kind.personalElements?.(el) ?? [];
   // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
-  if (allowed && filled.some((p) => !allowed.has(p))) return "승인 뒤 양식에 개인정보가 채워짐";
+  const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
+  const explained = (p: Element) =>
+    allowed?.has(p) || (written?.has(p) && written.get(p) === ((p as HTMLInputElement).value ?? ""));
+  if (allowed && filled.some((p) => !explained(p))) return "승인 뒤 양식에 개인정보가 채워짐";
   // 클릭은 묶음 입력이 아니므로, 승인 뒤 개인정보 제출로 바뀌었으면(버튼 자신의 값 포함) 그대로 멈춘다.
   // 입력 칸은 허용 목록으로 판정하고, 목록이 없을 때만(오래되어 지워진 경우 등) 양식 단위로 본다.
   if (now.submitsPersonal && !info.submitsPersonal && (kind.prefix !== "f" || !allowed)) {

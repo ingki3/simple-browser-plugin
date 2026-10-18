@@ -48,8 +48,12 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
   for (let doc: Document | null = el.ownerDocument; doc; doc = parentDocument(doc)) {
     if (paymentDocument(doc)) return true;
   }
-  // 버튼이 든 shadow root들(웹 컴포넌트가 그린 결제 화면)의 큰 제목도 본다.
-  for (let root = el.getRootNode(); isShadowRoot(root); root = root.host.getRootNode()) {
+  // 클릭 이벤트 경로에 있는 shadow root들(웹 컴포넌트가 그린 결제 화면, slot에 배치된 버튼 포함)의 큰 제목도 본다.
+  const seen = new Set<Node>();
+  for (let cur: Element | null = el; cur; cur = eventParent(cur)) {
+    const root = cur.getRootNode();
+    if (!isShadowRoot(root) || seen.has(root)) continue;
+    seen.add(root);
     const headings = Array.from(root.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
     if (PAYMENT_TEXT_RE.test(headings)) return true;
   }
