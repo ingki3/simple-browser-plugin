@@ -99,6 +99,11 @@ function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null): boolea
   for (let doc: Document | null = el.ownerDocument; doc; doc = parentDocument(doc)) {
     if (paymentDocument(doc)) return true;
   }
+  // 버튼이 든 shadow root들(웹 컴포넌트가 그린 결제 화면)의 큰 제목도 본다.
+  for (let root = el.getRootNode(); isShadowRoot(root); root = root.host.getRootNode()) {
+    const headings = Array.from(root.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
+    if (PAYMENT_TEXT_RE.test(headings)) return true;
+  }
   // 양식과 그 바깥 대화상자를 각각 본다(대화상자의 "결제 금액" 문구 아래 양식 속 '확인' 버튼).
   const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
   return [form, dialog].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)));
@@ -119,11 +124,16 @@ const CLICK_KIND: TargetKind = {
     const submitTo = formDestination(control ?? el, form);
     // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
     const ancestorHref = enclosingLinkHref(el);
+    // 대상을 감싼 버튼·링크(실제로 작동하는 쪽)의 글자.
+    const parent = el.parentElement ?? (isShadowRoot(el.getRootNode()) ? (el.getRootNode() as ShadowRoot).host : null);
+    const outer = parent ? closestAcross(parent, 'a[href], area[href], button, input[type=submit], input[type=image], [role="button"], [role="link"]') : null;
+    const outerText = outer ? clickText(outer as HTMLElement) : "";
     return {
       submitsPersonal: !!form && formHasPersonalValues(form),
       paymentContext: inPaymentContext(el, form),
       ...(submitTo ? { submitTo } : {}),
       ...(ancestorHref ? { ancestorHref } : {}),
+      ...(outerText ? { outerText } : {}),
     };
   },
 };

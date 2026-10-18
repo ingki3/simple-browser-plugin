@@ -34,10 +34,12 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
   }
   if (tool === "click_element") {
     for (const t of targets) {
-      if (PAYMENT_TEXT_RE.test(t.name)) return "결제·주문 버튼";
+      // 실제로 작동하는 바깥 버튼·링크의 글자도 본다(<button>구매 <span>확인</span></button>의 span).
+      const text = `${t.name} ${t.outerText ?? ""}`;
+      if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
       if (t.submitsPersonal) return "개인정보가 채워진 양식 제출";
-      if (SUBMIT_TEXT_RE.test(t.name)) return "가입·신청·제출 버튼";
+      if (SUBMIT_TEXT_RE.test(text)) return "가입·신청·제출 버튼";
     }
     return null;
   }
@@ -71,7 +73,37 @@ export function siteOf(url: string): string | null {
   }
 }
 
-function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean | null {
+// 주소의 쿼리·해시 값에 실린 다른 주소(리다이렉트 매개변수 ?url=https%3A…, ?next=//host/…).
+// 신뢰 사이트의 열린 리다이렉트를 거쳐 밖으로 나가는 것을 막으려고 그 목적지도 경계 안이어야 한다.
+function embeddedUrls(u: URL): string[] {
+  const values: string[] = [];
+  u.searchParams.forEach((v) => values.push(v));
+  if (u.hash.length > 1) {
+    const h = u.hash.slice(1);
+    values.push(h);
+    try {
+      new URLSearchParams(h.includes("?") ? h.slice(h.indexOf("?") + 1) : h).forEach((v) => values.push(v));
+    } catch {
+      /* ignore */
+    }
+  }
+  const out: string[] = [];
+  for (const raw of values) {
+    let v = raw.trim();
+    for (let i = 0; i < 2 && /%[0-9a-f]{2}/i.test(v); i++) {
+      try {
+        v = decodeURIComponent(v);
+      } catch {
+        break;
+      }
+    }
+    if (/^(https?:)?\/\//i.test(v)) out.push(v.startsWith("//") ? `${u.protocol}${v}` : v);
+    else if (/https?:\/\//i.test(v)) out.push(v.slice(v.search(/https?:\/\//i)));
+  }
+  return out;
+}
+
+function withinTrusted(trustedSites: ReadonlySet<string>, url: string, depth = 0): boolean | null {
   let u: URL;
   try {
     u = new URL(url);
@@ -80,6 +112,11 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean 
   }
   if (!/^https?:$/.test(u.protocol)) return null;
   if (isSharedHost(u.hostname)) return false;
+  if (depth < 3) {
+    for (const inner of embeddedUrls(u)) {
+      if (withinTrusted(trustedSites, inner, depth + 1) !== true) return false;
+    }
+  }
   for (const site of trustedSites) {
     let t: URL;
     try {
