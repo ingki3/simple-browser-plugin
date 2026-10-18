@@ -167,7 +167,7 @@ const CLICK_KIND: TargetKind = {
     const control = activatedControl(el);
     const form = control?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
     const submitTo = formDestination(control ?? el, form);
-    const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
+    const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control) : "";
     // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
     const ancestorHref = enclosingLinkHref(el);
     // 대상을 감싼 버튼·링크들(실제로 작동하는 바깥 컨트롤까지)의 글자를 모두 모은다.

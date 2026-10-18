@@ -117,18 +117,35 @@ export function formDestination(el: HTMLElement, form: HTMLFormElement | null): 
 
 // 양식을 지금 값으로 제출하면 요청하는 주소(action + 칸 값을 쿼리로). GET 양식은 실제로 이 주소로 가고,
 // POST 양식도 값에 실린 주소(리다이렉트 매개변수 next=https://…)를 같은 방식으로 검사하려고 쿼리로 붙인다.
-export function formSubmissionUrl(form: HTMLFormElement, action: string): string {
+// FormData는 페이지에 formdata 이벤트를 일으키므로(그 처리기가 전송할 수 있다) 쓰지 않고 칸 값을 직접 읽는다.
+// submitter가 있으면 그 버튼의 name=value도 넣는다(실제 제출에 포함된다).
+export function formSubmissionUrl(form: HTMLFormElement, action: string, submitter?: Element | null): string {
   if (!action) return "";
+  let u: URL;
   try {
-    const u = new URL(action);
-    const data = new FormData(form);
-    data.forEach((v, k) => {
-      if (typeof v === "string" && v) u.searchParams.append(k, v);
-    });
-    return u.href;
+    u = new URL(action);
   } catch {
     return action;
   }
+  for (const el of formElements(form)) {
+    if (!isFieldElement(el as HTMLElement)) continue;
+    const f = el as FieldElement;
+    if (!f.name || f.disabled) continue;
+    if (isTag(f, "input")) {
+      if (["submit", "button", "image", "reset", "file"].includes(f.type)) continue;
+      if ((f.type === "checkbox" || f.type === "radio") && !f.checked) continue;
+    }
+    if (isTag(f, "select")) {
+      for (const o of Array.from(f.selectedOptions)) u.searchParams.append(f.name, o.value);
+      continue;
+    }
+    u.searchParams.append(f.name, f.value ?? "");
+  }
+  if (submitter && (isTag(submitter, "button") || isTag(submitter, "input"))) {
+    const b = submitter as HTMLButtonElement | HTMLInputElement;
+    if (b.name) u.searchParams.append(b.name, b.value ?? "");
+  }
+  return u.href;
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).
@@ -158,10 +175,13 @@ const FIELD_KIND: TargetKind = {
   risk: (el) => {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
     const submitTo = formDestination(el, form);
+    // 기존 칸 값까지 합친 제출 주소(change 처리기로 바로 제출되면 숨은 next=https://… 도 함께 간다).
+    const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
     return {
       personal: isPersonalField(el),
       submitsPersonal: !!form && formHasPersonalValues(form),
       ...(submitTo ? { submitTo } : {}),
+      ...(submitUrl ? { submitUrl } : {}),
     };
   },
 };

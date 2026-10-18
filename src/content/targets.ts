@@ -318,7 +318,9 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
   if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";
-  if ((now.submitUrl ?? "") !== (info.submitUrl ?? "")) return "양식에 담긴 값이 바뀜";
+  // 입력 칸은 묶음 안의 앞선 입력이 같은 양식 값을 바꾸므로 제출 주소의 값 부분은 비교하지 않는다
+  // (기존 값에 실린 바깥 주소는 승인 카드 판정 때 이미 본다). 클릭은 값이 바뀌면 멈춘다.
+  if (kind.prefix !== "f" && (now.submitUrl ?? "") !== (info.submitUrl ?? "")) return "양식에 담긴 값이 바뀜";
   if ((now.outerText ?? "") !== (info.outerText ?? "")) return "감싼 버튼 글자가 바뀜";
   return null;
 }
