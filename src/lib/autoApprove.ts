@@ -35,7 +35,13 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
       // 결제·개인정보 주소를 가리키는 선택지가 있는 칸도 묻는다.
-      for (const url of [t.submitTo ?? "", t.submitUrl ?? "", ...(t.choiceUrls ?? []), ...(t.scopeSubmitUrls ?? [])]) {
+      for (const url of [
+        t.submitTo ?? "",
+        t.submitUrl ?? "",
+        ...(t.choiceUrls ?? []),
+        ...(t.scopeSubmitUrls ?? []),
+        ...(t.scopeFormActions ?? []),
+      ]) {
         const why = url ? sensitiveUrlReason(url) : null;
         if (why) return `${why}로 이어지는 칸 입력`;
       }
@@ -60,6 +66,7 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
         t.submitUrl ?? "",
         ...(t.choiceUrls ?? []),
         ...(t.scopeSubmitUrls ?? []),
+        ...(t.scopeFormActions ?? []),
       ]) {
         const why = href ? sensitiveUrlReason(href) : null;
         if (why) return `${why}로 가는 링크`;
@@ -327,6 +334,8 @@ export function looksPersonalValue(raw: string): boolean {
 }
 
 export function sensitiveUrlReason(url: string): string | null {
+  // content script가 넣는 "끝까지 보지 못함" 표시(about:too-many-…, about:undecodable).
+  if (/^about:(too-many|undecodable|over-budget)/.test(url)) return "끝까지 확인하지 못한 주소";
   // 리다이렉트 매개변수에 감싼 주소도 같은 기준으로 본다.
   const { urls, overflow } = expandUrls(url);
   if (overflow) return "끝까지 확인하지 못한 복잡한 주소";

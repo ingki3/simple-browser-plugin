@@ -176,7 +176,9 @@ const CLICK_KIND: TargetKind = {
     // 대상을 감싼 버튼·링크들(실제로 작동하는 바깥 컨트롤까지)의 글자를 모두 모은다.
     const outerText = enclosingControlTexts(el);
     // 양식 밖 버튼(이동 링크가 아닌 것)이면 범위 안 다른 양식들의 제출 주소도 목적지로 본다.
-    const scopeUrls = form ? [] : scopeSubmitUrls(submitScopes(el).filter((s) => s.includeFormFields));
+    const scopeForms = form
+      ? { changed: [], actions: [] }
+      : scopeSubmitUrls(submitScopes(el).filter((s) => s.includeFormFields));
     return {
       // 작동할 컨트롤(제출 버튼, 또는 label이 연결한 checkbox·radio) 자신이 실을 개인정보 값도 본다.
       submitsPersonal:
@@ -192,7 +194,8 @@ const CLICK_KIND: TargetKind = {
       ...(submitUrl ? { submitUrl } : {}),
       ...(ancestorHref ? { ancestorHref } : {}),
       ...(outerText ? { outerText } : {}),
-      ...(scopeUrls.length ? { scopeSubmitUrls: scopeUrls } : {}),
+      ...(scopeForms.changed.length ? { scopeSubmitUrls: scopeForms.changed } : {}),
+      ...(scopeForms.actions.length ? { scopeFormActions: scopeForms.actions } : {}),
       ...(choiceUrls.length ? { choiceUrls } : {}),
       ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
     };

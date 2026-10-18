@@ -22,7 +22,7 @@ export interface TargetKind {
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
   // 그 칸의 양식에서 값이 채워진 개인정보·비밀 칸들(묶음 승인 예외 판정용).
   personalElements?(el: HTMLElement): Element[];
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "scopeSubmitUrls">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "scopeSubmitUrls" | "scopeFormActions">;
 }
 
 interface Entry {
@@ -404,6 +404,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const scopeKey = (urls: string[] | undefined) =>
     (urls ?? []).map((u) => (kind.prefix === "f" ? u.split("?")[0] : u)).join(" ");
   if (scopeKey(now.scopeSubmitUrls) !== scopeKey(info.scopeSubmitUrls)) return "주변 양식의 제출 주소가 바뀜";
+  if ((now.scopeFormActions ?? []).join(" ") !== (info.scopeFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
   return null;
 }
 

@@ -246,6 +246,19 @@ function personalParams(submitUrl: string): Set<string> {
   return out;
 }
 
+// 공백으로 이은 여러 주소의 매개변수 값을 모은다.
+function urlLikeParamsAll(urls: string): Set<string> {
+  const out = new Set<string>();
+  for (const u of urls.split(" ").filter(Boolean)) for (const v of urlLikeParams(u)) out.add(v);
+  return out;
+}
+
+function personalParamsAll(urls: string): Set<string> {
+  const out = new Set<string>();
+  for (const u of urls.split(" ").filter(Boolean)) for (const v of personalParams(u)) out.add(v);
+  return out;
+}
+
 // 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).
 // 제출되는 값이면 종류를 가리지 않는다: 숨은 칸(로그인한 사용자 이메일 등)·선택 칸(생년월일)·체크한 칸도 본다.
 export function formHasPersonalValues(form: HTMLFormElement): boolean {
@@ -270,21 +283,41 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
   return false;
 }
 
-// 범위 안 양식들(칸 값이 바뀐 것)이 실제로 제출되는 주소(action과 지금 값을 합친 주소). 양식 밖 버튼·칸의 처리기가
-// 그 양식을 requestSubmit할 수 있으니 사이트 경계·결제·개인정보 주소 검사에 넣는다(최대 50개).
-export function scopeSubmitUrls(scopes: Array<{ node: Element | ShadowRoot }>): string[] {
-  const out: string[] = [];
+// 범위 안 양식들의 제출 주소. 양식 밖 버튼·칸의 처리기가 그 양식을 requestSubmit할 수 있으니 검사에 넣는다.
+// - changed: 칸 값이 처음 값에서 바뀐 양식(사용자·모델이 넣은 값이 실릴 수 있다)의 action과 지금 값을 합친 주소.
+//   사이트 경계와 결제·개인정보 주소를 모두 본다.
+// - actions: 모든 양식의 action. 결제·개인정보 주소만 본다(처음 값 그대로인 양식은 대화 내용을 싣지 않으니
+//   모든 페이지 머리의 다른 하위 도메인 검색 양식 때문에 버튼마다 묻지 않게 사이트 경계는 보지 않는다).
+// 한도(각 50개)를 넘으면 끝까지 보지 못했다는 표시를 넣는다(웹 주소가 아니라 늘 묻게 된다).
+const TOO_MANY_FORMS = "about:too-many-forms";
+
+export function scopeSubmitUrls(scopes: Array<{ node: Element | ShadowRoot }>): { changed: string[]; actions: string[] } {
+  const changed: string[] = [];
+  const actions: string[] = [];
   for (const s of scopes) {
     for (const f of Array.from(s.node.querySelectorAll("form"))) {
-      if (!formHasChangedValues(f as HTMLFormElement)) continue;
       const action = formAction(f as HTMLFormElement);
       if (!action) continue;
+      if (!actions.includes(action)) {
+        if (actions.length >= 50) {
+          actions.push(TOO_MANY_FORMS);
+          return { changed, actions };
+        }
+        actions.push(action);
+      }
+      if (!formHasChangedValues(f as HTMLFormElement)) continue;
       const url = formSubmissionUrl(f as HTMLFormElement, action);
-      for (const u of [action, url]) if (u && !out.includes(u)) out.push(u);
-      if (out.length >= 50) return out;
+      for (const u of [action, url]) {
+        if (!u || changed.includes(u)) continue;
+        if (changed.length >= 50) {
+          changed.push(TOO_MANY_FORMS);
+          return { changed, actions };
+        }
+        changed.push(u);
+      }
     }
   }
-  return out;
+  return { changed, actions };
 }
 
 // 양식 밖 입력 칸의 범위: change 처리기가 다른 양식을 requestSubmit할 수 있으니 클릭처럼 범위 안 양식 칸까지 본다.
@@ -419,8 +452,12 @@ const FIELD_KIND: TargetKind = {
       ...(submitUrl ? { submitUrl } : {}),
       // 양식 밖 칸이면 범위 안 다른 양식들의 제출 주소도 본다.
       ...(() => {
-        const urls = form ? [] : scopeSubmitUrls(fieldFormlessScopes(el));
-        return urls.length ? { scopeSubmitUrls: urls } : {};
+        if (form) return {};
+        const { changed, actions } = scopeSubmitUrls(fieldFormlessScopes(el));
+        return {
+          ...(changed.length ? { scopeSubmitUrls: changed } : {}),
+          ...(actions.length ? { scopeFormActions: actions } : {}),
+        };
       })(),
       ...(choiceUrls.length ? { choiceUrls } : {}),
     };
@@ -571,15 +608,19 @@ export async function fillFormFields(
     const intended = intendedValue(el, f.value);
     // 승인 뒤 양식 값에 주소가 새로 생겼으면(페이지가 숨은 next를 바꾼 경우) 채우지 않는다.
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
-    const nowUrl = FIELD_KIND.risk?.(el).submitUrl ?? "";
-    if (nowUrl) {
+    const nowRisk = FIELD_KIND.risk?.(el);
+    // 같은 칸의 양식 제출 주소와, 양식 밖 칸이면 주변 양식들의 제출 주소를 함께 본다.
+    const nowUrl = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? [])].join(" ");
+    const approvedUrl = [info.submitUrl ?? "", ...(info.scopeSubmitUrls ?? [])].join(" ");
+    if (nowUrl.trim()) {
       const known = new Set([
-        ...urlLikeParams(info.submitUrl ?? ""),
+        ...urlLikeParamsAll(approvedUrl),
         ...args.fills.map((x) => decodeDeep(x.value)),
         ...applied,
       ]);
-      const added = [...urlLikeParams(nowUrl), ...personalParams(nowUrl)].filter(
-        (v) => !known.has(v) && !personalParams(info.submitUrl ?? "").has(v),
+      const approvedPersonal = personalParamsAll(approvedUrl);
+      const added = [...urlLikeParamsAll(nowUrl), ...personalParamsAll(nowUrl)].filter(
+        (v) => !known.has(v) && !approvedPersonal.has(v),
       );
       if (added.length) {
         results.push({
