@@ -99,12 +99,15 @@ export interface FormlessScope {
   node: Element | ShadowRoot;
   // 대화상자 안이면 안쪽 양식에 속한 칸도 본다(바깥 버튼이 안쪽 양식을 requestSubmit하는 경우).
   includeFormFields: boolean;
+  // 하위 컨테이너 탐색이 한도에 걸려 끝까지 보지 못했는지(그러면 개인정보가 있는 것으로 본다).
+  incomplete?: boolean;
 }
 
 export function formlessScopes(el: Element): FormlessScope[] {
   const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
   const inDialog = !!dialog;
   const nodes: Array<Element | ShadowRoot> = [];
+  let incomplete = false;
   // 클릭 경로의 shadow root들(대화상자가 있으면 그 안쪽 것만).
   for (let cur: Element | null = el; cur && cur !== dialog; cur = eventParent(cur)) {
     const root = cur.getRootNode();
@@ -115,9 +118,11 @@ export function formlessScopes(el: Element): FormlessScope[] {
     nodes.push(base);
     // 범위 안 다른 웹 컴포넌트의 열린 shadow root와 같은 출처 iframe 문서도 서로 교차해 본다
     // (querySelectorAll은 shadow·iframe 안으로 들어가지 않는다).
-    for (const n of nestedContainersIn(base)) if (!nodes.includes(n)) nodes.push(n);
+    const scan = nestedContainerScan(base);
+    for (const n of scan.containers) if (!nodes.includes(n)) nodes.push(n);
+    if (scan.incomplete) incomplete = true;
   }
-  const scopes = nodes.map((node) => ({ node, includeFormFields: inDialog }));
+  const scopes: FormlessScope[] = nodes.map((node) => ({ node, includeFormFields: inDialog, incomplete }));
   // 같은 출처 iframe 안의 대상이면 iframe 요소를 부모 문서의 대상으로 보고 부모 쪽 범위도 더한다
   // (부모 대화상자의 이메일·비밀번호를 iframe 안 버튼이 부모 함수로 제출).
   const frame = frameElementOf(el.ownerDocument);
@@ -128,6 +133,11 @@ export function formlessScopes(el: Element): FormlessScope[] {
 // 범위 안의 하위 컨테이너들: 열린 shadow root와 같은 출처 iframe 문서 body를 서로 교차해 따라 들어간다
 // (iframe 안 컴포넌트의 shadow root, shadow root 안 iframe). 전체 최대 220개.
 export function nestedContainersIn(scope: Element | ShadowRoot): Array<Element | ShadowRoot> {
+  return nestedContainerScan(scope).containers;
+}
+
+// 하위 컨테이너와, 한도(220개)에 걸려 끝까지 보지 못했는지.
+export function nestedContainerScan(scope: Element | ShadowRoot): { containers: Array<Element | ShadowRoot>; incomplete: boolean } {
   const out: Array<Element | ShadowRoot> = [];
   const queue: Array<Element | ShadowRoot> = [scope];
   while (queue.length && out.length < 220) {
@@ -148,7 +158,7 @@ export function nestedContainersIn(scope: Element | ShadowRoot): Array<Element |
       }
     }
   }
-  return out;
+  return { containers: out, incomplete: out.length >= 220 };
 }
 
 // 범위 안의 열린 shadow root들(iframe 안 것 포함).

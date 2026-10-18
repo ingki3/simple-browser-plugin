@@ -8,7 +8,7 @@ import {
   looksPersonalValue,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { formlessScopes, inPaymentContext, openShadowRootsIn } from "./context";
+import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
 import { noteWritten, peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
@@ -253,6 +253,18 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸들.
+// 범위들의 개인정보 칸. 탐색이 한도에 걸린 범위는 그 범위 노드(또는 shadow host)를 민감 표시로 넣는다.
+export function personalValuedInScopes(
+  scopes: Array<{ node: Element | ShadowRoot; includeFormFields: boolean; incomplete?: boolean }>,
+): Element[] {
+  const out: Element[] = [];
+  for (const s of scopes) {
+    out.push(...personalValuedElements(s.node, s.includeFormFields));
+    if (s.incomplete) out.push("host" in s.node ? (s.node as ShadowRoot).host : (s.node as Element));
+  }
+  return out;
+}
+
 export function personalValuedElements(
   scope: HTMLFormElement | Element | ShadowRoot,
   includeFormFields = false,
@@ -269,9 +281,12 @@ export function personalValuedElements(
   if (isElement && isTag(scope as Element, "form")) {
     fields = formElements(scope as HTMLFormElement);
     // 양식 안 웹 컴포넌트의 열린 shadow root 칸도 본다(컴포넌트가 그린 비밀번호 칸 — 제출 처리기가 읽어 보낸다).
-    for (const root of openShadowRootsIn(scope as Element)) {
+    // 양식 안 iframe 문서의 칸도 본다. 탐색 한도에 걸리면 끝까지 보지 못했으니 양식 자신을 민감 표시로 넣는다.
+    const scan = nestedContainerScan(scope as Element);
+    for (const root of scan.containers) {
       for (const c of Array.from(root.querySelectorAll("input, textarea, select"))) if (!fields.includes(c)) fields.push(c);
     }
+    if (scan.incomplete) out.push(scope as Element);
   } else {
     const withForms = isDialog || includeFormFields;
     fields = Array.from(scope.querySelectorAll("input, textarea, select")).filter(
@@ -319,7 +334,7 @@ const FIELD_KIND: TargetKind = {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
     return form
       ? personalValuedElements(form)
-      : formlessScopes(el).flatMap((s) => personalValuedElements(s.node, s.includeFormFields));
+      : personalValuedInScopes(formlessScopes(el));
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다).
@@ -341,7 +356,14 @@ const FIELD_KIND: TargetKind = {
       // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
       submitsPersonal: form
         ? formHasPersonalValues(form)
-        : formlessScopes(el).some((s) => personalValuedElements(s.node, s.includeFormFields).some((p) => p !== el)),
+        : personalValuedInScopes(formlessScopes(el)).some((p) => p !== el),
+      // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
+      ...(() => {
+        const full = isFieldElement(el)
+          ? `${resolveLabel(el)} ${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""}`.replace(/\s+/g, " ").trim()
+          : "";
+        return full ? { outerText: full } : {};
+      })(),
       // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
       paymentContext:
         inPaymentContext(el, form) ||

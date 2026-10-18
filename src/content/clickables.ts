@@ -7,7 +7,7 @@ import {
   formHasPersonalValues,
   formSubmissionUrl,
   isPersonalField,
-  personalValuedElements,
+  personalValuedInScopes,
 } from "./forms";
 import { closestAcross, eventParent, formlessScopes, inPaymentContext, linkHrefOf, type FormlessScope } from "./context";
 import {
@@ -156,7 +156,7 @@ const CLICK_KIND: TargetKind = {
   sensitive: () => null,
   // 누르면 작동할 컨트롤의 양식에서 값이 채워진 개인정보·비밀 칸들(승인 뒤 새로 채워졌는지 보려고).
   personalElements: (el) => {
-    return submitScopes(el).flatMap((s) => personalValuedElements(s.node, s.includeFormFields));
+    return personalValuedInScopes(submitScopes(el));
   },
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
@@ -179,7 +179,7 @@ const CLICK_KIND: TargetKind = {
       submitsPersonal:
         (!!form && formHasPersonalValues(form)) ||
         // 양식 없는 화면(대화상자의 로그인 칸 + Continue 버튼 등)은 버튼 주변 입력 칸 묶음을 본다.
-        (!form && submitScopes(el).some((s) => personalValuedElements(s.node, s.includeFormFields).length > 0)) ||
+        (!form && personalValuedInScopes(submitScopes(el)).length > 0) ||
         controlHasPersonalValue(control ?? linked) ||
         [control, linked].some(
           (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),

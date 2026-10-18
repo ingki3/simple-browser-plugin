@@ -28,7 +28,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.sensitive === "payment") return "결제 정보 칸 입력";
       if (t.personal) return `개인정보 칸 입력('${t.name.slice(0, 30) || t.fieldType}')`;
       // 결제 문구가 붙은 칸이나 결제 화면의 칸(change 처리기가 결제하는 '구매 확정' 체크박스 등).
-      if (PAYMENT_TEXT_RE.test(`${t.name} ${splitIdentifier(t.name)}`)) return "결제 문구가 붙은 칸 입력";
+      const label = `${t.name} ${t.outerText ?? ""}`;
+      if (PAYMENT_TEXT_RE.test(`${label} ${splitIdentifier(label)}`)) return "결제 문구가 붙은 칸 입력";
       if (t.paymentContext) return "결제 화면의 칸 입력";
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
