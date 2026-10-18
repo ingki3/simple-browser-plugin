@@ -6,7 +6,7 @@
 import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
-import { linkHrefOf } from "./context";
+import { fieldValueSignature, linkHrefOf } from "./context";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸)와 요소에 붙이는 속성.
@@ -280,7 +280,8 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 }
 
 // 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
-const consentAllowed = new Map<string, Set<Element>>();
+// 승인 당시 값이 채워져 있던 개인정보·비밀 칸과 그때의 값. 실행 직전에 값이 바뀌었으면(이 호출이 쓴 값이 아니면) 멈춘다.
+const consentAllowed = new Map<string, Map<Element, string>>();
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
@@ -310,12 +311,12 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
     return (el as HTMLInputElement).form ?? el.closest("form") ?? el;
   };
   // 승인 때 이미 채워져 있던 개인정보 칸과 이 묶음이 채울 칸만 허용한다(뒤에 자동 완성된 비밀번호 등은 아님).
-  const allowed = new Set<Element>();
+  const allowed = new Map<Element, string>();
   ids.forEach((id) => {
     const entry = registry.get(id);
     const el = entry?.ref.deref();
     if (!entry || !el) return;
-    for (const p of entry.kind.personalElements?.(el) ?? []) allowed.add(p);
+    for (const p of entry.kind.personalElements?.(el) ?? []) allowed.set(p, fieldValueSignature(p));
   });
   consentAllowed.set(callId, allowed);
   while (consentAllowed.size > 50) {
@@ -382,7 +383,8 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
   const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
   const explained = (p: Element) =>
-    allowed?.has(p) || (written?.has(p) && written.get(p) === ((p as HTMLInputElement).value ?? ""));
+    (allowed?.has(p) && allowed.get(p) === fieldValueSignature(p)) ||
+    (written?.has(p) && written.get(p) === ((p as HTMLInputElement).value ?? ""));
   if (allowed && filled.some((p) => !explained(p))) return "승인 뒤 양식에 개인정보가 채워짐";
   // 클릭은 묶음 입력이 아니므로, 승인 뒤 개인정보 제출로 바뀌었으면(버튼 자신의 값 포함) 그대로 멈춘다.
   // 입력 칸은 허용 목록으로 판정하고, 목록이 없을 때만(오래되어 지워진 경우 등) 양식 단위로 본다.

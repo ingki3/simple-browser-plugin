@@ -62,7 +62,7 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
   // 대상의 대화상자와, 연결된 양식이 든 대화상자(<button form=f>가 대화상자 밖에 있는 경우)를 모두 본다.
   const dialogSel = 'dialog, [role="dialog"], [role="alertdialog"]';
   const dialogs = [closestAcross(el, dialogSel), form ? closestAcross(form, dialogSel) : null];
-  if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test(scope.textContent ?? ""))) {
+  if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test(deepText(scope)))) {
     return true;
   }
   // 같은 출처 iframe 안이면 그 iframe 요소를 부모 문서의 대상으로 보고 대화상자·shadow 맥락을 다시 본다
@@ -164,4 +164,23 @@ export function nestedContainerScan(scope: Element | ShadowRoot): { containers: 
 // 범위 안의 열린 shadow root들(iframe 안 것 포함).
 export function openShadowRootsIn(scope: Element | ShadowRoot): ShadowRoot[] {
   return nestedContainersIn(scope).filter((n): n is ShadowRoot => isShadowRoot(n));
+}
+
+// 칸의 지금 값 요약(승인 당시와 같은지 비교용). 체크·선택·파일은 상태로, 읽을 수 없는 커스텀 컨트롤은 빈 값.
+export function fieldValueSignature(el: Element): string {
+  const f = el as HTMLInputElement;
+  if (el.localName === "select") {
+    return Array.from((el as HTMLSelectElement).selectedOptions, (o) => o.value).join("\u0001");
+  }
+  if (el.localName === "input" && (f.type === "checkbox" || f.type === "radio")) return `${f.checked}:${f.value}`;
+  if (el.localName === "input" && f.type === "file") return Array.from(f.files ?? [], (x) => `${x.name}:${x.size}`).join("\u0001");
+  if (el.localName === "input" || el.localName === "textarea") return f.value ?? "";
+  return "";
+}
+
+// 범위와 그 안 shadow root·같은 출처 iframe의 글자 전체(결제 문구 판정용 — textContent는 shadow 안 글자를 담지 않는다).
+export function deepText(scope: Element): string {
+  const parts = [scope.textContent ?? ""];
+  for (const c of nestedContainersIn(scope)) parts.push(c.textContent ?? "");
+  return parts.join(" ");
 }
