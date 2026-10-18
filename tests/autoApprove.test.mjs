@@ -219,3 +219,13 @@ test("phone, resident and card numbers in the path ask", () => {
   }
   assert.equal(navigateAutoBlock(trusted, "https://trusted.example/article/20261019/123456"), null);
 });
+
+test("only lowercase void 0 javascript links are inert", async () => {
+  const { pageActionSiteBlock } = await import("../src/lib/autoApprove.ts");
+  const trusted = new Set([siteOf("https://shop.example/")]);
+  const page = "https://shop.example/a";
+  assert.equal(pageActionSiteBlock(trusted, page, ["javascript:void(0)"], []), null);
+  assert.equal(pageActionSiteBlock(trusted, page, ["JavaScript:void 0;"], []), null);
+  assert.ok(pageActionSiteBlock(trusted, page, ["javascript:VOID(0)"], []));
+  assert.ok(pageActionSiteBlock(trusted, page, ["javascript:void0"], []));
+});

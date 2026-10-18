@@ -406,7 +406,14 @@ export function navigateAutoBlock(trustedSites: ReadonlySet<string>, targetUrl: 
   return sensitiveUrlReason(targetUrl);
 }
 
-const INERT_HREF_RE = /^javascript:\s*(void\s*\(?\s*0\s*\)?\s*;?|;|)\s*$/i;
+// 아무것도 하지 않는 javascript: 링크. 스킴만 대소문자를 가리지 않고, 식은 그대로 본다
+// (javascript:VOID(0)은 페이지가 정의한 VOID 함수를 부른다). void 0 / void(0) / ; / 빈 식만.
+const INERT_HREF_RE = {
+  test(href: string): boolean {
+    if (!/^javascript:/i.test(href)) return false;
+    return /^\s*(void(\s+0|\s*\(\s*0\s*\))\s*;?|;|)\s*$/.test(href.slice("javascript:".length));
+  },
+};
 
 // 클릭·입력: 사용자가 고르지 않은 사이트의 페이지에서는(자동 클릭으로 들어간 수집 페이지의 검색 칸 등) 묻는다.
 // 다른 사이트로 가는 링크 클릭과 다른 사이트로 제출하는 양식 버튼도 이동과 같게 본다.

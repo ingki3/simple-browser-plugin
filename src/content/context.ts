@@ -21,7 +21,12 @@ function paymentDocument(doc: Document): boolean {
   if (/(checkout|payment)/i.test(route) || /(\bpay\b|\border\b)/i.test(words)) return true;
   // 컴포넌트의 열린 shadow root 안 제목(<checkout-title>의 <h1>결제 금액</h1>)도 본다.
   const roots: Array<Document | Element | ShadowRoot> = [doc];
-  if (doc.documentElement) roots.push(...nestedContainersIn(doc.documentElement).filter((n) => isShadowRoot(n)));
+  if (doc.documentElement) {
+    const scan = nestedContainerScan(doc.documentElement);
+    // 한도에 걸려 끝까지 보지 못했으면 결제 제목이 숨어 있을 수 있으니 결제 화면으로 본다(묻기).
+    if (scan.incomplete) return true;
+    roots.push(...scan.containers.filter((n) => isShadowRoot(n)));
+  }
   const headings = roots
     .flatMap((r) => Array.from(r.querySelectorAll("h1, h2"), (h) => h.textContent ?? ""))
     .join(" ");
