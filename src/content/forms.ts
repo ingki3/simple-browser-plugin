@@ -848,7 +848,10 @@ export async function fillFormFields(
         : null;
     // 승인 뒤 양식이 바뀌었는지(채우기 직전과, input 처리기가 돈 뒤 change를 보내기 전에 본다).
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
+    // 처리기가 칸 이름을 바꿔(q → payment) 승인 예외를 넓히지 못하게 시작할 때의 이름을 쓴다.
+    const startName = el.name;
     const driftReason = (): string | null => {
+      if (el.name !== startName) return "입력 중 칸 이름이 바뀌어 채우지 않았습니다. 다시 찾으세요.";
       const nowRisk = FIELD_KIND.risk?.(el);
       // 같은 칸의 양식 제출 주소와, 양식 밖 칸이면 주변 양식들의 제출 주소를 함께 본다.
       const nowUrl = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? [])].join(" ");
@@ -868,7 +871,7 @@ export async function fillFormFields(
       if (added.length) return "승인한 뒤 양식에 주소·개인정보 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요.";
       // 앞선 입력의 처리기가 숨은 값을 바꿔(operation=browse → pay) 제출 주소가 결제·민감 주소로 바뀌었으면 멈춘다.
       // 이 칸과 앞서 채운 칸의 이름·값 쌍만 승인한 값으로 빼고 본다(같은 값이라도 다른 이름 payment=1은 남긴다).
-      const pairs = new Set([...appliedPairs, `${el.name}\u0001${decodeDeep(intended)}`]);
+      const pairs = new Set([...appliedPairs, `${startName}\u0001${decodeDeep(intended)}`]);
       // byPair: 이 묶음이 채운 칸의 이름·값 쌍만 뺀다(결제 판정용 — 같은 값의 새 이름 payment=1을 남긴다).
       // 아니면 이 묶음이 넣는 값과 같은 값은 이름과 관계없이 뺀다(개인정보 판정용 — 승인한 이메일을 처리기가
       // 같은 양식의 숨은 칸에 복사하는 것은 승인한 변화다).
@@ -943,9 +946,9 @@ export async function fillFormFields(
     // 앞선 입력이 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
     applied.add(decodeDeep(intended));
     if (actual !== undefined) applied.add(decodeDeep(actual));
-    if (el.name) {
-      appliedPairs.add(`${el.name}\u0001${decodeDeep(intended)}`);
-      if (actual !== undefined) appliedPairs.add(`${el.name}\u0001${decodeDeep(actual)}`);
+    if (startName && el.name === startName) {
+      appliedPairs.add(`${startName}\u0001${decodeDeep(intended)}`);
+      if (actual !== undefined) appliedPairs.add(`${startName}\u0001${decodeDeep(actual)}`);
     }
     // 이 호출이 써 넣은 상태를 값 요약으로 기록한다. checkbox·radio는 처리기가 돌기 전에 정한 상태(expectedSig),
     // 글자 칸은 브라우저가 정리한 실제 값(type=email의 앞뒤 공백 제거 등).
