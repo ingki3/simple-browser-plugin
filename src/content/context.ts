@@ -28,7 +28,7 @@ function paymentDocument(doc: Document): boolean {
     roots.push(...scan.containers.filter((n) => isShadowRoot(n)));
   }
   const headings = roots
-    .flatMap((r) => Array.from(r.querySelectorAll("h1, h2"), (h) => h.textContent ?? ""))
+    .flatMap((r) => Array.from(r.querySelectorAll("h1, h2"), (h) => slottedText(h)))
     .join(" ");
   return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
 }
@@ -207,7 +207,16 @@ export function fieldValueSignature(el: Element): string {
 
 // 범위와 그 안 shadow root·같은 출처 iframe의 글자 전체(결제 문구 판정용 — textContent는 shadow 안 글자를 담지 않는다).
 export function deepText(scope: Element): string {
-  const parts = [scope.textContent ?? ""];
-  for (const c of nestedContainersIn(scope)) parts.push(c.textContent ?? "");
+  const parts = [slottedText(scope)];
+  for (const c of nestedContainersIn(scope)) parts.push(slottedText(c));
+  return parts.join(" ");
+}
+
+// 글자와, 그 안 slot에 배치되어 보이는 light DOM 글자(<h2><slot name=heading></slot></h2> — textContent에 없다).
+export function slottedText(node: Element | ShadowRoot | Document): string {
+  const parts = [node.textContent ?? ""];
+  for (const slot of Array.from(node.querySelectorAll("slot"))) {
+    for (const n of (slot as HTMLSlotElement).assignedNodes({ flatten: true })) parts.push(n.textContent ?? "");
+  }
   return parts.join(" ");
 }

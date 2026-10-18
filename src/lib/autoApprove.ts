@@ -14,7 +14,7 @@ export const AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
 
 // 돈이 나가는 버튼: 결제·구매·주문·송금 등. 영문 order는 단어로 따로 본다(Confirm order, Place your order).
 export const PAYMENT_TEXT_RE =
-  /(결제|구매|구입|주문|송금|이체|충전|후원|기부|입금|\bpay\b|payment|checkout|check\s*out|\bbuy\b|purchase|\border\b|donate)/i;
+  /(결제|구매|구입|주문|송금|이체|충전|후원|기부|입금|\bpay\b|payment|checkout|check\s*out|\bbuy\b|purchase|\border\b|donate|\btransfer\b|\bwire\b|remit|send\s*money)/i;
 // 개인정보를 내보내는 버튼: 가입·신청·제출·인증 등.
 const SUBMIT_TEXT_RE =
   /(가입|신청|제출|접수|본인\s*인증|인증\s*(번호|요청|하기)|예약\s*하기|문의\s*(하기|등록)|sign\s*up|register|submit|verify)/i;
@@ -272,7 +272,7 @@ export const PERSONAL_HINT_RE =
 // 주소 자체가 개인정보를 싣거나 결제로 가는지: 경로·쿼리·해시에 결제 단서, 매개변수 이름에 개인정보·비밀 단서,
 // 값에 이메일·전화번호·카드 번호 모양. 같은 사이트 안이라도 이런 주소로의 이동·링크 클릭은 묻는다
 // (이메일이 든 GET 가입 양식 주소로 바로 이동, 결제를 확정하는 GET 링크).
-const PAYMENT_ROUTE_RE = /(checkout|payment|\bpay\b|\border\b|결제|구매|주문|송금|이체)/i;
+const PAYMENT_ROUTE_RE = /(checkout|payment|\bpay\b|\border\b|\btransfer\b|remit|결제|구매|주문|송금|이체)/i;
 const PERSONAL_PARAM_RE =
   /(e[\s-]?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|password|passwd|\bpwd\b|\botp\b|card|cvc|cvv|(?<![a-z])name(?![a-z])|username|이름|성명|전화|휴대|연락처|이메일|주소|생년|주민|계좌|비밀번호|카드|인증)/i;
 // 휴대전화(01x)·구분자 있는 일반 전화·카드 번호·주민등록번호 모양. 기사 번호 같은 긴 숫자와 헷갈리지 않게 좁게 잡는다.

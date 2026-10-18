@@ -229,3 +229,11 @@ test("only lowercase void 0 javascript links are inert", async () => {
   assert.ok(pageActionSiteBlock(trusted, page, ["javascript:VOID(0)"], []));
   assert.ok(pageActionSiteBlock(trusted, page, ["javascript:void0"], []));
 });
+
+test("English money transfer wording asks", () => {
+  for (const name of ["Confirm transfer", "Send money", "Wire funds"]) {
+    assert.ok(autoApproveBlock("click_element", [t({ name })]), name);
+  }
+  const trusted = new Set([siteOf("https://bank.example/")]);
+  assert.ok(navigateAutoBlock(trusted, "https://bank.example/transfer/confirm"));
+});
