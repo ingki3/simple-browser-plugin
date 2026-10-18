@@ -917,13 +917,23 @@ export async function fillFormFields(
       };
       // 이유별로 비교한다(이미 개인정보 주소였던 양식에 결제 동작이 새로 붙은 경우도 잡게).
       const PAYMENT_REASON = "결제·주문 주소";
+      // 제출 주소(쿼리 뺀 주소)별로 이유를 모은다. 다른 양식에 이미 있던 결제 단서가 이 양식의 새 결제를 덮지 않게.
+      const target = (u: string) => {
+        try {
+          const x = new URL(u);
+          return `${x.origin}${x.pathname}`;
+        } catch {
+          return u;
+        }
+      };
       const reasonsIn = (list: string[]) => {
         const out = new Set<string>();
         for (const u of list) {
           if (!u) continue;
-          if (sensitiveUrlReason(withoutKnown(u, true)) === PAYMENT_REASON) out.add(PAYMENT_REASON);
+          const key = target(u);
+          if (sensitiveUrlReason(withoutKnown(u, true)) === PAYMENT_REASON) out.add(`${key}\u0001${PAYMENT_REASON}`);
           const other = sensitiveUrlReason(withoutKnown(u, false));
-          if (other) out.add(other);
+          if (other) out.add(`${key}\u0001${other}`);
         }
         return out;
       };

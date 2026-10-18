@@ -371,7 +371,10 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
   entry.approved = null;
   const now = fullInfo(entry.kind, el);
   if (!sameApproved(now, approved.info)) {
-    throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
+    const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
+    // 민감한 칸(비밀번호·결제·인증번호)으로 바뀐 것은 위험 변화다(묶음 입력의 남은 칸도 멈춘다).
+    if ((now.sensitive ?? null) !== (approved.info.sensitive ?? null)) throw new RiskAddedError(msg);
+    throw new Error(msg);
   }
   const added = riskAdded(entry.kind, el, approved.info);
   if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
