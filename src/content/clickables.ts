@@ -7,6 +7,7 @@ import {
   formHasPersonalValues,
   formSubmissionUrl,
   isPersonalField,
+  captureHiddenBaselines,
   personalValuedInScopes,
   scopeSubmitUrls,
 } from "./forms";
@@ -218,6 +219,7 @@ type FindClickablesArgs = {
 };
 
 export function findClickables(args: FindClickablesArgs): ClickableElement[] {
+  captureHiddenBaselines();
   return scanTargets(() => collectClickables(args));
 }
 

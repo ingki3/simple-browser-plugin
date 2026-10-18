@@ -400,10 +400,11 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   if ((now.outerText ?? "") !== (info.outerText ?? "")) return "감싼 버튼 글자가 바뀜";
   if (now.download && !info.download) return "내려받기 링크로 바뀜";
   if ((now.choiceUrls ?? []).join(" ") !== (info.choiceUrls ?? []).join(" ")) return "선택지 주소가 바뀜";
-  // 범위 안 다른 양식의 제출 주소: 클릭은 값까지, 입력 칸은 묶음 입력이 값을 바꾸므로 action만 비교.
-  const scopeKey = (urls: string[] | undefined) =>
-    (urls ?? []).map((u) => (kind.prefix === "f" ? u.split("?")[0] : u)).join(" ");
-  if (scopeKey(now.scopeSubmitUrls) !== scopeKey(info.scopeSubmitUrls)) return "주변 양식의 제출 주소가 바뀜";
+  // 범위 안 다른 양식의 제출 주소: 클릭은 값까지 비교한다. 입력 칸은 묶음 입력이 주변 양식 값을 바꿀 수 있어
+  // 여기서는 action 목록(scopeFormActions)만 비교하고, 값에 새로 생긴 주소·개인정보는 입력 직전 검사가 본다.
+  if (kind.prefix !== "f" && (now.scopeSubmitUrls ?? []).join(" ") !== (info.scopeSubmitUrls ?? []).join(" ")) {
+    return "주변 양식의 제출 주소가 바뀜";
+  }
   if ((now.scopeFormActions ?? []).join(" ") !== (info.scopeFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
   return null;
 }

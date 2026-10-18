@@ -266,6 +266,18 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸들.
+// 숨은 칸(type=hidden)은 .value를 바꾸면 defaultValue도 같이 바뀌어 처음 값과 비교할 수 없다.
+// 페이지를 처음 살필 때(find_*) 값을 기록해 두고 그 값과 비교한다. 기록이 없으면 지금 값을 기준으로 삼는다.
+const hiddenBaseline = new WeakMap<Element, string>();
+
+export function captureHiddenBaselines(): void {
+  for (const root of getAccessibleRoots()) {
+    for (const el of Array.from(root.querySelectorAll('input[type="hidden"]'))) {
+      if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, (el as HTMLInputElement).value);
+    }
+  }
+}
+
 // 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
 // (페이지가 처음부터 넣어 둔 값은 페이지의 것이다). 모든 페이지 머리의 빈 검색 양식 같은 것은 빼려는 것.
 function formHasChangedValues(form: HTMLFormElement): boolean {
@@ -276,6 +288,9 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
       if (Array.from(f.options).some((o) => o.selected !== o.defaultSelected)) return true;
     } else if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio")) {
       if (f.checked !== f.defaultChecked) return true;
+    } else if (isTag(f, "input") && f.type === "hidden") {
+      if (!hiddenBaseline.has(f)) hiddenBaseline.set(f, f.value);
+      else if (hiddenBaseline.get(f) !== f.value) return true;
     } else if (f.value !== (f as HTMLInputElement | HTMLTextAreaElement).defaultValue) {
       return true;
     }
@@ -472,6 +487,7 @@ function currentValueOf(el: FieldElement): string {
 }
 
 export function findFormFields(args: { onlyVisible?: boolean }): FormField[] {
+  captureHiddenBaselines();
   return scanTargets(() => collectFormFields(args));
 }
 
