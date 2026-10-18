@@ -81,21 +81,28 @@ export function linkHrefOf(el: Element): string {
 // 양식 없는 화면에서 대상의 처리기가 읽어 보낼 수 있는 입력 칸 범위들: 감싼 대화상자가 있으면 그것 하나,
 // 없으면 클릭 경로에 있는 shadow root들과 문서 body 전체(가까운 일반 칸에서 멈추면 바깥의 이메일·비밀번호 칸을
 // 놓친다). 범위 안에서는 어느 양식에도 속하지 않은 칸만 본다(personalValuedElements).
-export function formlessScopes(el: Element): Array<Element | ShadowRoot> {
+export interface FormlessScope {
+  node: Element | ShadowRoot;
+  // 대화상자 안이면 안쪽 양식에 속한 칸도 본다(바깥 버튼이 안쪽 양식을 requestSubmit하는 경우).
+  includeFormFields: boolean;
+}
+
+export function formlessScopes(el: Element): FormlessScope[] {
   const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
-  const scopes: Array<Element | ShadowRoot> = [];
+  const inDialog = !!dialog;
+  const nodes: Array<Element | ShadowRoot> = [];
   // 클릭 경로의 shadow root들(대화상자가 있으면 그 안쪽 것만).
   for (let cur: Element | null = el; cur && cur !== dialog; cur = eventParent(cur)) {
     const root = cur.getRootNode();
-    if (isShadowRoot(root) && !scopes.includes(root)) scopes.push(root);
+    if (isShadowRoot(root) && !nodes.includes(root)) nodes.push(root);
   }
   const base = dialog ?? el.ownerDocument.body;
   if (base) {
-    scopes.push(base);
+    nodes.push(base);
     // 범위 안 다른 웹 컴포넌트의 열린 shadow root도 본다(querySelectorAll은 shadow 안으로 들어가지 않는다).
-    for (const root of openShadowRootsIn(base)) if (!scopes.includes(root)) scopes.push(root);
+    for (const root of openShadowRootsIn(base)) if (!nodes.includes(root)) nodes.push(root);
   }
-  return scopes;
+  return nodes.map((node) => ({ node, includeFormFields: inDialog }));
 }
 
 // 범위 안의 열린 shadow root들(중첩 포함, 최대 200개).

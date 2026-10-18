@@ -253,7 +253,10 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸들.
-export function personalValuedElements(scope: HTMLFormElement | Element | ShadowRoot): Element[] {
+export function personalValuedElements(
+  scope: HTMLFormElement | Element | ShadowRoot,
+  includeFormFields = false,
+): Element[] {
   const out: Element[] = [];
   // 양식이면 그 컨트롤 목록. 대화상자면 그 안의 모든 입력 칸(바깥 버튼이 안쪽 양식을 requestSubmit하는 경우 포함).
   // 그 밖의 양식 없는 범위면 어느 양식에도 속하지 않은 칸만(양식에 속한 칸은 그 양식이 제출할 때만 나간다 —
@@ -265,10 +268,14 @@ export function personalValuedElements(scope: HTMLFormElement | Element | Shadow
   const fields = isElement && isTag(scope as Element, "form")
     ? formElements(scope as HTMLFormElement)
     : Array.from(scope.querySelectorAll("input, textarea, select")).filter(
-        (f) => isDialog || !(f as HTMLInputElement).form,
+        (f) => isDialog || includeFormFields || !(f as HTMLInputElement).form,
       );
   for (const el of fields) {
-    if (!isFieldElement(el as HTMLElement)) continue;
+    // 양식에 연결된 커스텀 컨트롤(ElementInternals.setFormValue)은 제출 값을 읽을 수 없으니 민감한 값으로 본다.
+    if (!isFieldElement(el as HTMLElement)) {
+      if (el.localName.includes("-")) out.push(el);
+      continue;
+    }
     const f = el as FieldElement;
     if (isTag(f, "input") && ["submit", "button", "image", "reset"].includes(f.type)) continue;
     // 파일이 선택된 칸은 내용을 볼 수 없으니 늘 민감한 값으로 본다(로컬 파일 업로드).
@@ -296,7 +303,9 @@ const FIELD_KIND: TargetKind = {
   sensitive: sensitivityOf,
   personalElements: (el) => {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
-    return (form ? [form] : formlessScopes(el)).flatMap((scope) => personalValuedElements(scope));
+    return form
+      ? personalValuedElements(form)
+      : formlessScopes(el).flatMap((s) => personalValuedElements(s.node, s.includeFormFields));
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다).
@@ -318,7 +327,7 @@ const FIELD_KIND: TargetKind = {
       // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
       submitsPersonal: form
         ? formHasPersonalValues(form)
-        : formlessScopes(el).some((scope) => personalValuedElements(scope).some((p) => p !== el)),
+        : formlessScopes(el).some((s) => personalValuedElements(s.node, s.includeFormFields).some((p) => p !== el)),
       // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
       paymentContext:
         inPaymentContext(el, form) ||
