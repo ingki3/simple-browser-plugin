@@ -287,6 +287,8 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 const hiddenBaseline = new WeakMap<Element, string>();
 // 기준 값을 기록한 문서. 기록한 뒤에 새로 생긴 숨은 칸은 페이지 기본값이 아니라 바뀐 값으로 본다.
 const baselineDocs = new WeakSet<Document>();
+// 기준을 기록할 때 있던 칸들. 그 뒤 새로 생긴 칸(값이 있는)은 종류와 관계없이 바뀐 값으로 본다.
+const seenFields = new WeakSet<Element>();
 
 export function captureHiddenBaselines(): void {
   // 기준은 문서마다 처음 살필 때 한 번만 기록한다(그 뒤에 생긴 숨은 칸을 기준으로 삼지 않게).
@@ -299,6 +301,7 @@ export function captureHiddenBaselines(): void {
     for (const el of Array.from(root.querySelectorAll('input[type="hidden"], input[type="checkbox"], input[type="radio"]'))) {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, (el as HTMLInputElement).value);
     }
+    for (const el of Array.from(root.querySelectorAll("input, textarea, select"))) seenFields.add(el);
     // 선택 칸은 처음 살핀 때의 실제 선택 상태를 기준으로 삼는다(selected 속성이 없으면 첫 선택지가 골라져 있다).
     for (const el of Array.from(root.querySelectorAll("select"))) {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, selectedSignature(el as HTMLSelectElement));
@@ -318,6 +321,15 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
   for (const el of formElements(form)) {
     if (!isFieldElement(el as HTMLElement)) continue;
     const f = el as FieldElement;
+    // 기준을 기록한 문서에 나중에 생긴 칸이 값을 가지고 있으면 바뀐 값이다(처리기가 새 칸에 내용을 복사).
+    if (baselineDocs.has(f.ownerDocument) && !seenFields.has(f)) {
+      const hasValue = isTag(f, "select")
+        ? Array.from(f.selectedOptions).some((o) => o.value)
+        : isTag(f, "input") && (f.type === "checkbox" || f.type === "radio")
+          ? f.checked
+          : !!f.value;
+      if (hasValue) return true;
+    }
     if (isTag(f, "select")) {
       const sig = selectedSignature(f);
       if (!hiddenBaseline.has(f)) hiddenBaseline.set(f, sig);

@@ -76,7 +76,8 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
   // 같은 출처 iframe 안이면 그 iframe 요소를 부모 문서의 대상으로 보고 대화상자·shadow 맥락을 다시 본다
   // (결제 대화상자 안에 iframe이 있고 그 안의 '확인' 버튼).
   const frame = frameElementOf(el.ownerDocument);
-  return !!frame && inPaymentContext(frame as HTMLElement, null);
+  // 부모 쪽에서는 iframe을 감싼 양식도 함께 본다(바깥 양식의 결제 문구, iframe 버튼이 부모 양식을 제출).
+  return !!frame && inPaymentContext(frame as HTMLElement, closestAcross(frame, "form") as HTMLFormElement | null);
 }
 
 function frameElementOf(doc: Document): Element | null {
