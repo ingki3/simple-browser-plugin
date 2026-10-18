@@ -289,6 +289,7 @@ const hiddenBaseline = new WeakMap<Element, string>();
 const baselineDocs = new WeakSet<Document>();
 // 기준을 기록할 때 있던 칸들. 그 뒤 새로 생긴 칸(값이 있는)은 종류와 관계없이 바뀐 값으로 본다.
 const seenFields = new WeakSet<Element>();
+const textBaseline = new WeakMap<Element, string>();
 
 export function captureHiddenBaselines(): void {
   // 기준은 문서마다 처음 살필 때 한 번만 기록한다(그 뒤에 생긴 숨은 칸을 기준으로 삼지 않게).
@@ -302,6 +303,12 @@ export function captureHiddenBaselines(): void {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, (el as HTMLInputElement).value);
     }
     for (const el of Array.from(root.querySelectorAll("input, textarea, select"))) seenFields.add(el);
+    // 일반 칸은 처음 살핀 값을 따로 기록한다(React 등이 value와 defaultValue를 함께 바꾸면 defaultValue 비교로는 못 잡는다).
+    for (const el of Array.from(root.querySelectorAll("input, textarea"))) {
+      const t = (el as HTMLInputElement).type;
+      if (isTag(el, "input") && (t === "hidden" || t === "checkbox" || t === "radio")) continue;
+      if (!textBaseline.has(el)) textBaseline.set(el, (el as HTMLInputElement).value);
+    }
     // 선택 칸은 처음 살핀 때의 실제 선택 상태를 기준으로 삼는다(selected 속성이 없으면 첫 선택지가 골라져 있다).
     for (const el of Array.from(root.querySelectorAll("select"))) {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, selectedSignature(el as HTMLSelectElement));
@@ -348,6 +355,8 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
         hiddenBaseline.set(f, f.value);
       } else if (hiddenBaseline.get(f) !== f.value) return true;
     } else if (f.value !== (f as HTMLInputElement | HTMLTextAreaElement).defaultValue) {
+      return true;
+    } else if (textBaseline.has(f) && textBaseline.get(f) !== f.value) {
       return true;
     }
   }

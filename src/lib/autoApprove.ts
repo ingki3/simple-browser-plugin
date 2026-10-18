@@ -130,6 +130,13 @@ function embeddedUrls(u: URL, maxValues = Infinity): string[] {
   }
   const out: string[] = [];
   if (values.length > maxValues) return [OVER_BUDGET];
+  // 경로에 감싼 목적지(/out/https%3A%2F%2Fhost/…, /proxy/https://host/…). 리다이렉트·프록시 경로로 밖에 보낼 수 있다.
+  const path = normalizeUrlText(decodeDeepText(u.pathname));
+  if (/%3a|%2f%2f|%5c/i.test(path)) out.push(UNDECODABLE);
+  else {
+    const at = path.search(/https?:[/\\]/i);
+    if (at >= 0) out.push(path.slice(at));
+  }
   for (const raw of values) {
     // 잘못된 %ZZ가 섞여도 올바른 %XX는 풀어 본다(decodeDeepText). 다 풀고도 인코딩된 주소 흔적(%3A%2F%2F)이 남으면
     // 목적지를 확인하지 못한 것으로 본다(사이트 경계 판정에서 늘 밖 → 묻기).

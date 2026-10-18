@@ -3,6 +3,7 @@
 // 확인하고 승인할 기술을 남기며, 실행 직전에 다시 그 기술과 같을 때만 실행한다.
 // 요소가 다시 그려져 사라졌으면 멈춘다. 비슷한 요소로 대신하지 않는다.
 
+import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
@@ -300,11 +301,14 @@ export function noteWritten(callId: string, el: Element, value: string): void {
 }
 
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
-export function inspectTargets(ids: string[], callId: string, prefix: string): TargetInfo[] {
+export function inspectTargets(ids: string[], callId: string, prefix: string, values?: string[]): TargetInfo[] {
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
   // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
   // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
-  const batchHasPersonal = infos.some((info) => info.personal || info.sensitive);
+  // 칸 단서가 없어도 입력할 값이 개인정보(이메일·전화 등)면 승인 카드가 뜨므로 개인정보 묶음으로 본다.
+  const personalAt = (i: number) =>
+    !!(infos[i].personal || infos[i].sensitive) || (values?.[i] !== undefined && looksPersonalValue(values[i]));
+  const batchHasPersonal = infos.some((_, i) => personalAt(i));
   const scopeOf = (id: string): Element | null => {
     const el = registry.get(id)?.ref.deref();
     if (!el) return null;
@@ -334,7 +338,7 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
   }
   const consentScopes = new Set<Element>();
   ids.forEach((id, i) => {
-    if (infos[i].personal || infos[i].sensitive) {
+    if (personalAt(i)) {
       const scope = scopeOf(id);
       if (scope) consentScopes.add(scope);
     }

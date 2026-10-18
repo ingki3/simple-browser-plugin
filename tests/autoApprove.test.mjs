@@ -195,3 +195,12 @@ test("tools outside page actions are never automatic", () => {
   assert.ok(autoApproveBlock("read_document", []));
   assert.ok(autoApproveBlock("google_sheets_write_range", []));
 });
+
+test("destinations wrapped in the path are checked against the trusted site", () => {
+  const trusted = new Set([siteOf("https://trusted.example/")]);
+  assert.ok(navigateAutoBlock(trusted, "https://trusted.example/out/https%3A%2F%2Fcollector.example%2Freceive%3Fd%3Dx"));
+  assert.ok(navigateAutoBlock(trusted, "https://trusted.example/proxy/https://collector.example/receive"));
+  assert.ok(navigateAutoBlock(trusted, "https://trusted.example/out/https%253A%252F%252Fcollector.example"));
+  assert.equal(navigateAutoBlock(trusted, "https://trusted.example/out/https%3A%2F%2Fsub.trusted.example%2Fa"), null);
+  assert.equal(navigateAutoBlock(trusted, "https://trusted.example/docs/http-guide"), null);
+});

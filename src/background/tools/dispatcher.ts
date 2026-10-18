@@ -74,11 +74,12 @@ async function inspectTargets(
   prefix: "c" | "f",
   callId: string,
   turnTab: TurnTab,
+  values?: string[],
 ): Promise<TargetInfo[]> {
   const tabId = await resolveTurnTab(turnTab);
   await waitForNavigationSettle(tabId, 10_000);
   try {
-    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId, prefix }, 5_000, "대상 확인");
+    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId, prefix, values }, 5_000, "대상 확인");
   } catch (err) {
     if (isMissingReceiver(err)) {
       throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
@@ -149,6 +150,7 @@ export async function buildToolPreview(
         "f",
         callId,
         turnTab,
+        args.fills.map((f) => f.value),
       );
       await beginActionLog(
         callId,
