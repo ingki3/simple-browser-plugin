@@ -65,6 +65,18 @@ function resolveLabel(el: FieldElement): string {
   return "";
 }
 
+// 라벨 외의 접근성 이름 단서: aria-label·aria-labelledby가 가리키는 글자·title·placeholder.
+// (label이 '코드'여도 aria-label이 '인증번호'면 비밀 칸이다.)
+function accessibleHint(el: Element): string {
+  const parts = [el.getAttribute("aria-label") ?? "", el.getAttribute("title") ?? "", el.getAttribute("placeholder") ?? ""];
+  const root = el.getRootNode() as Document | ShadowRoot;
+  for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean)) {
+    const ref = root.getElementById?.(id) ?? el.ownerDocument.getElementById(id);
+    if (ref) parts.push(ref.textContent ?? "");
+  }
+  return parts.join(" ");
+}
+
 function describeType(el: FieldElement): string {
   if (isTag(el, "input")) return el.type || "text";
   if (isTag(el, "textarea")) return "textarea";
@@ -76,7 +88,7 @@ function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
   if ((isTag(el, "input") && el.type === "password") || /password|one-time-code/.test(ac)) return "password";
   if (/\bcc-/.test(ac)) return "payment";
-  const hint = splitIdentifier(`${el.getAttribute("name") ?? ""} ${el.id} ${isFieldElement(el) ? resolveLabel(el) : ""}`);
+  const hint = splitIdentifier(`${el.getAttribute("name") ?? ""} ${el.id} ${isFieldElement(el) ? resolveLabel(el) : ""} ${accessibleHint(el)}`);
   if (PAYMENT_RE.test(hint)) return "payment";
   // 비밀번호 표시로 type이 text가 된 칸, 일회용 인증 코드 칸도 비밀 값으로 본다.
   if (SECRET_HINT_RE.test(hint)) return "password";
@@ -92,7 +104,7 @@ export function isPersonalField(el: HTMLElement): boolean {
   if (isTag(el, "input") && (el.type === "email" || el.type === "tel")) return true;
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
   if (PERSONAL_AC_RE.test(ac)) return true;
-  const hint = splitIdentifier(`${el.getAttribute("name") ?? ""} ${el.id} ${resolveLabel(el)}`);
+  const hint = splitIdentifier(`${el.getAttribute("name") ?? ""} ${el.id} ${resolveLabel(el)} ${accessibleHint(el)}`);
   return PERSONAL_HINT_RE.test(hint);
 }
 
