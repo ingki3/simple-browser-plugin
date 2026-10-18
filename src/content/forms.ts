@@ -605,7 +605,8 @@ function intendedValue(el: FieldElement, value: string): string {
   return value;
 }
 
-function fillOne(el: FieldElement, value: string): boolean {
+// onSet: 글자 칸에 브라우저가 정리한 실제 값(앞뒤 공백 제거 등)을 페이지 처리기가 돌기 전에 알려 준다.
+function fillOne(el: FieldElement, value: string, onSet?: (actual: string) => void): boolean {
   if (isTag(el, "select")) {
     const match = Array.from(el.options).find(
       (opt) => opt.value === value || opt.textContent?.trim() === value,
@@ -634,6 +635,7 @@ function fillOne(el: FieldElement, value: string): boolean {
     return true;
   }
   setNativeProperty(el, "value", value);
+  onSet?.(el.value);
   dispatchChange(el);
   return true;
 }
@@ -671,7 +673,7 @@ export async function fillFormFields(
   for (const id of ids) peekApproved(id, callId, FIELD_KIND.prefix);
 
   const results: FillResult[] = [];
-  const written: Array<{ el: FieldElement; info: TargetInfo; value: string; result: FillResult }> = [];
+  const written: Array<{ el: FieldElement; info: TargetInfo; value: string; actual?: string; result: FillResult }> = [];
   const applied = new Set<string>();
   for (const f of args.fills) {
     let el: HTMLElement;
@@ -718,21 +720,24 @@ export async function fillFormFields(
         continue;
       }
     }
-    if (!fillOne(el, f.value)) {
+    let actual: string | undefined;
+    if (!fillOne(el, f.value, (v) => (actual = v))) {
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
     }
     // 앞선 입력이 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
     applied.add(decodeDeep(intended));
-    // 이 호출이 써 넣은 상태를 값 요약으로 기록한다. checkbox·radio는 처리기가 돌기 전에 정한 상태(expectedSig).
-    noteWritten(callId, el, expectedSig ?? intended);
+    if (actual !== undefined) applied.add(decodeDeep(actual));
+    // 이 호출이 써 넣은 상태를 값 요약으로 기록한다. checkbox·radio는 처리기가 돌기 전에 정한 상태(expectedSig),
+    // 글자 칸은 브라우저가 정리한 실제 값(type=email의 앞뒤 공백 제거 등).
+    noteWritten(callId, el, expectedSig ?? actual ?? intended);
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
-    written.push({ el, info, value: f.value, result });
+    written.push({ el, info, value: f.value, actual, result });
   }
 
   await new Promise((r) => setTimeout(r, SETTLE_MS));
-  for (const { el, info, value, result } of written) {
+  for (const { el, info, value, actual, result } of written) {
     // input·change 처리기가 칸을 새로 그렸으면 떨어져 나간 이전 요소의 값은 화면과 무관하다.
     if (!el.isConnected) {
       result.note = "입력 뒤 페이지가 칸을 새로 그려 값이 남았는지 확인하지 못했습니다";
@@ -742,7 +747,7 @@ export async function fillFormFields(
     const changed = recheckApproved(FIELD_KIND, el, info);
     if (changed) {
       result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
-    } else if (appliedValue(el, value)) {
+    } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual)) {
       result.applied = true;
     } else {
       result.note = "페이지가 값을 바꾸거나 받아들이지 않았습니다(최대 길이·서식 등)";
