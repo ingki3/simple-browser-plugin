@@ -161,7 +161,12 @@ export async function buildToolPreview(
         autoBlock: autoApproveBlock("fill_form_fields", infos),
         // 양식 제출 주소(기존 값 포함)와 선택지 주소. 입력할 값은 fillValues로 따로 본다.
         linkHrefs: infos
-          .flatMap((info) => [info.submitTo ?? "", info.submitUrl ?? "", ...(info.choiceUrls ?? [])])
+          .flatMap((info) => [
+            info.submitTo ?? "",
+            info.submitUrl ?? "",
+            ...(info.choiceUrls ?? []),
+            ...(info.scopeSubmitUrls ?? []),
+          ])
           .filter(Boolean),
         fillValues: args.fills.map((f) => f.value),
       };
@@ -190,6 +195,7 @@ export async function buildToolPreview(
           info.submitUrl ?? "",
           info.ancestorHref ?? "",
           ...(info.choiceUrls ?? []),
+          ...(info.scopeSubmitUrls ?? []),
         ].filter(Boolean),
       };
     }

@@ -253,6 +253,40 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸들.
+// 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
+// (페이지가 처음부터 넣어 둔 값은 페이지의 것이다). 모든 페이지 머리의 빈 검색 양식 같은 것은 빼려는 것.
+function formHasChangedValues(form: HTMLFormElement): boolean {
+  for (const el of formElements(form)) {
+    if (!isFieldElement(el as HTMLElement)) continue;
+    const f = el as FieldElement;
+    if (isTag(f, "select")) {
+      if (Array.from(f.options).some((o) => o.selected !== o.defaultSelected)) return true;
+    } else if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio")) {
+      if (f.checked !== f.defaultChecked) return true;
+    } else if (f.value !== (f as HTMLInputElement | HTMLTextAreaElement).defaultValue) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// 범위 안 양식들(칸 값이 바뀐 것)이 실제로 제출되는 주소(action과 지금 값을 합친 주소). 양식 밖 버튼·칸의 처리기가
+// 그 양식을 requestSubmit할 수 있으니 사이트 경계·결제·개인정보 주소 검사에 넣는다(최대 50개).
+export function scopeSubmitUrls(scopes: Array<{ node: Element | ShadowRoot }>): string[] {
+  const out: string[] = [];
+  for (const s of scopes) {
+    for (const f of Array.from(s.node.querySelectorAll("form"))) {
+      if (!formHasChangedValues(f as HTMLFormElement)) continue;
+      const action = formAction(f as HTMLFormElement);
+      if (!action) continue;
+      const url = formSubmissionUrl(f as HTMLFormElement, action);
+      for (const u of [action, url]) if (u && !out.includes(u)) out.push(u);
+      if (out.length >= 50) return out;
+    }
+  }
+  return out;
+}
+
 // 양식 밖 입력 칸의 범위: change 처리기가 다른 양식을 requestSubmit할 수 있으니 클릭처럼 범위 안 양식 칸까지 본다.
 function fieldFormlessScopes(el: Element) {
   return formlessScopes(el).map((s) => ({ ...s, includeFormFields: true }));
@@ -372,6 +406,10 @@ const FIELD_KIND: TargetKind = {
       // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
       paymentContext:
         inPaymentContext(el, form) ||
+        // 체크하면 실리는 checkbox·radio 값에 결제 문구가 있으면(value="purchase").
+        (isTag(el, "input") &&
+          (el.type === "checkbox" || el.type === "radio") &&
+          (PAYMENT_TEXT_RE.test(el.value) || PAYMENT_TEXT_RE.test(splitIdentifier(el.value)))) ||
         (isTag(el, "select") &&
           Array.from(el.options).some((o) => {
             const text = `${o.textContent ?? ""} ${o.value}`;
@@ -379,6 +417,11 @@ const FIELD_KIND: TargetKind = {
           })),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
+      // 양식 밖 칸이면 범위 안 다른 양식들의 제출 주소도 본다.
+      ...(() => {
+        const urls = form ? [] : scopeSubmitUrls(fieldFormlessScopes(el));
+        return urls.length ? { scopeSubmitUrls: urls } : {};
+      })(),
       ...(choiceUrls.length ? { choiceUrls } : {}),
     };
   },

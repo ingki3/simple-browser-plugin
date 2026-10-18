@@ -38,6 +38,8 @@ export interface TargetInfo {
   submitUrl?: string;
   // 선택 칸의 선택지 값 중 주소처럼 보이는 것(절대 주소로 푼 것). 사이트 경계 판정용.
   choiceUrls?: string[];
+  // 양식 밖 대상이 처리기로 제출할 수 있는 범위 안 다른 양식들의 제출 주소(사이트 경계·민감 주소 판정용).
+  scopeSubmitUrls?: string[];
   // 대상이 링크 안의 요소면 그 링크 주소(누르면 바깥 링크가 열린다). 사이트 경계 판정용.
   ancestorHref?: string;
   // 대상이 버튼·링크 안의 요소면 실제로 작동하는 그 바깥 버튼·링크의 글자. 결제·제출 문구 판정용.

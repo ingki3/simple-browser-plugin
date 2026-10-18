@@ -35,7 +35,7 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
       // 결제·개인정보 주소를 가리키는 선택지가 있는 칸도 묻는다.
-      for (const url of [t.submitTo ?? "", t.submitUrl ?? "", ...(t.choiceUrls ?? [])]) {
+      for (const url of [t.submitTo ?? "", t.submitUrl ?? "", ...(t.choiceUrls ?? []), ...(t.scopeSubmitUrls ?? [])]) {
         const why = url ? sensitiveUrlReason(url) : null;
         if (why) return `${why}로 이어지는 칸 입력`;
       }
@@ -53,7 +53,14 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       // 파일을 내려받는 링크(download 속성)는 이미지 저장처럼 묻는다.
       if (t.download) return "파일 내려받기 링크";
       // 누르면 가는 링크·양식 제출 주소에 결제 경로나 개인정보가 실려 있으면 묻는다.
-      for (const href of [t.href, t.ancestorHref ?? "", t.submitTo ?? "", t.submitUrl ?? "", ...(t.choiceUrls ?? [])]) {
+      for (const href of [
+        t.href,
+        t.ancestorHref ?? "",
+        t.submitTo ?? "",
+        t.submitUrl ?? "",
+        ...(t.choiceUrls ?? []),
+        ...(t.scopeSubmitUrls ?? []),
+      ]) {
         const why = href ? sensitiveUrlReason(href) : null;
         if (why) return `${why}로 가는 링크`;
       }
