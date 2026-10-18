@@ -657,8 +657,8 @@ const FIELD_KIND: TargetKind = {
           // 양식 안 칸: 제출 버튼들의 formaction(기본 action과 다른 것)과 지금 값을 합친 주소도 본다
           // (change 처리기가 form.requestSubmit(button)으로 그 주소에 제출할 수 있다).
           const own = otherDestinations(form, submitTo);
-          // 주변 범위의 다른 양식: 값이 바뀐 양식의 제출 주소는 사이트 경계까지 보고, 나머지 양식의 action은
-          // 결제·개인정보 주소인지만 본다(바깥 action 양식이 있다는 이유만으로 모든 입력이 묻지 않게).
+          // 주변 범위의 다른 양식: 값이 바뀐 양식의 제출 주소와, 모든 양식의 action(change 처리기가 입력값을 옮겨
+          // 제출할 수 있다 — 승인 판정에서 사이트 경계와 결제·개인정보 주소를 본다).
           const around = scopeSubmitUrls(fieldFormlessScopes(el).filter((s) => s.node !== form));
           const urls = [...(own.scopeSubmitUrls ?? []), ...around.changed.filter((u) => !(own.scopeSubmitUrls ?? []).includes(u))];
           return {

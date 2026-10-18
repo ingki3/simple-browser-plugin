@@ -170,6 +170,8 @@ export async function buildToolPreview(
             ...(info.scopeSubmitUrls ?? []),
             // 입력은 change 처리기가 주변 양식(기본값 상태 포함)에 값을 옮겨 제출할 수 있어 그 action도 경계를 본다.
             ...(info.scopeFormActions ?? []),
+            // 양식 안 칸도 change 처리기가 값을 주변 양식에 옮겨 제출할 수 있어 그 action의 사이트 경계를 본다.
+            ...(info.aroundFormActions ?? []),
           ])
           .filter(Boolean),
         fillValues: args.fills.map((f) => f.value),
