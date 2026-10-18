@@ -59,8 +59,10 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
     if (PAYMENT_TEXT_RE.test(headings)) return true;
   }
   // 양식과 그 바깥 대화상자를 각각 본다(대화상자의 "결제 금액" 문구 아래 양식 속 '확인' 버튼).
-  const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
-  return [form, dialog].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)));
+  // 대상의 대화상자와, 연결된 양식이 든 대화상자(<button form=f>가 대화상자 밖에 있는 경우)를 모두 본다.
+  const dialogSel = 'dialog, [role="dialog"], [role="alertdialog"]';
+  const dialogs = [closestAcross(el, dialogSel), form ? closestAcross(form, dialogSel) : null];
+  return [form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)));
 }
 
 // 링크 요소의 실제 목적지 문자열. SVG <a>의 href는 문자열이 아니라 SVGAnimatedString이라 속성에서 읽어

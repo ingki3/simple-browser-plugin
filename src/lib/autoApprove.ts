@@ -252,7 +252,20 @@ const PERSONAL_PARAM_RE =
 // 휴대전화(01x)·구분자 있는 일반 전화·카드 번호·주민등록번호 모양. 기사 번호 같은 긴 숫자와 헷갈리지 않게 좁게 잡는다.
 const PERSONAL_VALUE_RE =
   /(?<!\d)01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|(?<!\d)0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}(?!\d)|(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)|(?<!\d)\d{6}[-\s][1-4]\d{6}(?!\d)/;
-const EMAIL_RE = /[^\s@/?#&=]+@[^\s@/?#&=]+\.[^\s@/?#&=]+/;
+const EMAIL_AROUND_AT_RE = /[^\s@/?#&=]{1,64}@[^\s@/?#&=]{1,253}\.[^\s@/?#&=]{1,63}/;
+// 이메일 모양이 있는지. 긴 값에서 정규식이 위치마다 다시 훑어 오래 걸리지 않게 '@' 주변(최대 100곳)만 본다.
+const EMAIL_RE = {
+  test(v: string): boolean {
+    let from = 0;
+    for (let n = 0; n < 100; n++) {
+      const at = v.indexOf("@", from);
+      if (at < 0) return false;
+      if (EMAIL_AROUND_AT_RE.test(v.slice(Math.max(0, at - 64), at + 320))) return true;
+      from = at + 1;
+    }
+    return false;
+  },
+};
 
 // 구분자 없이 이어 쓴 카드 번호(13~19자리, Luhn 검사 통과).
 function hasCardNumber(v: string): boolean {

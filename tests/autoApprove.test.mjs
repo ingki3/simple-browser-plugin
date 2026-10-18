@@ -94,7 +94,7 @@ test("trusted sites extend only to the same host and its subdomains", () => {
   assert.equal(siteOf("javascript:alert(1)"), null);
 });
 
-test("navigation and links carrying personal data or payment routes still ask", () => {
+test("navigation and links carrying personal data or payment routes still ask", async () => {
   const trusted = new Set([siteOf("https://shop.example/")]);
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/register?email=alice%40example.com"));
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/p?x=010-1234-5678"));
@@ -126,6 +126,12 @@ test("navigation and links carrying personal data or payment routes still ask", 
   navigateAutoBlock(trusted, many);
   autoApproveBlock("click_element", [t({ name: "계속", href: many })]);
   assert.ok(Date.now() - started < 1000);
+  // 긴 값에서도 개인정보 판정이 오래 걸리지 않는다
+  const { looksPersonalValue } = await import("../src/lib/autoApprove.ts");
+  const t1 = Date.now();
+  assert.equal(looksPersonalValue("a".repeat(200000)), false);
+  assert.equal(looksPersonalValue("a".repeat(100000) + " bob@example.com"), true);
+  assert.ok(Date.now() - t1 < 500);
   assert.ok(autoApproveBlock("click_element", [t({ name: "계속", href: "https://alice:secret@shop.example/private" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "구매 확정" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "동의", paymentContext: true })]));
