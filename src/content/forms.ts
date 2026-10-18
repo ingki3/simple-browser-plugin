@@ -1,5 +1,6 @@
 import type { FormField } from "@/lib/messages";
 import { looksPersonalValue } from "@/lib/autoApprove";
+import { inPaymentContext } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
 import { peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
@@ -189,7 +190,10 @@ export function controlHasPersonalValue(control: Element | null): boolean {
   if (!control || !(isTag(control, "button") || isTag(control, "input"))) return false;
   const b = control as HTMLButtonElement | HTMLInputElement;
   const value = (b.value ?? "").trim();
-  if (!b.name || !value) return false;
+  if (!value) return false;
+  // 값 자체가 개인정보 모양이면 name이 없어도(스크립트가 값을 읽어 보내는 경우) 개인정보로 본다.
+  if (looksPersonalValue(value)) return true;
+  if (!b.name) return false;
   const hint = `${b.name} ${b.id}`;
   return (
     PERSONAL_HINT_RE.test(hint) ||
@@ -296,6 +300,8 @@ const FIELD_KIND: TargetKind = {
         (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)) ||
         (isTag(el, "select") && Array.from(el.options).some((o) => looksPersonalValue(o.value))),
       submitsPersonal: !!form && formHasPersonalValues(form),
+      // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등).
+      paymentContext: inPaymentContext(el, form),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
       ...(choiceUrls.length ? { choiceUrls } : {}),

@@ -27,6 +27,9 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.sensitive === "password") return "비밀번호 칸 입력";
       if (t.sensitive === "payment") return "결제 정보 칸 입력";
       if (t.personal) return `개인정보 칸 입력('${t.name.slice(0, 30) || t.fieldType}')`;
+      // 결제 문구가 붙은 칸이나 결제 화면의 칸(change 처리기가 결제하는 '구매 확정' 체크박스 등).
+      if (PAYMENT_TEXT_RE.test(t.name)) return "결제 문구가 붙은 칸 입력";
+      if (t.paymentContext) return "결제 화면의 칸 입력";
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
@@ -203,6 +206,7 @@ export function sensitiveUrlReason(url: string, depth = 0): string | null {
     /* 그대로 */
   }
   if (PAYMENT_ROUTE_RE.test(route)) return "결제·주문 주소";
+  if (u.username || u.password) return "계정 정보가 실린 주소";
   let personal = false;
   u.searchParams.forEach((v, k) => {
     if (v.trim() && (PERSONAL_PARAM_RE.test(k) || PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v))) personal = true;

@@ -9,7 +9,7 @@ import {
   isPersonalField,
   personalValuedElements,
 } from "./forms";
-import { PAYMENT_TEXT_RE } from "@/lib/autoApprove";
+import { closestAcross, inPaymentContext } from "./context";
 import {
   detectRegion,
   recheckApproved,
@@ -49,42 +49,8 @@ function clickText(el: HTMLElement): string {
   );
 }
 
-function parentDocument(doc: Document): Document | null {
-  const win = doc.defaultView;
-  if (!win || win === win.parent) return null;
-  try {
-    return win.parent.document;
-  } catch {
-    return null;
-  }
-}
 
-function paymentDocument(doc: Document): boolean {
-  const loc = doc.defaultView?.location;
-  let route = `${loc?.pathname ?? ""}${loc?.search ?? ""}${loc?.hash ?? ""}`;
-  try {
-    route = decodeURIComponent(route);
-  } catch {
-    /* 그대로 */
-  }
-  if (/(checkout|payment|\bpay\b|order)/i.test(route)) return true;
-  const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
-  return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
-}
 
-// 자신부터 위로 올라가며 selector에 맞는 첫 요소. shadow root 경계를 넘어 host로 올라간다.
-function closestAcross(el: Element, selector: string): Element | null {
-  let cur: Element | null = el;
-  while (cur) {
-    if (cur.matches(selector)) return cur;
-    if (cur.parentElement) cur = cur.parentElement;
-    else {
-      const root = cur.getRootNode();
-      cur = isShadowRoot(root) ? root.host : null;
-    }
-  }
-  return null;
-}
 
 // 링크 안의 요소면 그 링크 주소(웹 컴포넌트를 감싼 <a>까지).
 function enclosingLinkHref(el: HTMLElement): string {
@@ -148,23 +114,6 @@ function labelControl(el: HTMLElement): HTMLElement | null {
   return (label?.control as HTMLElement | null | undefined) ?? null;
 }
 
-// 결제 화면인지: 문서 주소(경로·쿼리·해시 — SPA는 #/checkout·?route=checkout처럼 라우팅한다)·제목·큰 제목(h1·h2),
-// 또는 버튼이 든 양식·대화상자의 글자(앞부분)에 결제 단서가 있으면.
-// section·article은 보지 않는다(상품 목록 구역에 "구매 1,234" 같은 글자가 흔해 목록 안 버튼이 모두 걸린다).
-function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null): boolean {
-  // 같은 출처 iframe 안의 버튼은 바깥 문서(부모 프레임들)의 주소·제목·큰 제목도 본다.
-  for (let doc: Document | null = el.ownerDocument; doc; doc = parentDocument(doc)) {
-    if (paymentDocument(doc)) return true;
-  }
-  // 버튼이 든 shadow root들(웹 컴포넌트가 그린 결제 화면)의 큰 제목도 본다.
-  for (let root = el.getRootNode(); isShadowRoot(root); root = root.host.getRootNode()) {
-    const headings = Array.from(root.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
-    if (PAYMENT_TEXT_RE.test(headings)) return true;
-  }
-  // 양식과 그 바깥 대화상자를 각각 본다(대화상자의 "결제 금액" 문구 아래 양식 속 '확인' 버튼).
-  const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
-  return [form, dialog].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)));
-}
 
 const CLICK_KIND: TargetKind = {
   prefix: "c",

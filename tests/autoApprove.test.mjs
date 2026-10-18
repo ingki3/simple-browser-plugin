@@ -91,6 +91,9 @@ test("navigation and links carrying personal data or payment routes still ask", 
   assert.ok(navigateAutoBlock(trusted, wrapped));
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["alice@example.com"]));
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["/checkout/confirm"]));
+  assert.ok(autoApproveBlock("click_element", [t({ name: "계속", href: "https://alice:secret@shop.example/private" })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "구매 확정" })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "동의", paymentContext: true })]));
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["/continue?email=alice%40example.com"]));
 });
 
