@@ -184,7 +184,13 @@ export async function buildToolPreview(
       return {
         ...clickCard(info),
         autoBlock: autoApproveBlock("click_element", [info]),
-        linkHrefs: [info.href, info.submitTo ?? "", info.submitUrl ?? "", info.ancestorHref ?? ""].filter(Boolean),
+        linkHrefs: [
+          info.href,
+          info.submitTo ?? "",
+          info.submitUrl ?? "",
+          info.ancestorHref ?? "",
+          ...(info.choiceUrls ?? []),
+        ].filter(Boolean),
       };
     }
     case "read_document": {

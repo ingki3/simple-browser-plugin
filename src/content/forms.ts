@@ -134,7 +134,7 @@ function urlLike(v: string, doc: Document): string | null {
 }
 
 // 입력으로 실제 들어갈 수 있는 값 중 주소처럼 보이는 것: select의 모든 선택지, checkbox·radio의 value.
-function choiceUrlsOf(el: HTMLElement): string[] {
+export function choiceUrlsOf(el: HTMLElement): string[] {
   const values = isTag(el, "select")
     ? Array.from(el.options, (o) => o.value)
     : isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")

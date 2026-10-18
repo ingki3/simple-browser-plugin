@@ -69,6 +69,22 @@ test("trusted sites extend only to the same host and its subdomains", () => {
   assert.equal(siteOf("javascript:alert(1)"), null);
 });
 
+test("navigation and links carrying personal data or payment routes still ask", () => {
+  const trusted = new Set([siteOf("https://shop.example/")]);
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/register?email=alice%40example.com"));
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/p?x=010-1234-5678"));
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/checkout/confirm"));
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/#/order/place"));
+  assert.equal(navigateAutoBlock(trusted, "https://shop.example/search?query=%EB%A7%A5%EB%B6%81&page=2"), null);
+  // 기사·상품 번호 같은 숫자는 개인정보로 보지 않는다
+  const news = new Set([siteOf("https://n.news.naver.com/")]);
+  assert.equal(navigateAutoBlock(news, "https://n.news.naver.com/mnews/article/001/0016382338"), null);
+  assert.equal(navigateAutoBlock(news, "https://n.news.naver.com/main/read.naver?oid=001&aid=0016382338"), null);
+  assert.ok(navigateAutoBlock(news, "https://n.news.naver.com/u/alice@example.com"));
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", href: "https://shop.example/pay/confirm?id=3" })]));
+  assert.equal(autoApproveBlock("click_element", [t({ name: "다음 글", href: "https://shop.example/board/3" })]), null);
+});
+
 test("clicks and fills run automatically only on pages and destinations within chosen sites", () => {
   const trusted = new Set([siteOf("https://news.naver.com/")]);
   assert.equal(pageActionSiteBlock(trusted, "https://news.naver.com/section/105", ["https://n.news.naver.com/a/1"]), null);

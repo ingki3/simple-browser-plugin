@@ -1,6 +1,7 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isShadowRoot, isTag } from "./docs";
 import {
+  choiceUrlsOf,
   controlHasPersonalValue,
   formDestination,
   formHasPersonalValues,
@@ -190,6 +191,9 @@ const CLICK_KIND: TargetKind = {
     const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
     // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
     const ancestorHref = enclosingLinkHref(el);
+    // 클릭으로 바뀌는 checkbox·radio(직접 또는 label 연결)의 value가 주소면 그 주소도 목적지로 본다.
+    const toggled = [control, linked].find((c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes((c as HTMLInputElement).type));
+    const choiceUrls = toggled ? choiceUrlsOf(toggled as HTMLElement) : [];
     // 대상을 감싼 버튼·링크들(실제로 작동하는 바깥 컨트롤까지)의 글자를 모두 모은다.
     const outerText = enclosingControlTexts(el);
     return {
@@ -205,6 +209,7 @@ const CLICK_KIND: TargetKind = {
       ...(submitUrl ? { submitUrl } : {}),
       ...(ancestorHref ? { ancestorHref } : {}),
       ...(outerText ? { outerText } : {}),
+      ...(choiceUrls.length ? { choiceUrls } : {}),
     };
   },
 };

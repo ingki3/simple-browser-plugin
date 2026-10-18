@@ -38,6 +38,11 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const text = `${t.name} ${t.outerText ?? ""}`;
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
+      // 누르면 가는 링크 주소에 결제 경로나 개인정보가 실려 있으면 묻는다.
+      for (const href of [t.href, t.ancestorHref ?? ""]) {
+        const why = href ? sensitiveUrlReason(href) : null;
+        if (why) return `${why}로 가는 링크`;
+      }
       if (t.submitsPersonal) return "개인정보가 채워진 양식 제출";
       if (SUBMIT_TEXT_RE.test(text)) return "가입·신청·제출 버튼";
     }
@@ -155,13 +160,48 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string, depth = 0
   return false;
 }
 
+// 주소 자체가 개인정보를 싣거나 결제로 가는지: 경로·쿼리·해시에 결제 단서, 매개변수 이름에 개인정보·비밀 단서,
+// 값에 이메일·전화번호·카드 번호 모양. 같은 사이트 안이라도 이런 주소로의 이동·링크 클릭은 묻는다
+// (이메일이 든 GET 가입 양식 주소로 바로 이동, 결제를 확정하는 GET 링크).
+const PAYMENT_ROUTE_RE = /(checkout|payment|\bpay\b|\border\b|결제|구매|주문|송금|이체)/i;
+const PERSONAL_PARAM_RE =
+  /(e-?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|password|passwd|\bpwd\b|\botp\b|card|cvc|cvv|(?<![a-z])name(?![a-z])|username|이름|성명|전화|휴대|연락처|이메일|주소|생년|주민|계좌|비밀번호|카드|인증)/i;
+// 휴대전화(01x)·구분자 있는 일반 전화·카드 번호·주민등록번호 모양. 기사 번호 같은 긴 숫자와 헷갈리지 않게 좁게 잡는다.
+const PERSONAL_VALUE_RE =
+  /(?<!\d)01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|(?<!\d)0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}(?!\d)|(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)|(?<!\d)\d{6}[-\s][1-4]\d{6}(?!\d)/;
+const EMAIL_RE = /[^\s@/?#&=]+@[^\s@/?#&=]+\.[^\s@/?#&=]+/;
+
+export function sensitiveUrlReason(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(normalizeUrlText(url));
+  } catch {
+    return null;
+  }
+  let route = `${u.pathname}${u.search}${u.hash}`;
+  try {
+    route = decodeURIComponent(route);
+  } catch {
+    /* 그대로 */
+  }
+  if (PAYMENT_ROUTE_RE.test(route)) return "결제·주문 주소";
+  let personal = false;
+  u.searchParams.forEach((v, k) => {
+    if (v.trim() && (PERSONAL_PARAM_RE.test(k) || PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v))) personal = true;
+  });
+  // 경로에서는 이메일만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
+  if (personal || EMAIL_RE.test(route)) return "개인정보가 실린 주소";
+  return null;
+}
+
 // 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소·호스트 이름에 실어 밖으로 보낼 수 있다.
 // 사용자가 고른 사이트(요청을 시작한 탭의 사이트, 승인 카드로 이동을 허락한 사이트) 안에서만 자동 실행한다.
 // 자동 이동·클릭으로 들어간 사이트는 신뢰 사이트가 되지 않는다(두 단계로 나눠 보내는 우회를 막음).
 export function navigateAutoBlock(trustedSites: ReadonlySet<string>, targetUrl: string): string | null {
   const inside = withinTrusted(trustedSites, targetUrl);
   if (inside === null) return "웹 주소가 아님";
-  return inside ? null : "요청을 시작한 사이트 밖으로 이동";
+  if (!inside) return "요청을 시작한 사이트 밖으로 이동";
+  return sensitiveUrlReason(targetUrl);
 }
 
 const INERT_HREF_RE = /^javascript:\s*(void\s*\(?\s*0\s*\)?\s*;?|;|)\s*$/i;
