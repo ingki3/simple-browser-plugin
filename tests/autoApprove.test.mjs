@@ -31,6 +31,9 @@ test("identifier hints are split on underscores and camel case", async () => {
   assert.equal(splitIdentifier("userPin"), "user Pin");
   const trusted = new Set([siteOf("https://shop.example/")]);
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/verify?otp_code=123456"));
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/#password=secret123"));
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/#/login?otp_code=123456"));
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/%70ayment/confirm?x=%ZZ"));
 });
 
 test("sign-up, application and submit buttons still ask", () => {

@@ -367,8 +367,11 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const filled = kind.personalElements?.(el) ?? [];
   // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
   if (allowed && filled.some((p) => !allowed.has(p))) return "승인 뒤 양식에 개인정보가 채워짐";
-  // 허용 목록이 없으면(오래되어 지워진 경우 등) 양식 단위로만 본다.
-  if (!allowed && now.submitsPersonal && !info.submitsPersonal) return "승인 뒤 양식에 개인정보가 채워짐";
+  // 클릭은 묶음 입력이 아니므로, 승인 뒤 개인정보 제출로 바뀌었으면(버튼 자신의 값 포함) 그대로 멈춘다.
+  // 입력 칸은 허용 목록으로 판정하고, 목록이 없을 때만(오래되어 지워진 경우 등) 양식 단위로 본다.
+  if (now.submitsPersonal && !info.submitsPersonal && (kind.prefix !== "f" || !allowed)) {
+    return "승인 뒤 양식에 개인정보가 채워짐";
+  }
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
   if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";

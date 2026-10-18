@@ -204,14 +204,24 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean 
 }
 
 // 값을 여러 번 인코딩해 숨긴 경우까지 풀어 본다(alice%2540example.com).
+// 잘못된 %ZZ가 섞여 있어도 나머지 올바른 %XX는 하나씩 푼다(한 군데 오류로 전체 해석을 포기하지 않게).
 function decodeDeepText(v: string): string {
   let s = v;
   for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(s); i++) {
+    let next: string;
     try {
-      s = decodeURIComponent(s);
+      next = decodeURIComponent(s);
     } catch {
-      break;
+      next = s.replace(/(?:%[0-9a-f]{2})+/gi, (seq) => {
+        try {
+          return decodeURIComponent(seq);
+        } catch {
+          return seq.replace(/%([0-7][0-9a-f])/gi, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+        }
+      });
     }
+    if (next === s) break;
+    s = next;
   }
   return s;
 }
@@ -262,13 +272,23 @@ export function sensitiveUrlReason(url: string): string | null {
   const { urls, overflow } = expandUrls(url);
   if (overflow) return "끝까지 확인하지 못한 복잡한 주소";
   for (const u of urls) {
-    const route = decodeDeepText(`${u.pathname}${u.search}${u.hash}`);
+    // 경로·쿼리·해시를 따로 풀어 본다(한 부분의 잘못된 인코딩이 다른 부분 해석을 막지 않게).
+    const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join("");
     if (PAYMENT_ROUTE_RE.test(route)) return "결제·주문 주소";
     if (u.username || u.password) return "계정 정보가 실린 주소";
-    let personal = false;
-    u.searchParams.forEach((raw, k) => {
+    // 쿼리와 해시(#a=b, #/path?a=b — 해시 값을 읽는 SPA) 매개변수 모두 본다.
+    const params: Array<[string, string]> = [...u.searchParams];
+    if (u.hash.length > 1) {
+      const h = u.hash.slice(1);
+      try {
+        params.push(...new URLSearchParams(h.includes("?") ? h.slice(h.indexOf("?") + 1) : h));
+      } catch {
+        /* ignore */
+      }
+    }
+    const personal = params.some(([k, raw]) => {
       const v = decodeDeepText(raw);
-      if (v.trim() && (PERSONAL_PARAM_RE.test(splitIdentifier(k)) || looksPersonalValue(v))) personal = true;
+      return !!v.trim() && (PERSONAL_PARAM_RE.test(splitIdentifier(decodeDeepText(k))) || looksPersonalValue(v));
     });
     // 경로에서는 이메일만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
     if (personal || EMAIL_RE.test(route)) return "개인정보가 실린 주소";
