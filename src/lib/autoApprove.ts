@@ -73,6 +73,12 @@ const SHARED_HOSTING_APEXES = new Set([
   "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "web.app", "firebaseapp.com",
   "herokuapp.com", "appspot.com", "blogspot.com", "wordpress.com", "tistory.com", "glitch.me", "onrender.com",
   "azurewebsites.net", "cloudfront.net", "amazonaws.com", "notion.site", "substack.com", "medium.com",
+  // 사용자마다 자기 웹앱·양식·파일을 올리는 서비스(남의 배포 주소로 대화 내용을 보낼 수 있다).
+  "script.google.com", "script.googleusercontent.com", "docs.google.com", "sites.google.com",
+  "storage.googleapis.com", "googleusercontent.com", "forms.gle", "forms.office.com", "blob.core.windows.net",
+  "githubusercontent.com", "gist.github.com", "pastebin.com", "dropboxusercontent.com", "firebaseio.com",
+  "repl.co", "replit.app", "ngrok.io", "ngrok-free.app", "trycloudflare.com", "surge.sh", "fly.dev", "deno.dev",
+  "webhook.site", "pipedream.net",
 ]);
 
 function isSharedHost(host: string): boolean {
