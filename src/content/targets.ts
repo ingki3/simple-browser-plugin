@@ -285,7 +285,9 @@ const consentAllowed = new Map<string, Set<Element>>();
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
 export function inspectTargets(ids: string[], callId: string, prefix: string): TargetInfo[] {
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
-  if (!infos.some((info) => info.personal || info.sensitive)) return infos;
+  // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
+  // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
+  const batchHasPersonal = infos.some((info) => info.personal || info.sensitive);
   const scopeOf = (id: string): Element | null => {
     const el = registry.get(id)?.ref.deref();
     if (!el) return null;
@@ -297,7 +299,8 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
     const entry = registry.get(id);
     const el = entry?.ref.deref();
     if (!entry || !el) return;
-    allowed.add(el);
+    // 묶음에 개인정보 칸이 있으면(늘 카드 승인) 이 묶음이 채울 칸도 허용한다.
+    if (batchHasPersonal) allowed.add(el);
     for (const p of entry.kind.personalElements?.(el) ?? []) allowed.add(p);
   });
   consentAllowed.set(callId, allowed);
@@ -305,6 +308,14 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
     const oldest = consentAllowed.keys().next().value;
     if (oldest === undefined) break;
     consentAllowed.delete(oldest);
+  }
+  if (!batchHasPersonal) {
+    return ids.map((id, i) => {
+      const entry = registry.get(id);
+      const info = { ...infos[i], consentCall: callId };
+      if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+      return info;
+    });
   }
   const consentScopes = new Set<Element>();
   ids.forEach((id, i) => {
@@ -315,8 +326,12 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
   });
   return ids.map((id, i) => {
     const scope = scopeOf(id);
-    if (!scope || !consentScopes.has(scope)) return infos[i];
     const entry = registry.get(id);
+    if (!scope || !consentScopes.has(scope)) {
+      const info = { ...infos[i], consentCall: callId };
+      if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+      return info;
+    }
     const info = { ...infos[i], consentPersonal: true, consentCall: callId };
     if (entry?.approved?.callId === callId) entry.approved = { callId, info };
     return info;
@@ -348,10 +363,12 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const now = kind.risk?.(el);
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
-  if (now.submitsPersonal && !info.submitsPersonal) {
-    const allowed = info.consentPersonal && info.consentCall ? consentAllowed.get(info.consentCall) : undefined;
-    const filled = kind.personalElements?.(el) ?? [];
-    if (!allowed || filled.some((p) => !allowed.has(p))) return "승인 뒤 양식에 개인정보가 채워짐";
+  const allowed = info.consentCall ? consentAllowed.get(info.consentCall) : undefined;
+  const filled = kind.personalElements?.(el) ?? [];
+  // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
+  if (allowed && filled.some((p) => !allowed.has(p))) return "승인 뒤 양식에 개인정보가 채워짐";
+  if (now.submitsPersonal && !info.submitsPersonal && !(info.consentPersonal && allowed)) {
+    return "승인 뒤 양식에 개인정보가 채워짐";
   }
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";

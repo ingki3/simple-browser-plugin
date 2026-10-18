@@ -1,6 +1,13 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isShadowRoot, isTag } from "./docs";
-import { controlHasPersonalValue, formDestination, formHasPersonalValues, formSubmissionUrl, isPersonalField } from "./forms";
+import {
+  controlHasPersonalValue,
+  formDestination,
+  formHasPersonalValues,
+  formSubmissionUrl,
+  isPersonalField,
+  personalValuedElements,
+} from "./forms";
 import { PAYMENT_TEXT_RE } from "@/lib/autoApprove";
 import {
   detectRegion,
@@ -121,7 +128,11 @@ function enclosingControlTexts(el: HTMLElement): string {
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
 function activatedControl(el: HTMLElement): HTMLButtonElement | HTMLInputElement | null {
-  const c = closestAcross(el, "button, input[type=submit], input[type=image], input[type=button], input[type=reset]");
+  // 직접 누르는 checkbox·radio도 자기 양식과 자기 값을 싣는 컨트롤이다.
+  const c = closestAcross(
+    el,
+    "button, input[type=submit], input[type=image], input[type=button], input[type=reset], input[type=checkbox], input[type=radio]",
+  );
   if (c) return c as HTMLButtonElement | HTMLInputElement;
   // <label for="send">을 누르면 연결된 제출 input이 작동한다.
   const control = labelControl(el);
@@ -162,6 +173,12 @@ const CLICK_KIND: TargetKind = {
   name: clickText,
   fieldType: () => "",
   sensitive: () => null,
+  // 누르면 작동할 컨트롤의 양식에서 값이 채워진 개인정보·비밀 칸들(승인 뒤 새로 채워졌는지 보려고).
+  personalElements: (el) => {
+    const control = activatedControl(el) ?? labelControl(el);
+    const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
+    return form ? personalValuedElements(form) : [];
+  },
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
     const control = activatedControl(el);
@@ -180,7 +197,9 @@ const CLICK_KIND: TargetKind = {
       submitsPersonal:
         (!!form && formHasPersonalValues(form)) ||
         controlHasPersonalValue(control ?? linked) ||
-        (!!linked && isPersonalField(linked) && !!(linked as HTMLInputElement).value?.trim()),
+        [control, linked].some(
+          (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),
+        ),
       paymentContext: inPaymentContext(el, form),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),

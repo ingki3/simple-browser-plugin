@@ -334,6 +334,16 @@ function dispatchChange(el: Element): void {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+// 이 입력이 실제로 넣을 값(페이지 처리기가 돌기 전에 정한 것): 선택 칸은 고를 option.value, checkbox·radio는 자기 value.
+function intendedValue(el: FieldElement, value: string): string {
+  if (isTag(el, "select")) {
+    const match = Array.from(el.options).find((opt) => opt.value === value || opt.textContent?.trim() === value);
+    return match ? match.value : value;
+  }
+  if (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")) return el.value;
+  return value;
+}
+
 function fillOne(el: FieldElement, value: string): boolean {
   if (isTag(el, "select")) {
     const match = Array.from(el.options).find(
@@ -414,6 +424,8 @@ export async function fillFormFields(
     }
     if (!isFieldElement(el)) throw new Error(`id '${f.id}'는 입력 칸이 아닙니다.`);
     const label = FIELD_KIND.name(el);
+    // 처리기가 돌기 전에 이 입력이 넣을 값을 정해 둔다(처리기가 덮어쓴 값은 승인한 변화가 아니다).
+    const intended = intendedValue(el, f.value);
     // 승인 뒤 양식 값에 주소가 새로 생겼으면(페이지가 숨은 next를 바꾼 경우) 채우지 않는다.
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
     const nowUrl = FIELD_KIND.risk?.(el).submitUrl ?? "";
@@ -433,8 +445,8 @@ export async function fillFormFields(
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
     }
-    // 앞선 입력이 실제로 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
-    applied.add(decodeDeep(el.value ?? ""));
+    // 앞선 입력이 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
+    applied.add(decodeDeep(intended));
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
     written.push({ el, info, value: f.value, result });
