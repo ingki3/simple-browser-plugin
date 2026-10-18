@@ -77,6 +77,11 @@ function accessibleNames(el: Element): string {
     if (ref) parts.push(ref.textContent ?? "");
   }
   if (isTag(el, "input")) parts.push(el.value);
+  // 이미지로 표시한 버튼·링크의 이름(<a><img alt="Buy now"></a>, input[type=image], area, svg title).
+  parts.push(el.getAttribute("alt") ?? "");
+  for (const d of Array.from(el.querySelectorAll("img[alt], input[alt], area[alt], svg title, [aria-label]")).slice(0, 50)) {
+    parts.push(d.getAttribute("alt") ?? d.getAttribute("aria-label") ?? d.textContent ?? "");
+  }
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
