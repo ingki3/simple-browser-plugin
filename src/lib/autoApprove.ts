@@ -177,6 +177,11 @@ const PERSONAL_VALUE_RE =
   /(?<!\d)01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|(?<!\d)0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}(?!\d)|(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)|(?<!\d)\d{6}[-\s][1-4]\d{6}(?!\d)/;
 const EMAIL_RE = /[^\s@/?#&=]+@[^\s@/?#&=]+\.[^\s@/?#&=]+/;
 
+// 값 자체가 개인정보 모양인지(이메일·휴대전화·구분자 있는 전화·카드·주민번호).
+export function looksPersonalValue(v: string): boolean {
+  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v);
+}
+
 export function sensitiveUrlReason(url: string, depth = 0): string | null {
   let u: URL;
   try {
@@ -243,6 +248,9 @@ export function pageActionSiteBlock(
     probe.hash = "";
     probe.searchParams.set("v", v);
     if (withinTrusted(trustedSites, probe.href) !== true) return "입력 값에 사이트 밖 주소";
+    // 입력 값에 실린 결제·개인정보 주소(/checkout/confirm, /continue?email=…)도 이동과 같게 본다.
+    const why = sensitiveUrlReason(probe.href);
+    if (why) return `입력 값에 ${why}`;
   }
   for (const raw of linkHrefs) {
     let href = raw;

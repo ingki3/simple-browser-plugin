@@ -1,4 +1,5 @@
 import type { FormField } from "@/lib/messages";
+import { looksPersonalValue } from "@/lib/autoApprove";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
 import { peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
@@ -230,6 +231,19 @@ function urlLikeParams(submitUrl: string): Set<string> {
   return out;
 }
 
+// 제출 주소의 매개변수 값 중 개인정보 모양인 것(입력 도중 새로 생겼는지 보려고).
+function personalParams(submitUrl: string): Set<string> {
+  const out = new Set<string>();
+  try {
+    new URL(submitUrl).searchParams.forEach((v) => {
+      if (looksPersonalValue(decodeDeep(v))) out.add(decodeDeep(v));
+    });
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
 // 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).
 // 제출되는 값이면 종류를 가리지 않는다: 숨은 칸(로그인한 사용자 이메일 등)·선택 칸(생년월일)·체크한 칸도 본다.
 export function formHasPersonalValues(form: HTMLFormElement): boolean {
@@ -276,9 +290,11 @@ const FIELD_KIND: TargetKind = {
     const choiceUrls = choiceUrlsOf(el);
     return {
       // checkbox·radio는 체크하면 자기 value가 실리므로, 그 값이 개인정보 모양이어도 개인정보 칸으로 본다.
+      // 선택 칸은 표시 문구로 골라도 실제 option.value가 들어가므로, 개인정보 모양의 선택지가 있으면 개인정보 칸으로 본다.
       personal:
         isPersonalField(el) ||
-        (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)),
+        (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)) ||
+        (isTag(el, "select") && Array.from(el.options).some((o) => looksPersonalValue(o.value))),
       submitsPersonal: !!form && formHasPersonalValues(form),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
@@ -438,9 +454,16 @@ export async function fillFormFields(
         ...args.fills.map((x) => decodeDeep(x.value)),
         ...applied,
       ]);
-      const added = [...urlLikeParams(nowUrl)].filter((v) => !known.has(v));
+      const added = [...urlLikeParams(nowUrl), ...personalParams(nowUrl)].filter(
+        (v) => !known.has(v) && !personalParams(info.submitUrl ?? "").has(v),
+      );
       if (added.length) {
-        results.push({ id: f.id, label, applied: false, note: "승인한 뒤 양식에 주소 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요." });
+        results.push({
+          id: f.id,
+          label,
+          applied: false,
+          note: "승인한 뒤 양식에 주소·개인정보 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요.",
+        });
         continue;
       }
     }

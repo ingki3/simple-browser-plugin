@@ -90,6 +90,8 @@ test("navigation and links carrying personal data or payment routes still ask", 
   const wrapped = `https://shop.example/redirect?next=${encodeURIComponent("https://shop.example/continue?email=alice%40example.com")}`;
   assert.ok(navigateAutoBlock(trusted, wrapped));
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["alice@example.com"]));
+  assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["/checkout/confirm"]));
+  assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["/continue?email=alice%40example.com"]));
 });
 
 test("clicks and fills run automatically only on pages and destinations within chosen sites", () => {
