@@ -19,7 +19,7 @@ function paymentDocument(doc: Document): boolean {
   const words = splitIdentifier(route);
   // order·pay는 낱말 단위로만(border-collie, display 같은 단어 속 글자는 아님).
   if (/(checkout|payment)/i.test(route) || /(\bpay\b|\border\b)/i.test(words)) return true;
-  const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
+  const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ");
   return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
 }
 
@@ -55,14 +55,14 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
     const root = cur.getRootNode();
     if (!isShadowRoot(root) || seen.has(root)) continue;
     seen.add(root);
-    const headings = Array.from(root.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
+    const headings = Array.from(root.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ");
     if (PAYMENT_TEXT_RE.test(headings)) return true;
   }
   // 양식과 그 바깥 대화상자를 각각 본다(대화상자의 "결제 금액" 문구 아래 양식 속 '확인' 버튼).
   // 대상의 대화상자와, 연결된 양식이 든 대화상자(<button form=f>가 대화상자 밖에 있는 경우)를 모두 본다.
   const dialogSel = 'dialog, [role="dialog"], [role="alertdialog"]';
   const dialogs = [closestAcross(el, dialogSel), form ? closestAcross(form, dialogSel) : null];
-  if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)))) {
+  if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test(scope.textContent ?? ""))) {
     return true;
   }
   // 같은 출처 iframe 안이면 그 iframe 요소를 부모 문서의 대상으로 보고 대화상자·shadow 맥락을 다시 본다
@@ -115,8 +115,33 @@ export function formlessScopes(el: Element): FormlessScope[] {
     nodes.push(base);
     // 범위 안 다른 웹 컴포넌트의 열린 shadow root도 본다(querySelectorAll은 shadow 안으로 들어가지 않는다).
     for (const root of openShadowRootsIn(base)) if (!nodes.includes(root)) nodes.push(root);
+    // 범위 안 같은 출처 iframe의 문서도 본다(대화상자 안 iframe의 로그인 양식을 바깥 버튼이 제출).
+    for (const body of frameBodiesIn(base)) if (!nodes.includes(body)) nodes.push(body);
   }
   return nodes.map((node) => ({ node, includeFormFields: inDialog }));
+}
+
+// 범위 안 같은 출처 iframe(중첩 포함, 최대 20개)의 body.
+function frameBodiesIn(scope: Element | ShadowRoot): Element[] {
+  const out: Element[] = [];
+  const queue: Array<Element | ShadowRoot> = [scope];
+  while (queue.length && out.length < 20) {
+    const node = queue.shift()!;
+    for (const frame of Array.from(node.querySelectorAll("iframe, frame"))) {
+      let body: Element | null = null;
+      try {
+        body = (frame as HTMLIFrameElement).contentDocument?.body ?? null;
+      } catch {
+        body = null;
+      }
+      if (body && !out.includes(body)) {
+        out.push(body);
+        queue.push(body);
+        if (out.length >= 20) break;
+      }
+    }
+  }
+  return out;
 }
 
 // 범위 안의 열린 shadow root들(중첩 포함, 최대 200개).
