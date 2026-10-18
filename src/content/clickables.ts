@@ -85,6 +85,26 @@ function enclosingLinkHref(el: HTMLElement): string {
   return link ? (link as HTMLAnchorElement).href : "";
 }
 
+const CONTROL_SELECTOR =
+  'a[href], area[href], button, input[type=submit], input[type=image], input[type=button], [role="button"], [role="link"]';
+
+function parentAcrossShadow(el: Element): Element | null {
+  if (el.parentElement) return el.parentElement;
+  const root = el.getRootNode();
+  return isShadowRoot(root) ? root.host : null;
+}
+
+function enclosingControlTexts(el: HTMLElement): string {
+  const texts: string[] = [];
+  for (let cur = parentAcrossShadow(el); cur; cur = parentAcrossShadow(cur)) {
+    const c = closestAcross(cur, CONTROL_SELECTOR);
+    if (!c) break;
+    texts.push(clickText(c as HTMLElement));
+    cur = c;
+  }
+  return texts.join(" ").slice(0, 400);
+}
+
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
 function activatedControl(el: HTMLElement): HTMLButtonElement | HTMLInputElement | null {
   const c = closestAcross(el, "button, input[type=submit], input[type=image]");
@@ -124,10 +144,8 @@ const CLICK_KIND: TargetKind = {
     const submitTo = formDestination(control ?? el, form);
     // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
     const ancestorHref = enclosingLinkHref(el);
-    // 대상을 감싼 버튼·링크(실제로 작동하는 쪽)의 글자.
-    const parent = el.parentElement ?? (isShadowRoot(el.getRootNode()) ? (el.getRootNode() as ShadowRoot).host : null);
-    const outer = parent ? closestAcross(parent, 'a[href], area[href], button, input[type=submit], input[type=image], [role="button"], [role="link"]') : null;
-    const outerText = outer ? clickText(outer as HTMLElement) : "";
+    // 대상을 감싼 버튼·링크들(실제로 작동하는 바깥 컨트롤까지)의 글자를 모두 모은다.
+    const outerText = enclosingControlTexts(el);
     return {
       submitsPersonal: !!form && formHasPersonalValues(form),
       paymentContext: inPaymentContext(el, form),

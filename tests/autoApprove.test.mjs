@@ -79,6 +79,10 @@ test("clicks and fills run automatically only on pages and destinations within c
   // 신뢰 사이트의 리다이렉트 매개변수에 실린 바깥 주소
   assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["https://news.naver.com/redirect?url=https%3A%2F%2Fcollector.example%2F%3Fd%3D1"]));
   assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/out?next=//collector.example/x"));
+  assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/redirect?next=%2F%5Ccollector.example%2Fcollect%3Fd%3Dsecret"));
+  assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/r?u=https:%5C%5Ccollector.example"));
+  assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/r?next=%2Fmain%2Fhome"), null);
+  assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/search?query=hello"), null);
   assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/#/go?to=https://collector.example/"));
   assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/r?url=https%3A%2F%2Fn.news.naver.com%2Fa"), null);
   // 목적지를 확인할 수 없는 링크는 묻고, 아무 데도 가지 않는 자리표시 링크는 일반 버튼처럼 본다.

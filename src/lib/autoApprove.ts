@@ -97,8 +97,17 @@ function embeddedUrls(u: URL): string[] {
         break;
       }
     }
-    if (/^(https?:)?\/\//i.test(v)) out.push(v.startsWith("//") ? `${u.protocol}${v}` : v);
-    else if (/https?:\/\//i.test(v)) out.push(v.slice(v.search(/https?:\/\//i)));
+    // 브라우저가 주소로 해석할 수 있는 값은 모두 실제 목적지로 풀어 본다(역슬래시 /\host, //host, 스킴 있는 주소).
+    // 평범한 상대 경로·글자는 같은 사이트로 풀리므로 그대로 통과한다.
+    if (/^[/\\]|^(https?|javascript|vbscript|data|blob|file|ftp):/i.test(v)) {
+      try {
+        out.push(new URL(v, u).href);
+      } catch {
+        /* 주소가 아님 */
+      }
+    } else if (/https?:[/\\]{2}/i.test(v)) {
+      out.push(v.slice(v.search(/https?:[/\\]{2}/i)));
+    }
   }
   return out;
 }
