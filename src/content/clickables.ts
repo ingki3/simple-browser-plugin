@@ -11,7 +11,15 @@ import {
   personalValuedInScopes,
   scopeSubmitUrls,
 } from "./forms";
-import { closestAcross, eventParent, formlessScopes, inPaymentContext, linkHrefOf, type FormlessScope } from "./context";
+import {
+  closestAcross,
+  eventParent,
+  formlessScopes,
+  inPaymentContext,
+  linkHrefOf,
+  nestedContainerScan,
+  type FormlessScope,
+} from "./context";
 import {
   detectRegion,
   recheckApproved,
@@ -80,10 +88,17 @@ function accessibleNames(el: Element): string {
   // 이미지로 표시한 버튼·링크의 이름(<a><img alt="Buy now"></a>, input[type=image], area, svg title).
   parts.push(el.getAttribute("alt") ?? "");
   // 한도 없이 모두 본다(앞에 무해한 요소를 많이 두고 뒤에 결제 이름을 숨기지 못하게). 각 속성을 따로 넣는다.
-  for (const d of Array.from(el.querySelectorAll("img, input, area, svg title, [aria-label], [title]"))) {
-    parts.push(d.getAttribute("alt") ?? "", d.getAttribute("aria-label") ?? "", d.getAttribute("title") ?? "");
-    if (d.localName === "title") parts.push(d.textContent ?? "");
+  // 자식 컴포넌트의 열린 shadow root 안(<button><payment-label></payment-label></button>)의 글자·이름도 본다.
+  const nested = nestedContainerScan(el);
+  for (const root of [el, ...nested.containers]) {
+    if (root !== el) parts.push(root.textContent ?? "");
+    for (const d of Array.from(root.querySelectorAll("img, input, area, svg title, [aria-label], [title]"))) {
+      parts.push(d.getAttribute("alt") ?? "", d.getAttribute("aria-label") ?? "", d.getAttribute("title") ?? "");
+      if (d.localName === "title") parts.push(d.textContent ?? "");
+    }
   }
+  // 한도에 걸려 끝까지 보지 못했으면 결제 이름이 숨어 있을 수 있으니 결제 단서로 본다(늘 묻는다).
+  if (nested.incomplete) parts.push("payment");
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 

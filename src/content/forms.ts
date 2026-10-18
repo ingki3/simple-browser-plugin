@@ -653,6 +653,11 @@ function appliedValue(el: FieldElement, value: string): boolean {
   return el.value === value;
 }
 
+// 브라우저의 정리(앞뒤 공백·줄바꿈 제거)만 허용한다. 잘못된 숫자·날짜를 빈 값으로 만든 것은 거부로 본다.
+function sameIgnoringSpace(actual: string, value: string): boolean {
+  return actual !== "" && actual.replace(/\s+/g, "") === value.replace(/\s+/g, "");
+}
+
 export interface FillResult {
   id: string;
   label: string;
@@ -747,7 +752,7 @@ export async function fillFormFields(
     const changed = recheckApproved(FIELD_KIND, el, info);
     if (changed) {
       result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
-    } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual)) {
+    } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual && sameIgnoringSpace(actual, value))) {
       result.applied = true;
     } else {
       result.note = "페이지가 값을 바꾸거나 받아들이지 않았습니다(최대 길이·서식 등)";
