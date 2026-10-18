@@ -649,10 +649,10 @@ const FIELD_KIND: TargetKind = {
       // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
       paymentContext:
         inPaymentContext(el, form) ||
-        // 체크하면 실리는 checkbox·radio 값에 결제 문구가 있으면(value="purchase").
+        // 체크하면 실리는 checkbox·radio의 name=value에 결제 문구가 있으면(value="purchase", name="confirm_order").
         (isTag(el, "input") &&
           (el.type === "checkbox" || el.type === "radio") &&
-          (PAYMENT_TEXT_RE.test(el.value) || PAYMENT_TEXT_RE.test(splitIdentifier(el.value)))) ||
+          [el.value, el.name].some((v) => PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v)))) ||
         (isTag(el, "select") &&
           Array.from(el.options).some((o) => {
             const text = `${o.textContent ?? ""} ${o.value}`;
