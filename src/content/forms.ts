@@ -604,9 +604,9 @@ const FIELD_KIND: TargetKind = {
   sensitive: sensitivityOf,
   personalElements: (el) => {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
-    return form
-      ? personalValuedElements(form)
-      : personalValuedInScopes(fieldFormlessScopes(el));
+    // 양식 안 칸도 change 처리기가 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있어 주변 범위를 함께 본다.
+    const around = personalValuedInScopes(fieldFormlessScopes(el));
+    return form ? [...new Set([...personalValuedElements(form), ...around])] : around;
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다).
@@ -626,9 +626,10 @@ const FIELD_KIND: TargetKind = {
         (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)) ||
         (isTag(el, "select") && Array.from(el.options).some((o) => looksPersonalValue(o.value))),
       // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
-      submitsPersonal: form
-        ? formHasPersonalValues(form)
-        : personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
+      // 양식 안 칸도 주변 범위(대화상자, 없으면 화면)의 다른 양식을 본다(change 처리기가 그 양식을 제출할 수 있다).
+      submitsPersonal:
+        (!!form && formHasPersonalValues(form)) ||
+        personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
       // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
       ...(() => {
         const full = isFieldElement(el)
@@ -655,7 +656,16 @@ const FIELD_KIND: TargetKind = {
         if (form) {
           // 양식 안 칸: 제출 버튼들의 formaction(기본 action과 다른 것)과 지금 값을 합친 주소도 본다
           // (change 처리기가 form.requestSubmit(button)으로 그 주소에 제출할 수 있다).
-          return otherDestinations(form, submitTo);
+          const own = otherDestinations(form, submitTo);
+          // 주변 범위의 다른 양식: 값이 바뀐 양식의 제출 주소는 사이트 경계까지 보고, 나머지 양식의 action은
+          // 결제·개인정보 주소인지만 본다(바깥 action 양식이 있다는 이유만으로 모든 입력이 묻지 않게).
+          const around = scopeSubmitUrls(fieldFormlessScopes(el).filter((s) => s.node !== form));
+          const urls = [...(own.scopeSubmitUrls ?? []), ...around.changed.filter((u) => !(own.scopeSubmitUrls ?? []).includes(u))];
+          return {
+            ...(own.scopeFormActions ? { scopeFormActions: own.scopeFormActions } : {}),
+            ...(urls.length ? { scopeSubmitUrls: urls } : {}),
+            ...(around.actions.length ? { aroundFormActions: around.actions } : {}),
+          };
         }
         const { changed, actions } = scopeSubmitUrls(fieldFormlessScopes(el));
         return {

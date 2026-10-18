@@ -42,6 +42,8 @@ export interface TargetInfo {
   scopeSubmitUrls?: string[];
   // 범위 안 모든 양식의 action(결제·개인정보 주소 판정용, 사이트 경계는 보지 않음).
   scopeFormActions?: string[];
+  // 양식 안 입력 칸 주변 범위의 다른 양식 action(결제·개인정보 주소인지만 본다).
+  aroundFormActions?: string[];
   // 대상 링크의 ping 주소들(사이트 경계·민감 주소 판정용).
   pingUrls?: string[];
   // 대상이 링크 안의 요소면 그 링크 주소(누르면 바깥 링크가 열린다). 사이트 경계 판정용.
