@@ -151,6 +151,12 @@ export function nestedContainersIn(scope: Element | ShadowRoot): Array<Element |
 export function nestedContainerScan(scope: Element | ShadowRoot): { containers: Array<Element | ShadowRoot>; incomplete: boolean } {
   const out: Array<Element | ShadowRoot> = [];
   const queue: Array<Element | ShadowRoot> = [scope];
+  // 범위 요소 자신의 열린 shadow root도 넣는다(커스텀 요소 버튼이 자기 shadow에 글자를 그리는 경우).
+  const own = !isShadowRoot(scope) ? (scope as HTMLElement).shadowRoot : null;
+  if (own) {
+    out.push(own);
+    queue.push(own);
+  }
   while (queue.length && out.length < 220) {
     const node = queue.shift()!;
     for (const child of Array.from(node.querySelectorAll("*"))) {

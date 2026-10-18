@@ -77,13 +77,19 @@ function parentAcrossShadow(el: Element): Element | null {
   return eventParent(el);
 }
 
-// 보이는 글자와 다른 접근성 이름(aria-label·aria-labelledby·title·value). <button aria-label="Buy now">🛒</button>
-function accessibleNames(el: Element): string {
-  const parts = [el.getAttribute("aria-label") ?? "", el.getAttribute("title") ?? ""];
+// aria-labelledby가 가리키는 요소들의 글자.
+function labelledByText(el: Element): string {
+  const parts: string[] = [];
   for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean)) {
     const ref = (el.getRootNode() as Document | ShadowRoot).getElementById?.(id) ?? el.ownerDocument.getElementById(id);
     if (ref) parts.push(ref.textContent ?? "");
   }
+  return parts.join(" ");
+}
+
+// 보이는 글자와 다른 접근성 이름(aria-label·aria-labelledby·title·value). <button aria-label="Buy now">🛒</button>
+function accessibleNames(el: Element): string {
+  const parts = [el.getAttribute("aria-label") ?? "", el.getAttribute("title") ?? "", labelledByText(el)];
   if (isTag(el, "input")) parts.push(el.value);
   // 이미지로 표시한 버튼·링크의 이름(<a><img alt="Buy now"></a>, input[type=image], area, svg title).
   parts.push(el.getAttribute("alt") ?? "");
@@ -92,8 +98,9 @@ function accessibleNames(el: Element): string {
   const nested = nestedContainerScan(el);
   for (const root of [el, ...nested.containers]) {
     if (root !== el) parts.push(root.textContent ?? "");
-    for (const d of Array.from(root.querySelectorAll("img, input, area, svg title, [aria-label], [title]"))) {
+    for (const d of Array.from(root.querySelectorAll("img, input, area, svg title, [aria-label], [title], [aria-labelledby]"))) {
       parts.push(d.getAttribute("alt") ?? "", d.getAttribute("aria-label") ?? "", d.getAttribute("title") ?? "");
+      parts.push(labelledByText(d));
       if (d.localName === "title") parts.push(d.textContent ?? "");
     }
   }
