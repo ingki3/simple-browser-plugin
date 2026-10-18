@@ -8,7 +8,7 @@ import {
   looksPersonalValue,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { formlessScope, inPaymentContext } from "./context";
+import { formlessScopes, inPaymentContext } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
 import { noteWritten, peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
@@ -296,8 +296,7 @@ const FIELD_KIND: TargetKind = {
   sensitive: sensitivityOf,
   personalElements: (el) => {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
-    const scope = form ?? formlessScope(el);
-    return scope ? personalValuedElements(scope) : [];
+    return (form ? [form] : formlessScopes(el)).flatMap((scope) => personalValuedElements(scope));
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다).
@@ -319,10 +318,7 @@ const FIELD_KIND: TargetKind = {
       // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
       submitsPersonal: form
         ? formHasPersonalValues(form)
-        : (() => {
-            const scope = formlessScope(el);
-            return !!scope && personalValuedElements(scope).some((p) => p !== el);
-          })(),
+        : formlessScopes(el).some((scope) => personalValuedElements(scope).some((p) => p !== el)),
       // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
       paymentContext:
         inPaymentContext(el, form) ||

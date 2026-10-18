@@ -78,26 +78,17 @@ export function linkHrefOf(el: Element): string {
   }
 }
 
-// 양식 없는 화면에서 대상 주변의 입력 칸 묶음: 감싼 대화상자, 아니면 위로 올라가며(최대 6단계, body 전)
-// 처음 만나는 입력 칸이 든 조상. self는 그 자신(입력 칸)이 있어도 다른 칸이 있어야 범위로 본다.
-export function formlessScope(el: Element): Element | ShadowRoot | null {
+// 양식 없는 화면에서 대상의 처리기가 읽어 보낼 수 있는 입력 칸 범위들: 감싼 대화상자가 있으면 그것 하나,
+// 없으면 클릭 경로에 있는 shadow root들과 문서 body 전체(가까운 일반 칸에서 멈추면 바깥의 이메일·비밀번호 칸을
+// 놓친다). 범위 안에서는 어느 양식에도 속하지 않은 칸만 본다(personalValuedElements).
+export function formlessScopes(el: Element): Array<Element | ShadowRoot> {
   const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
-  if (dialog) return dialog;
-  const hasOtherFields = (scope: Element | ShadowRoot) =>
-    Array.from(scope.querySelectorAll("input, textarea, select")).some((f) => f !== el);
-  let cur: Element | null = el;
-  for (let depth = 0; cur && depth < 7; depth++) {
-    const next = eventParent(cur);
-    // shadow root 맨 위에서 host로 넘어가기 전에 그 shadow root 자체도 범위로 본다(로그인 칸과 버튼이 나란히 있는 컴포넌트).
-    if (!cur.parentElement && !(cur as HTMLElement).assignedSlot) {
-      const root = cur.getRootNode();
-      if (isShadowRoot(root) && hasOtherFields(root)) return root;
-    }
-    if (!next) break;
-    if (hasOtherFields(next)) return next;
-    // body까지는 본다(최상위에 칸과 버튼이 나란히 있는 화면). 그 위로는 올라가지 않는다.
-    if (next === next.ownerDocument.body) break;
-    cur = next;
+  if (dialog) return [dialog];
+  const scopes: Array<Element | ShadowRoot> = [];
+  for (let cur: Element | null = el; cur; cur = eventParent(cur)) {
+    const root = cur.getRootNode();
+    if (isShadowRoot(root) && !scopes.includes(root)) scopes.push(root);
   }
-  return null;
+  if (el.ownerDocument.body) scopes.push(el.ownerDocument.body);
+  return scopes;
 }

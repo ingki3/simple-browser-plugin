@@ -238,7 +238,7 @@ export function decodeDeepText(v: string): string {
 
 // 칸 이름·주소 매개변수 이름의 단서(입력 칸과 주소가 같은 규칙을 쓴다). 대상 글자는 splitIdentifier로 나눈 뒤 검사한다.
 export const SECRET_HINT_RE =
-  /(password|passwd|\bpwd\b|passcode|비밀\s*번호|암호|\botp\b|one[\s_-]*time|인증\s*(번호|코드)|보안\s*번호|verification[\s_-]*code|auth[\s_-]*code|\bpin\b)/i;
+  /(password|passwd|\bpwd\b|passcode|비밀\s*번호|암호|\botp\b|one[\s_-]*time|인증\s*(번호|코드)|보안\s*번호|verification[\s_-]*code|auth[\s_-]*code|\bpin\b|api[\s_-]*key|access[\s_-]*key|secret|\btoken\b|bearer|authorization|credential|private[\s_-]*key|session[\s_-]*(id|key)|\bsid\b)/i;
 export const FIELD_PAYMENT_HINT_RE = /(card.?(num|no)|cardnumber|cvc|cvv|카드\s*번호|보안\s*코드)/i;
 export const PERSONAL_HINT_RE =
   /(이름|성명|성함|휴대\s*폰|핸드폰|전화|연락처|이메일|메일\s*주소|주소|우편\s*번호|생년월일|생일|주민|외국인\s*등록|여권|계좌|e[\s-]?mail|phone|mobile|\btel\b|address|\bzip\b|postal|birth|ssn|passport|account|full\s*name|first\s*name|last\s*name|user\s*name|nick\s*name|(?<![a-z])name(?![a-z]))/i;
@@ -293,9 +293,13 @@ export function splitIdentifier(s: string): string {
 }
 
 // 값 자체가 개인정보 모양인지(이메일·휴대전화·구분자 있는 전화·카드·주민번호). 인코딩된 값은 풀어 본다.
+// 흔한 API 키·토큰 모양(sk-…, ghp_…, xoxb-…, AKIA…, JWT).
+const SECRET_VALUE_RE =
+  /(?<![A-Za-z0-9])(sk|pk|rk)[-_][A-Za-z0-9][-_A-Za-z0-9]{12,}|(?<![A-Za-z0-9])(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}|(?<![A-Za-z0-9])xox[abpr]-[A-Za-z0-9-]{10,}|(?<![A-Z0-9])AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./;
+
 export function looksPersonalValue(raw: string): boolean {
   const v = decodeDeepText(raw);
-  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v);
+  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v) || SECRET_VALUE_RE.test(v.slice(0, 20000));
 }
 
 export function sensitiveUrlReason(url: string): string | null {

@@ -9,7 +9,7 @@ import {
   isPersonalField,
   personalValuedElements,
 } from "./forms";
-import { closestAcross, eventParent, formlessScope, inPaymentContext, linkHrefOf } from "./context";
+import { closestAcross, eventParent, formlessScopes, inPaymentContext, linkHrefOf } from "./context";
 import {
   detectRegion,
   recheckApproved,
@@ -94,11 +94,11 @@ function enclosingControlTexts(el: HTMLElement): string {
 
 // 버튼이 제출할 값의 범위: 연결된 양식, 없으면 감싼 대화상자, 그것도 없으면 위로 올라가며 처음 만나는
 // 입력 칸이 든 조상(최대 6단계). 클릭 처리기가 그 칸들을 읽어 보내는 양식 없는 화면을 잡는다.
-function submitScope(el: HTMLElement): Element | ShadowRoot | null {
+function submitScopes(el: HTMLElement): Array<Element | ShadowRoot> {
   const control = activatedControl(el) ?? labelControl(el);
   const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
-  if (form) return form;
-  return formlessScope(el);
+  if (form) return [form];
+  return formlessScopes(el);
 }
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
@@ -133,8 +133,7 @@ const CLICK_KIND: TargetKind = {
   sensitive: () => null,
   // 누르면 작동할 컨트롤의 양식에서 값이 채워진 개인정보·비밀 칸들(승인 뒤 새로 채워졌는지 보려고).
   personalElements: (el) => {
-    const scope = submitScope(el);
-    return scope ? personalValuedElements(scope) : [];
+    return submitScopes(el).flatMap((scope) => personalValuedElements(scope));
   },
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
@@ -157,10 +156,7 @@ const CLICK_KIND: TargetKind = {
       submitsPersonal:
         (!!form && formHasPersonalValues(form)) ||
         // 양식 없는 화면(대화상자의 로그인 칸 + Continue 버튼 등)은 버튼 주변 입력 칸 묶음을 본다.
-        (!form && (() => {
-          const scope = submitScope(el);
-          return !!scope && personalValuedElements(scope).length > 0;
-        })()) ||
+        (!form && submitScopes(el).some((scope) => personalValuedElements(scope).length > 0)) ||
         controlHasPersonalValue(control ?? linked) ||
         [control, linked].some(
           (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),
