@@ -12,7 +12,16 @@ import {
 import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
-import { noteWritten, peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
+import {
+  RiskAddedError,
+  noteWritten,
+  peekApproved,
+  recheckApproved,
+  registerTarget,
+  scanTargets,
+  takeApproved,
+  type TargetKind,
+} from "./targets";
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
 const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
@@ -674,6 +683,7 @@ const FIELD_KIND: TargetKind = {
         };
       })(),
       ...(choiceUrls.length ? { choiceUrls } : {}),
+      ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
     };
   },
 };
@@ -827,7 +837,14 @@ export async function fillFormFields(
   const applied = new Set<string>();
   // 이 묶음이 채운 칸의 이름과 값(name\u0001값). 재검사에서 이 쌍만 승인한 값으로 빼고 본다.
   const appliedPairs = new Set<string>();
+  // 한 칸이 승인 뒤 위험 변화(제출 주소·이름·개인정보)로 막히면 남은 칸도 채우지 않는다
+  // (앞 칸의 처리기가 뒤 칸을 바꿔 둔 것일 수 있다).
+  let halted = false;
   for (const f of args.fills) {
+    if (halted) {
+      results.push({ id: f.id, label: "", applied: false, note: "앞 칸에서 위험 변화가 보여 채우지 않았습니다. 다시 찾으세요." });
+      continue;
+    }
     let el: HTMLElement;
     let info: TargetInfo;
     try {
@@ -835,6 +852,8 @@ export async function fillFormFields(
       ({ el, info } = takeApproved(f.id, callId, FIELD_KIND.prefix));
     } catch (err) {
       results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
+      // 대상이 사라진 것이 아니라 위험이 생긴 것(riskAdded)이면 남은 칸도 멈춘다.
+      if (err instanceof RiskAddedError) halted = true;
       continue;
     }
     if (!isFieldElement(el)) throw new Error(`id '${f.id}'는 입력 칸이 아닙니다.`);
@@ -848,8 +867,8 @@ export async function fillFormFields(
         : null;
     // 승인 뒤 양식이 바뀌었는지(채우기 직전과, input 처리기가 돈 뒤 change를 보내기 전에 본다).
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
-    // 처리기가 칸 이름을 바꿔(q → payment) 승인 예외를 넓히지 못하게 시작할 때의 이름을 쓴다.
-    const startName = el.name;
+    // 처리기가 칸 이름을 바꿔(q → payment) 승인 예외를 넓히지 못하게 승인 당시의 이름을 쓴다.
+    const startName = info.fieldName ?? "";
     // 브라우저가 정리한 실제 값(onSet에서 받는다). change 전 재검사의 허용 값에도 넣는다.
     let actual: string | undefined;
     const driftReason = (): string | null => {
@@ -919,6 +938,7 @@ export async function fillFormFields(
     const before = driftReason();
     if (before) {
       results.push({ id: f.id, label, applied: false, note: before });
+      halted = true;
       continue;
     }
     // change를 보내기 전 재검사에서 이 칸 자신이 쓴 값이 '승인 뒤 채워진 개인정보'로 보이지 않게 먼저 기록한다.
@@ -943,6 +963,7 @@ export async function fillFormFields(
     } catch (err) {
       if (!(err instanceof ChangeBlocked)) throw err;
       results.push({ id: f.id, label, applied: false, note: err.message });
+      halted = true;
       continue;
     }
     if (!filled) {

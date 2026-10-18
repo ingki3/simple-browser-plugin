@@ -44,6 +44,8 @@ export interface TargetInfo {
   scopeFormActions?: string[];
   // 양식 안 입력 칸 주변 범위의 다른 양식 action(사이트 경계와 결제·개인정보 주소를 본다).
   aroundFormActions?: string[];
+  // 입력 칸의 name(승인 당시). 처리기가 이름을 바꿔(q → payment) 제출 매개변수를 바꾸지 못하게 비교한다.
+  fieldName?: string;
   // 대상 링크의 ping 주소들(사이트 경계·민감 주소 판정용).
   pingUrls?: string[];
   // 대상이 링크 안의 요소면 그 링크 주소(누르면 바깥 링크가 열린다). 사이트 경계 판정용.

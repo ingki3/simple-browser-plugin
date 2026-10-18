@@ -23,7 +23,7 @@ export interface TargetKind {
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
   // 그 칸의 양식에서 값이 채워진 개인정보·비밀 칸들(묶음 승인 예외 판정용).
   personalElements?(el: HTMLElement): Element[];
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName">;
 }
 
 interface Entry {
@@ -357,6 +357,9 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
   });
 }
 
+// 승인 뒤 위험(개인정보·제출 주소·이름 등)이 새로 생겨 멈췄다는 표시. 묶음 입력은 남은 칸도 멈춘다.
+export class RiskAddedError extends Error {}
+
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
 export function takeApproved(id: string, callId: string, prefix: string): { el: HTMLElement; info: TargetInfo } {
   const known = entryOf(id, prefix);
@@ -371,7 +374,7 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
   const added = riskAdded(entry.kind, el, approved.info);
-  if (added) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
+  if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
   checkVisible(entry, el, approved.info.name, true);
   return { el, info: approved.info };
 }
@@ -424,6 +427,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   }
   if ((now.scopeFormActions ?? []).join(" ") !== (info.scopeFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
   if ((now.aroundFormActions ?? []).join(" ") !== (info.aroundFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
+  if ((now.fieldName ?? "") !== (info.fieldName ?? "")) return "칸 이름이 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
 }
