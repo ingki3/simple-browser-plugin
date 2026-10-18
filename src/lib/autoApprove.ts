@@ -205,7 +205,7 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean 
 
 // 값을 여러 번 인코딩해 숨긴 경우까지 풀어 본다(alice%2540example.com).
 // 잘못된 %ZZ가 섞여 있어도 나머지 올바른 %XX는 하나씩 푼다(한 군데 오류로 전체 해석을 포기하지 않게).
-function decodeDeepText(v: string): string {
+export function decodeDeepText(v: string): string {
   let s = v;
   for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(s); i++) {
     let next: string;

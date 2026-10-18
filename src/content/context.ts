@@ -1,5 +1,5 @@
 // 조작 대상 주변의 맥락 판정(결제 화면인지 등). 클릭 대상과 입력 칸이 함께 쓴다.
-import { PAYMENT_TEXT_RE } from "@/lib/autoApprove";
+import { PAYMENT_TEXT_RE, decodeDeepText } from "@/lib/autoApprove";
 import { isShadowRoot } from "./docs";
 
 function parentDocument(doc: Document): Document | null {
@@ -14,12 +14,8 @@ function parentDocument(doc: Document): Document | null {
 
 function paymentDocument(doc: Document): boolean {
   const loc = doc.defaultView?.location;
-  let route = `${loc?.pathname ?? ""}${loc?.search ?? ""}${loc?.hash ?? ""}`;
-  try {
-    route = decodeURIComponent(route);
-  } catch {
-    /* 그대로 */
-  }
+  // 경로·쿼리·해시를 따로, 잘못된 인코딩이 섞여도 올바른 부분은 풀어 본다.
+  const route = [loc?.pathname ?? "", loc?.search ?? "", loc?.hash ?? ""].map(decodeDeepText).join("");
   if (/(checkout|payment|\bpay\b|order)/i.test(route)) return true;
   const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
   return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
@@ -27,16 +23,20 @@ function paymentDocument(doc: Document): boolean {
 
 // 자신부터 위로 올라가며 selector에 맞는 첫 요소. shadow root 경계를 넘어 host로 올라간다.
 export function closestAcross(el: Element, selector: string): Element | null {
-  let cur: Element | null = el;
-  while (cur) {
+  for (let cur: Element | null = el; cur; cur = eventParent(cur)) {
     if (cur.matches(selector)) return cur;
-    if (cur.parentElement) cur = cur.parentElement;
-    else {
-      const root = cur.getRootNode();
-      cur = isShadowRoot(root) ? root.host : null;
-    }
   }
   return null;
+}
+
+// 클릭 이벤트가 거쳐 가는 경로의 다음 요소: slot에 배치된 요소는 그 slot(그 위 shadow 트리의 링크가 작동한다),
+// 아니면 부모, shadow root의 맨 위면 host.
+export function eventParent(el: Element): Element | null {
+  const slot = (el as HTMLElement).assignedSlot;
+  if (slot) return slot;
+  if (el.parentElement) return el.parentElement;
+  const root = el.getRootNode();
+  return isShadowRoot(root) ? root.host : null;
 }
 
 // 결제 화면인지: 문서 주소(경로·쿼리·해시 — SPA는 #/checkout·?route=checkout처럼 라우팅한다)·제목·큰 제목(h1·h2),

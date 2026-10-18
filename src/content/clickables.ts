@@ -1,5 +1,5 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
-import { getAccessibleRoots, isShadowRoot, isTag } from "./docs";
+import { getAccessibleRoots, isTag } from "./docs";
 import {
   choiceUrlsOf,
   controlHasPersonalValue,
@@ -9,7 +9,7 @@ import {
   isPersonalField,
   personalValuedElements,
 } from "./forms";
-import { closestAcross, inPaymentContext } from "./context";
+import { closestAcross, eventParent, inPaymentContext } from "./context";
 import {
   detectRegion,
   recheckApproved,
@@ -54,7 +54,7 @@ function clickText(el: HTMLElement): string {
 
 // 링크 안의 요소면 그 링크 주소(웹 컴포넌트를 감싼 <a>까지).
 function enclosingLinkHref(el: HTMLElement): string {
-  const parent = el.parentElement ?? (isShadowRoot(el.getRootNode()) ? (el.getRootNode() as ShadowRoot).host : null);
+  const parent = eventParent(el);
   const link = parent ? closestAcross(parent, "a[href], area[href]") : null;
   return link ? (link as HTMLAnchorElement).href : "";
 }
@@ -63,9 +63,7 @@ const CONTROL_SELECTOR =
   'a[href], area[href], button, input[type=submit], input[type=image], input[type=button], [role="button"], [role="link"]';
 
 function parentAcrossShadow(el: Element): Element | null {
-  if (el.parentElement) return el.parentElement;
-  const root = el.getRootNode();
-  return isShadowRoot(root) ? root.host : null;
+  return eventParent(el);
 }
 
 // 보이는 글자와 다른 접근성 이름(aria-label·aria-labelledby·title·value). <button aria-label="Buy now">🛒</button>
