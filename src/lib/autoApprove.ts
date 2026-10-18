@@ -285,8 +285,12 @@ export function sensitiveUrlReason(url: string): string | null {
   for (const u of urls) {
     // 경로·쿼리·해시를 따로 풀어 본다(한 부분의 잘못된 인코딩이 다른 부분 해석을 막지 않게).
     const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join("");
-    // 이어 붙인 표기(pay_now, confirm_order, placeOrder)도 낱말로 나눠 본다.
-    if (PAYMENT_ROUTE_RE.test(route) || PAYMENT_ROUTE_RE.test(splitIdentifier(route))) return "결제·주문 주소";
+    // 이어 붙인 표기(pay_now, confirm_order, placeOrder)도 낱말로 나눠 보고, 버튼 문구와 같은 금전 단서
+    // (donate, purchase, buy, 충전 등)도 경로 낱말에 적용한다.
+    const words = splitIdentifier(route).replace(/[/?#&=+]+/g, " ");
+    if (PAYMENT_ROUTE_RE.test(route) || PAYMENT_ROUTE_RE.test(words) || PAYMENT_TEXT_RE.test(words)) {
+      return "결제·주문 주소";
+    }
     if (u.username || u.password) return "계정 정보가 실린 주소";
     // 쿼리와 해시(#a=b, #/path?a=b — 해시 값을 읽는 SPA) 매개변수 모두 본다.
     const params: Array<[string, string]> = [...u.searchParams];

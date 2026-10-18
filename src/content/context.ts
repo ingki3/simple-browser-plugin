@@ -91,8 +91,10 @@ export function formlessScope(el: Element): Element | ShadowRoot | null {
       const root = cur.getRootNode();
       if (isShadowRoot(root) && hasOtherFields(root)) return root;
     }
-    if (!next || next === next.ownerDocument.body) break;
+    if (!next) break;
     if (hasOtherFields(next)) return next;
+    // body까지는 본다(최상위에 칸과 버튼이 나란히 있는 화면). 그 위로는 올라가지 않는다.
+    if (next === next.ownerDocument.body) break;
     cur = next;
   }
   return null;
