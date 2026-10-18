@@ -122,7 +122,8 @@ const TOO_MANY_CHOICES = "about:too-many-url-choices";
 // 주소로 쓰일 수 있는 값: 스킴·/·\로 시작하거나, 상대 경로처럼 /·?·=·%·:가 섞인 값(redirect?next=…).
 // "ko", "seoul" 같은 평범한 값은 아니다.
 function urlLike(v: string, doc: Document): string | null {
-  const s = v.trim();
+  // 인코딩된 값(https%3A%2F%2F…)은 먼저 풀어 본다(change 처리기·서버가 풀어 쓰는 경우).
+  const s = decodeDeep(v);
   if (!s || !/^(https?:|javascript:|data:|\/|\\)|[/?=%:]/i.test(s)) return null;
   if (/^javascript:|^data:/i.test(s)) return s;
   try {
@@ -237,7 +238,9 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
     const f = el as FieldElement;
     if (isTag(f, "input") && ["submit", "button", "image", "reset"].includes(f.type)) continue;
     if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio") && !f.checked) continue;
-    if (!(f.value ?? "").trim()) continue;
+    // 다중 선택 칸은 첫 선택값(value)만 보면 빈 값일 수 있어 선택된 값을 모두 본다.
+    const value = isTag(f, "select") ? Array.from(f.selectedOptions, (o) => o.value).join(" ") : f.value ?? "";
+    if (!value.trim()) continue;
     if (sensitivityOf(f) || isPersonalField(f)) return true;
   }
   return false;

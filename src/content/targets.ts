@@ -278,10 +278,25 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 }
 
 // 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
+// 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
 export function inspectTargets(ids: string[], callId: string, prefix: string): TargetInfo[] {
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
   if (!infos.some((info) => info.personal || info.sensitive)) return infos;
+  const scopeOf = (id: string): Element | null => {
+    const el = registry.get(id)?.ref.deref();
+    if (!el) return null;
+    return (el as HTMLInputElement).form ?? el.closest("form") ?? el;
+  };
+  const consentScopes = new Set<Element>();
+  ids.forEach((id, i) => {
+    if (infos[i].personal || infos[i].sensitive) {
+      const scope = scopeOf(id);
+      if (scope) consentScopes.add(scope);
+    }
+  });
   return ids.map((id, i) => {
+    const scope = scopeOf(id);
+    if (!scope || !consentScopes.has(scope)) return infos[i];
     const entry = registry.get(id);
     const info = { ...infos[i], consentPersonal: true };
     if (entry?.approved?.callId === callId) entry.approved = { callId, info };
