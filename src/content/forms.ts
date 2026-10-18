@@ -956,6 +956,11 @@ export async function fillFormFields(
         f.value,
         (v) => {
           actual = v;
+          // 브라우저가 정리한 실제 값이 개인정보 모양으로 바뀌었으면(요청한 값은 아니었다) 승인 범위 밖이다.
+          // 페이지 처리기가 보기 전(input 이벤트 전)에 멈춘다.
+          if (v !== intended && looksPersonalValue(v) && !looksPersonalValue(intended)) {
+            throw new ChangeBlocked("브라우저가 정리한 입력값이 개인정보 모양이라 입력 이벤트를 보내지 않았습니다. 다시 확인하세요.");
+          }
           if (!expectedSig) noteWritten(callId, el, v);
         },
         guard,

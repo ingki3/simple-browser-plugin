@@ -340,8 +340,11 @@ function hasJwt(v: string): boolean {
 }
 
 export function looksPersonalValue(raw: string): boolean {
+  const test = (v: string) =>
+    PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v) || SECRET_VALUE_RE.test(v) || hasJwt(v);
   const v = decodeDeepText(raw);
-  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v) || SECRET_VALUE_RE.test(v) || hasJwt(v);
+  // 한 줄 입력 칸은 브라우저가 줄바꿈을 지워 넣는다(alice@\nexample.com → alice@example.com). 지운 값도 본다.
+  return test(v) || test(v.replace(/[\r\n]+/g, ""));
 }
 
 export function sensitiveUrlReason(url: string): string | null {

@@ -237,3 +237,10 @@ test("English money transfer wording asks", () => {
   const trusted = new Set([siteOf("https://bank.example/")]);
   assert.ok(navigateAutoBlock(trusted, "https://bank.example/transfer/confirm"));
 });
+
+test("values split by line breaks are still personal", async () => {
+  const { looksPersonalValue } = await import("../src/lib/autoApprove.ts");
+  assert.ok(looksPersonalValue("alice@\nexample.com"));
+  assert.ok(looksPersonalValue("010-1234-\r\n5678"));
+  assert.ok(!looksPersonalValue("hello\nworld"));
+});
