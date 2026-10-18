@@ -41,7 +41,6 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
         ...(t.choiceUrls ?? []),
         ...(t.scopeSubmitUrls ?? []),
         ...(t.scopeFormActions ?? []),
-        ...(t.pingUrls ?? []),
       ]) {
         const why = url ? sensitiveUrlReason(url) : null;
         if (why) return `${why}로 이어지는 칸 입력`;
@@ -68,6 +67,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
         ...(t.choiceUrls ?? []),
         ...(t.scopeSubmitUrls ?? []),
         ...(t.scopeFormActions ?? []),
+        // 링크의 ping 주소(쿠키를 실은 POST)도 결제·개인정보 주소인지 본다.
+        ...(t.pingUrls ?? []),
       ]) {
         const why = href ? sensitiveUrlReason(href) : null;
         if (why) return `${why}로 가는 링크`;

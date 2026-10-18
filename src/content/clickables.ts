@@ -177,7 +177,6 @@ const CLICK_KIND: TargetKind = {
       ? (pingLink.getAttribute("ping") ?? "")
           .split(/\s+/)
           .filter(Boolean)
-          .slice(0, 20)
           .map((p) => {
             try {
               return new URL(p, pingLink.baseURI).href;
@@ -213,7 +212,8 @@ const CLICK_KIND: TargetKind = {
       ...(scopeForms.changed.length ? { scopeSubmitUrls: scopeForms.changed } : {}),
       ...(scopeForms.actions.length ? { scopeFormActions: scopeForms.actions } : {}),
       ...(choiceUrls.length ? { choiceUrls } : {}),
-      ...(pingUrls.length ? { pingUrls } : {}),
+      // 20개를 넘으면 끝까지 보지 못했다는 표시를 넣는다(늘 묻게 된다).
+      ...(pingUrls.length ? { pingUrls: pingUrls.length > 20 ? [...pingUrls.slice(0, 20), "about:too-many-pings"] : pingUrls } : {}),
       ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
     };
   },
