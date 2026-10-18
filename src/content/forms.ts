@@ -253,6 +253,11 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸들.
+// 양식 밖 입력 칸의 범위: change 처리기가 다른 양식을 requestSubmit할 수 있으니 클릭처럼 범위 안 양식 칸까지 본다.
+function fieldFormlessScopes(el: Element) {
+  return formlessScopes(el).map((s) => ({ ...s, includeFormFields: true }));
+}
+
 // 범위들의 개인정보 칸. 탐색이 한도에 걸린 범위는 그 범위 노드(또는 shadow host)를 민감 표시로 넣는다.
 export function personalValuedInScopes(
   scopes: Array<{ node: Element | ShadowRoot; includeFormFields: boolean; incomplete?: boolean }>,
@@ -334,7 +339,7 @@ const FIELD_KIND: TargetKind = {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
     return form
       ? personalValuedElements(form)
-      : personalValuedInScopes(formlessScopes(el));
+      : personalValuedInScopes(fieldFormlessScopes(el));
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다).
@@ -356,7 +361,7 @@ const FIELD_KIND: TargetKind = {
       // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
       submitsPersonal: form
         ? formHasPersonalValues(form)
-        : personalValuedInScopes(formlessScopes(el)).some((p) => p !== el),
+        : personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
       // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
       ...(() => {
         const full = isFieldElement(el)
