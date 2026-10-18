@@ -28,7 +28,7 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.sensitive === "payment") return "결제 정보 칸 입력";
       if (t.personal) return `개인정보 칸 입력('${t.name.slice(0, 30) || t.fieldType}')`;
       // 결제 문구가 붙은 칸이나 결제 화면의 칸(change 처리기가 결제하는 '구매 확정' 체크박스 등).
-      if (PAYMENT_TEXT_RE.test(t.name)) return "결제 문구가 붙은 칸 입력";
+      if (PAYMENT_TEXT_RE.test(`${t.name} ${splitIdentifier(t.name)}`)) return "결제 문구가 붙은 칸 입력";
       if (t.paymentContext) return "결제 화면의 칸 입력";
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
@@ -44,7 +44,9 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
   if (tool === "click_element") {
     for (const t of targets) {
       // 실제로 작동하는 바깥 버튼·링크의 글자도 본다(<button>구매 <span>확인</span></button>의 span).
-      const text = `${t.name} ${t.outerText ?? ""}`;
+      // 붙여 쓴 이름(PayNow, BuyNow, pay_now)도 낱말로 나눠 본다.
+      const raw = `${t.name} ${t.outerText ?? ""}`;
+      const text = `${raw} ${splitIdentifier(raw)}`;
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
       // 파일을 내려받는 링크(download 속성)는 이미지 저장처럼 묻는다.

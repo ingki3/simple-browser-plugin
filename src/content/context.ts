@@ -17,7 +17,8 @@ function paymentDocument(doc: Document): boolean {
   // 경로·쿼리·해시를 따로, 잘못된 인코딩이 섞여도 올바른 부분은 풀어 본다.
   const route = [loc?.pathname ?? "", loc?.search ?? "", loc?.hash ?? ""].map(decodeDeepText).join("");
   const words = splitIdentifier(route);
-  if (/(checkout|payment|\bpay\b|order)/i.test(route) || /(\bpay\b|\border\b)/i.test(words)) return true;
+  // order·pay는 낱말 단위로만(border-collie, display 같은 단어 속 글자는 아님).
+  if (/(checkout|payment)/i.test(route) || /(\bpay\b|\border\b)/i.test(words)) return true;
   const headings = Array.from(doc.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ").slice(0, 1000);
   return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
 }

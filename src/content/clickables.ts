@@ -91,6 +91,22 @@ function enclosingControlTexts(el: HTMLElement): string {
   return texts.filter(Boolean).join(" ").slice(0, 400);
 }
 
+// 버튼이 제출할 값의 범위: 연결된 양식, 없으면 감싼 대화상자, 그것도 없으면 위로 올라가며 처음 만나는
+// 입력 칸이 든 조상(최대 6단계). 클릭 처리기가 그 칸들을 읽어 보내는 양식 없는 화면을 잡는다.
+function submitScope(el: HTMLElement): Element | null {
+  const control = activatedControl(el) ?? labelControl(el);
+  const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
+  if (form) return form;
+  const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
+  if (dialog) return dialog;
+  let cur: Element | null = eventParent(el);
+  for (let depth = 0; cur && depth < 6; depth++, cur = eventParent(cur)) {
+    if (cur === cur.ownerDocument.body) break;
+    if (cur.querySelector("input, textarea, select")) return cur;
+  }
+  return null;
+}
+
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
 function activatedControl(el: HTMLElement): HTMLButtonElement | HTMLInputElement | null {
   // 직접 누르는 checkbox·radio도 자기 양식과 자기 값을 싣는 컨트롤이다.
@@ -123,9 +139,8 @@ const CLICK_KIND: TargetKind = {
   sensitive: () => null,
   // 누르면 작동할 컨트롤의 양식에서 값이 채워진 개인정보·비밀 칸들(승인 뒤 새로 채워졌는지 보려고).
   personalElements: (el) => {
-    const control = activatedControl(el) ?? labelControl(el);
-    const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
-    return form ? personalValuedElements(form) : [];
+    const scope = submitScope(el);
+    return scope ? personalValuedElements(scope) : [];
   },
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
@@ -147,6 +162,11 @@ const CLICK_KIND: TargetKind = {
       // 작동할 컨트롤(제출 버튼, 또는 label이 연결한 checkbox·radio) 자신이 실을 개인정보 값도 본다.
       submitsPersonal:
         (!!form && formHasPersonalValues(form)) ||
+        // 양식 없는 화면(대화상자의 로그인 칸 + Continue 버튼 등)은 버튼 주변 입력 칸 묶음을 본다.
+        (!form && (() => {
+          const scope = submitScope(el);
+          return !!scope && personalValuedElements(scope).length > 0;
+        })()) ||
         controlHasPersonalValue(control ?? linked) ||
         [control, linked].some(
           (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),

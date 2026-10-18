@@ -41,6 +41,10 @@ test("identifier hints are split on underscores and camel case", async () => {
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/redirect?next=https%253A%252F%252Fcollector.example%252F%253Fd%253Dprivate-chat%25ZZ"));
 });
 
+test("joined payment button names still ask", () => {
+  for (const name of ["PayNow", "BuyNow", "pay_now"]) assert.ok(autoApproveBlock("click_element", [t({ name })]), name);
+});
+
 test("sign-up, application and submit buttons still ask", () => {
   for (const name of ["회원가입", "신청하기", "제출", "본인인증", "인증번호 요청", "Sign up", "Submit"]) {
     assert.ok(autoApproveBlock("click_element", [t({ name })]), name);
