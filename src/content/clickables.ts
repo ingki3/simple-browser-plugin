@@ -55,7 +55,8 @@ function clickText(el: HTMLElement): string {
 // 링크 안의 요소면 그 링크 주소(웹 컴포넌트를 감싼 <a>까지).
 function enclosingLinkHref(el: HTMLElement): string {
   const parent = eventParent(el);
-  const link = parent ? closestAcross(parent, "a[href], area[href]") : null;
+  // SVG의 xlink:href 링크도 포함한다([*|href]는 이름공간과 관계없이 href 속성).
+  const link = parent ? closestAcross(parent, "a[href], area[href], a[*|href]") : null;
   return link ? linkHrefOf(link) : "";
 }
 
@@ -93,7 +94,7 @@ function enclosingControlTexts(el: HTMLElement): string {
 
 // 버튼이 제출할 값의 범위: 연결된 양식, 없으면 감싼 대화상자, 그것도 없으면 위로 올라가며 처음 만나는
 // 입력 칸이 든 조상(최대 6단계). 클릭 처리기가 그 칸들을 읽어 보내는 양식 없는 화면을 잡는다.
-function submitScope(el: HTMLElement): Element | null {
+function submitScope(el: HTMLElement): Element | ShadowRoot | null {
   const control = activatedControl(el) ?? labelControl(el);
   const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
   if (form) return form;

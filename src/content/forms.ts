@@ -252,11 +252,11 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸들.
-export function personalValuedElements(scope: HTMLFormElement | Element): Element[] {
+export function personalValuedElements(scope: HTMLFormElement | Element | ShadowRoot): Element[] {
   const out: Element[] = [];
   // 양식이면 그 컨트롤 목록, 양식 없는 화면(대화상자 등)이면 그 안에서 어느 양식에도 속하지 않은 입력 칸들
   // (양식에 속한 칸은 그 양식이 제출할 때만 나간다).
-  const fields = isTag(scope, "form")
+  const fields = "localName" in scope && isTag(scope as Element, "form")
     ? formElements(scope as HTMLFormElement)
     : Array.from(scope.querySelectorAll("input, textarea, select")).filter((f) => !(f as HTMLInputElement).form);
   for (const el of fields) {
