@@ -29,6 +29,9 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       if (t.personal) return `개인정보 칸 입력('${t.name.slice(0, 30) || t.fieldType}')`;
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
+      // 같은 이유로 결제·개인정보 주소로 제출되는 양식의 칸도 묻는다.
+      const why = t.submitTo ? sensitiveUrlReason(t.submitTo) : null;
+      if (why) return `${why}로 제출되는 양식의 칸 입력`;
     }
     return null;
   }
@@ -38,8 +41,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const text = `${t.name} ${t.outerText ?? ""}`;
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
-      // 누르면 가는 링크 주소에 결제 경로나 개인정보가 실려 있으면 묻는다.
-      for (const href of [t.href, t.ancestorHref ?? ""]) {
+      // 누르면 가는 링크·양식 제출 주소에 결제 경로나 개인정보가 실려 있으면 묻는다.
+      for (const href of [t.href, t.ancestorHref ?? "", t.submitTo ?? "", t.submitUrl ?? ""]) {
         const why = href ? sensitiveUrlReason(href) : null;
         if (why) return `${why}로 가는 링크`;
       }

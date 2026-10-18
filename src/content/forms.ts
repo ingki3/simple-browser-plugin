@@ -275,7 +275,10 @@ const FIELD_KIND: TargetKind = {
     // 값을 미리 풀어 둔다(change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지). 한도를 넘으면 묻는다.
     const choiceUrls = choiceUrlsOf(el);
     return {
-      personal: isPersonalField(el),
+      // checkbox·radio는 체크하면 자기 value가 실리므로, 그 값이 개인정보 모양이어도 개인정보 칸으로 본다.
+      personal:
+        isPersonalField(el) ||
+        (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)),
       submitsPersonal: !!form && formHasPersonalValues(form),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),

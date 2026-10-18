@@ -83,6 +83,8 @@ test("navigation and links carrying personal data or payment routes still ask", 
   assert.ok(navigateAutoBlock(news, "https://n.news.naver.com/u/alice@example.com"));
   assert.ok(autoApproveBlock("click_element", [t({ name: "확인", href: "https://shop.example/pay/confirm?id=3" })]));
   assert.equal(autoApproveBlock("click_element", [t({ name: "다음 글", href: "https://shop.example/board/3" })]), null);
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", submitTo: "https://shop.example/payment/confirm" })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "select", name: "수량", submitTo: "https://shop.example/order/place" })]));
 });
 
 test("clicks and fills run automatically only on pages and destinations within chosen sites", () => {
