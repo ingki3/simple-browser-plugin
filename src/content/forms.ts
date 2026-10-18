@@ -233,6 +233,12 @@ function urlLikeParams(submitUrl: string): Set<string> {
 // 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).
 // 제출되는 값이면 종류를 가리지 않는다: 숨은 칸(로그인한 사용자 이메일 등)·선택 칸(생년월일)·체크한 칸도 본다.
 export function formHasPersonalValues(form: HTMLFormElement): boolean {
+  return personalValuedElements(form).length > 0;
+}
+
+// 값이 채워진 개인정보·비밀번호·결제 칸들.
+export function personalValuedElements(form: HTMLFormElement): Element[] {
+  const out: Element[] = [];
   for (const el of formElements(form)) {
     if (!isFieldElement(el as HTMLElement)) continue;
     const f = el as FieldElement;
@@ -241,9 +247,9 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
     // 다중 선택 칸은 첫 선택값(value)만 보면 빈 값일 수 있어 선택된 값을 모두 본다.
     const value = isTag(f, "select") ? Array.from(f.selectedOptions, (o) => o.value).join(" ") : f.value ?? "";
     if (!value.trim()) continue;
-    if (sensitivityOf(f) || isPersonalField(f)) return true;
+    if (sensitivityOf(f) || isPersonalField(f)) out.push(f);
   }
-  return false;
+  return out;
 }
 
 const FIELD_KIND: TargetKind = {
@@ -254,6 +260,10 @@ const FIELD_KIND: TargetKind = {
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
+  personalElements: (el) => {
+    const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
+    return form ? personalValuedElements(form) : [];
+  },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다).
   risk: (el) => {

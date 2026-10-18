@@ -19,6 +19,8 @@ export interface TargetKind {
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
+  // 그 칸의 양식에서 값이 채워진 개인정보·비밀 칸들(묶음 승인 예외 판정용).
+  personalElements?(el: HTMLElement): Element[];
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls">;
 }
 
@@ -278,6 +280,8 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 }
 
 // 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
+const consentAllowed = new Map<string, Set<Element>>();
+
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
 export function inspectTargets(ids: string[], callId: string, prefix: string): TargetInfo[] {
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
@@ -287,6 +291,21 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
     if (!el) return null;
     return (el as HTMLInputElement).form ?? el.closest("form") ?? el;
   };
+  // 승인 때 이미 채워져 있던 개인정보 칸과 이 묶음이 채울 칸만 허용한다(뒤에 자동 완성된 비밀번호 등은 아님).
+  const allowed = new Set<Element>();
+  ids.forEach((id) => {
+    const entry = registry.get(id);
+    const el = entry?.ref.deref();
+    if (!entry || !el) return;
+    allowed.add(el);
+    for (const p of entry.kind.personalElements?.(el) ?? []) allowed.add(p);
+  });
+  consentAllowed.set(callId, allowed);
+  while (consentAllowed.size > 50) {
+    const oldest = consentAllowed.keys().next().value;
+    if (oldest === undefined) break;
+    consentAllowed.delete(oldest);
+  }
   const consentScopes = new Set<Element>();
   ids.forEach((id, i) => {
     if (infos[i].personal || infos[i].sensitive) {
@@ -298,7 +317,7 @@ export function inspectTargets(ids: string[], callId: string, prefix: string): T
     const scope = scopeOf(id);
     if (!scope || !consentScopes.has(scope)) return infos[i];
     const entry = registry.get(id);
-    const info = { ...infos[i], consentPersonal: true };
+    const info = { ...infos[i], consentPersonal: true, consentCall: callId };
     if (entry?.approved?.callId === callId) entry.approved = { callId, info };
     return info;
   });
@@ -329,7 +348,11 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const now = kind.risk?.(el);
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
-  if (now.submitsPersonal && !info.submitsPersonal && !info.consentPersonal) return "승인 뒤 양식에 개인정보가 채워짐";
+  if (now.submitsPersonal && !info.submitsPersonal) {
+    const allowed = info.consentPersonal && info.consentCall ? consentAllowed.get(info.consentCall) : undefined;
+    const filled = kind.personalElements?.(el) ?? [];
+    if (!allowed || filled.some((p) => !allowed.has(p))) return "승인 뒤 양식에 개인정보가 채워짐";
+  }
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
   if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";

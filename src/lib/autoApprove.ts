@@ -89,33 +89,44 @@ function embeddedUrls(u: URL): string[] {
   }
   const out: string[] = [];
   for (const raw of values) {
-    let v = raw.trim();
+    let v = normalizeUrlText(raw);
     for (let i = 0; i < 2 && /%[0-9a-f]{2}/i.test(v); i++) {
       try {
-        v = decodeURIComponent(v);
+        v = normalizeUrlText(decodeURIComponent(v));
       } catch {
         break;
       }
     }
-    // 브라우저가 주소로 해석할 수 있는 값은 모두 실제 목적지로 풀어 본다(역슬래시 /\host, //host, 스킴 있는 주소).
-    // 평범한 상대 경로·글자는 같은 사이트로 풀리므로 그대로 통과한다.
-    if (/^[/\\]|^(https?|javascript|vbscript|data|blob|file|ftp):/i.test(v)) {
+    // 글 속에 박힌 절대 주소("see https://…").
+    const mid = v.search(/https?:[/\\]{2}/i);
+    if (mid > 0) out.push(v.slice(mid));
+    // 주소로 쓰일 수 있는 값(/·\·?·#·=·:·% 포함)은 이 주소 기준으로 브라우저처럼 풀어 본다
+    // (//host, /\host, ?next=//host, 스킴 있는 주소). 평범한 글자는 같은 사이트 경로로 풀려 통과한다.
+    if (/[/\\?#=:%]/.test(v)) {
+      const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(v)?.[1]?.toLowerCase();
+      // 브라우저가 이동에 쓰는 스킴이 아니면(date:desc 같은 값) 상대 경로로 본다.
+      const text = scheme && !NAV_SCHEMES.has(scheme) ? `./${v}` : v;
       try {
-        out.push(new URL(v, u).href);
+        out.push(new URL(text, u).href);
       } catch {
         /* 주소가 아님 */
       }
-    } else if (/https?:[/\\]{2}/i.test(v)) {
-      out.push(v.slice(v.search(/https?:[/\\]{2}/i)));
     }
   }
   return out;
 }
 
+const NAV_SCHEMES = new Set(["http", "https", "javascript", "vbscript", "data", "blob", "file", "ftp", "filesystem", "about"]);
+
+// 브라우저는 주소의 탭·줄바꿈을 지우고 앞뒤의 제어 문자·공백을 잘라 낸다(ht\ttps://… → https://…). 같은 규칙으로 정리한다.
+function normalizeUrlText(v: string): string {
+  return v.replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
+}
+
 function withinTrusted(trustedSites: ReadonlySet<string>, url: string, depth = 0): boolean | null {
   let u: URL;
   try {
-    u = new URL(url);
+    u = new URL(normalizeUrlText(url));
   } catch {
     return null;
   }

@@ -165,9 +165,12 @@ const CLICK_KIND: TargetKind = {
   // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
   risk: (el) => {
     const control = activatedControl(el);
-    const form = control?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
+    // label이 연결한 컨트롤(checkbox·radio 포함)도 누르면 작동하므로 그 양식과, 작동 뒤 실릴 값을 본다.
+    const linked = control ? null : labelControl(el);
+    const linkedForm = linked && "form" in linked ? ((linked as HTMLInputElement).form ?? null) : null;
+    const form = control?.form ?? linkedForm ?? (closestAcross(el, "form") as HTMLFormElement | null);
     const submitTo = formDestination(control ?? el, form);
-    const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control) : "";
+    const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
     // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
     const ancestorHref = enclosingLinkHref(el);
     // 대상을 감싼 버튼·링크들(실제로 작동하는 바깥 컨트롤까지)의 글자를 모두 모은다.

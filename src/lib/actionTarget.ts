@@ -45,6 +45,8 @@ export interface TargetInfo {
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
   // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
   consentPersonal?: boolean;
+  // 그 예외를 준 승인 호출(content script가 허용한 칸 목록을 찾는 키).
+  consentCall?: string;
 }
 
 // find_* 때와 같은 요소인지: 목록 위치를 뺀 기본 항목이 모두 같아야 한다.
