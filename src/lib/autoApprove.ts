@@ -227,9 +227,28 @@ const PERSONAL_VALUE_RE =
   /(?<!\d)01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|(?<!\d)0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}(?!\d)|(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)|(?<!\d)\d{6}[-\s][1-4]\d{6}(?!\d)/;
 const EMAIL_RE = /[^\s@/?#&=]+@[^\s@/?#&=]+\.[^\s@/?#&=]+/;
 
-// 값 자체가 개인정보 모양인지(이메일·휴대전화·구분자 있는 전화·카드·주민번호).
-export function looksPersonalValue(v: string): boolean {
-  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v);
+// 구분자 없이 이어 쓴 카드 번호(13~19자리, Luhn 검사 통과).
+function hasCardNumber(v: string): boolean {
+  for (const m of v.matchAll(/(?<!\d)\d{13,19}(?!\d)/g)) {
+    let sum = 0;
+    const digits = m[0];
+    for (let i = 0; i < digits.length; i++) {
+      let d = Number(digits[digits.length - 1 - i]);
+      if (i % 2 === 1) {
+        d *= 2;
+        if (d > 9) d -= 9;
+      }
+      sum += d;
+    }
+    if (sum % 10 === 0) return true;
+  }
+  return false;
+}
+
+// 값 자체가 개인정보 모양인지(이메일·휴대전화·구분자 있는 전화·카드·주민번호). 인코딩된 값은 풀어 본다.
+export function looksPersonalValue(raw: string): boolean {
+  const v = decodeDeepText(raw);
+  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v);
 }
 
 export function sensitiveUrlReason(url: string): string | null {

@@ -265,7 +265,8 @@ export function personalValuedElements(form: HTMLFormElement): Element[] {
     // 다중 선택 칸은 첫 선택값(value)만 보면 빈 값일 수 있어 선택된 값을 모두 본다.
     const value = isTag(f, "select") ? Array.from(f.selectedOptions, (o) => o.value).join(" ") : f.value ?? "";
     if (!value.trim()) continue;
-    if (sensitivityOf(f) || isPersonalField(f)) out.push(f);
+    // 칸 이름 단서가 없어도 값 자체가 개인정보 모양이면(댓글 칸에 붙여 넣은 카드 번호 등) 개인정보로 본다.
+    if (sensitivityOf(f) || isPersonalField(f) || looksPersonalValue(value)) out.push(f);
   }
   return out;
 }

@@ -93,6 +93,8 @@ test("navigation and links carrying personal data or payment routes still ask", 
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["/checkout/confirm"]));
   assert.ok(navigateAutoBlock(trusted, "https://shop.example/search?q=alice%2540example.com"));
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["alice%40example.com"]));
+  assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["결제는 4111111111111111 로"]));
+  assert.equal(pageActionSiteBlock(trusted, "https://shop.example/", [], ["상품번호 1234567890123"]), null);
   // 감싼 주소를 반복 확장하는 주소도 오래 걸리지 않고, 끝까지 못 보면 묻는다
   const many = "https://shop.example/?" + Array.from({ length: 400 }, (_, i) => `p${i}=%23x${i}`).join("&");
   const started = Date.now();
