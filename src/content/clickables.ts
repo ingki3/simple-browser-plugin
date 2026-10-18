@@ -1,6 +1,6 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isShadowRoot, isTag } from "./docs";
-import { formDestination, formHasPersonalValues, formSubmissionUrl } from "./forms";
+import { controlHasPersonalValue, formDestination, formHasPersonalValues, formSubmissionUrl } from "./forms";
 import { PAYMENT_TEXT_RE } from "@/lib/autoApprove";
 import {
   detectRegion,
@@ -173,7 +173,7 @@ const CLICK_KIND: TargetKind = {
     // 대상을 감싼 버튼·링크들(실제로 작동하는 바깥 컨트롤까지)의 글자를 모두 모은다.
     const outerText = enclosingControlTexts(el);
     return {
-      submitsPersonal: !!form && formHasPersonalValues(form),
+      submitsPersonal: (!!form && formHasPersonalValues(form)) || (!!form && controlHasPersonalValue(control)),
       paymentContext: inPaymentContext(el, form),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),

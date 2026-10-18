@@ -180,6 +180,35 @@ export function formSubmissionUrl(form: HTMLFormElement, action: string, submitt
   return u.href;
 }
 
+// 제출 버튼 자신의 name=value에 개인정보·비밀 값이 실려 있는지(<button name="email" value="a@b.c">).
+export function controlHasPersonalValue(control: Element | null): boolean {
+  if (!control || !(isTag(control, "button") || isTag(control, "input"))) return false;
+  const b = control as HTMLButtonElement | HTMLInputElement;
+  const value = (b.value ?? "").trim();
+  if (!b.name || !value) return false;
+  const hint = `${b.name} ${b.id}`;
+  return (
+    PERSONAL_HINT_RE.test(hint) ||
+    SECRET_HINT_RE.test(hint) ||
+    PAYMENT_RE.test(hint) ||
+    /\S+@\S+\.\S+/.test(value) ||
+    /\d[\d\s-]{7,}\d/.test(value)
+  );
+}
+
+// 제출 주소의 매개변수 값 중 주소처럼 보이는 것(입력 직전 새로 생겼는지 보려고).
+function urlLikeParams(submitUrl: string): Set<string> {
+  const out = new Set<string>();
+  try {
+    new URL(submitUrl).searchParams.forEach((v) => {
+      if (/^[/\\]|^[a-z][a-z0-9+.-]*:|:\/\/|%2f%2f/i.test(v.trim())) out.add(v.trim());
+    });
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
 // 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).
 // 제출되는 값이면 종류를 가리지 않는다: 숨은 칸(로그인한 사용자 이메일 등)·선택 칸(생년월일)·체크한 칸도 본다.
 export function formHasPersonalValues(form: HTMLFormElement): boolean {
@@ -351,6 +380,17 @@ export async function fillFormFields(
     }
     if (!isFieldElement(el)) throw new Error(`id '${f.id}'는 입력 칸이 아닙니다.`);
     const label = FIELD_KIND.name(el);
+    // 승인 뒤 양식 값에 주소가 새로 생겼으면(페이지가 숨은 next를 바꾼 경우) 채우지 않는다.
+    // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
+    const nowUrl = FIELD_KIND.risk?.(el).submitUrl ?? "";
+    if (nowUrl) {
+      const known = new Set([...urlLikeParams(info.submitUrl ?? ""), ...args.fills.map((x) => x.value.trim())]);
+      const added = [...urlLikeParams(nowUrl)].filter((v) => !known.has(v));
+      if (added.length) {
+        results.push({ id: f.id, label, applied: false, note: "승인한 뒤 양식에 주소 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요." });
+        continue;
+      }
+    }
     if (!fillOne(el, f.value)) {
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;

@@ -638,7 +638,7 @@ export class ChatAgent {
               pageUrl = undefined;
             }
             if (this.isStale(turn)) return false;
-            block = pageActionSiteBlock(trusted, pageUrl, preview.linkHrefs ?? []);
+            block = pageActionSiteBlock(trusted, pageUrl, preview.linkHrefs ?? [], preview.fillValues ?? []);
           }
           let approved: boolean;
           if (autoApprove && !block) {

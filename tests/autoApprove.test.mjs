@@ -77,6 +77,12 @@ test("clicks and fills run automatically only on pages and destinations within c
   assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["https://collector.example/next"]));
   assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["https://collector.example/collect"]));
   assert.ok(pageActionSiteBlock(trusted, undefined, []));
+  // 입력할 값: 상대 경로 리다이렉트에 실린 바깥 주소, 글 속 주소
+  assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", [], ["/redirect?next=https://collector.example/?d=1"]));
+  assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", [], ["see https://collector.example/x"]));
+  assert.equal(pageActionSiteBlock(trusted, "https://news.naver.com/", [], ["/main", "맥북 에어", "a@b"]), null);
+  // 상대 링크는 페이지 주소 기준으로 푼다
+  assert.equal(pageActionSiteBlock(trusted, "https://news.naver.com/", ["/section/105"]), null);
   // 신뢰 사이트의 리다이렉트 매개변수에 실린 바깥 주소
   assert.ok(pageActionSiteBlock(trusted, "https://news.naver.com/", ["https://news.naver.com/redirect?url=https%3A%2F%2Fcollector.example%2F%3Fd%3D1"]));
   assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/out?next=//collector.example/x"));

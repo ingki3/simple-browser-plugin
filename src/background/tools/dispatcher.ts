@@ -63,6 +63,8 @@ export interface ToolPreview {
   autoBlock?: string | null;
   // 클릭 대상 링크의 주소(자동 실행 사이트 경계 판정용).
   linkHrefs?: string[];
+  // 입력할 값들(사이트 경계 판정용).
+  fillValues?: string[];
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -157,11 +159,11 @@ export async function buildToolPreview(
       return {
         ...fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value }))),
         autoBlock: autoApproveBlock("fill_form_fields", infos),
-        // 양식 제출 주소와, 주소처럼 보이는 입력 값(리다이렉트 칸에 바깥 주소를 넣는 경로).
-        linkHrefs: [
-          ...infos.flatMap((info) => [info.submitTo ?? "", info.submitUrl ?? "", ...(info.choiceUrls ?? [])]),
-          ...args.fills.map((f) => f.value.trim()).filter((v) => /^(https?:)?[/\\]{2}|^[a-z]+:\/\/|^javascript:/i.test(v)),
-        ].filter(Boolean),
+        // 양식 제출 주소(기존 값 포함)와 선택지 주소. 입력할 값은 fillValues로 따로 본다.
+        linkHrefs: infos
+          .flatMap((info) => [info.submitTo ?? "", info.submitUrl ?? "", ...(info.choiceUrls ?? [])])
+          .filter(Boolean),
+        fillValues: args.fills.map((f) => f.value),
       };
     }
     case "download_images": {

@@ -157,15 +157,36 @@ const INERT_HREF_RE = /^javascript:\s*(void\s*\(?\s*0\s*\)?\s*;?|;|)\s*$/i;
 
 // 클릭·입력: 사용자가 고르지 않은 사이트의 페이지에서는(자동 클릭으로 들어간 수집 페이지의 검색 칸 등) 묻는다.
 // 다른 사이트로 가는 링크 클릭과 다른 사이트로 제출하는 양식 버튼도 이동과 같게 본다.
+// values: 입력할 값들. 상대 경로(/redirect?next=https://…)나 글 속 주소가 양식 제출·이동에 실릴 수 있어
+// 지금 페이지 주소의 매개변수로 넣어 본 것처럼 같은 방식(내장 주소 풀기)으로 검사한다.
 export function pageActionSiteBlock(
   trustedSites: ReadonlySet<string>,
   pageUrl: string | undefined,
   linkHrefs: string[],
+  values: string[] = [],
 ): string | null {
   if (!pageUrl || withinTrusted(trustedSites, pageUrl) !== true) return "요청을 시작한 사이트 밖의 페이지";
-  for (const href of linkHrefs) {
+  for (const v of values) {
+    let probe: URL;
+    try {
+      probe = new URL(pageUrl);
+    } catch {
+      return "요청을 시작한 사이트 밖의 페이지";
+    }
+    probe.search = "";
+    probe.hash = "";
+    probe.searchParams.set("v", v);
+    if (withinTrusted(trustedSites, probe.href) !== true) return "입력 값에 사이트 밖 주소";
+  }
+  for (const raw of linkHrefs) {
+    let href = raw;
+    try {
+      href = new URL(raw, pageUrl).href;
+    } catch {
+      /* 그대로 */
+    }
     // 아무 데도 가지 않는 자리표시 링크(javascript:void(0) 등)는 일반 버튼과 같게 본다.
-    if (INERT_HREF_RE.test(href)) continue;
+    if (INERT_HREF_RE.test(raw) || INERT_HREF_RE.test(href)) continue;
     // 웹 주소가 아니어서(javascript:…, data:, mailto:) 목적지를 확인할 수 없으면 묻는다.
     if (withinTrusted(trustedSites, href) !== true) return "요청을 시작한 사이트 밖으로 가는 링크·양식 제출";
   }
