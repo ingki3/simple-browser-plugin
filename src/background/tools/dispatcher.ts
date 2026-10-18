@@ -196,6 +196,7 @@ export async function buildToolPreview(
           info.ancestorHref ?? "",
           ...(info.choiceUrls ?? []),
           ...(info.scopeSubmitUrls ?? []),
+          ...(info.pingUrls ?? []),
         ].filter(Boolean),
       };
     }

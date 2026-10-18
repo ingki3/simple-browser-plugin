@@ -31,6 +31,13 @@ export function closestAcross(el: Element, selector: string): Element | null {
   return null;
 }
 
+// 자신부터 위로 올라가며 selector에 맞는 모든 조상(가까운 것부터). 겹친 대화상자를 모두 보려고.
+export function allAcross(el: Element, selector: string): Element[] {
+  const out: Element[] = [];
+  for (let cur: Element | null = el; cur; cur = eventParent(cur)) if (cur.matches(selector)) out.push(cur);
+  return out;
+}
+
 // 클릭 이벤트가 거쳐 가는 경로의 다음 요소: slot에 배치된 요소는 그 slot(그 위 shadow 트리의 링크가 작동한다),
 // 아니면 부모, shadow root의 맨 위면 host.
 export function eventParent(el: Element): Element | null {
@@ -61,7 +68,8 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
   // 양식과 그 바깥 대화상자를 각각 본다(대화상자의 "결제 금액" 문구 아래 양식 속 '확인' 버튼).
   // 대상의 대화상자와, 연결된 양식이 든 대화상자(<button form=f>가 대화상자 밖에 있는 경우)를 모두 본다.
   const dialogSel = 'dialog, [role="dialog"], [role="alertdialog"]';
-  const dialogs = [closestAcross(el, dialogSel), form ? closestAcross(form, dialogSel) : null];
+  // 겹친 대화상자는 바깥쪽까지 모두 본다(바깥 대화상자의 결제 금액, 안쪽 대화상자의 '확인').
+  const dialogs = [...allAcross(el, dialogSel), ...(form ? allAcross(form, dialogSel) : [])];
   if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test(deepText(scope)))) {
     return true;
   }
@@ -104,7 +112,9 @@ export interface FormlessScope {
 }
 
 export function formlessScopes(el: Element): FormlessScope[] {
-  const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
+  // 겹친 대화상자면 가장 바깥 것을 범위로 삼는다(안쪽 버튼이 바깥 대화상자의 칸을 제출할 수 있다).
+  const dialogChain = allAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
+  const dialog = dialogChain.length ? dialogChain[dialogChain.length - 1] : null;
   const inDialog = !!dialog;
   const nodes: Array<Element | ShadowRoot> = [];
   let incomplete = false;

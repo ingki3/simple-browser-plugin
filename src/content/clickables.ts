@@ -171,6 +171,21 @@ const CLICK_KIND: TargetKind = {
     const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
     // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
     const ancestorHref = enclosingLinkHref(el);
+    // 링크의 ping 주소(하이퍼링크 감사): 누르면 목적지 주소를 담아 ping 주소로도 요청이 간다.
+    const pingLink = closestAcross(el, "a[ping], area[ping]");
+    const pingUrls = pingLink
+      ? (pingLink.getAttribute("ping") ?? "")
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 20)
+          .map((p) => {
+            try {
+              return new URL(p, pingLink.baseURI).href;
+            } catch {
+              return p;
+            }
+          })
+      : [];
     // 클릭으로 바뀌는 checkbox·radio(직접 또는 label 연결)의 value가 주소면 그 주소도 목적지로 본다.
     const toggled = [control, linked].find((c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes((c as HTMLInputElement).type));
     const choiceUrls = toggled ? choiceUrlsOf(toggled as HTMLElement) : [];
@@ -198,6 +213,7 @@ const CLICK_KIND: TargetKind = {
       ...(scopeForms.changed.length ? { scopeSubmitUrls: scopeForms.changed } : {}),
       ...(scopeForms.actions.length ? { scopeFormActions: scopeForms.actions } : {}),
       ...(choiceUrls.length ? { choiceUrls } : {}),
+      ...(pingUrls.length ? { pingUrls } : {}),
       ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
     };
   },

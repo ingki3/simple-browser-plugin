@@ -41,6 +41,7 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
         ...(t.choiceUrls ?? []),
         ...(t.scopeSubmitUrls ?? []),
         ...(t.scopeFormActions ?? []),
+        ...(t.pingUrls ?? []),
       ]) {
         const why = url ? sensitiveUrlReason(url) : null;
         if (why) return `${why}로 이어지는 칸 입력`;

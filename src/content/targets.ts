@@ -22,7 +22,7 @@ export interface TargetKind {
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
   // 그 칸의 양식에서 값이 채워진 개인정보·비밀 칸들(묶음 승인 예외 판정용).
   personalElements?(el: HTMLElement): Element[];
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "scopeSubmitUrls" | "scopeFormActions">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "scopeSubmitUrls" | "scopeFormActions" | "pingUrls">;
 }
 
 interface Entry {
@@ -382,10 +382,13 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const filled = kind.personalElements?.(el) ?? [];
   // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
   const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
+  // 이 호출이 써 넣은 값과 같은 값이 다른 칸에 복사된 것(처리기의 같은 값 동기화)도 승인한 변화로 본다.
+  const writtenValues = new Set(written ? [...written.values()].filter(Boolean) : []);
   const explained = (p: Element) =>
     (allowed?.has(p) && allowed.get(p) === fieldValueSignature(p)) ||
     // 선택 칸은 선택 상태 전체(다중 선택에 처리기가 더한 선택지 포함)를 비교한다.
-    (written?.has(p) && written.get(p) === fieldValueSignature(p));
+    (written?.has(p) && written.get(p) === fieldValueSignature(p)) ||
+    (!written?.has(p) && writtenValues.has(fieldValueSignature(p)));
   if (allowed && filled.some((p) => !explained(p))) return "승인 뒤 양식에 개인정보가 채워짐";
   // 클릭은 묶음 입력이 아니므로, 승인 뒤 개인정보 제출로 바뀌었으면(버튼 자신의 값 포함) 그대로 멈춘다.
   // 입력 칸은 허용 목록으로 판정하고, 목록이 없을 때만(오래되어 지워진 경우 등) 양식 단위로 본다.
@@ -407,6 +410,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
     return "주변 양식의 제출 주소가 바뀜";
   }
   if ((now.scopeFormActions ?? []).join(" ") !== (info.scopeFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
+  if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
 }
 
