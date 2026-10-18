@@ -91,6 +91,14 @@ test("navigation and links carrying personal data or payment routes still ask", 
   assert.ok(navigateAutoBlock(trusted, wrapped));
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["alice@example.com"]));
   assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["/checkout/confirm"]));
+  assert.ok(navigateAutoBlock(trusted, "https://shop.example/search?q=alice%2540example.com"));
+  assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", [], ["alice%40example.com"]));
+  // 감싼 주소를 반복 확장하는 주소도 오래 걸리지 않고, 끝까지 못 보면 묻는다
+  const many = "https://shop.example/?" + Array.from({ length: 400 }, (_, i) => `p${i}=%23x${i}`).join("&");
+  const started = Date.now();
+  navigateAutoBlock(trusted, many);
+  autoApproveBlock("click_element", [t({ name: "계속", href: many })]);
+  assert.ok(Date.now() - started < 1000);
   assert.ok(autoApproveBlock("click_element", [t({ name: "계속", href: "https://alice:secret@shop.example/private" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "구매 확정" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "동의", paymentContext: true })]));

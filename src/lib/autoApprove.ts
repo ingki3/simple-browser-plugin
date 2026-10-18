@@ -89,7 +89,7 @@ export function siteOf(url: string): string | null {
 
 // 주소의 쿼리·해시 값에 실린 다른 주소(리다이렉트 매개변수 ?url=https%3A…, ?next=//host/…).
 // 신뢰 사이트의 열린 리다이렉트를 거쳐 밖으로 나가는 것을 막으려고 그 목적지도 경계 안이어야 한다.
-function embeddedUrls(u: URL): string[] {
+function embeddedUrls(u: URL, maxValues = Infinity): string[] {
   const values: string[] = [];
   u.searchParams.forEach((v) => values.push(v));
   if (u.hash.length > 1) {
@@ -102,6 +102,7 @@ function embeddedUrls(u: URL): string[] {
     }
   }
   const out: string[] = [];
+  if (values.length > maxValues) return [OVER_BUDGET];
   for (const raw of values) {
     let v = normalizeUrlText(raw);
     for (let i = 0; i < 2 && /%[0-9a-f]{2}/i.test(v); i++) {
@@ -137,21 +138,48 @@ function normalizeUrlText(v: string): string {
   return v.replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
 }
 
-function withinTrusted(trustedSites: ReadonlySet<string>, url: string, depth = 0): boolean | null {
-  let u: URL;
-  try {
-    u = new URL(normalizeUrlText(url));
-  } catch {
-    return null;
+// 주소와 그 안에 감싼 주소들을 모두 펼친다(깊이 3, 같은 주소는 한 번만, 전체 MAX_EXPANDED개까지).
+// 한도를 넘거나 깊이 3에서도 감싼 주소가 남으면 overflow — 끝까지 확인하지 못했으니 묻는다.
+const MAX_EXPANDED = 200;
+// 펼치면서 살펴볼 매개변수 값의 총량. 넘으면 끝까지 확인하지 못한 것으로 본다(서비스 워커가 오래 멈추지 않게).
+const MAX_VALUES_TOTAL = 2000;
+const OVER_BUDGET = "about:over-budget";
+
+function expandUrls(url: string): { urls: URL[]; overflow: boolean } {
+  const urls: URL[] = [];
+  const seen = new Set<string>();
+  const queue: Array<{ text: string; depth: number }> = [{ text: url, depth: 0 }];
+  let overflow = false;
+  let budget = 0;
+  while (queue.length) {
+    const { text, depth } = queue.shift()!;
+    let u: URL;
+    try {
+      u = new URL(normalizeUrlText(text));
+    } catch {
+      if (depth === 0) return { urls: [], overflow: false };
+      continue;
+    }
+    if (seen.has(u.href)) continue;
+    seen.add(u.href);
+    if (seen.size > MAX_EXPANDED) return { urls, overflow: true };
+    urls.push(u);
+    if (!/^https?:$/.test(u.protocol)) continue;
+    const inners = embeddedUrls(u, MAX_VALUES_TOTAL - budget);
+    if (inners[0] === OVER_BUDGET) return { urls, overflow: true };
+    budget += Array.from(u.searchParams).length + 2;
+    if (!inners.length) continue;
+    if (depth >= 3) {
+      overflow = true;
+      continue;
+    }
+    for (const inner of inners) queue.push({ text: inner, depth: depth + 1 });
   }
-  if (!/^https?:$/.test(u.protocol)) return null;
-  if (isSharedHost(u.hostname)) return false;
-  const inners = embeddedUrls(u);
-  // 리다이렉트를 여러 겹 감싼 주소는 끝까지 풀지 않고 밖으로 본다(묻는다).
-  if (inners.length && depth >= 3) return false;
-  for (const inner of inners) {
-    if (withinTrusted(trustedSites, inner, depth + 1) !== true) return false;
-  }
+  return { urls, overflow };
+}
+
+function hostTrusted(trustedSites: ReadonlySet<string>, u: URL): boolean {
+  if (!/^https?:$/.test(u.protocol) || isSharedHost(u.hostname)) return false;
   for (const site of trustedSites) {
     let t: URL;
     try {
@@ -162,11 +190,30 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string, depth = 0
     if (t.protocol !== u.protocol || t.port !== u.port) continue;
     if (u.hostname === t.hostname) return true;
     const isIp = /^[\d.]+$/.test(t.hostname) || t.hostname.startsWith("[");
-    if (!isIp && t.hostname.includes(".") && u.hostname.endsWith(`.${t.hostname}`)) {
-      return true;
-    }
+    if (!isIp && t.hostname.includes(".") && u.hostname.endsWith(`.${t.hostname}`)) return true;
   }
   return false;
+}
+
+// 주소(와 감싼 주소 모두)가 신뢰 사이트 안인지. 웹 주소가 아니면 null.
+function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean | null {
+  const { urls, overflow } = expandUrls(url);
+  if (!urls.length || !/^https?:$/.test(urls[0].protocol)) return null;
+  if (overflow) return false;
+  return urls.every((u) => hostTrusted(trustedSites, u));
+}
+
+// 값을 여러 번 인코딩해 숨긴 경우까지 풀어 본다(alice%2540example.com).
+function decodeDeepText(v: string): string {
+  let s = v;
+  for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(s); i++) {
+    try {
+      s = decodeURIComponent(s);
+    } catch {
+      break;
+    }
+  }
+  return s;
 }
 
 // 주소 자체가 개인정보를 싣거나 결제로 가는지: 경로·쿼리·해시에 결제 단서, 매개변수 이름에 개인정보·비밀 단서,
@@ -185,34 +232,22 @@ export function looksPersonalValue(v: string): boolean {
   return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v);
 }
 
-export function sensitiveUrlReason(url: string, depth = 0): string | null {
-  let u: URL;
-  try {
-    u = new URL(normalizeUrlText(url));
-  } catch {
-    return null;
-  }
+export function sensitiveUrlReason(url: string): string | null {
   // 리다이렉트 매개변수에 감싼 주소도 같은 기준으로 본다.
-  if (depth < 3) {
-    for (const inner of embeddedUrls(u)) {
-      const why = sensitiveUrlReason(inner, depth + 1);
-      if (why) return why;
-    }
+  const { urls, overflow } = expandUrls(url);
+  if (overflow) return "끝까지 확인하지 못한 복잡한 주소";
+  for (const u of urls) {
+    const route = decodeDeepText(`${u.pathname}${u.search}${u.hash}`);
+    if (PAYMENT_ROUTE_RE.test(route)) return "결제·주문 주소";
+    if (u.username || u.password) return "계정 정보가 실린 주소";
+    let personal = false;
+    u.searchParams.forEach((raw, k) => {
+      const v = decodeDeepText(raw);
+      if (v.trim() && (PERSONAL_PARAM_RE.test(k) || looksPersonalValue(v))) personal = true;
+    });
+    // 경로에서는 이메일만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
+    if (personal || EMAIL_RE.test(route)) return "개인정보가 실린 주소";
   }
-  let route = `${u.pathname}${u.search}${u.hash}`;
-  try {
-    route = decodeURIComponent(route);
-  } catch {
-    /* 그대로 */
-  }
-  if (PAYMENT_ROUTE_RE.test(route)) return "결제·주문 주소";
-  if (u.username || u.password) return "계정 정보가 실린 주소";
-  let personal = false;
-  u.searchParams.forEach((v, k) => {
-    if (v.trim() && (PERSONAL_PARAM_RE.test(k) || PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v))) personal = true;
-  });
-  // 경로에서는 이메일만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
-  if (personal || EMAIL_RE.test(route)) return "개인정보가 실린 주소";
   return null;
 }
 
@@ -241,7 +276,7 @@ export function pageActionSiteBlock(
   if (!pageUrl || withinTrusted(trustedSites, pageUrl) !== true) return "요청을 시작한 사이트 밖의 페이지";
   for (const v of values) {
     // 개인정보 모양의 값(이메일·전화·카드 번호)을 넣는 것은 칸 이름과 관계없이 묻는다.
-    if (PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v)) return "개인정보 모양의 값 입력";
+    if (looksPersonalValue(decodeDeepText(v))) return "개인정보 모양의 값 입력";
     let probe: URL;
     try {
       probe = new URL(pageUrl);
