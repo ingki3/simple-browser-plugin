@@ -384,7 +384,8 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
   const explained = (p: Element) =>
     (allowed?.has(p) && allowed.get(p) === fieldValueSignature(p)) ||
-    (written?.has(p) && written.get(p) === ((p as HTMLInputElement).value ?? ""));
+    // 선택 칸은 선택 상태 전체(다중 선택에 처리기가 더한 선택지 포함)를 비교한다.
+    (written?.has(p) && written.get(p) === fieldValueSignature(p));
   if (allowed && filled.some((p) => !explained(p))) return "승인 뒤 양식에 개인정보가 채워짐";
   // 클릭은 묶음 입력이 아니므로, 승인 뒤 개인정보 제출로 바뀌었으면(버튼 자신의 값 포함) 그대로 멈춘다.
   // 입력 칸은 허용 목록으로 판정하고, 목록이 없을 때만(오래되어 지워진 경우 등) 양식 단위로 본다.

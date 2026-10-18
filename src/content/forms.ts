@@ -8,9 +8,9 @@ import {
   looksPersonalValue,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
+import { fieldValueSignature, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
-import { getAccessibleRoots, isTag } from "./docs";
+import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { noteWritten, peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
@@ -116,7 +116,11 @@ function formAction(form: HTMLFormElement): string {
 // formAction은 속성이 없을 때 지금 문서 주소를 돌려주므로 속성이 있을 때만 쓴다.
 export function formDestination(el: HTMLElement, form: HTMLFormElement | null): string {
   if (!form) return "";
-  if (el.hasAttribute("formaction") && "formAction" in el) return (el as HTMLButtonElement).formAction;
+  // formaction은 그 요소가 실제 제출자(submit 버튼·submit/image input)일 때만 쓰인다. 입력 칸 등에 붙은 것은 무시.
+  const submitter =
+    (isTag(el, "button") && ((el as HTMLButtonElement).type || "submit") === "submit") ||
+    (isTag(el, "input") && ["submit", "image"].includes((el as HTMLInputElement).type));
+  if (submitter && el.hasAttribute("formaction")) return (el as HTMLButtonElement).formAction;
   return formAction(form);
 }
 
@@ -269,13 +273,21 @@ export function formHasPersonalValues(form: HTMLFormElement): boolean {
 // 숨은 칸(type=hidden)은 .value를 바꾸면 defaultValue도 같이 바뀌어 처음 값과 비교할 수 없다.
 // 페이지를 처음 살필 때(find_*) 값을 기록해 두고 그 값과 비교한다. 기록이 없으면 지금 값을 기준으로 삼는다.
 const hiddenBaseline = new WeakMap<Element, string>();
+// 기준 값을 기록한 문서. 기록한 뒤에 새로 생긴 숨은 칸은 페이지 기본값이 아니라 바뀐 값으로 본다.
+const baselineDocs = new WeakSet<Document>();
 
 export function captureHiddenBaselines(): void {
+  // 기준은 문서마다 처음 살필 때 한 번만 기록한다(그 뒤에 생긴 숨은 칸을 기준으로 삼지 않게).
+  const fresh = getAccessibleDocs().filter((doc) => !baselineDocs.has(doc));
+  if (!fresh.length) return;
   for (const root of getAccessibleRoots()) {
+    const doc = (root as Node).ownerDocument ?? (root as Document);
+    if (!fresh.includes(doc)) continue;
     for (const el of Array.from(root.querySelectorAll('input[type="hidden"]'))) {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, (el as HTMLInputElement).value);
     }
   }
+  for (const doc of fresh) baselineDocs.add(doc);
 }
 
 // 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
@@ -289,8 +301,11 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
     } else if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio")) {
       if (f.checked !== f.defaultChecked) return true;
     } else if (isTag(f, "input") && f.type === "hidden") {
-      if (!hiddenBaseline.has(f)) hiddenBaseline.set(f, f.value);
-      else if (hiddenBaseline.get(f) !== f.value) return true;
+      if (!hiddenBaseline.has(f)) {
+        // 기준을 기록한 문서에 나중에 생긴 숨은 칸(값이 있는)은 바뀐 것으로 본다.
+        if (baselineDocs.has(f.ownerDocument) && f.value) return true;
+        hiddenBaseline.set(f, f.value);
+      } else if (hiddenBaseline.get(f) !== f.value) return true;
     } else if (f.value !== (f as HTMLInputElement | HTMLTextAreaElement).defaultValue) {
       return true;
     }
@@ -654,7 +669,12 @@ export async function fillFormFields(
     }
     // 앞선 입력이 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
     applied.add(decodeDeep(intended));
-    noteWritten(callId, el, intended);
+    // 이 호출이 써 넣은 상태(선택 칸은 고른 선택지 하나, checkbox·radio는 체크 상태)를 값 요약으로 기록한다.
+    noteWritten(
+      callId,
+      el,
+      isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") ? fieldValueSignature(el) : intended,
+    );
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
     written.push({ el, info, value: f.value, result });
