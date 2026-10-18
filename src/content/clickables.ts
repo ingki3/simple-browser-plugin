@@ -1,6 +1,6 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { getAccessibleRoots, isShadowRoot, isTag } from "./docs";
-import { controlHasPersonalValue, formDestination, formHasPersonalValues, formSubmissionUrl } from "./forms";
+import { controlHasPersonalValue, formDestination, formHasPersonalValues, formSubmissionUrl, isPersonalField } from "./forms";
 import { PAYMENT_TEXT_RE } from "@/lib/autoApprove";
 import {
   detectRegion,
@@ -176,7 +176,11 @@ const CLICK_KIND: TargetKind = {
     // 대상을 감싼 버튼·링크들(실제로 작동하는 바깥 컨트롤까지)의 글자를 모두 모은다.
     const outerText = enclosingControlTexts(el);
     return {
-      submitsPersonal: (!!form && formHasPersonalValues(form)) || (!!form && controlHasPersonalValue(control)),
+      // 작동할 컨트롤(제출 버튼, 또는 label이 연결한 checkbox·radio) 자신이 실을 개인정보 값도 본다.
+      submitsPersonal:
+        (!!form && formHasPersonalValues(form)) ||
+        controlHasPersonalValue(control ?? linked) ||
+        (!!linked && isPersonalField(linked) && !!(linked as HTMLInputElement).value?.trim()),
       paymentContext: inPaymentContext(el, form),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
