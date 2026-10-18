@@ -82,6 +82,9 @@ test("clicks and fills run automatically only on pages and destinations within c
   assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/redirect?next=%2F%5Ccollector.example%2Fcollect%3Fd%3Dsecret"));
   assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/r?u=https:%5C%5Ccollector.example"));
   assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/r?next=%2Fmain%2Fhome"), null);
+  let wrapped = "https://collector.example/?d=secret";
+  for (let i = 0; i < 5; i++) wrapped = `https://news.naver.com/redirect?url=${encodeURIComponent(wrapped)}`;
+  assert.ok(navigateAutoBlock(trusted, wrapped));
   assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/search?query=hello"), null);
   assert.ok(navigateAutoBlock(trusted, "https://news.naver.com/#/go?to=https://collector.example/"));
   assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/r?url=https%3A%2F%2Fn.news.naver.com%2Fa"), null);

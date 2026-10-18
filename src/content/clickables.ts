@@ -94,21 +94,46 @@ function parentAcrossShadow(el: Element): Element | null {
   return isShadowRoot(root) ? root.host : null;
 }
 
+// 보이는 글자와 다른 접근성 이름(aria-label·aria-labelledby·title·value). <button aria-label="Buy now">🛒</button>
+function accessibleNames(el: Element): string {
+  const parts = [el.getAttribute("aria-label") ?? "", el.getAttribute("title") ?? ""];
+  for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean)) {
+    const ref = (el.getRootNode() as Document | ShadowRoot).getElementById?.(id) ?? el.ownerDocument.getElementById(id);
+    if (ref) parts.push(ref.textContent ?? "");
+  }
+  if (isTag(el, "input")) parts.push(el.value);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
 function enclosingControlTexts(el: HTMLElement): string {
-  const texts: string[] = [];
+  const texts: string[] = [accessibleNames(el)];
   for (let cur = parentAcrossShadow(el); cur; cur = parentAcrossShadow(cur)) {
     const c = closestAcross(cur, CONTROL_SELECTOR);
     if (!c) break;
-    texts.push(clickText(c as HTMLElement));
+    texts.push(clickText(c as HTMLElement), accessibleNames(c));
     cur = c;
   }
-  return texts.join(" ").slice(0, 400);
+  // label을 누르면 연결된 컨트롤이 작동하므로 그 이름도 본다.
+  const control = labelControl(el);
+  if (control) texts.push(clickText(control), accessibleNames(control));
+  return texts.filter(Boolean).join(" ").slice(0, 400);
 }
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
 function activatedControl(el: HTMLElement): HTMLButtonElement | HTMLInputElement | null {
   const c = closestAcross(el, "button, input[type=submit], input[type=image]");
-  return c as HTMLButtonElement | HTMLInputElement | null;
+  if (c) return c as HTMLButtonElement | HTMLInputElement;
+  // <label for="send">을 누르면 연결된 제출 input이 작동한다.
+  const control = labelControl(el);
+  if (control && (isTag(control, "button") || (isTag(control, "input") && ["submit", "image"].includes(control.type)))) {
+    return control as HTMLButtonElement | HTMLInputElement;
+  }
+  return null;
+}
+
+function labelControl(el: HTMLElement): HTMLElement | null {
+  const label = closestAcross(el, "label") as HTMLLabelElement | null;
+  return (label?.control as HTMLElement | null | undefined) ?? null;
 }
 
 // 결제 화면인지: 문서 주소(경로·쿼리·해시 — SPA는 #/checkout·?route=checkout처럼 라우팅한다)·제목·큰 제목(h1·h2),

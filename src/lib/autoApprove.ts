@@ -121,10 +121,11 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string, depth = 0
   }
   if (!/^https?:$/.test(u.protocol)) return null;
   if (isSharedHost(u.hostname)) return false;
-  if (depth < 3) {
-    for (const inner of embeddedUrls(u)) {
-      if (withinTrusted(trustedSites, inner, depth + 1) !== true) return false;
-    }
+  const inners = embeddedUrls(u);
+  // 리다이렉트를 여러 겹 감싼 주소는 끝까지 풀지 않고 밖으로 본다(묻는다).
+  if (inners.length && depth >= 3) return false;
+  for (const inner of inners) {
+    if (withinTrusted(trustedSites, inner, depth + 1) !== true) return false;
   }
   for (const site of trustedSites) {
     let t: URL;
