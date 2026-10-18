@@ -714,8 +714,13 @@ function setNativeProperty(el: Element, prop: "value" | "checked", value: string
   else (el as unknown as Record<string, unknown>)[prop] = value;
 }
 
-function dispatchChange(el: Element): void {
+// input 처리기가 돈 뒤 change를 보내기 전에 막혔다는 표시(이유가 메시지).
+class ChangeBlocked extends Error {}
+
+function dispatchChange(el: Element, guard?: () => string | null): void {
   el.dispatchEvent(new Event("input", { bubbles: true }));
+  const blocked = guard?.();
+  if (blocked) throw new ChangeBlocked(blocked);
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
@@ -730,14 +735,20 @@ function intendedValue(el: FieldElement, value: string): string {
 }
 
 // onSet: 글자 칸에 브라우저가 정리한 실제 값(앞뒤 공백 제거 등)을 페이지 처리기가 돌기 전에 알려 준다.
-function fillOne(el: FieldElement, value: string, onSet?: (actual: string) => void): boolean {
+// guard: input 처리기가 돈 뒤 change를 보내기 전에 부른다. 이유를 돌려주면 change를 보내지 않는다(ChangeBlocked).
+function fillOne(
+  el: FieldElement,
+  value: string,
+  onSet?: (actual: string) => void,
+  guard?: () => string | null,
+): boolean {
   if (isTag(el, "select")) {
     const match = Array.from(el.options).find(
       (opt) => opt.value === value || opt.textContent?.trim() === value,
     );
     if (!match) return false;
     setNativeProperty(el, "value", match.value);
-    dispatchChange(el);
+    dispatchChange(el, guard);
     return true;
   }
   if (isTag(el, "input") && el.type === "checkbox") {
@@ -745,7 +756,7 @@ function fillOne(el: FieldElement, value: string, onSet?: (actual: string) => vo
     const want = TRUTHY_VALUES.test(value.trim()) || value === el.value;
     if (el.checked !== want) {
       setNativeProperty(el, "checked", want);
-      dispatchChange(el);
+      dispatchChange(el, guard);
     }
     return true;
   }
@@ -754,13 +765,13 @@ function fillOne(el: FieldElement, value: string, onSet?: (actual: string) => vo
     if (value !== el.value && !TRUTHY_VALUES.test(value.trim())) return false;
     if (!el.checked) {
       setNativeProperty(el, "checked", true);
-      dispatchChange(el);
+      dispatchChange(el, guard);
     }
     return true;
   }
   setNativeProperty(el, "value", value);
   onSet?.(el.value);
-  dispatchChange(el);
+  dispatchChange(el, guard);
   return true;
 }
 
@@ -825,13 +836,14 @@ export async function fillFormFields(
       isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")
         ? `${el.type === "radio" ? true : TRUTHY_VALUES.test(f.value.trim()) || f.value === el.value}:${el.value}`
         : null;
-    // 승인 뒤 양식 값에 주소가 새로 생겼으면(페이지가 숨은 next를 바꾼 경우) 채우지 않는다.
+    // 승인 뒤 양식이 바뀌었는지(채우기 직전과, input 처리기가 돈 뒤 change를 보내기 전에 본다).
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
-    const nowRisk = FIELD_KIND.risk?.(el);
-    // 같은 칸의 양식 제출 주소와, 양식 밖 칸이면 주변 양식들의 제출 주소를 함께 본다.
-    const nowUrl = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? [])].join(" ");
-    const approvedUrl = [info.submitUrl ?? "", ...(info.scopeSubmitUrls ?? [])].join(" ");
-    if (nowUrl.trim()) {
+    const driftReason = (): string | null => {
+      const nowRisk = FIELD_KIND.risk?.(el);
+      // 같은 칸의 양식 제출 주소와, 양식 밖 칸이면 주변 양식들의 제출 주소를 함께 본다.
+      const nowUrl = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? [])].join(" ");
+      const approvedUrl = [info.submitUrl ?? "", ...(info.scopeSubmitUrls ?? [])].join(" ");
+      if (!nowUrl.trim()) return null;
       const known = new Set([
         ...urlLikeParamsAll(approvedUrl),
         ...args.fills.map((x) => decodeDeep(x.value)),
@@ -841,25 +853,20 @@ export async function fillFormFields(
       const added = [...urlLikeParamsAll(nowUrl), ...personalParamsAll(nowUrl)].filter(
         (v) => !known.has(v) && !approvedPersonal.has(v),
       );
-      if (added.length) {
-        results.push({
-          id: f.id,
-          label,
-          applied: false,
-          note: "승인한 뒤 양식에 주소·개인정보 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요.",
-        });
-        continue;
-      }
+      if (added.length) return "승인한 뒤 양식에 주소·개인정보 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요.";
       // 앞선 입력의 처리기가 숨은 값을 바꿔(operation=browse → pay) 제출 주소가 결제·민감 주소로 바뀌었으면 멈춘다.
-      // 이 묶음이 넣는 값 자체(검색어 'buy milk' 등)는 승인한 것이니 빼고 본다.
-      // 이 칸과 앞서 채운 칸의 이름·값 쌍만 뺀다(같은 값이라도 다른 이름 payment=1 같은 새 매개변수는 남긴다).
+      // 이 칸과 앞서 채운 칸의 이름·값 쌍만 승인한 값으로 빼고 본다(같은 값이라도 다른 이름 payment=1은 남긴다).
       const pairs = new Set([...appliedPairs, `${el.name}\u0001${decodeDeep(intended)}`]);
-      const withoutKnown = (u: string) => {
+      // byPair: 이 묶음이 채운 칸의 이름·값 쌍만 뺀다(결제 판정용 — 같은 값의 새 이름 payment=1을 남긴다).
+      // 아니면 이 묶음이 넣는 값과 같은 값은 이름과 관계없이 뺀다(개인정보 판정용 — 승인한 이메일을 처리기가
+      // 같은 양식의 숨은 칸에 복사하는 것은 승인한 변화다).
+      const withoutKnown = (u: string, byPair: boolean) => {
         try {
           const x = new URL(u);
           const kept = new URLSearchParams();
           x.searchParams.forEach((v, k) => {
-            if (!pairs.has(`${k}\u0001${decodeDeep(v)}`)) kept.append(k, v);
+            const drop = byPair ? pairs.has(`${k}\u0001${decodeDeep(v)}`) : known.has(decodeDeep(v));
+            if (!drop) kept.append(k, v);
           });
           x.search = kept.toString();
           return x.href;
@@ -868,23 +875,56 @@ export async function fillFormFields(
         }
       };
       // 이유별로 비교한다(이미 개인정보 주소였던 양식에 결제 동작이 새로 붙은 경우도 잡게).
-      const reasonsIn = (list: string[]) =>
-        new Set(list.map((u) => (u ? sensitiveUrlReason(withoutKnown(u)) : null)).filter((r): r is string => !!r));
+      const PAYMENT_REASON = "결제·주문 주소";
+      const reasonsIn = (list: string[]) => {
+        const out = new Set<string>();
+        for (const u of list) {
+          if (!u) continue;
+          if (sensitiveUrlReason(withoutKnown(u, true)) === PAYMENT_REASON) out.add(PAYMENT_REASON);
+          const other = sensitiveUrlReason(withoutKnown(u, false));
+          if (other) out.add(other);
+        }
+        return out;
+      };
       const nowList = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? []), ...(nowRisk?.scopeFormActions ?? [])];
       const approvedList = [info.submitUrl ?? "", ...(info.scopeSubmitUrls ?? []), ...(info.scopeFormActions ?? [])];
       const approvedReasons = reasonsIn(approvedList);
       if ([...reasonsIn(nowList)].some((r) => !approvedReasons.has(r))) {
-        results.push({
-          id: f.id,
-          label,
-          applied: false,
-          note: "승인한 뒤 양식의 제출 주소가 결제·개인정보 주소로 바뀌어 채우지 않았습니다. 다시 찾으세요.",
-        });
-        continue;
+        return "승인한 뒤 양식의 제출 주소가 결제·개인정보 주소로 바뀌어 채우지 않았습니다. 다시 찾으세요.";
       }
+      return null;
+    };
+    const before = driftReason();
+    if (before) {
+      results.push({ id: f.id, label, applied: false, note: before });
+      continue;
     }
+    // change를 보내기 전 재검사에서 이 칸 자신이 쓴 값이 '승인 뒤 채워진 개인정보'로 보이지 않게 먼저 기록한다.
+    noteWritten(callId, el, expectedSig ?? intended);
+    // input 처리기가 action·숨은 값·대상을 바꿨으면 change(제출로 이어질 수 있다)를 보내지 않는다.
+    const guard = (): string | null => {
+      const changed = recheckApproved(FIELD_KIND, el, info);
+      if (changed) return `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${changed}). 다시 찾으세요.`;
+      return driftReason();
+    };
     let actual: string | undefined;
-    if (!fillOne(el, f.value, (v) => (actual = v))) {
+    let filled: boolean;
+    try {
+      filled = fillOne(
+        el,
+        f.value,
+        (v) => {
+          actual = v;
+          if (!expectedSig) noteWritten(callId, el, v);
+        },
+        guard,
+      );
+    } catch (err) {
+      if (!(err instanceof ChangeBlocked)) throw err;
+      results.push({ id: f.id, label, applied: false, note: err.message });
+      continue;
+    }
+    if (!filled) {
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
     }

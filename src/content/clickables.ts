@@ -148,12 +148,13 @@ function isNavigatingHref(link: Element): boolean {
 function submitScopes(el: HTMLElement): FormlessScope[] {
   const control = activatedControl(el) ?? labelControl(el);
   const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
-  if (form) return [{ node: form, includeFormFields: true }];
-  // 양식 밖 버튼은 처리기가 다른 양식을 requestSubmit할 수 있으니 범위 안 양식 칸까지 본다. 다만 목적지가 있는
-  // 일반 링크(href로 이동)는 양식 칸을 끌어오지 않는다(주변 양식의 숨은 값 때문에 모든 링크가 묻게 되지 않게).
+  // 버튼의 처리기는 자기 양식이 아니라 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있으니, 양식 안 버튼도
+  // 바깥 범위(대화상자, 없으면 화면)의 양식 칸까지 본다. 다만 목적지가 있는 일반 링크(href로 이동)는 양식 칸을
+  // 끌어오지 않는다(주변 양식의 숨은 값 때문에 모든 링크가 묻게 되지 않게).
   const link = closestAcross(el, "a[href], area[href], a[*|href]");
   const navLink = !!link && isNavigatingHref(link);
-  return formlessScopes(el).map((s) => (navLink ? s : { ...s, includeFormFields: true }));
+  const outer = formlessScopes(el).map((s) => (navLink ? s : { ...s, includeFormFields: true }));
+  return form ? [{ node: form, includeFormFields: true }, ...outer] : outer;
 }
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
@@ -222,18 +223,24 @@ const CLICK_KIND: TargetKind = {
     const outerText = enclosingControlTexts(el);
     // 양식 밖 버튼(이동 링크가 아닌 것)이면 범위 안 다른 양식들의 제출 주소도 목적지로 본다.
     // 양식 안 버튼이면 같은 양식의 다른 제출 버튼 주소(formaction)를 본다(처리기가 requestSubmit(숨은 버튼)).
+    // 양식 밖 버튼과 양식 안 버튼 모두 범위 안 다른 양식들의 제출 주소를 본다(처리기가 다른 양식을 requestSubmit).
+    const around = scopeSubmitUrls(submitScopes(el).filter((s) => s.includeFormFields && s.node !== form));
     const scopeForms = form
       ? (() => {
           const o = otherDestinations(form, submitTo);
-          return { changed: o.scopeSubmitUrls ?? [], actions: o.scopeFormActions ?? [] };
+          return {
+            changed: [...(o.scopeSubmitUrls ?? []), ...around.changed.filter((u) => !(o.scopeSubmitUrls ?? []).includes(u))],
+            actions: [...(o.scopeFormActions ?? []), ...around.actions.filter((u) => !(o.scopeFormActions ?? []).includes(u))],
+          };
         })()
-      : scopeSubmitUrls(submitScopes(el).filter((s) => s.includeFormFields));
+      : around;
     return {
       // 작동할 컨트롤(제출 버튼, 또는 label이 연결한 checkbox·radio) 자신이 실을 개인정보 값도 본다.
       submitsPersonal:
         (!!form && formHasPersonalValues(form)) ||
         // 양식 없는 화면(대화상자의 로그인 칸 + Continue 버튼 등)은 버튼 주변 입력 칸 묶음을 본다.
-        (!form && personalValuedInScopes(submitScopes(el)).length > 0) ||
+        // 양식 안 버튼도 같은 대화상자·화면의 다른 양식(처리기가 requestSubmit할 수 있다)을 함께 본다.
+        personalValuedInScopes(submitScopes(el)).length > 0 ||
         controlHasPersonalValue(control ?? linked) ||
         [control, linked].some(
           (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),
