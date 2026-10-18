@@ -8,7 +8,7 @@ import {
   looksPersonalValue,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { formlessScopes, inPaymentContext } from "./context";
+import { formlessScopes, inPaymentContext, openShadowRootsIn } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleRoots, isTag } from "./docs";
 import { noteWritten, peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
@@ -268,6 +268,10 @@ export function personalValuedElements(
   let fields: Element[];
   if (isElement && isTag(scope as Element, "form")) {
     fields = formElements(scope as HTMLFormElement);
+    // 양식 안 웹 컴포넌트의 열린 shadow root 칸도 본다(컴포넌트가 그린 비밀번호 칸 — 제출 처리기가 읽어 보낸다).
+    for (const root of openShadowRootsIn(scope as Element)) {
+      for (const c of Array.from(root.querySelectorAll("input, textarea, select"))) if (!fields.includes(c)) fields.push(c);
+    }
   } else {
     const withForms = isDialog || includeFormFields;
     fields = Array.from(scope.querySelectorAll("input, textarea, select")).filter(

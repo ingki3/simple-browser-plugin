@@ -295,11 +295,27 @@ export function splitIdentifier(s: string): string {
 // 값 자체가 개인정보 모양인지(이메일·휴대전화·구분자 있는 전화·카드·주민번호). 인코딩된 값은 풀어 본다.
 // 흔한 API 키·토큰 모양(sk-…, ghp_…, xoxb-…, AKIA…, JWT).
 const SECRET_VALUE_RE =
-  /(?<![A-Za-z0-9])(sk|pk|rk)[-_][A-Za-z0-9][-_A-Za-z0-9]{12,}|(?<![A-Za-z0-9])(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}|(?<![A-Za-z0-9])xox[abpr]-[A-Za-z0-9-]{10,}|(?<![A-Z0-9])AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./;
+  /(?<![A-Za-z0-9])(sk|pk|rk)[-_][A-Za-z0-9][-_A-Za-z0-9]{12,}|(?<![A-Za-z0-9])(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}|(?<![A-Za-z0-9])xox[abpr]-[A-Za-z0-9-]{10,}|(?<![A-Z0-9])AKIA[A-Z0-9]{16}/;
+
+// JWT(eyJ….eyJ….): 정규식 되짚기로 긴 값에서 느려지지 않게 점으로 나눈 조각을 차례로 본다.
+function hasJwt(v: string): boolean {
+  if (!v.includes("eyJ")) return false;
+  for (const run of v.match(/[A-Za-z0-9_.-]+/g) ?? []) {
+    if (!run.includes(".")) continue;
+    const parts = run.split(".");
+    for (let i = 0; i + 1 < parts.length; i++) {
+      const a = parts[i].slice(parts[i].lastIndexOf("eyJ"));
+      if (a.startsWith("eyJ") && a.length >= 13 && parts[i + 1].startsWith("eyJ") && parts[i + 1].length >= 13 && i + 2 < parts.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 export function looksPersonalValue(raw: string): boolean {
   const v = decodeDeepText(raw);
-  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v) || SECRET_VALUE_RE.test(v);
+  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v) || SECRET_VALUE_RE.test(v) || hasJwt(v);
 }
 
 export function sensitiveUrlReason(url: string): string | null {
@@ -339,7 +355,7 @@ export function sensitiveUrlReason(url: string): string | null {
       );
     });
     // 경로에서는 이메일과 키·토큰 모양만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
-    if (personal || EMAIL_RE.test(route) || SECRET_VALUE_RE.test(route)) return "개인정보가 실린 주소";
+    if (personal || EMAIL_RE.test(route) || SECRET_VALUE_RE.test(route) || hasJwt(route)) return "개인정보가 실린 주소";
   }
   return null;
 }

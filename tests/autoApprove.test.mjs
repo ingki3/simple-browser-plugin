@@ -136,6 +136,10 @@ test("navigation and links carrying personal data or payment routes still ask", 
   assert.equal(looksPersonalValue("a".repeat(200000)), false);
   assert.equal(looksPersonalValue("a".repeat(100000) + " bob@example.com"), true);
   assert.equal(looksPersonalValue("@ ".repeat(100) + " ".repeat(400) + "alice@example.com"), true);
+  const t2 = Date.now();
+  assert.equal(looksPersonalValue("eyJ".repeat(50000)), false);
+  assert.ok(Date.now() - t2 < 200);
+  assert.equal(looksPersonalValue("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc"), true);
   assert.ok(Date.now() - t1 < 500);
   assert.ok(autoApproveBlock("click_element", [t({ name: "계속", href: "https://alice:secret@shop.example/private" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "checkbox", name: "구매 확정" })]));

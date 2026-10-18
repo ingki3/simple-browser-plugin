@@ -118,7 +118,12 @@ export function formlessScopes(el: Element): FormlessScope[] {
     // 범위 안 같은 출처 iframe의 문서도 본다(대화상자 안 iframe의 로그인 양식을 바깥 버튼이 제출).
     for (const body of frameBodiesIn(base)) if (!nodes.includes(body)) nodes.push(body);
   }
-  return nodes.map((node) => ({ node, includeFormFields: inDialog }));
+  const scopes = nodes.map((node) => ({ node, includeFormFields: inDialog }));
+  // 같은 출처 iframe 안의 대상이면 iframe 요소를 부모 문서의 대상으로 보고 부모 쪽 범위도 더한다
+  // (부모 대화상자의 이메일·비밀번호를 iframe 안 버튼이 부모 함수로 제출).
+  const frame = frameElementOf(el.ownerDocument);
+  if (frame) for (const s of formlessScopes(frame)) if (!scopes.some((x) => x.node === s.node)) scopes.push(s);
+  return scopes;
 }
 
 // 범위 안 같은 출처 iframe(중첩 포함, 최대 20개)의 body.
@@ -145,7 +150,7 @@ function frameBodiesIn(scope: Element | ShadowRoot): Element[] {
 }
 
 // 범위 안의 열린 shadow root들(중첩 포함, 최대 200개).
-function openShadowRootsIn(scope: Element | ShadowRoot): ShadowRoot[] {
+export function openShadowRootsIn(scope: Element | ShadowRoot): ShadowRoot[] {
   const out: ShadowRoot[] = [];
   const queue: Array<Element | ShadowRoot> = [scope];
   while (queue.length && out.length < 200) {
