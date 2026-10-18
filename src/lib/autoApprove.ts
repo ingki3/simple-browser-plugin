@@ -47,12 +47,19 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
 // 자동 실행의 신뢰 경계. 신뢰 사이트는 출처(스킴·호스트·포트)로 기억하고, 대상 주소는
 // 같은 출처이거나 그 호스트의 하위 도메인(news.naver.com → n.news.naver.com)일 때만 안으로 본다.
 // 등록 도메인을 추정하지 않는다(co.za·s3.amazonaws.com처럼 형제 하위 도메인이 남의 것일 수 있다).
-// 남에게 하위 도메인을 나눠 주는 호스팅의 첫 화면(tistory.com 등)은 하위 도메인으로 넓히지 않는다.
+// 남에게 하위 도메인이나 경로를 나눠 주는 공유 호스팅(github.io, s3.amazonaws.com 등)의 주소는
+// 같은 호스트라도 다른 사용자의 것일 수 있어 신뢰 범위로 보지 않는다(늘 묻는다).
 const SHARED_HOSTING_APEXES = new Set([
   "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "web.app", "firebaseapp.com",
   "herokuapp.com", "appspot.com", "blogspot.com", "wordpress.com", "tistory.com", "glitch.me", "onrender.com",
   "azurewebsites.net", "cloudfront.net", "amazonaws.com", "notion.site", "substack.com", "medium.com",
 ]);
+
+function isSharedHost(host: string): boolean {
+  const h = host.toLowerCase();
+  for (const apex of SHARED_HOSTING_APEXES) if (h === apex || h.endsWith(`.${apex}`)) return true;
+  return false;
+}
 
 // 신뢰 사이트로 기억할 값(웹 주소의 출처). 웹 주소가 아니면 null.
 export function siteOf(url: string): string | null {
@@ -72,6 +79,7 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean 
     return null;
   }
   if (!/^https?:$/.test(u.protocol)) return null;
+  if (isSharedHost(u.hostname)) return false;
   for (const site of trustedSites) {
     let t: URL;
     try {
@@ -82,7 +90,7 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean 
     if (t.protocol !== u.protocol || t.port !== u.port) continue;
     if (u.hostname === t.hostname) return true;
     const isIp = /^[\d.]+$/.test(t.hostname) || t.hostname.startsWith("[");
-    if (!isIp && t.hostname.includes(".") && !SHARED_HOSTING_APEXES.has(t.hostname) && u.hostname.endsWith(`.${t.hostname}`)) {
+    if (!isIp && t.hostname.includes(".") && u.hostname.endsWith(`.${t.hostname}`)) {
       return true;
     }
   }

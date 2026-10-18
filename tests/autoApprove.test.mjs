@@ -53,6 +53,9 @@ test("trusted sites extend only to the same host and its subdomains", () => {
   assert.ok(navigateAutoBlock(new Set([siteOf("https://bank.co.za/")]), "https://collector.co.za/?d=1"));
   assert.ok(navigateAutoBlock(new Set([siteOf("https://alice.s3.amazonaws.com/")]), "https://mallory.s3.amazonaws.com/"));
   assert.ok(navigateAutoBlock(new Set([siteOf("https://tistory.com/")]), "https://evil.tistory.com/"));
+  assert.ok(navigateAutoBlock(new Set([siteOf("https://s3.amazonaws.com/company/index.html")]), "https://attacker.s3.amazonaws.com/?d=1"));
+  assert.ok(navigateAutoBlock(new Set([siteOf("https://s3.amazonaws.com/company/index.html")]), "https://s3.amazonaws.com/attacker/?d=1"));
+  assert.ok(navigateAutoBlock(new Set([siteOf("https://alice.github.io/")]), "https://alice.github.io/x"));
   assert.ok(navigateAutoBlock(new Set([siteOf("http://127.0.0.1:8080/")]), "http://127.0.0.1:9090/"));
   assert.ok(navigateAutoBlock(trusted, "https://honggildong.collector.example/"));
   assert.ok(navigateAutoBlock(trusted, "https://attacker.example/?d=010-1234-5678"));
