@@ -804,6 +804,8 @@ export async function fillFormFields(
   const results: FillResult[] = [];
   const written: Array<{ el: FieldElement; info: TargetInfo; value: string; actual?: string; result: FillResult }> = [];
   const applied = new Set<string>();
+  // 이 묶음이 채운 칸의 이름과 값(name\u0001값). 재검사에서 이 쌍만 승인한 값으로 빼고 본다.
+  const appliedPairs = new Set<string>();
   for (const f of args.fills) {
     let el: HTMLElement;
     let info: TargetInfo;
@@ -850,12 +852,14 @@ export async function fillFormFields(
       }
       // 앞선 입력의 처리기가 숨은 값을 바꿔(operation=browse → pay) 제출 주소가 결제·민감 주소로 바뀌었으면 멈춘다.
       // 이 묶음이 넣는 값 자체(검색어 'buy milk' 등)는 승인한 것이니 빼고 본다.
+      // 이 칸과 앞서 채운 칸의 이름·값 쌍만 뺀다(같은 값이라도 다른 이름 payment=1 같은 새 매개변수는 남긴다).
+      const pairs = new Set([...appliedPairs, `${el.name}\u0001${decodeDeep(intended)}`]);
       const withoutKnown = (u: string) => {
         try {
           const x = new URL(u);
           const kept = new URLSearchParams();
           x.searchParams.forEach((v, k) => {
-            if (!known.has(decodeDeep(v))) kept.append(k, v);
+            if (!pairs.has(`${k}\u0001${decodeDeep(v)}`)) kept.append(k, v);
           });
           x.search = kept.toString();
           return x.href;
@@ -887,6 +891,10 @@ export async function fillFormFields(
     // 앞선 입력이 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
     applied.add(decodeDeep(intended));
     if (actual !== undefined) applied.add(decodeDeep(actual));
+    if (el.name) {
+      appliedPairs.add(`${el.name}\u0001${decodeDeep(intended)}`);
+      if (actual !== undefined) appliedPairs.add(`${el.name}\u0001${decodeDeep(actual)}`);
+    }
     // 이 호출이 써 넣은 상태를 값 요약으로 기록한다. checkbox·radio는 처리기가 돌기 전에 정한 상태(expectedSig),
     // 글자 칸은 브라우저가 정리한 실제 값(type=email의 앞뒤 공백 제거 등).
     noteWritten(callId, el, expectedSig ?? actual ?? intended);
