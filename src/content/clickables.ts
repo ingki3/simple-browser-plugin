@@ -121,7 +121,7 @@ function enclosingControlTexts(el: HTMLElement): string {
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
 function activatedControl(el: HTMLElement): HTMLButtonElement | HTMLInputElement | null {
-  const c = closestAcross(el, "button, input[type=submit], input[type=image]");
+  const c = closestAcross(el, "button, input[type=submit], input[type=image], input[type=button], input[type=reset]");
   if (c) return c as HTMLButtonElement | HTMLInputElement;
   // <label for="send">을 누르면 연결된 제출 input이 작동한다.
   const control = labelControl(el);

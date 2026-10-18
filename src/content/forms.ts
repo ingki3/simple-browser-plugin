@@ -115,6 +115,20 @@ export function formDestination(el: HTMLElement, form: HTMLFormElement | null): 
   return formAction(form);
 }
 
+function optionUrls(select: HTMLSelectElement): string[] {
+  const out: string[] = [];
+  for (const o of Array.from(select.options).slice(0, 200)) {
+    const v = o.value.trim();
+    if (!/^(https?:|javascript:|data:|\/|\\)/i.test(v)) continue;
+    try {
+      out.push(/^javascript:|^data:/i.test(v) ? v : new URL(v, select.ownerDocument.baseURI).href);
+    } catch {
+      out.push(v);
+    }
+  }
+  return out.slice(0, 50);
+}
+
 // 양식을 지금 값으로 제출하면 요청하는 주소(action + 칸 값을 쿼리로). GET 양식은 실제로 이 주소로 가고,
 // POST 양식도 값에 실린 주소(리다이렉트 매개변수 next=https://…)를 같은 방식으로 검사하려고 쿼리로 붙인다.
 // FormData는 페이지에 formdata 이벤트를 일으키므로(그 처리기가 전송할 수 있다) 쓰지 않고 칸 값을 직접 읽는다.
@@ -177,11 +191,15 @@ const FIELD_KIND: TargetKind = {
     const submitTo = formDestination(el, form);
     // 기존 칸 값까지 합친 제출 주소(change 처리기로 바로 제출되면 숨은 next=https://… 도 함께 간다).
     const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
+    // 선택 칸은 표시 문구로 고르면 실제 option.value가 들어가므로, 주소처럼 보이는 선택지 값을 미리 풀어 둔다
+    // (change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지).
+    const choiceUrls = isTag(el, "select") ? optionUrls(el) : [];
     return {
       personal: isPersonalField(el),
       submitsPersonal: !!form && formHasPersonalValues(form),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
+      ...(choiceUrls.length ? { choiceUrls } : {}),
     };
   },
 };

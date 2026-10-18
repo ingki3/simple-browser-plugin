@@ -159,7 +159,7 @@ export async function buildToolPreview(
         autoBlock: autoApproveBlock("fill_form_fields", infos),
         // 양식 제출 주소와, 주소처럼 보이는 입력 값(리다이렉트 칸에 바깥 주소를 넣는 경로).
         linkHrefs: [
-          ...infos.flatMap((info) => [info.submitTo ?? "", info.submitUrl ?? ""]),
+          ...infos.flatMap((info) => [info.submitTo ?? "", info.submitUrl ?? "", ...(info.choiceUrls ?? [])]),
           ...args.fills.map((f) => f.value.trim()).filter((v) => /^(https?:)?[/\\]{2}|^[a-z]+:\/\/|^javascript:/i.test(v)),
         ].filter(Boolean),
       };

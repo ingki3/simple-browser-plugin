@@ -36,6 +36,8 @@ export interface TargetInfo {
   submitTo?: string;
   // 지금 칸 값으로 제출하면 요청하는 주소(action + 칸 값 쿼리). 값에 실린 바깥 주소(리다이렉트 매개변수) 판정용.
   submitUrl?: string;
+  // 선택 칸의 선택지 값 중 주소처럼 보이는 것(절대 주소로 푼 것). 사이트 경계 판정용.
+  choiceUrls?: string[];
   // 대상이 링크 안의 요소면 그 링크 주소(누르면 바깥 링크가 열린다). 사이트 경계 판정용.
   ancestorHref?: string;
   // 대상이 버튼·링크 안의 요소면 실제로 작동하는 그 바깥 버튼·링크의 글자. 결제·제출 문구 판정용.
