@@ -61,14 +61,18 @@ function describeType(el: FieldElement): string {
   return "select";
 }
 
+const SECRET_HINT_RE =
+  /(password|passwd|\bpwd\b|passcode|비밀\s*번호|암호|\botp\b|one[\s_-]*time|인증\s*(번호|코드)|보안\s*번호|verification[\s_-]*code|auth[\s_-]*code|\bpin\b)/i;
 const PAYMENT_RE = /(card.?(num|no)|cardnumber|cvc|cvv|카드\s*번호|보안\s*코드)/i;
 
 function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
-  if ((isTag(el, "input") && el.type === "password") || /password/.test(ac)) return "password";
+  if ((isTag(el, "input") && el.type === "password") || /password|one-time-code/.test(ac)) return "password";
   if (/\bcc-/.test(ac)) return "payment";
   const hint = `${el.getAttribute("name") ?? ""} ${el.id} ${isFieldElement(el) ? resolveLabel(el) : ""}`;
   if (PAYMENT_RE.test(hint)) return "payment";
+  // 비밀번호 표시로 type이 text가 된 칸, 일회용 인증 코드 칸도 비밀 값으로 본다.
+  if (SECRET_HINT_RE.test(hint)) return "password";
   return null;
 }
 
@@ -109,6 +113,22 @@ export function formDestination(el: HTMLElement, form: HTMLFormElement | null): 
   if (!form) return "";
   if (el.hasAttribute("formaction") && "formAction" in el) return (el as HTMLButtonElement).formAction;
   return formAction(form);
+}
+
+// 양식을 지금 값으로 제출하면 요청하는 주소(action + 칸 값을 쿼리로). GET 양식은 실제로 이 주소로 가고,
+// POST 양식도 값에 실린 주소(리다이렉트 매개변수 next=https://…)를 같은 방식으로 검사하려고 쿼리로 붙인다.
+export function formSubmissionUrl(form: HTMLFormElement, action: string): string {
+  if (!action) return "";
+  try {
+    const u = new URL(action);
+    const data = new FormData(form);
+    data.forEach((v, k) => {
+      if (typeof v === "string" && v) u.searchParams.append(k, v);
+    });
+    return u.href;
+  } catch {
+    return action;
+  }
 }
 
 // 값이 채워진 개인정보·비밀번호·결제 칸이 있는 양식인지(그 양식의 버튼은 자동 실행하지 않는다).

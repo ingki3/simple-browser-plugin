@@ -36,6 +36,7 @@ test("buttons of a form with filled personal values still ask", () => {
 });
 
 test("password, payment and personal fields still ask", () => {
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", sensitive: "password", name: "인증번호" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "password", sensitive: "password" })]));
   assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", sensitive: "payment" })]));
   assert.match(
