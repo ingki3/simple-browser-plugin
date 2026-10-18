@@ -137,6 +137,25 @@ export function formDestination(el: HTMLElement, form: HTMLFormElement | null): 
   return formAction(form);
 }
 
+// 양식의 제출 버튼들. form.elements는 input[type=image]를 빼므로 그 양식에 속한 이미지 버튼(form 속성으로
+// 바깥에서 연결된 것 포함)을 따로 모은다.
+function formSubmitters(form: HTMLFormElement): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (const el of formElements(form)) {
+    if (
+      (isTag(el, "button") && ((el as HTMLButtonElement).type || "submit") === "submit") ||
+      (isTag(el, "input") && (el as HTMLInputElement).type === "submit")
+    ) {
+      out.push(el as HTMLElement);
+    }
+  }
+  const root = form.getRootNode() as Document | ShadowRoot;
+  for (const img of Array.from(root.querySelectorAll('input[type="image" i]'))) {
+    if ((img as HTMLInputElement).form === form && !out.includes(img as HTMLElement)) out.push(img as HTMLElement);
+  }
+  return out;
+}
+
 // 양식이 제출될 수 있는 모든 주소: 기본 action과 연결된 제출 버튼들의 formaction
 // (처리기가 form.requestSubmit(button)으로 다른 버튼의 주소로 보낼 수 있다). 50개를 넘으면 한도 표시를 넣는다.
 export function formDestinations(form: HTMLFormElement): string[] {
@@ -151,7 +170,7 @@ export function formDestinations(form: HTMLFormElement): string[] {
     return true;
   };
   add(formAction(form));
-  for (const el of formElements(form)) {
+  for (const el of formSubmitters(form)) {
     if (!el.hasAttribute("formaction")) continue;
     const dest = formDestination(el as HTMLElement, form);
     if (!add(dest)) break;
@@ -163,12 +182,9 @@ export function formDestinations(form: HTMLFormElement): string[] {
 // 같은 action이어도 버튼 값(operation=pay)이 다를 수 있다. 50개를 넘으면 한도 표시를 넣는다.
 function submitterUrls(form: HTMLFormElement, withValues: boolean): string[] {
   const urls: string[] = [];
-  for (const el of formElements(form)) {
-    const submitter =
-      (isTag(el, "button") && ((el as HTMLButtonElement).type || "submit") === "submit") ||
-      (isTag(el, "input") && ["submit", "image"].includes((el as HTMLInputElement).type));
+  for (const el of formSubmitters(form)) {
     const b = el as HTMLButtonElement;
-    if (!submitter || !b.name) continue;
+    if (!b.name) continue;
     const dest = formDestination(b, form);
     let url = "";
     if (withValues) url = formSubmissionUrl(form, dest, b);
@@ -828,10 +844,13 @@ export async function fillFormFields(
           return u;
         }
       };
-      const sensitiveIn = (list: string[]) => list.some((u) => !!u && !!sensitiveUrlReason(withoutKnown(u)));
+      // 이유별로 비교한다(이미 개인정보 주소였던 양식에 결제 동작이 새로 붙은 경우도 잡게).
+      const reasonsIn = (list: string[]) =>
+        new Set(list.map((u) => (u ? sensitiveUrlReason(withoutKnown(u)) : null)).filter((r): r is string => !!r));
       const nowList = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? []), ...(nowRisk?.scopeFormActions ?? [])];
       const approvedList = [info.submitUrl ?? "", ...(info.scopeSubmitUrls ?? []), ...(info.scopeFormActions ?? [])];
-      if (sensitiveIn(nowList) && !sensitiveIn(approvedList)) {
+      const approvedReasons = reasonsIn(approvedList);
+      if ([...reasonsIn(nowList)].some((r) => !approvedReasons.has(r))) {
         results.push({
           id: f.id,
           label,
