@@ -83,12 +83,35 @@ export function linkHrefOf(el: Element): string {
 // 놓친다). 범위 안에서는 어느 양식에도 속하지 않은 칸만 본다(personalValuedElements).
 export function formlessScopes(el: Element): Array<Element | ShadowRoot> {
   const dialog = closestAcross(el, 'dialog, [role="dialog"], [role="alertdialog"]');
-  if (dialog) return [dialog];
   const scopes: Array<Element | ShadowRoot> = [];
-  for (let cur: Element | null = el; cur; cur = eventParent(cur)) {
+  // 클릭 경로의 shadow root들(대화상자가 있으면 그 안쪽 것만).
+  for (let cur: Element | null = el; cur && cur !== dialog; cur = eventParent(cur)) {
     const root = cur.getRootNode();
     if (isShadowRoot(root) && !scopes.includes(root)) scopes.push(root);
   }
-  if (el.ownerDocument.body) scopes.push(el.ownerDocument.body);
+  const base = dialog ?? el.ownerDocument.body;
+  if (base) {
+    scopes.push(base);
+    // 범위 안 다른 웹 컴포넌트의 열린 shadow root도 본다(querySelectorAll은 shadow 안으로 들어가지 않는다).
+    for (const root of openShadowRootsIn(base)) if (!scopes.includes(root)) scopes.push(root);
+  }
   return scopes;
+}
+
+// 범위 안의 열린 shadow root들(중첩 포함, 최대 200개).
+function openShadowRootsIn(scope: Element | ShadowRoot): ShadowRoot[] {
+  const out: ShadowRoot[] = [];
+  const queue: Array<Element | ShadowRoot> = [scope];
+  while (queue.length && out.length < 200) {
+    const node = queue.shift()!;
+    for (const child of Array.from(node.querySelectorAll("*"))) {
+      const sr = (child as HTMLElement).shadowRoot;
+      if (sr && !out.includes(sr)) {
+        out.push(sr);
+        queue.push(sr);
+        if (out.length >= 200) break;
+      }
+    }
+  }
+  return out;
 }

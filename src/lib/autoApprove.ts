@@ -299,7 +299,7 @@ const SECRET_VALUE_RE =
 
 export function looksPersonalValue(raw: string): boolean {
   const v = decodeDeepText(raw);
-  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v) || SECRET_VALUE_RE.test(v.slice(0, 20000));
+  return PERSONAL_VALUE_RE.test(v) || EMAIL_RE.test(v) || hasCardNumber(v) || SECRET_VALUE_RE.test(v);
 }
 
 export function sensitiveUrlReason(url: string): string | null {
@@ -338,8 +338,8 @@ export function sensitiveUrlReason(url: string): string | null {
           looksPersonalValue(v))
       );
     });
-    // 경로에서는 이메일만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
-    if (personal || EMAIL_RE.test(route)) return "개인정보가 실린 주소";
+    // 경로에서는 이메일과 키·토큰 모양만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
+    if (personal || EMAIL_RE.test(route) || SECRET_VALUE_RE.test(route)) return "개인정보가 실린 주소";
   }
   return null;
 }
