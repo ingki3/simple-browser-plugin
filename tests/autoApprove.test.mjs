@@ -211,3 +211,11 @@ test("common English order confirmation buttons ask", () => {
   }
   assert.equal(autoApproveBlock("click_element", [t({ name: "Ordering tips" })]), null);
 });
+
+test("phone, resident and card numbers in the path ask", () => {
+  const trusted = new Set([siteOf("https://trusted.example/")]);
+  for (const p of ["/collect/010-1234-5678", "/collect/900101-1234567", "/collect/4111-1111-1111-1111", "/c/01012345678", "/c/4111111111111111"]) {
+    assert.ok(navigateAutoBlock(trusted, "https://trusted.example" + p), p);
+  }
+  assert.equal(navigateAutoBlock(trusted, "https://trusted.example/article/20261019/123456"), null);
+});

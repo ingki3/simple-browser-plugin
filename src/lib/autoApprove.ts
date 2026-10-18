@@ -380,8 +380,18 @@ export function sensitiveUrlReason(url: string): string | null {
           looksPersonalValue(v))
       );
     });
-    // 경로에서는 이메일과 키·토큰 모양만 본다(기사·상품 번호 같은 숫자 경로를 개인정보로 오해하지 않게).
-    if (personal || EMAIL_RE.test(route) || SECRET_VALUE_RE.test(route) || hasJwt(route)) return "개인정보가 실린 주소";
+    // 경로에서는 이메일·키·토큰과, 구분 기호가 있는 전화·주민·카드 번호와 휴대전화 번호, Luhn이 맞는 카드 번호를 본다
+    // (평범한 기사·상품 번호는 대개 이 모양이 아니다).
+    if (
+      personal ||
+      EMAIL_RE.test(route) ||
+      SECRET_VALUE_RE.test(route) ||
+      hasJwt(route) ||
+      PERSONAL_VALUE_RE.test(route) ||
+      hasCardNumber(route)
+    ) {
+      return "개인정보가 실린 주소";
+    }
   }
   return null;
 }

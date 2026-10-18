@@ -138,7 +138,7 @@ export function formDestination(el: HTMLElement, form: HTMLFormElement | null): 
 
 // 양식이 제출될 수 있는 모든 주소: 기본 action과 연결된 제출 버튼들의 formaction
 // (처리기가 form.requestSubmit(button)으로 다른 버튼의 주소로 보낼 수 있다). 50개를 넘으면 한도 표시를 넣는다.
-function formDestinations(form: HTMLFormElement): string[] {
+export function formDestinations(form: HTMLFormElement): string[] {
   const out: string[] = [];
   const add = (u: string) => {
     if (!u || out.includes(u)) return true;
@@ -156,6 +156,20 @@ function formDestinations(form: HTMLFormElement): string[] {
     if (!add(dest)) break;
   }
   return out;
+}
+
+// 이 제출 주소 말고 양식이 제출될 수 있는 다른 주소들(다른 제출 버튼의 formaction)과 지금 값을 합친 주소.
+// 칸의 change 처리기나 다른 버튼의 클릭 처리기가 form.requestSubmit(그 버튼)으로 보낼 수 있다.
+export function otherDestinations(
+  form: HTMLFormElement,
+  submitTo: string,
+): { scopeFormActions?: string[]; scopeSubmitUrls?: string[] } {
+  const extra = formDestinations(form).filter((u) => u !== submitTo);
+  if (!extra.length) return {};
+  return {
+    scopeFormActions: extra,
+    scopeSubmitUrls: extra.map((u) => (u.startsWith("about:") ? u : formSubmissionUrl(form, u))),
+  };
 }
 
 const MAX_CHOICE_URLS = 50;
@@ -560,12 +574,7 @@ const FIELD_KIND: TargetKind = {
         if (form) {
           // 양식 안 칸: 제출 버튼들의 formaction(기본 action과 다른 것)과 지금 값을 합친 주소도 본다
           // (change 처리기가 form.requestSubmit(button)으로 그 주소에 제출할 수 있다).
-          const extra = formDestinations(form).filter((u) => u !== submitTo);
-          if (!extra.length) return {};
-          return {
-            scopeFormActions: extra,
-            scopeSubmitUrls: extra.map((u) => (u.startsWith("about:") ? u : formSubmissionUrl(form, u))),
-          };
+          return otherDestinations(form, submitTo);
         }
         const { changed, actions } = scopeSubmitUrls(fieldFormlessScopes(el));
         return {
