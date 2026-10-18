@@ -850,6 +850,8 @@ export async function fillFormFields(
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
     // 처리기가 칸 이름을 바꿔(q → payment) 승인 예외를 넓히지 못하게 시작할 때의 이름을 쓴다.
     const startName = el.name;
+    // 브라우저가 정리한 실제 값(onSet에서 받는다). change 전 재검사의 허용 값에도 넣는다.
+    let actual: string | undefined;
     const driftReason = (): string | null => {
       if (el.name !== startName) return "입력 중 칸 이름이 바뀌어 채우지 않았습니다. 다시 찾으세요.";
       const nowRisk = FIELD_KIND.risk?.(el);
@@ -860,8 +862,9 @@ export async function fillFormFields(
       const known = new Set([
         ...urlLikeParamsAll(approvedUrl),
         ...args.fills.map((x) => decodeDeep(x.value)),
-        // 이 칸에 실제로 넣을 값(선택 칸을 표시 문구로 고르면 option.value)도 승인한 값이다.
+        // 이 칸에 실제로 넣을 값(선택 칸을 표시 문구로 고르면 option.value)과 브라우저가 정리한 값도 승인한 값이다.
         decodeDeep(intended),
+        ...(actual !== undefined ? [decodeDeep(actual)] : []),
         ...applied,
       ]);
       const approvedPersonal = personalParamsAll(approvedUrl);
@@ -871,7 +874,11 @@ export async function fillFormFields(
       if (added.length) return "승인한 뒤 양식에 주소·개인정보 값이 새로 생겨 채우지 않았습니다. 다시 찾으세요.";
       // 앞선 입력의 처리기가 숨은 값을 바꿔(operation=browse → pay) 제출 주소가 결제·민감 주소로 바뀌었으면 멈춘다.
       // 이 칸과 앞서 채운 칸의 이름·값 쌍만 승인한 값으로 빼고 본다(같은 값이라도 다른 이름 payment=1은 남긴다).
-      const pairs = new Set([...appliedPairs, `${startName}\u0001${decodeDeep(intended)}`]);
+      const pairs = new Set([
+        ...appliedPairs,
+        `${startName}\u0001${decodeDeep(intended)}`,
+        ...(actual !== undefined ? [`${startName}\u0001${decodeDeep(actual)}`] : []),
+      ]);
       // byPair: 이 묶음이 채운 칸의 이름·값 쌍만 뺀다(결제 판정용 — 같은 값의 새 이름 payment=1을 남긴다).
       // 아니면 이 묶음이 넣는 값과 같은 값은 이름과 관계없이 뺀다(개인정보 판정용 — 승인한 이메일을 처리기가
       // 같은 양식의 숨은 칸에 복사하는 것은 승인한 변화다).
@@ -922,7 +929,6 @@ export async function fillFormFields(
       if (changed) return `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${changed}). 다시 찾으세요.`;
       return driftReason();
     };
-    let actual: string | undefined;
     let filled: boolean;
     try {
       filled = fillOne(

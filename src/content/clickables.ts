@@ -129,31 +129,12 @@ function enclosingControlTexts(el: HTMLElement): string {
 
 // 버튼이 제출할 값의 범위: 연결된 양식, 없으면 감싼 대화상자, 그것도 없으면 위로 올라가며 처음 만나는
 // 입력 칸이 든 조상(최대 6단계). 클릭 처리기가 그 칸들을 읽어 보내는 양식 없는 화면을 잡는다.
-// 다른 문서로 이동하는 링크인지. javascript:·빈 주소·#…처럼 같은 문서에 머무는 자리표시 링크는 아니다
-// (그런 링크는 처리기가 하는 일이 전부라 버튼처럼 본다).
-function isNavigatingHref(link: Element): boolean {
-  const raw = (link.getAttribute("href") ?? link.getAttributeNS("http://www.w3.org/1999/xlink", "href") ?? "").trim();
-  if (!raw || raw.startsWith("#") || /^javascript:/i.test(raw)) return false;
-  try {
-    const target = new URL(raw, link.baseURI);
-    const here = new URL(link.ownerDocument.URL);
-    target.hash = "";
-    here.hash = "";
-    return target.href !== here.href;
-  } catch {
-    return false;
-  }
-}
-
 function submitScopes(el: HTMLElement): FormlessScope[] {
   const control = activatedControl(el) ?? labelControl(el);
   const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
-  // 버튼의 처리기는 자기 양식이 아니라 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있으니, 양식 안 버튼도
-  // 바깥 범위(대화상자, 없으면 화면)의 양식 칸까지 본다. 다만 목적지가 있는 일반 링크(href로 이동)는 양식 칸을
-  // 끌어오지 않는다(주변 양식의 숨은 값 때문에 모든 링크가 묻게 되지 않게).
-  const link = closestAcross(el, "a[href], area[href], a[*|href]");
-  const navLink = !!link && isNavigatingHref(link);
-  const outer = formlessScopes(el).map((s) => (navLink ? s : { ...s, includeFormFields: true }));
+  // 버튼·링크의 처리기는 자기 양식이 아니라 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있으니
+  // (목적지가 있는 링크도 클릭 처리기에서 이동을 취소하고 제출할 수 있다) 바깥 범위의 양식 칸까지 본다.
+  const outer = formlessScopes(el).map((s) => ({ ...s, includeFormFields: true }));
   return form ? [{ node: form, includeFormFields: true }, ...outer] : outer;
 }
 
