@@ -265,11 +265,21 @@ export function personalValuedElements(
   const isDialog =
     isElement &&
     ((scope as Element).localName === "dialog" || /^(dialog|alertdialog)$/.test((scope as Element).getAttribute("role") ?? ""));
-  const fields = isElement && isTag(scope as Element, "form")
-    ? formElements(scope as HTMLFormElement)
-    : Array.from(scope.querySelectorAll("input, textarea, select")).filter(
-        (f) => isDialog || includeFormFields || !(f as HTMLInputElement).form,
-      );
+  let fields: Element[];
+  if (isElement && isTag(scope as Element, "form")) {
+    fields = formElements(scope as HTMLFormElement);
+  } else {
+    const withForms = isDialog || includeFormFields;
+    fields = Array.from(scope.querySelectorAll("input, textarea, select")).filter(
+      (f) => withForms || !(f as HTMLInputElement).form,
+    );
+    // 안쪽 양식까지 보는 범위면 그 양식들의 컨트롤 목록(커스텀 컨트롤 포함)도 더한다.
+    if (withForms) {
+      for (const form of Array.from(scope.querySelectorAll("form"))) {
+        for (const c of formElements(form as HTMLFormElement)) if (!fields.includes(c)) fields.push(c);
+      }
+    }
+  }
   for (const el of fields) {
     // 양식에 연결된 커스텀 컨트롤(ElementInternals.setFormValue)은 제출 값을 읽을 수 없으니 민감한 값으로 본다.
     if (!isFieldElement(el as HTMLElement)) {

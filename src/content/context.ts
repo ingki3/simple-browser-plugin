@@ -62,7 +62,21 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
   // 대상의 대화상자와, 연결된 양식이 든 대화상자(<button form=f>가 대화상자 밖에 있는 경우)를 모두 본다.
   const dialogSel = 'dialog, [role="dialog"], [role="alertdialog"]';
   const dialogs = [closestAcross(el, dialogSel), form ? closestAcross(form, dialogSel) : null];
-  return [form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)));
+  if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test((scope.textContent ?? "").slice(0, 2000)))) {
+    return true;
+  }
+  // 같은 출처 iframe 안이면 그 iframe 요소를 부모 문서의 대상으로 보고 대화상자·shadow 맥락을 다시 본다
+  // (결제 대화상자 안에 iframe이 있고 그 안의 '확인' 버튼).
+  const frame = frameElementOf(el.ownerDocument);
+  return !!frame && inPaymentContext(frame as HTMLElement, null);
+}
+
+function frameElementOf(doc: Document): Element | null {
+  try {
+    return doc.defaultView?.frameElement ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // 링크 요소의 실제 목적지 문자열. SVG <a>의 href는 문자열이 아니라 SVGAnimatedString이라 속성에서 읽어
