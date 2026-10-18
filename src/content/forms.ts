@@ -8,7 +8,7 @@ import {
   looksPersonalValue,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { fieldValueSignature, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
+import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { noteWritten, peekApproved, recheckApproved, registerTarget, scanTargets, takeApproved, type TargetKind } from "./targets";
@@ -283,7 +283,8 @@ export function captureHiddenBaselines(): void {
   for (const root of getAccessibleRoots()) {
     const doc = (root as Node).ownerDocument ?? (root as Document);
     if (!fresh.includes(doc)) continue;
-    for (const el of Array.from(root.querySelectorAll('input[type="hidden"]'))) {
+    // checkbox·radio도 value가 속성을 따라 defaultValue와 함께 바뀌므로 같은 방식으로 기록한다.
+    for (const el of Array.from(root.querySelectorAll('input[type="hidden"], input[type="checkbox"], input[type="radio"]'))) {
       if (!hiddenBaseline.has(el)) hiddenBaseline.set(el, (el as HTMLInputElement).value);
     }
   }
@@ -300,6 +301,11 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
       if (Array.from(f.options).some((o) => o.selected !== o.defaultSelected)) return true;
     } else if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio")) {
       if (f.checked !== f.defaultChecked) return true;
+      // 체크 상태가 그대로여도 제출될 value가 처음 살핀 값에서 바뀌었으면(처리기가 내용을 복사) 바뀐 것.
+      if (!hiddenBaseline.has(f)) {
+        if (baselineDocs.has(f.ownerDocument) && f.checked) return true;
+        hiddenBaseline.set(f, f.value);
+      } else if (hiddenBaseline.get(f) !== f.value) return true;
     } else if (isTag(f, "input") && f.type === "hidden") {
       if (!hiddenBaseline.has(f)) {
         // 기준을 기록한 문서에 나중에 생긴 숨은 칸(값이 있는)은 바뀐 것으로 본다.
@@ -637,6 +643,11 @@ export async function fillFormFields(
     const label = FIELD_KIND.name(el);
     // 처리기가 돌기 전에 이 입력이 넣을 값을 정해 둔다(처리기가 덮어쓴 값은 승인한 변화가 아니다).
     const intended = intendedValue(el, f.value);
+    // checkbox·radio: 처리기가 돌기 전의 value와 요청한 체크 상태로 기대 값 요약을 만든다(fieldValueSignature와 같은 꼴).
+    const expectedSig =
+      isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")
+        ? `${el.type === "radio" ? true : TRUTHY_VALUES.test(f.value.trim()) || f.value === el.value}:${el.value}`
+        : null;
     // 승인 뒤 양식 값에 주소가 새로 생겼으면(페이지가 숨은 next를 바꾼 경우) 채우지 않는다.
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.
     const nowRisk = FIELD_KIND.risk?.(el);
@@ -669,12 +680,8 @@ export async function fillFormFields(
     }
     // 앞선 입력이 넣은 값(선택 칸은 표시 문구가 아니라 option.value)은 승인한 변화다.
     applied.add(decodeDeep(intended));
-    // 이 호출이 써 넣은 상태(선택 칸은 고른 선택지 하나, checkbox·radio는 체크 상태)를 값 요약으로 기록한다.
-    noteWritten(
-      callId,
-      el,
-      isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") ? fieldValueSignature(el) : intended,
-    );
+    // 이 호출이 써 넣은 상태를 값 요약으로 기록한다. checkbox·radio는 처리기가 돌기 전에 정한 상태(expectedSig).
+    noteWritten(callId, el, expectedSig ?? intended);
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
     written.push({ el, info, value: f.value, result });
