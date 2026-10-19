@@ -684,6 +684,7 @@ const FIELD_KIND: TargetKind = {
       })(),
       ...(choiceUrls.length ? { choiceUrls } : {}),
       ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
+      baseUri: el.baseURI,
     };
   },
 };

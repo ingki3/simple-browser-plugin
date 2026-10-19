@@ -65,6 +65,8 @@ export interface ToolPreview {
   linkHrefs?: string[];
   // 입력할 값들(사이트 경계 판정용).
   fillValues?: string[];
+  // 입력 칸 문서의 기준 주소(<base href> 포함). 상대 주소 입력값은 이 기준으로도 풀어 본다.
+  baseUrls?: string[];
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -175,6 +177,7 @@ export async function buildToolPreview(
           ])
           .filter(Boolean),
         fillValues: args.fills.map((f) => f.value),
+        baseUrls: [...new Set(infos.map((info) => info.baseUri ?? "").filter(Boolean))],
       };
     }
     case "download_images": {

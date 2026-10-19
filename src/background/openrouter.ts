@@ -638,7 +638,11 @@ export class ChatAgent {
               pageUrl = undefined;
             }
             if (this.isStale(turn)) return false;
-            block = pageActionSiteBlock(trusted, pageUrl, preview.linkHrefs ?? [], preview.fillValues ?? []);
+            // 입력값의 상대 주소는 탭 주소와, 페이지가 실제로 쓰는 기준 주소(<base href>) 모두로 풀어 본다.
+            for (const base of [pageUrl, ...(preview.baseUrls ?? [])]) {
+              block = pageActionSiteBlock(trusted, base, preview.linkHrefs ?? [], preview.fillValues ?? []);
+              if (block) break;
+            }
           }
           let approved: boolean;
           if (autoApprove && !block) {

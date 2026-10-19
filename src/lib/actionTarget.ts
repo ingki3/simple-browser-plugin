@@ -46,6 +46,8 @@ export interface TargetInfo {
   aroundFormActions?: string[];
   // 입력 칸의 name(승인 당시). 처리기가 이름을 바꿔(q → payment) 제출 매개변수를 바꾸지 못하게 비교한다.
   fieldName?: string;
+  // 입력 칸 문서의 기준 주소(document.baseURI). 처리기가 상대 주소 입력값을 이 기준으로 풀 수 있다.
+  baseUri?: string;
   // 대상 링크의 ping 주소들(사이트 경계·민감 주소 판정용).
   pingUrls?: string[];
   // 대상이 링크 안의 요소면 그 링크 주소(누르면 바깥 링크가 열린다). 사이트 경계 판정용.
