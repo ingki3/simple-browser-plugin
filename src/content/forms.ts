@@ -790,8 +790,14 @@ function fillOne(
     }
     return true;
   }
+  // 브라우저가 정리할 값(줄바꿈 제거, range의 숫자 정규화 등)을 페이지에 붙지 않은 복제본에서 먼저 구해 검사한다.
+  // onSet이 막으면(개인정보 모양으로 바뀜) 실제 칸에는 쓰지 않는다(페이지 스크립트가 .value를 읽지 못하게).
+  if (onSet) {
+    const probe = el.cloneNode(false) as HTMLInputElement | HTMLTextAreaElement;
+    setNativeProperty(probe, "value", value);
+    onSet(probe.value);
+  }
   setNativeProperty(el, "value", value);
-  onSet?.(el.value);
   dispatchChange(el, guard);
   return true;
 }
