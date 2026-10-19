@@ -900,14 +900,18 @@ export async function fillFormFields(
         ...(actual !== undefined ? [`${startName}\u0001${decodeDeep(actual)}`] : []),
       ]);
       // byPair: 이 묶음이 채운 칸의 이름·값 쌍만 뺀다(결제 판정용 — 같은 값의 새 이름 payment=1을 남긴다).
-      // 아니면 이 묶음이 넣는 값과 같은 값은 이름과 관계없이 뺀다(개인정보 판정용 — 승인한 이메일을 처리기가
-      // 같은 양식의 숨은 칸에 복사하는 것은 승인한 변화다).
+      // 아니면 그 쌍과 함께, 개인정보 승인 카드를 받은 묶음(consentPersonal)이 넣는 개인정보 모양의 값은 이름과
+      // 관계없이 뺀다(승인한 이메일을 처리기가 같은 양식의 숨은 칸에 복사하는 것은 승인한 변화다). 자동 실행한
+      // 일반 값이 full_name 같은 개인정보 매개변수로 복사된 것은 빼지 않는다.
       const withoutKnown = (u: string, byPair: boolean) => {
         try {
           const x = new URL(u);
           const kept = new URLSearchParams();
           x.searchParams.forEach((v, k) => {
-            const drop = byPair ? pairs.has(`${k}\u0001${decodeDeep(v)}`) : known.has(decodeDeep(v));
+            const dv = decodeDeep(v);
+            const drop =
+              pairs.has(`${k}\u0001${dv}`) ||
+              (!byPair && !!info.consentPersonal && known.has(dv) && looksPersonalValue(dv));
             if (!drop) kept.append(k, v);
           });
           x.search = kept.toString();
