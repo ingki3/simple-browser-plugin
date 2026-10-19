@@ -230,13 +230,18 @@ const CLICK_KIND: TargetKind = {
         [control, linked].some(
           (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),
         ),
-      // 클릭으로 바뀌는 checkbox·radio(직접 또는 label 연결)의 name=value에 결제 문구가 있으면 입력 도구와 같이 본다.
+      // 작동할 컨트롤(버튼·제출 input, 클릭으로 바뀌는 checkbox·radio — 직접 또는 label 연결)의 name=value에
+      // 결제 문구가 있으면(name="confirm_order") 결제 동작으로 본다.
       paymentContext:
         inPaymentContext(el, form) ||
-        (!!toggled &&
-          [(toggled as HTMLInputElement).value, (toggled as HTMLInputElement).name].some(
-            (v) => PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v)),
-          )),
+        [control, linked].some(
+          (c) =>
+            !!c &&
+            ["value", "name"].some((attr) => {
+              const v = c.getAttribute(attr) ?? "";
+              return PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v));
+            }),
+        ),
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
       ...(ancestorHref ? { ancestorHref } : {}),
