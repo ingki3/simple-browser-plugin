@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "@/sidepanel/components/ActionLogField";
+import { AutoApproveField } from "@/sidepanel/components/AutoApproveField";
 import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
 import {
   DEFAULT_MODEL,
@@ -28,6 +29,7 @@ const DEFAULTS: Settings = {
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
   actionLogEnabled: true,
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
+  autoApprove: false,
 };
 
 export function Options() {
@@ -55,6 +57,7 @@ export function Options() {
             : DEFAULTS.maxToolHops,
         actionLogEnabled: raw.actionLogEnabled !== false,
         csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
+        autoApprove: raw.autoApprove === true,
       });
     });
   }, []);
@@ -225,6 +228,11 @@ export function Options() {
       <CsvMaxCharsField
         value={draft.csvMaxChars}
         onChange={(csvMaxChars) => setDraft({ ...draft, csvMaxChars })}
+      />
+
+      <AutoApproveField
+        enabled={draft.autoApprove}
+        onToggle={(autoApprove) => setDraft({ ...draft, autoApprove })}
       />
 
       <ActionLogField

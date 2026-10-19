@@ -183,7 +183,7 @@ export type BgToContent =
   | { kind: "translate_stop" }
   // 승인 카드용: id들이 find_* 때와 같은 요소인지 확인하고 이 호출의 승인 대상으로 남긴다.
   // prefix는 기대하는 대상 종류("c" 클릭, "f" 입력 칸).
-  | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f" }
+  | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f"; values?: string[] }
   // click_element 뒤 같은 문서에서 관찰한 변화를 읽는다.
   | { kind: "action_effect"; token: string }
   // 동작 기록용 페이지 뼈대 해시(최상위 문서).
@@ -213,6 +213,8 @@ export interface Settings {
   actionLogEnabled: boolean;
   // read_document가 CSV·TSV 파일을 표로 읽을 때 모델에 넘기는 최대 글자 수(모델이 따로 정하지 않았을 때).
   csvMaxChars: number;
+  // 페이지 이동·클릭·입력을 승인 없이 실행할지. 켜도 결제·개인정보 제출은 묻는다(src/lib/autoApprove.ts).
+  autoApprove: boolean;
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
+import { AutoApproveField } from "./AutoApproveField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import {
@@ -272,6 +273,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <CsvMaxCharsField
             value={draft.csvMaxChars}
             onChange={(csvMaxChars) => setDraft({ ...draft, csvMaxChars })}
+          />
+
+          <AutoApproveField
+            enabled={draft.autoApprove}
+            onToggle={(autoApprove) => setDraft({ ...draft, autoApprove })}
           />
 
           <ActionLogField

@@ -3,9 +3,11 @@
 // 확인하고 승인할 기술을 남기며, 실행 직전에 다시 그 기술과 같을 때만 실행한다.
 // 요소가 다시 그려져 사라졌으면 멈춘다. 비슷한 요소로 대신하지 않는다.
 
+import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
+import { fieldValueSignature, linkHrefOf } from "./context";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸)와 요소에 붙이는 속성.
@@ -18,6 +20,10 @@ export interface TargetKind {
   name(el: HTMLElement): string;
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
+  // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
+  // 그 칸의 양식에서 값이 채워진 개인정보·비밀 칸들(묶음 승인 예외 판정용).
+  personalElements?(el: HTMLElement): Element[];
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
 interface Entry {
@@ -75,8 +81,7 @@ function implicitRole(el: HTMLElement): string {
 }
 
 function hrefOf(el: HTMLElement): string {
-  if (el.localName !== "a") return "";
-  return (el as HTMLAnchorElement).href || "";
+  return linkHrefOf(el);
 }
 
 // 행 문맥: 대상이 든 목록 항목(li·tr·role=row 등, 또는 같은 틀 형제가 2개 이상인 반복 구조)의 글자.
@@ -270,10 +275,90 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
   checkVisible(entry, el, entry.base.name, false);
-  const info: TargetInfo = { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el) };
+  const info: TargetInfo = { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el), ...entry.kind.risk?.(el) };
   entry.approved = { callId, info };
   return info;
 }
+
+// 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
+// 승인 당시 값이 채워져 있던 개인정보·비밀 칸과 그때의 값. 실행 직전에 값이 바뀌었으면(이 호출이 쓴 값이 아니면) 멈춘다.
+const consentAllowed = new Map<string, Map<Element, string>>();
+// 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
+const writtenByCall = new Map<string, Map<Element, string>>();
+
+export function noteWritten(callId: string, el: Element, value: string): void {
+  let m = writtenByCall.get(callId);
+  if (!m) {
+    m = new Map();
+    writtenByCall.set(callId, m);
+    while (writtenByCall.size > 50) {
+      const oldest = writtenByCall.keys().next().value;
+      if (oldest === undefined) break;
+      writtenByCall.delete(oldest);
+    }
+  }
+  m.set(el, value);
+}
+
+// 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
+export function inspectTargets(ids: string[], callId: string, prefix: string, values?: string[]): TargetInfo[] {
+  const infos = ids.map((id) => inspectTarget(id, callId, prefix));
+  // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
+  // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
+  // 칸 단서가 없어도 입력할 값이 개인정보(이메일·전화 등)면 승인 카드가 뜨므로 개인정보 묶음으로 본다.
+  const personalAt = (i: number) =>
+    !!(infos[i].personal || infos[i].sensitive) || (values?.[i] !== undefined && looksPersonalValue(values[i]));
+  const batchHasPersonal = infos.some((_, i) => personalAt(i));
+  const scopeOf = (id: string): Element | null => {
+    const el = registry.get(id)?.ref.deref();
+    if (!el) return null;
+    return (el as HTMLInputElement).form ?? el.closest("form") ?? el;
+  };
+  // 승인 때 이미 채워져 있던 개인정보 칸과 이 묶음이 채울 칸만 허용한다(뒤에 자동 완성된 비밀번호 등은 아님).
+  const allowed = new Map<Element, string>();
+  ids.forEach((id) => {
+    const entry = registry.get(id);
+    const el = entry?.ref.deref();
+    if (!entry || !el) return;
+    for (const p of entry.kind.personalElements?.(el) ?? []) allowed.set(p, fieldValueSignature(p));
+  });
+  consentAllowed.set(callId, allowed);
+  while (consentAllowed.size > 50) {
+    const oldest = consentAllowed.keys().next().value;
+    if (oldest === undefined) break;
+    consentAllowed.delete(oldest);
+  }
+  if (!batchHasPersonal) {
+    return ids.map((id, i) => {
+      const entry = registry.get(id);
+      const info = { ...infos[i], consentCall: callId };
+      if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+      return info;
+    });
+  }
+  const consentScopes = new Set<Element>();
+  ids.forEach((id, i) => {
+    if (personalAt(i)) {
+      const scope = scopeOf(id);
+      if (scope) consentScopes.add(scope);
+    }
+  });
+  return ids.map((id, i) => {
+    const scope = scopeOf(id);
+    const entry = registry.get(id);
+    if (!scope || !consentScopes.has(scope)) {
+      const info = { ...infos[i], consentCall: callId };
+      if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+      return info;
+    }
+    const info = { ...infos[i], consentPersonal: true, consentCall: callId };
+    if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+    return info;
+  });
+}
+
+// 승인 뒤 위험(개인정보·제출 주소·이름 등)이 새로 생겨 멈췄다는 표시. 묶음 입력은 남은 칸도 멈춘다.
+export class RiskAddedError extends Error {}
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
 export function takeApproved(id: string, callId: string, prefix: string): { el: HTMLElement; info: TargetInfo } {
@@ -286,10 +371,71 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
   entry.approved = null;
   const now = fullInfo(entry.kind, el);
   if (!sameApproved(now, approved.info)) {
-    throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
+    const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
+    // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
+    // (묶음 입력의 남은 칸도 멈춘다).
+    if ((now.sensitive ?? null) !== (approved.info.sensitive ?? null)) throw new RiskAddedError(msg);
+    if (riskAdded(entry.kind, el, approved.info)) throw new RiskAddedError(msg);
+    throw new Error(msg);
   }
+  const added = riskAdded(entry.kind, el, approved.info);
+  if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
   checkVisible(entry, el, approved.info.name, true);
   return { el, info: approved.info };
+}
+
+// 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
+// 자동 완성·페이지 스크립트가 승인 뒤에 칸을 채우면, 자동 실행이든 사람이 승인한 카드든 그대로 실행하지 않는다.
+function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string | null {
+  const now = kind.risk?.(el);
+  if (!now) return null;
+  if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
+  const allowed = info.consentCall ? consentAllowed.get(info.consentCall) : undefined;
+  const filled = kind.personalElements?.(el) ?? [];
+  // 승인 때 목록에 없던 개인정보·비밀 칸이 채워졌으면(기존 개인정보 유무와 관계없이) 멈춘다.
+  const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
+  // 이 호출이 써 넣은 값과 같은 값이 같은 양식의 다른 칸에 복사된 것(처리기의 같은 값 동기화)도 승인한 변화로 본다.
+  // 개인정보 칸을 카드로 승인받은 묶음(consentPersonal)이고, 직접 쓴 칸과 같은 양식일 때만.
+  const formOf = (e: Element) => (e as HTMLInputElement).form ?? e.closest("form");
+  const syncAllowed = (p: Element) => {
+    if (!info.consentPersonal || !written) return false;
+    const sig = fieldValueSignature(p);
+    const pf = formOf(p);
+    if (!pf || !sig) return false;
+    for (const [w, v] of written) if (v === sig && formOf(w) === pf) return true;
+    return false;
+  };
+  const explained = (p: Element) =>
+    (allowed?.has(p) && allowed.get(p) === fieldValueSignature(p)) ||
+    // 선택 칸은 선택 상태 전체(다중 선택에 처리기가 더한 선택지 포함)를 비교한다.
+    (written?.has(p) && written.get(p) === fieldValueSignature(p)) ||
+    (!written?.has(p) && syncAllowed(p));
+  if (allowed && filled.some((p) => !explained(p))) return "승인 뒤 양식에 개인정보가 채워짐";
+  // 클릭은 묶음 입력이 아니므로, 승인 뒤 개인정보 제출로 바뀌었으면(버튼 자신의 값 포함) 그대로 멈춘다.
+  // 입력 칸은 허용 목록으로 판정하고, 목록이 없을 때만(오래되어 지워진 경우 등) 양식 단위로 본다.
+  if (now.submitsPersonal && !info.submitsPersonal && (kind.prefix !== "f" || !allowed)) {
+    return "승인 뒤 양식에 개인정보가 채워짐";
+  }
+  if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
+  if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
+  if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";
+  // 입력 칸은 묶음 안의 앞선 입력이 같은 양식 값을 바꾸므로 제출 주소의 값 부분은 비교하지 않는다
+  // (기존 값에 실린 바깥 주소는 승인 카드 판정 때 이미 본다). 클릭은 값이 바뀌면 멈춘다.
+  if (kind.prefix !== "f" && (now.submitUrl ?? "") !== (info.submitUrl ?? "")) return "양식에 담긴 값이 바뀜";
+  if ((now.outerText ?? "") !== (info.outerText ?? "")) return "감싼 버튼 글자가 바뀜";
+  if (now.download && !info.download) return "내려받기 링크로 바뀜";
+  if ((now.choiceUrls ?? []).join(" ") !== (info.choiceUrls ?? []).join(" ")) return "선택지 주소가 바뀜";
+  // 범위 안 다른 양식의 제출 주소: 클릭은 값까지 비교한다. 입력 칸은 묶음 입력이 주변 양식 값을 바꿀 수 있어
+  // 여기서는 action 목록(scopeFormActions)만 비교하고, 값에 새로 생긴 주소·개인정보는 입력 직전 검사가 본다.
+  if (kind.prefix !== "f" && (now.scopeSubmitUrls ?? []).join(" ") !== (info.scopeSubmitUrls ?? []).join(" ")) {
+    return "주변 양식의 제출 주소가 바뀜";
+  }
+  if ((now.scopeFormActions ?? []).join(" ") !== (info.scopeFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
+  if ((now.aroundFormActions ?? []).join(" ") !== (info.aroundFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
+  if ((now.fieldName ?? "") !== (info.fieldName ?? "")) return "칸 이름이 바뀜";
+  if ((now.baseUri ?? "") !== (info.baseUri ?? "")) return "문서 기준 주소가 바뀜";
+  if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
+  return null;
 }
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
@@ -298,6 +444,8 @@ export function recheckApproved(kind: TargetKind, el: HTMLElement, info: TargetI
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const now = fullInfo(kind, el);
   if (!sameApproved(now, info)) return describeDifference(info, now);
+  const added = riskAdded(kind, el, info);
+  if (added) return added;
   if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";
   return null;
 }
@@ -314,6 +462,8 @@ export function peekApproved(id: string, callId: string, prefix: string): void {
   if (!sameApproved(now, approved.info)) {
     throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`);
   }
+  const added = riskAdded(entry.kind, el, approved.info);
+  if (added) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
 }
 
 // ---------------------------------------------------------------------------

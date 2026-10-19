@@ -26,6 +26,41 @@ export interface TargetInfo {
   list?: { index: number; count: number; semantic: boolean } | null;
   // 승인 카드에 경고만 하는 표시(비교에는 쓰지 않음): 화면에 보이지 않는 입력 칸.
   hidden?: boolean;
+  // 자동 실행 예외 판정용(비교에는 쓰지 않음, 대상 확인 때 계산).
+  // personal: 이름·연락처·주소·생년월일 같은 개인정보 칸. submitsPersonal: 개인정보·비밀번호·결제 값이 채워진 양식을 제출하는 버튼.
+  personal?: boolean;
+  submitsPersonal?: boolean;
+  // 결제 화면(주소·제목이나 버튼이 든 양식·대화상자의 글자에 결제 단서)의 버튼. 저장된 카드로 '확인'만 누르면 결제되는 화면을 잡는다.
+  paymentContext?: boolean;
+  // 양식 안 버튼이면 그 양식이 제출되는 주소(formaction 또는 form action을 절대 주소로). 사이트 경계 판정용.
+  submitTo?: string;
+  // 지금 칸 값으로 제출하면 요청하는 주소(action + 칸 값 쿼리). 값에 실린 바깥 주소(리다이렉트 매개변수) 판정용.
+  submitUrl?: string;
+  // 선택 칸의 선택지 값 중 주소처럼 보이는 것(절대 주소로 푼 것). 사이트 경계 판정용.
+  choiceUrls?: string[];
+  // 양식 밖 대상이 처리기로 제출할 수 있는 범위 안 다른 양식들의 제출 주소(사이트 경계·민감 주소 판정용).
+  scopeSubmitUrls?: string[];
+  // 범위 안 모든 양식의 action(결제·개인정보 주소 판정용, 사이트 경계는 보지 않음).
+  scopeFormActions?: string[];
+  // 양식 안 입력 칸 주변 범위의 다른 양식 action(사이트 경계와 결제·개인정보 주소를 본다).
+  aroundFormActions?: string[];
+  // 입력 칸의 name(승인 당시). 처리기가 이름을 바꿔(q → payment) 제출 매개변수를 바꾸지 못하게 비교한다.
+  fieldName?: string;
+  // 입력 칸 문서의 기준 주소(document.baseURI). 처리기가 상대 주소 입력값을 이 기준으로 풀 수 있다.
+  baseUri?: string;
+  // 대상 링크의 ping 주소들(사이트 경계·민감 주소 판정용).
+  pingUrls?: string[];
+  // 대상이 링크 안의 요소면 그 링크 주소(누르면 바깥 링크가 열린다). 사이트 경계 판정용.
+  ancestorHref?: string;
+  // 대상이 버튼·링크 안의 요소면 실제로 작동하는 그 바깥 버튼·링크의 글자. 결제·제출 문구 판정용.
+  outerText?: string;
+  // 대상이나 감싼 링크에 download 속성이 있는지(누르면 파일을 내려받는다).
+  download?: boolean;
+  // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
+  // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
+  consentPersonal?: boolean;
+  // 그 예외를 준 승인 호출(content script가 허용한 칸 목록을 찾는 키).
+  consentCall?: string;
 }
 
 // find_* 때와 같은 요소인지: 목록 위치를 뺀 기본 항목이 모두 같아야 한다.

@@ -1,6 +1,7 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
+import { autoApproveBlock, navigateAutoBlock, pageActionSiteBlock, siteOf } from "@/lib/autoApprove";
 import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
@@ -142,6 +143,9 @@ export class ChatAgent {
   // 백그라운드에서 직접 네트워크를 쓰는 도구(read_document)를 중단 시 함께 끊는다.
   private activeTool: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
+  // 자동 실행해도 되는 사이트: 이 턴을 시작한 탭의 사이트와, 이 대화에서 승인 카드로 이동을 허락한 사이트.
+  private turnSite: string | null = null;
+  private approvedSites = new Set<string>();
   private lastAttachedPdfUrl: string | null = null;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
   // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
@@ -210,6 +214,7 @@ export class ChatAgent {
   reset(): void {
     this.history = [];
     this.lastAttachedPdfUrl = null;
+    this.approvedSites.clear();
   }
 
   private send(msg: BgToPanel): void {
@@ -341,6 +346,17 @@ export class ChatAgent {
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
     if ("tabId" in this.turnTab) debugLog("turn:tab", `tab ${this.turnTab.tabId}`);
+    // 탭 조회를 기다리는 사이 새 턴이 시작됐으면 그 턴의 신뢰 사이트를 덮어쓰지 않는다.
+    let site: string | null = null;
+    if ("tabId" in turnTab) {
+      try {
+        const url = (await chrome.tabs.get(turnTab.tabId)).url;
+        if (url) site = siteOf(url);
+      } catch {
+        /* 탭을 못 읽으면 신뢰 사이트 없이 진행(이동은 카드로 묻는다) */
+      }
+    }
+    if (!this.isStale(turn)) this.turnSite = site;
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);
@@ -581,6 +597,8 @@ export class ChatAgent {
           continue;
         }
 
+        // 승인 없이 실행한 호출은 결과 카드에 표시한다.
+        let autoRan = false;
         if (SENSITIVE_TOOLS.has(toolName)) {
           let preview: Awaited<ReturnType<typeof buildToolPreview>>;
           try {
@@ -600,24 +618,67 @@ export class ChatAgent {
           }
           // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
           if (this.isStale(turn)) return false;
-          debugLog("tool:awaiting_approval", `${toolName}`);
-          this.send({
-            kind: "tool_pending",
-            callId,
-            toolName,
-            args: parsedArgs,
-            previewSummary: preview.summary,
-            previewDetails: preview.details,
-          });
-          const approved = await new Promise<boolean>((resolve) => {
-            this.pendingApprovals.set(callId, resolve);
-          });
-          this.pendingApprovals.delete(callId);
+          // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
+          const { autoApprove } = await getSettings();
           if (this.isStale(turn)) return false;
-          debugLog(
-            "tool:approval_result",
-            `${toolName} ${approved ? "approved" : "cancelled"}`,
-          );
+          const trusted = new Set(this.approvedSites);
+          if (this.turnSite) trusted.add(this.turnSite);
+          let block =
+            toolName === "navigate_to_url"
+              ? navigateAutoBlock(trusted, String(preview.details ?? ""))
+              : preview.autoBlock !== undefined
+                ? preview.autoBlock
+                : autoApproveBlock(toolName, []);
+          // 클릭·입력은 지금 페이지와 링크가 사용자가 고른 사이트 안일 때만 자동 실행한다.
+          if (autoApprove && !block && (toolName === "click_element" || toolName === "fill_form_fields")) {
+            let pageUrl: string | undefined;
+            try {
+              pageUrl = "tabId" in this.turnTab ? (await chrome.tabs.get(this.turnTab.tabId)).url : undefined;
+            } catch {
+              pageUrl = undefined;
+            }
+            if (this.isStale(turn)) return false;
+            // 입력값의 상대 주소는 탭 주소와, 페이지가 실제로 쓰는 기준 주소(<base href>) 모두로 풀어 본다.
+            for (const base of [pageUrl, ...(preview.baseUrls ?? [])]) {
+              block = pageActionSiteBlock(trusted, base, preview.linkHrefs ?? [], preview.fillValues ?? []);
+              if (block) break;
+            }
+          }
+          let approved: boolean;
+          if (autoApprove && !block) {
+            debugLog("tool:auto_approved", `${toolName}`);
+            approved = true;
+            autoRan = true;
+          } else {
+            if (autoApprove) debugLog("tool:auto_blocked", `${toolName} · ${block}`);
+            debugLog("tool:awaiting_approval", `${toolName}`);
+            this.send({
+              kind: "tool_pending",
+              callId,
+              toolName,
+              args: parsedArgs,
+              previewSummary: autoApprove ? `${preview.summary} (자동 실행 예외: ${block})` : preview.summary,
+              previewDetails: preview.details,
+            });
+            approved = await new Promise<boolean>((resolve) => {
+              this.pendingApprovals.set(callId, resolve);
+            });
+            this.pendingApprovals.delete(callId);
+            if (this.isStale(turn)) return false;
+            debugLog(
+              "tool:approval_result",
+              `${toolName} ${approved ? "approved" : "cancelled"}`,
+            );
+            // 사용자가 카드로 허락한 이동의 출처는 이 대화에서 자동 이동해도 되는 곳으로 둔다.
+            if (approved && toolName === "navigate_to_url") {
+              try {
+                const site = siteOf(String(preview.details));
+                if (site) this.approvedSites.add(site);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
 
           if (!approved) {
             recordCancelledAction(callId, this.turnTab);
@@ -656,7 +717,7 @@ export class ChatAgent {
             callId,
             toolName,
             ok: result.ok,
-            summary: result.summary,
+            summary: autoRan ? `자동 실행 · ${result.summary}` : result.summary,
           });
           this.history.push({
             role: "tool",

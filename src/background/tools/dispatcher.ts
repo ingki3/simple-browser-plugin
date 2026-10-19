@@ -1,3 +1,4 @@
+import { autoApproveBlock } from "@/lib/autoApprove";
 import type {
   ClickableElement,
   FileLinkList,
@@ -58,6 +59,14 @@ export interface ToolExecResult {
 export interface ToolPreview {
   summary: string;
   details?: unknown;
+  // 자동 실행을 켰을 때도 승인을 받아야 하는 이유(결제·개인정보 제출). 없으면 null. 대상을 보지 않는 도구는 비워 둔다.
+  autoBlock?: string | null;
+  // 클릭 대상 링크의 주소(자동 실행 사이트 경계 판정용).
+  linkHrefs?: string[];
+  // 입력할 값들(사이트 경계 판정용).
+  fillValues?: string[];
+  // 입력 칸 문서의 기준 주소(<base href> 포함). 상대 주소 입력값은 이 기준으로도 풀어 본다.
+  baseUrls?: string[];
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -67,11 +76,12 @@ async function inspectTargets(
   prefix: "c" | "f",
   callId: string,
   turnTab: TurnTab,
+  values?: string[],
 ): Promise<TargetInfo[]> {
   const tabId = await resolveTurnTab(turnTab);
   await waitForNavigationSettle(tabId, 10_000);
   try {
-    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId, prefix }, 5_000, "대상 확인");
+    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId, prefix, values }, 5_000, "대상 확인");
   } catch (err) {
     if (isMissingReceiver(err)) {
       throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
@@ -142,6 +152,7 @@ export async function buildToolPreview(
         "f",
         callId,
         turnTab,
+        args.fills.map((f) => f.value),
       );
       await beginActionLog(
         callId,
@@ -149,7 +160,25 @@ export async function buildToolPreview(
         turnTab,
         infos.map((info, i) => logTarget(info, args.fills[i].value)),
       );
-      return fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value })));
+      return {
+        ...fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value }))),
+        autoBlock: autoApproveBlock("fill_form_fields", infos),
+        // 양식 제출 주소(기존 값 포함)와 선택지 주소. 입력할 값은 fillValues로 따로 본다.
+        linkHrefs: infos
+          .flatMap((info) => [
+            info.submitTo ?? "",
+            info.submitUrl ?? "",
+            ...(info.choiceUrls ?? []),
+            ...(info.scopeSubmitUrls ?? []),
+            // 입력은 change 처리기가 주변 양식(기본값 상태 포함)에 값을 옮겨 제출할 수 있어 그 action도 경계를 본다.
+            ...(info.scopeFormActions ?? []),
+            // 양식 안 칸도 change 처리기가 값을 주변 양식에 옮겨 제출할 수 있어 그 action의 사이트 경계를 본다.
+            ...(info.aroundFormActions ?? []),
+          ])
+          .filter(Boolean),
+        fillValues: args.fills.map((f) => f.value),
+        baseUrls: [...new Set(infos.map((info) => info.baseUri ?? "").filter(Boolean))],
+      };
     }
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
@@ -166,7 +195,19 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["click_element"];
       const [info] = await inspectTargets([args.id], "c", callId, turnTab);
       await beginActionLog(callId, "click_element", turnTab, [logTarget(info)]);
-      return clickCard(info);
+      return {
+        ...clickCard(info),
+        autoBlock: autoApproveBlock("click_element", [info]),
+        linkHrefs: [
+          info.href,
+          info.submitTo ?? "",
+          info.submitUrl ?? "",
+          info.ancestorHref ?? "",
+          ...(info.choiceUrls ?? []),
+          ...(info.scopeSubmitUrls ?? []),
+          ...(info.pingUrls ?? []),
+        ].filter(Boolean),
+      };
     }
     case "read_document": {
       const args = parsedArgs as ToolArgs["read_document"];
