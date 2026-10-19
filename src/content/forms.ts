@@ -94,7 +94,7 @@ function describeType(el: FieldElement): string {
 }
 
 
-function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
+export function sensitivityOf(el: HTMLElement): TargetInfo["sensitive"] {
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
   if ((isTag(el, "input") && el.type === "password") || /password|one-time-code/.test(ac)) return "password";
   if (/\bcc-/.test(ac)) return "payment";

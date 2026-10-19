@@ -12,6 +12,7 @@ import {
   personalValuedInScopes,
   scopeSubmitUrls,
   otherDestinations,
+  sensitivityOf,
 } from "./forms";
 import {
   closestAcross,
@@ -224,6 +225,8 @@ const CLICK_KIND: TargetKind = {
         // 양식 안 버튼도 같은 대화상자·화면의 다른 양식(처리기가 requestSubmit할 수 있다)을 함께 본다.
         personalValuedInScopes(submitScopes(el)).length > 0 ||
         controlHasPersonalValue(control ?? linked) ||
+        // 클릭으로 체크되는 checkbox·radio가 비밀번호·인증번호·결제 칸이면(접근성 이름 단서 포함) 입력과 같이 본다.
+        (!!toggled && !!sensitivityOf(toggled as HTMLElement)) ||
         [control, linked].some(
           (c) => !!c && isTag(c, "input") && ["checkbox", "radio"].includes(c.type) && isPersonalField(c) && !!c.value.trim(),
         ),
