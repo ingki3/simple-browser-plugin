@@ -1,4 +1,4 @@
-import { ACTION_LOG_KEY, READ_RECIPES_KEY } from "@/lib/messages";
+import { ACTION_LOG_KEY, LEGACY_READ_RECIPES_KEYS, READ_RECIPES_KEY } from "@/lib/messages";
 import {
   capTargets,
   pruneLog,
@@ -134,13 +134,15 @@ export async function storedCounts(): Promise<{ log: number; recipes: number }> 
   return { log, recipes };
 }
 
-// 확장이 시작될 때 만료 항목을 정리한다.
+// 확장이 시작될 때 만료 항목과 이전 세대 읽기 레시피를 정리한다. 이전 세대는 읽는 쪽도 보지 않으므로
+// 지우기 전에도 힌트로 쓰이지 않는다.
 export function pruneActionLog(): void {
+  void enqueue(() => chrome.storage.local.remove(LEGACY_READ_RECIPES_KEYS)).catch(() => undefined);
   void storedCounts().catch(() => undefined);
 }
 
 export function clearActionLog(): Promise<void> {
   pending.clear();
   clearPendingReads();
-  return enqueue(() => chrome.storage.local.remove([ACTION_LOG_KEY, READ_RECIPES_KEY]));
+  return enqueue(() => chrome.storage.local.remove([ACTION_LOG_KEY, READ_RECIPES_KEY, ...LEGACY_READ_RECIPES_KEYS]));
 }

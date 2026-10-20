@@ -258,7 +258,10 @@ export function normalizeMaxToolHops(raw: Partial<Settings> | undefined): number
 export const SETTINGS_KEY = "settings";
 export const FLAGS_KEY = "flags";
 export const ACTION_LOG_KEY = "actionLog";
-export const READ_RECIPES_KEY = "readRecipes";
+// 외부 본문 보호(보호 대화에서는 레시피를 저장하지 않음) 이후의 저장소 세대. 이전 세대("readRecipes")는 출처를
+// 알 수 없어(보호 대화에서 생긴 인자일 수 있음) 힌트로 쓰지 않고 시작할 때 지운다(LEGACY_READ_RECIPES_KEYS).
+export const READ_RECIPES_KEY = "readRecipesV2";
+export const LEGACY_READ_RECIPES_KEYS = ["readRecipes"];
 
 export const PORT_NAME = "chat";
 
