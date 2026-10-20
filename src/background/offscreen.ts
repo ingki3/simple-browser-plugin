@@ -84,7 +84,14 @@ function scheduleIdleClose(): void {
 function forceClose(): void {
   debugLog("offscreen:force_close", `${active.size} jobs`, "warn");
   for (const fail of [...active]) fail();
-  chrome.offscreen.closeDocument().catch(() => {});
+  // 닫는 동안 새 작업이 닫히는 문서를 쓰지 않게 ensureOffscreen이 이 종료를 기다리도록 한다.
+  const done = chrome.offscreen
+    .closeDocument()
+    .catch(() => {})
+    .finally(() => {
+      if (closing === done) closing = null;
+    });
+  closing = done;
 }
 
 // 닫는 타이머는 서비스 워커 종료와 함께 사라지므로, 다시 뜰 때 이전 실행에서 남은 offscreen 문서를 닫는다.

@@ -129,8 +129,9 @@ function collectFlowText(root: HTMLElement, maxChars = Infinity): string {
       .filter(Boolean)
       .join("\n");
     if (seg) {
+      // 실제로 이어 붙일 길이(조각 사이 구분자 2자 포함)를 센다.
+      total += (segments.length ? 2 : 0) + seg.length;
       segments.push(seg);
-      total += seg.length + 2;
     }
     buf = "";
   };
@@ -231,7 +232,8 @@ function depthExceeds(root: Element, limit: number): boolean {
 }
 
 export function extractParsedDocument(doc: Document, maxChars: number): { title: string; text: string; truncated: boolean } {
-  const title = (doc.title ?? "").trim();
+  // 제목도 상한을 둔다(본문 상한과 별개로 아주 긴 title이 대화 기록을 채우지 않게).
+  const title = (doc.title ?? "").trim().slice(0, 200);
   if (!doc.body) return { title, text: "", truncated: false };
   for (const el of Array.from(doc.querySelectorAll("script, style, noscript, template"))) el.remove();
   const count = doc.getElementsByTagName("*").length;

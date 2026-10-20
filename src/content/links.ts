@@ -1,6 +1,7 @@
-import { getAccessibleDocs } from "./docs";
+import { getAccessibleRoots } from "./docs";
 
-// read_linked_pages: 요청한 주소가 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 a[href]에 있는지와 그 링크 글자.
+// read_linked_pages: 요청한 주소가 지금 문서(최상위 + 접근 가능한 같은 출처 프레임 + 열린 shadow root, find_clickables와
+// 같은 범위)의 a[href]에 있는지와 그 링크 글자.
 // 해시만 다른 주소는 같은 링크로 본다. 모델이 만든 주소로 받아 오지 않게 하는 구조적 확인이다.
 function withoutHash(url: string): string | null {
   try {
@@ -14,8 +15,8 @@ function withoutHash(url: string): string | null {
 
 export function lookupLinks(urls: string[]): Array<{ url: string; present: boolean; text: string }> {
   const found = new Map<string, string>();
-  for (const doc of getAccessibleDocs()) {
-    for (const a of Array.from(doc.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+  for (const root of getAccessibleRoots()) {
+    for (const a of Array.from(root.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
       const key = withoutHash(a.href);
       if (!key || found.has(key)) continue;
       found.set(key, (a.innerText || a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120));
