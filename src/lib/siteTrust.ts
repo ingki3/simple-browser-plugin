@@ -17,8 +17,14 @@ const SHARED_HOSTING_APEXES = new Set([
   "webhook.site", "pipedream.net",
 ]);
 
+// 호스트 비교용 정규화: 소문자, 끝의 점 제거(script.google.com. → script.google.com). 공유 호스팅 검사와
+// 등록 도메인 계산(tldts는 끝의 점을 지우고 계산한다)이 같은 호스트를 보게 한다.
+function normHost(host: string): string {
+  return host.toLowerCase().replace(/\.+$/, "");
+}
+
 function isSharedHost(host: string): boolean {
-  const h = host.toLowerCase();
+  const h = normHost(host);
   for (const apex of SHARED_HOSTING_APEXES) if (h === apex || h.endsWith(`.${apex}`)) return true;
   return false;
 }
@@ -59,6 +65,7 @@ function isIpHost(host: string): boolean {
 // (script.google.com에서 시작한 턴이 www.google.com을 신뢰하지 않게).
 function hostTrusted(trustedSites: ReadonlySet<string>, u: URL): boolean {
   if (!/^https?:$/.test(u.protocol) || isSharedHost(u.hostname)) return false;
+  const uh = normHost(u.hostname);
   for (const site of trustedSites) {
     let t: URL;
     try {
@@ -67,18 +74,17 @@ function hostTrusted(trustedSites: ReadonlySet<string>, u: URL): boolean {
       continue;
     }
     if (t.protocol !== u.protocol || t.port !== u.port) continue;
-    if (u.hostname === t.hostname) return true;
-    if (isSharedHost(t.hostname) || isIpHost(t.hostname) || !t.hostname.includes(".") || isPublicSuffix(t.hostname)) {
-      continue;
-    }
-    const td = registrableDomain(t.hostname);
-    const ud = registrableDomain(u.hostname);
+    const th = normHost(t.hostname);
+    if (uh === th) return true;
+    if (isSharedHost(th) || isIpHost(th) || !th.includes(".") || isPublicSuffix(th)) continue;
+    const td = registrableDomain(th);
+    const ud = registrableDomain(uh);
     if (td && ud) {
       if (td === ud) return true;
       continue;
     }
     // 확인된 등록 도메인이 없으면(알 수 없는 접미사) 예전처럼 하위 도메인만 안이다.
-    if (u.hostname.endsWith(`.${t.hostname}`)) return true;
+    if (uh.endsWith(`.${th}`)) return true;
   }
   return false;
 }

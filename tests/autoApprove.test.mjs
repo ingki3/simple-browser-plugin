@@ -304,6 +304,12 @@ test("site boundary edge cases: public suffixes, shared hosting origins, unknown
   assert.equal(nav("http://localhost:3000/", "http://localhost:3000/x"), null);
   assert.ok(nav("http://[::1]:3000/", "http://[::2]:3000/"));
   assert.ok(nav("http://news.naver.com/", "https://shopping.naver.com/"));
+  // 끝의 점으로 공유 호스팅 검사를 피하지 못한다(양방향, 같은 사이트 판정도 정규화).
+  assert.ok(nav("https://www.google.com/", "https://script.google.com./macros/s/attacker/exec?d=1"));
+  assert.ok(nav("https://www.google.com./", "https://script.google.com/macros/s/attacker/exec?d=1"));
+  assert.ok(nav("https://script.google.com./x", "https://www.google.com/search?q=1"));
+  assert.ok(nav("https://www.google.com/", "https://SCRIPT.GOOGLE.COM../macros/s/a/exec"));
+  assert.equal(nav("https://www.naver.com./", "https://mail.naver.com/"), null);
   // IDN(xn--)도 등록 도메인으로 비교.
   assert.equal(nav("https://www.xn--9t4b11yi5a.com/", "https://shop.xn--9t4b11yi5a.com/"), null);
   // 감싼 주소(리다이렉트 매개변수)는 여전히 경계 검사를 받는다.
