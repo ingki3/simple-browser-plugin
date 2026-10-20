@@ -24,7 +24,8 @@ export type ToolName =
   | "google_sheets_write_markdown_table"
   | "google_drive_search"
   | "google_drive_list_recent"
-  | "google_drive_export";
+  | "google_drive_export"
+  | "read_other_tabs";
 
 export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "fill_form_fields",
@@ -33,6 +34,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "click_element",
   // 모델이 고른 URL로 쿠키를 실어 GET을 보낸다. 프롬프트 주입이 쿼리에 대화 내용을 담아 외부로 보낼 수 있다.
   "read_document",
+  // 사용자가 고른 다른 탭의 본문(다른 사이트의 정보)을 모델 제공자로 보낸다. 늘 사용자가 탭을 고른다.
+  "read_other_tabs",
   "google_sheets_write_range",
   "google_sheets_append_rows",
   "google_sheets_write_markdown_table",
@@ -138,7 +141,8 @@ export interface PageContent {
 export type PanelToBg =
   | { kind: "user_msg"; text: string; conversationId: string }
   // allowLinksThisTurn: 카드가 제안했을 때만 유효. 이번 요청 동안 같은 사이트 안의 일반 링크 이동은 묻지 않는다.
-  | { kind: "approve_tool"; callId: string; allowLinksThisTurn?: boolean }
+  // choiceIds: 선택 카드(choices)에서 고른 후보 id. 백그라운드가 고정한 후보의 부분집합만 받아들인다.
+  | { kind: "approve_tool"; callId: string; allowLinksThisTurn?: boolean; choiceIds?: string[] }
   | { kind: "cancel_tool"; callId: string }
   | { kind: "abort_stream" }
   | { kind: "reset_conversation"; conversationId: string }
@@ -168,6 +172,9 @@ export type BgToPanel =
       previewDetails?: unknown;
       // 일반 링크 클릭 카드면 true: "이번 요청 동안 링크 이동은 묻지 않기"를 함께 보여 준다(grantableLink).
       linkGrantOffer?: boolean;
+      // 선택 카드(다른 탭 고르기): 후보와 최대 선택 수. 고른 id만 승인 메시지로 돌려준다.
+      choices?: Array<{ id: string; label: string; sub: string }>;
+      choiceLimit?: number;
     }
   | {
       kind: "tool_result";
@@ -190,7 +197,9 @@ export type BgToContent =
   // click_element 뒤 같은 문서에서 관찰한 변화를 읽는다.
   | { kind: "action_effect"; token: string }
   // 동작 기록용 페이지 뼈대 해시(최상위 문서).
-  | { kind: "page_skeleton" };
+  | { kind: "page_skeleton" }
+  // 다른 탭 참조: 이 문서의 본문. 지금 주소가 expectUrl과 다르면 읽지 않는다.
+  | { kind: "read_page_text"; expectUrl: string };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;

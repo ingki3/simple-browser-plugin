@@ -1,14 +1,21 @@
+import { useState } from "react";
 import { KO } from "../i18n/ko";
 import type { ChatMessage } from "../state/chatStore";
 
 type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
-  onApprove: (callId: string, allowLinksThisTurn?: boolean) => void;
+  onApprove: (callId: string, allowLinksThisTurn?: boolean, choiceIds?: string[]) => void;
   onCancel: (callId: string) => void;
 };
 
 export function ToolPreviewCard(props: Props) {
-  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, resolved, onApprove, onCancel } = props;
+  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, choices, choiceLimit, resolved, onApprove, onCancel } =
+    props;
   const disabled = resolved !== null;
+  // 선택 카드(다른 탭 고르기): 아무것도 고르지 않은 상태에서 시작하고, 고른 id만 승인으로 보낸다.
+  const [picked, setPicked] = useState<string[]>([]);
+  const limit = choiceLimit ?? choices?.length ?? 0;
+  const toggle = (id: string) =>
+    setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length >= limit ? cur : [...cur, id]));
 
   return (
     <div className={`tool-card tool-pending${disabled ? " resolved" : ""}`}>
@@ -20,6 +27,24 @@ export function ToolPreviewCard(props: Props) {
         <div className="tool-card-summary">{previewSummary}</div>
         {typeof previewDetails === "string" && previewDetails && (
           <pre className="tool-card-details">{previewDetails}</pre>
+        )}
+        {choices && (
+          <ul className="tool-card-choices">
+            {choices.map((c) => (
+              <li key={c.id}>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    disabled={disabled || (!picked.includes(c.id) && picked.length >= limit)}
+                    checked={picked.includes(c.id)}
+                    onChange={() => toggle(c.id)}
+                  />
+                  <span className="choice-label">{c.label}</span>
+                  <span className="choice-sub">{c.sub}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
       <div className="tool-card-actions">
@@ -39,9 +64,15 @@ export function ToolPreviewCard(props: Props) {
                 {KO.approveLinksThisTurn}
               </button>
             )}
-            <button className="btn-approve" onClick={() => onApprove(callId)}>
-              {KO.approve}
-            </button>
+            {choices ? (
+              <button className="btn-approve" disabled={picked.length === 0} onClick={() => onApprove(callId, false, picked)}>
+                {KO.approveChoices}
+              </button>
+            ) : (
+              <button className="btn-approve" onClick={() => onApprove(callId)}>
+                {KO.approve}
+              </button>
+            )}
           </>
         )}
       </div>

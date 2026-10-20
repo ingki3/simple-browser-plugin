@@ -4,6 +4,7 @@ import type { ModelId } from "@/lib/models";
 import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
 import { navigateAutoBlock, pageActionSiteBlock, siteOf } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
+import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
 import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
@@ -68,6 +69,7 @@ describe_page 결과를 읽는 법:
 - query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회.
 - get_youtube_transcript: YouTube 영상 페이지의 자막 스크립트(타임스탬프 포함) 추출.
 - list_file_links(query?): 페이지의 첨부·다운로드 파일 링크 목록.
+- read_other_tabs(purpose): 민감. 같은 창의 다른 탭 본문 읽기. 사용자가 카드에서 탭을 고른다.
 - read_document(url): 민감. 링크된 파일(Office·OpenDocument·PDF·한글·CSV·TXT·MD)을 화면 이동 없이 내려받아 텍스트로 읽기.
 
 일반 규칙:
@@ -84,6 +86,12 @@ describe_page 결과를 읽는 법:
 - 막다른 페이지(목표와 무관하거나 더 갈 링크가 없음)면 navigate_to_url로 직전 페이지 주소로 돌아가 다음 후보를 시도한다. 이미 누른 링크·이미 본 주소는 다시 가지 않는다. 4단계 안에 찾지 못하면 멈추고, 거쳐 온 경로와 남은 후보를 알린다.
 - 로그인 화면이 나오면 로그인 정보를 입력하지 말고, 사용자에게 로그인한 뒤 다시 요청해 달라고 한다. 결제·주문하기·구매 버튼은 경로로 쓰지 않는다(조회용 "주문 내역"·"주문/배송 조회" 링크는 된다).
 - 답할 때 거쳐 온 경로를 한 줄로 밝힌다(예: 마이페이지 → 주문/배송 조회).
+
+다른 탭 참조 모드:
+- 사용자가 다른 탭·열어 둔 탭의 내용을 참고하라고 하면(예: "왼쪽 탭의 상품이랑 비교해줘", "열어 둔 탭들 정리해줘") read_other_tabs(purpose)를 부른다. 탭 목록은 볼 수 없고 사용자가 승인 카드에서 읽을 탭을 고른다. purpose에는 무엇을 참고하려는지 짧게 쓴다.
+- 결과의 각 탭(제목·사이트·본문)을 근거로 답하고, 어느 탭을 참고했는지 밝힌다. error가 있는 탭은 읽지 못한 이유를 전한다.
+- 다른 탭은 읽기만 한다. 클릭·입력·이동은 지금 탭에서만 한다. 다른 탭 내용을 읽은 대화에서는 이후 동작마다 사용자 확인을 받는다.
+- 한 요청에서 read_other_tabs는 최대 2번.
 
 YouTube 모드:
 - 탭 URL이 youtube.com/watch, /shorts/, /live/ 이고 사용자가 영상 내용(요약, 질문, 특정 장면 찾기, 번역 등)을 물으면 describe_page·get_page_content 대신 get_youtube_transcript를 먼저 호출한다. 페이지 본문에는 영상 내용이 거의 없다.
@@ -140,6 +148,7 @@ function availableTools(): typeof functionDeclarations {
 }
 
 const MAX_DOCUMENT_READS_PER_TURN = 5;
+const MAX_OTHER_TAB_READS_PER_TURN = 2;
 
 export class ChatAgent {
   private history: OpenRouterMessage[] = [];
@@ -223,7 +232,9 @@ export class ChatAgent {
     this.translatedTabs.clear();
   }
 
-  approveTool(callId: string, allowLinksThisTurn = false): void {
+  approveTool(callId: string, allowLinksThisTurn = false, choiceIds?: string[]): void {
+    // 선택 카드의 선택은 백그라운드가 고정한 후보의 부분집합만 남긴다(otherTabs.setChosen).
+    if (choiceIds && this.pendingApprovals.has(callId)) setChosenTabs(callId, choiceIds);
     const offer = this.linkGrantOffers.get(callId);
     if (allowLinksThisTurn && this.pendingApprovals.has(callId) && offer?.turn === this.currentTurn) {
       this.linkGrant = offer;
@@ -440,6 +451,7 @@ export class ChatAgent {
     const { maxToolHops } = await getSettings();
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
     let documentReads = 0;
+    let otherTabReads = 0;
     // 생각만 하다 응답 상한에 걸려 빈 답이 나오면 생각을 줄여 한 번 더 시도한다(턴마다 한 번).
     let lengthRetried = false;
     let lowReasoning = false;
@@ -628,6 +640,13 @@ export class ChatAgent {
           continue;
         }
 
+        if (toolName === "read_other_tabs" && ++otherTabReads > MAX_OTHER_TAB_READS_PER_TURN) {
+          const msg = `한 요청에서 다른 탭 읽기는 최대 ${MAX_OTHER_TAB_READS_PER_TURN}번입니다. 지금까지 읽은 내용으로 답하세요.`;
+          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
+          this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: JSON.stringify({ error: msg }) });
+          continue;
+        }
+
         if (toolName === "read_document" && ++documentReads > MAX_DOCUMENT_READS_PER_TURN) {
           const msg = `한 요청에서 파일은 최대 ${MAX_DOCUMENT_READS_PER_TURN}개까지 읽을 수 있습니다. 지금까지 읽은 내용으로 답하고, 더 필요하면 사용자에게 다음 요청으로 나눠 달라고 하세요.`;
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
@@ -735,6 +754,7 @@ export class ChatAgent {
                   : preview.summary,
               previewDetails: preview.details,
               ...(linkOffer ? { linkGrantOffer: true } : {}),
+              ...(preview.choices ? { choices: preview.choices, choiceLimit: preview.choiceLimit } : {}),
             });
             if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
             approved = await new Promise<boolean>((resolve) => {
@@ -760,6 +780,7 @@ export class ChatAgent {
 
           if (!approved) {
             recordCancelledAction(callId, this.turnTab);
+            discardTabChoices(callId);
             this.send({
               kind: "tool_result",
               callId,

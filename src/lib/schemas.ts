@@ -174,6 +174,13 @@ export const googleDriveExportArgs = z
   })
   .strict();
 
+export const readOtherTabsArgs = z
+  .object({
+    // 사용자에게 보일 이유(무엇을 참고하려는지). 탭은 사용자가 고른다.
+    purpose: z.string().min(1).max(200),
+  })
+  .strict();
+
 export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
@@ -197,6 +204,7 @@ export const toolArgsSchemas = {
   google_drive_search: googleDriveSearchArgs,
   google_drive_list_recent: googleDriveListRecentArgs,
   google_drive_export: googleDriveExportArgs,
+  read_other_tabs: readOtherTabsArgs,
 } as const;
 
 export type ToolArgs = {
