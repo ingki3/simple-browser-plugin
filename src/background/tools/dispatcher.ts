@@ -67,6 +67,8 @@ export interface ToolPreview {
   fillValues?: string[];
   // 입력 칸 문서의 기준 주소(<base href> 포함). 상대 주소 입력값은 이 기준으로도 풀어 본다.
   baseUrls?: string[];
+  // 클릭 대상(이번 요청 동안 링크 이동 허락 판정용, grantableLink).
+  clickTarget?: TargetInfo;
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -198,6 +200,7 @@ export async function buildToolPreview(
       return {
         ...clickCard(info),
         autoBlock: autoApproveBlock("click_element", [info]),
+        clickTarget: info,
         linkHrefs: [
           info.href,
           info.submitTo ?? "",

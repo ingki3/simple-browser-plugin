@@ -347,7 +347,9 @@ export function looksPersonalValue(raw: string): boolean {
   return test(v) || test(v.replace(/[\r\n]+/g, ""));
 }
 
-export function sensitiveUrlReason(url: string): string | null {
+// ignorePayment: 결제 단서(경로 낱말)는 보지 않고 개인정보·계정 정보·끝까지 못 본 주소만 본다
+// (사용자가 이번 요청 동안 링크 이동을 허락한 경우, grantableLink).
+export function sensitiveUrlReason(url: string, { ignorePayment = false }: { ignorePayment?: boolean } = {}): string | null {
   // content script가 넣는 "끝까지 보지 못함" 표시(about:too-many-…, about:undecodable).
   if (/^about:(too-many|undecodable|over-budget)/.test(url)) return "끝까지 확인하지 못한 주소";
   // 리다이렉트 매개변수에 감싼 주소도 같은 기준으로 본다.
@@ -359,7 +361,7 @@ export function sensitiveUrlReason(url: string): string | null {
     // 이어 붙인 표기(pay_now, confirm_order, placeOrder)도 낱말로 나눠 보고, 버튼 문구와 같은 금전 단서
     // (donate, purchase, buy, 충전 등)도 경로 낱말에 적용한다.
     const words = splitIdentifier(route).replace(/[/?#&=+]+/g, " ");
-    if (PAYMENT_ROUTE_RE.test(route) || PAYMENT_ROUTE_RE.test(words) || PAYMENT_TEXT_RE.test(words)) {
+    if (!ignorePayment && (PAYMENT_ROUTE_RE.test(route) || PAYMENT_ROUTE_RE.test(words) || PAYMENT_TEXT_RE.test(words))) {
       return "결제·주문 주소";
     }
     if (u.username || u.password) return "계정 정보가 실린 주소";
@@ -399,6 +401,37 @@ export function sensitiveUrlReason(url: string): string | null {
     }
   }
   return null;
+}
+
+// 승인 카드에서 "이번 요청 동안 링크 이동은 묻지 않기"를 고른 뒤 카드 없이 누를 수 있는 링크인지.
+// 글자·주소의 뜻(결제 문구 등)은 보지 않고 구조만 본다: 다른 문서의 http(s) 주소로 가는 <a>이고, 감싼 다른 링크·
+// 양식 제출·값이 바뀐 범위 안 양식·선택지 주소·내려받기가 없고, 개인정보가 채워진 양식과 무관하며,
+// 주소(ping 포함)에 개인정보·계정 정보가 실려 있지 않다. 사이트 경계는 호출하는 쪽(pageActionSiteBlock)이 본다.
+// 링크에 붙은 클릭 처리기가 이동 대신 다른 동작을 할 수는 있어, 이 허락은 사용자가 고른 요청 하나에만 쓴다.
+export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boolean {
+  if (t.tag !== "a" || !t.href) return false;
+  let dest: URL;
+  try {
+    dest = new URL(t.href);
+  } catch {
+    return false;
+  }
+  if (!/^https?:$/.test(dest.protocol)) return false;
+  if (t.ancestorHref || t.submitTo || t.submitUrl || t.download || t.submitsPersonal) return false;
+  if (t.choiceUrls?.length || t.scopeSubmitUrls?.length) return false;
+  // 같은 문서 안 위치만 바꾸는 링크(#…)는 이동하지 않고 페이지 처리기만 부르는 경우가 많다.
+  if (pageUrl) {
+    try {
+      const page = new URL(pageUrl);
+      page.hash = "";
+      const to = new URL(dest.href);
+      to.hash = "";
+      if (page.href === to.href) return false;
+    } catch {
+      return false;
+    }
+  }
+  return [t.href, ...(t.pingUrls ?? [])].every((u) => sensitiveUrlReason(u, { ignorePayment: true }) === null);
 }
 
 // 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소·호스트 이름에 실어 밖으로 보낼 수 있다.

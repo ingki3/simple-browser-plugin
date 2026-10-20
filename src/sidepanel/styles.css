@@ -370,6 +370,7 @@ body,
 
 .tool-card-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
   padding: 8px 12px;
@@ -398,6 +399,16 @@ body,
 .btn-cancel {
   background: var(--bg);
   color: var(--fg);
+}
+
+.btn-approve-links {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--primary);
+  background: var(--bg);
+  color: var(--primary);
+  cursor: pointer;
+  font-weight: 500;
 }
 
 .btn-approve {

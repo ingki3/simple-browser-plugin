@@ -5,7 +5,7 @@ import { ThinkingIndicator } from "./ThinkingIndicator";
 import { KO } from "../i18n/ko";
 
 interface Props {
-  onApprove: (callId: string) => void;
+  onApprove: (callId: string, allowLinksThisTurn?: boolean) => void;
   onCancel: (callId: string) => void;
 }
 
