@@ -19,6 +19,7 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "tldts": "7.4.16",
     "zod": "^3.23.8",
     "zustand": "^4.5.5"
   },

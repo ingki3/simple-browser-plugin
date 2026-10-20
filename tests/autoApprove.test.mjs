@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AUTO_APPROVE_TOOLS, autoApproveBlock, navigateAutoBlock, pageActionSiteBlock, siteOf } from "../src/lib/autoApprove.ts";
+import { AUTO_APPROVE_TOOLS, autoApproveBlock } from "../src/lib/autoApprove.ts";
+import { navigateAutoBlock, pageActionSiteBlock, siteOf } from "../src/lib/siteTrust.ts";
 
 const t = (over = {}) => ({
   tag: "button", role: "button", name: "", href: "", region: "main", inFrame: false,
@@ -77,11 +78,14 @@ test("buttons on a payment screen still ask, whatever their text", () => {
   assert.ok(autoApproveBlock("click_element", [t({ name: "Confirm", paymentContext: true })]));
 });
 
-test("trusted sites extend only to the same host and its subdomains", () => {
+test("trusted sites extend to the same registrable domain (same site), not across public suffixes", () => {
   const trusted = new Set([siteOf("https://news.naver.com/section/105")]);
   assert.equal(navigateAutoBlock(trusted, "https://news.naver.com/main"), null);
   assert.equal(navigateAutoBlock(trusted, "https://n.news.naver.com/mnews/article/1"), null);
-  assert.ok(navigateAutoBlock(trusted, "https://shopping.naver.com/"));
+  // 같은 등록 도메인(naver.com)의 다른 하위 서비스는 안.
+  assert.equal(navigateAutoBlock(trusted, "https://shopping.naver.com/"), null);
+  assert.equal(navigateAutoBlock(new Set([siteOf("https://www.naver.com/")]), "https://mail.naver.com/"), null);
+  assert.ok(navigateAutoBlock(trusted, "https://naver.com.evil.example/"));
   assert.ok(navigateAutoBlock(new Set([siteOf("https://bank.co.za/")]), "https://collector.co.za/?d=1"));
   assert.ok(navigateAutoBlock(new Set([siteOf("https://alice.s3.amazonaws.com/")]), "https://mallory.s3.amazonaws.com/"));
   assert.ok(navigateAutoBlock(new Set([siteOf("https://tistory.com/")]), "https://evil.tistory.com/"));
@@ -221,7 +225,6 @@ test("phone, resident and card numbers in the path ask", () => {
 });
 
 test("only lowercase void 0 javascript links are inert", async () => {
-  const { pageActionSiteBlock } = await import("../src/lib/autoApprove.ts");
   const trusted = new Set([siteOf("https://shop.example/")]);
   const page = "https://shop.example/a";
   assert.equal(pageActionSiteBlock(trusted, page, ["javascript:void(0)"], []), null);
@@ -278,4 +281,32 @@ test("grantableLink: 구조만 보고 같은 문서 밖으로 가는 일반 링�
   assert.equal(grantableLink(link({ role: "menuitem" }), page), false);
   assert.equal(grantableLink(link({ inFrame: true }), page), false);
   assert.equal(grantableLink(link({ insideControl: true }), page), false);
+});
+
+test("site boundary edge cases: public suffixes, shared hosting origins, unknown suffixes, IPs, ports, schemes", () => {
+  const nav = (from, to) => navigateAutoBlock(new Set([siteOf(from)]), to);
+  // 공개 접미사 아래 서로 다른 등록 도메인은 밖.
+  assert.ok(nav("https://example.co.kr/", "https://other.co.kr/"));
+  assert.equal(nav("https://www.example.co.kr/", "https://shop.example.co.kr/"), null);
+  // 접미사 자체를 원본으로 하위 도메인을 신뢰하지 않는다.
+  assert.ok(nav("https://co.kr/", "https://unrelated.co.kr/"));
+  // PSL private 영역: 사용자별 하위 도메인은 서로 다름(github.io는 공유 호스팅이라 늘 밖).
+  assert.ok(nav("https://a.github.io/", "https://b.github.io/"));
+  // 공유 호스팅 원본은 등록 도메인 확장의 근거가 아니다(양방향).
+  assert.ok(nav("https://script.google.com/macros/s/x/exec", "https://www.google.com/search?q=internal-project-alpha"));
+  assert.ok(nav("https://www.google.com/", "https://script.google.com/macros/s/x/exec"));
+  // 확인되지 않은 접미사는 예전 규칙: 하위 도메인만 안.
+  assert.equal(nav("https://foo.unknownsuffix/", "https://child.foo.unknownsuffix/"), null);
+  assert.ok(nav("https://foo.unknownsuffix/", "https://bar.unknownsuffix/"));
+  // IP·localhost는 같은 호스트만, 포트·스킴이 다르면 밖.
+  assert.ok(nav("http://127.0.0.1:3000/", "http://127.0.0.2:3000/"));
+  assert.ok(nav("http://localhost:3000/", "http://localhost:4000/"));
+  assert.equal(nav("http://localhost:3000/", "http://localhost:3000/x"), null);
+  assert.ok(nav("http://[::1]:3000/", "http://[::2]:3000/"));
+  assert.ok(nav("http://news.naver.com/", "https://shopping.naver.com/"));
+  // IDN(xn--)도 등록 도메인으로 비교.
+  assert.equal(nav("https://www.xn--9t4b11yi5a.com/", "https://shop.xn--9t4b11yi5a.com/"), null);
+  // 감싼 주소(리다이렉트 매개변수)는 여전히 경계 검사를 받는다.
+  assert.ok(nav("https://www.naver.com/", "https://shopping.naver.com/r?url=https%3A%2F%2Fcollector.example%2F"));
+  assert.equal(nav("https://www.naver.com/", "https://shopping.naver.com/r?url=https%3A%2F%2Fmail.naver.com%2F"), null);
 });

@@ -83,39 +83,6 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
   return null;
 }
 
-// 자동 실행의 신뢰 경계. 신뢰 사이트는 출처(스킴·호스트·포트)로 기억하고, 대상 주소는
-// 같은 출처이거나 그 호스트의 하위 도메인(news.naver.com → n.news.naver.com)일 때만 안으로 본다.
-// 등록 도메인을 추정하지 않는다(co.za·s3.amazonaws.com처럼 형제 하위 도메인이 남의 것일 수 있다).
-// 남에게 하위 도메인이나 경로를 나눠 주는 공유 호스팅(github.io, s3.amazonaws.com 등)의 주소는
-// 같은 호스트라도 다른 사용자의 것일 수 있어 신뢰 범위로 보지 않는다(늘 묻는다).
-const SHARED_HOSTING_APEXES = new Set([
-  "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "web.app", "firebaseapp.com",
-  "herokuapp.com", "appspot.com", "blogspot.com", "wordpress.com", "tistory.com", "glitch.me", "onrender.com",
-  "azurewebsites.net", "cloudfront.net", "amazonaws.com", "notion.site", "substack.com", "medium.com",
-  // 사용자마다 자기 웹앱·양식·파일을 올리는 서비스(남의 배포 주소로 대화 내용을 보낼 수 있다).
-  "script.google.com", "script.googleusercontent.com", "docs.google.com", "sites.google.com",
-  "storage.googleapis.com", "googleusercontent.com", "forms.gle", "forms.office.com", "blob.core.windows.net",
-  "githubusercontent.com", "gist.github.com", "pastebin.com", "dropboxusercontent.com", "firebaseio.com",
-  "repl.co", "replit.app", "ngrok.io", "ngrok-free.app", "trycloudflare.com", "surge.sh", "fly.dev", "deno.dev",
-  "webhook.site", "pipedream.net",
-]);
-
-function isSharedHost(host: string): boolean {
-  const h = host.toLowerCase();
-  for (const apex of SHARED_HOSTING_APEXES) if (h === apex || h.endsWith(`.${apex}`)) return true;
-  return false;
-}
-
-// 신뢰 사이트로 기억할 값(웹 주소의 출처). 웹 주소가 아니면 null.
-export function siteOf(url: string): string | null {
-  try {
-    const u = new URL(url);
-    return /^https?:$/.test(u.protocol) ? u.origin : null;
-  } catch {
-    return null;
-  }
-}
-
 // 주소의 쿼리·해시 값에 실린 다른 주소(리다이렉트 매개변수 ?url=https%3A…, ?next=//host/…).
 // 신뢰 사이트의 열린 리다이렉트를 거쳐 밖으로 나가는 것을 막으려고 그 목적지도 경계 안이어야 한다.
 function embeddedUrls(u: URL, maxValues = Infinity): string[] {
@@ -181,7 +148,7 @@ const MAX_VALUES_TOTAL = 2000;
 const OVER_BUDGET = "about:over-budget";
 const UNDECODABLE = "about:undecodable";
 
-function expandUrls(url: string): { urls: URL[]; overflow: boolean } {
+export function expandUrls(url: string): { urls: URL[]; overflow: boolean } {
   const urls: URL[] = [];
   const seen = new Set<string>();
   const queue: Array<{ text: string; depth: number }> = [{ text: url, depth: 0 }];
@@ -212,31 +179,6 @@ function expandUrls(url: string): { urls: URL[]; overflow: boolean } {
     for (const inner of inners) queue.push({ text: inner, depth: depth + 1 });
   }
   return { urls, overflow };
-}
-
-function hostTrusted(trustedSites: ReadonlySet<string>, u: URL): boolean {
-  if (!/^https?:$/.test(u.protocol) || isSharedHost(u.hostname)) return false;
-  for (const site of trustedSites) {
-    let t: URL;
-    try {
-      t = new URL(site);
-    } catch {
-      continue;
-    }
-    if (t.protocol !== u.protocol || t.port !== u.port) continue;
-    if (u.hostname === t.hostname) return true;
-    const isIp = /^[\d.]+$/.test(t.hostname) || t.hostname.startsWith("[");
-    if (!isIp && t.hostname.includes(".") && u.hostname.endsWith(`.${t.hostname}`)) return true;
-  }
-  return false;
-}
-
-// 주소(와 감싼 주소 모두)가 신뢰 사이트 안인지. 웹 주소가 아니면 null.
-function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean | null {
-  const { urls, overflow } = expandUrls(url);
-  if (!urls.length || !/^https?:$/.test(urls[0].protocol)) return null;
-  if (overflow) return false;
-  return urls.every((u) => hostTrusted(trustedSites, u));
 }
 
 // 값을 여러 번 인코딩해 숨긴 경우까지 풀어 본다(alice%2540example.com).
@@ -440,66 +382,4 @@ export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boole
   return [t.href, ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])].every(
     (u) => sensitiveUrlReason(u, { ignorePayment: true }) === null,
   );
-}
-
-// 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소·호스트 이름에 실어 밖으로 보낼 수 있다.
-// 사용자가 고른 사이트(요청을 시작한 탭의 사이트, 승인 카드로 이동을 허락한 사이트) 안에서만 자동 실행한다.
-// 자동 이동·클릭으로 들어간 사이트는 신뢰 사이트가 되지 않는다(두 단계로 나눠 보내는 우회를 막음).
-export function navigateAutoBlock(trustedSites: ReadonlySet<string>, targetUrl: string): string | null {
-  const inside = withinTrusted(trustedSites, targetUrl);
-  if (inside === null) return "웹 주소가 아님";
-  if (!inside) return "요청을 시작한 사이트 밖으로 이동";
-  return sensitiveUrlReason(targetUrl);
-}
-
-// 아무것도 하지 않는 javascript: 링크. 스킴만 대소문자를 가리지 않고, 식은 그대로 본다
-// (javascript:VOID(0)은 페이지가 정의한 VOID 함수를 부른다). void 0 / void(0) / ; / 빈 식만.
-const INERT_HREF_RE = {
-  test(href: string): boolean {
-    if (!/^javascript:/i.test(href)) return false;
-    return /^\s*(void(\s+0|\s*\(\s*0\s*\))\s*;?|;|)\s*$/.test(href.slice("javascript:".length));
-  },
-};
-
-// 클릭·입력: 사용자가 고르지 않은 사이트의 페이지에서는(자동 클릭으로 들어간 수집 페이지의 검색 칸 등) 묻는다.
-// 다른 사이트로 가는 링크 클릭과 다른 사이트로 제출하는 양식 버튼도 이동과 같게 본다.
-// values: 입력할 값들. 상대 경로(/redirect?next=https://…)나 글 속 주소가 양식 제출·이동에 실릴 수 있어
-// 지금 페이지 주소의 매개변수로 넣어 본 것처럼 같은 방식(내장 주소 풀기)으로 검사한다.
-export function pageActionSiteBlock(
-  trustedSites: ReadonlySet<string>,
-  pageUrl: string | undefined,
-  linkHrefs: string[],
-  values: string[] = [],
-): string | null {
-  if (!pageUrl || withinTrusted(trustedSites, pageUrl) !== true) return "요청을 시작한 사이트 밖의 페이지";
-  for (const v of values) {
-    // 개인정보 모양의 값(이메일·전화·카드 번호)을 넣는 것은 칸 이름과 관계없이 묻는다.
-    if (looksPersonalValue(decodeDeepText(v))) return "개인정보 모양의 값 입력";
-    let probe: URL;
-    try {
-      probe = new URL(pageUrl);
-    } catch {
-      return "요청을 시작한 사이트 밖의 페이지";
-    }
-    probe.search = "";
-    probe.hash = "";
-    probe.searchParams.set("v", v);
-    if (withinTrusted(trustedSites, probe.href) !== true) return "입력 값에 사이트 밖 주소";
-    // 입력 값에 실린 결제·개인정보 주소(/checkout/confirm, /continue?email=…)도 이동과 같게 본다.
-    const why = sensitiveUrlReason(probe.href);
-    if (why) return `입력 값에 ${why}`;
-  }
-  for (const raw of linkHrefs) {
-    let href = raw;
-    try {
-      href = new URL(raw, pageUrl).href;
-    } catch {
-      /* 그대로 */
-    }
-    // 아무 데도 가지 않는 자리표시 링크(javascript:void(0) 등)는 일반 버튼과 같게 본다.
-    if (INERT_HREF_RE.test(raw) || INERT_HREF_RE.test(href)) continue;
-    // 웹 주소가 아니어서(javascript:…, data:, mailto:) 목적지를 확인할 수 없으면 묻는다.
-    if (withinTrusted(trustedSites, href) !== true) return "요청을 시작한 사이트 밖으로 가는 링크·양식 제출";
-  }
-  return null;
 }
