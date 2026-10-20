@@ -22,3 +22,9 @@ test("decodes EUC-KR declared in meta and falls back for undeclared non-UTF-8", 
   assert.match(decodeHtml("text/html; charset=utf-8", enc("<p>한글")), /한글/);
   assert.match(decodeHtml("text/html; charset=bogus-label", enc("<p>한글")), /한글/);
 });
+
+test("BOM wins over header and meta", () => {
+  const utf16le = new Uint8Array([0xff, 0xfe, ...Array.from("<p>한글</p>").flatMap((c) => { const n = c.charCodeAt(0); return [n & 0xff, n >> 8]; })]);
+  assert.equal(decodeHtml("text/html", utf16le), "<p>한글</p>");
+  assert.equal(decodeHtml("text/html; charset=euc-kr", new Uint8Array([0xef, 0xbb, 0xbf, ...enc("<p>한글")])), "<p>한글");
+});

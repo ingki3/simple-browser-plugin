@@ -17,6 +17,10 @@ export function htmlCharset(contentType: string | null, bytes: Uint8Array): stri
 }
 
 export function decodeHtml(contentType: string | null, bytes: Uint8Array): string {
+  // BOM이 있으면 그 인코딩이 헤더·meta보다 우선한다(HTML 표준의 인코딩 판별 순서).
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return new TextDecoder("utf-8").decode(bytes.subarray(3));
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be").decode(bytes.subarray(2));
   const label = htmlCharset(contentType, bytes);
   if (label) {
     try {
