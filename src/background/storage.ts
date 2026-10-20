@@ -3,12 +3,11 @@ import {
   DEFAULT_CSV_MAX_CHARS,
   DEFAULT_MAX_TOOL_HOPS,
   FLAGS_KEY,
-  LEGACY_DEFAULT_MAX_TOOL_HOPS,
-  MAX_MAX_TOOL_HOPS,
-  MIN_MAX_TOOL_HOPS,
+  MAX_TOOL_HOPS_VERSION,
   MAX_SYSTEM_PROMPT_LENGTH,
   SETTINGS_KEY,
   normalizeCsvMaxChars,
+  normalizeMaxToolHops,
   type Flags,
   type Settings,
 } from "@/lib/messages";
@@ -24,11 +23,6 @@ export const DEFAULT_SETTINGS: Settings = {
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   autoApprove: false,
 };
-
-function normalizeMaxHops(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : DEFAULT_MAX_TOOL_HOPS;
-  return Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, n));
-}
 
 export async function readSettings(): Promise<Settings> {
   const obj = await chrome.storage.local.get(SETTINGS_KEY);
@@ -49,7 +43,7 @@ export async function readSettings(): Promise<Settings> {
       typeof raw.downloadFolderPrefix === "string"
         ? raw.downloadFolderPrefix
         : DEFAULT_SETTINGS.downloadFolderPrefix,
-    maxToolHops: normalizeMaxHops(raw.maxToolHops),
+    maxToolHops: normalizeMaxToolHops(raw),
     actionLogEnabled: raw.actionLogEnabled !== false,
     csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
     autoApprove: raw.autoApprove === true,
@@ -61,7 +55,8 @@ export async function writeSettings(next: Settings): Promise<void> {
     [SETTINGS_KEY]: {
       ...next,
       systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
-      maxToolHops: normalizeMaxHops(next.maxToolHops),
+      maxToolHops: normalizeMaxToolHops({ ...next, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }),
+      maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
       csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     },
   });
@@ -96,15 +91,3 @@ export async function setFlag<K extends keyof Flags>(key: K, value: Flags[K]): P
   await chrome.storage.local.set({ [FLAGS_KEY]: next });
 }
 
-// 기본 도구 호출 한도를 8에서 16으로 올렸다. 설정 화면은 설정 전체를 저장하므로 예전 기본값 8이 저장돼 있으면
-// 사용자가 고른 값인지 알 수 없다. 한 번만 새 기본값으로 올리고, 그 뒤에 사용자가 8로 바꾸면 그대로 둔다.
-export async function migrateMaxToolHops(): Promise<void> {
-  const flags = await readFlags();
-  if (flags.maxToolHopsMigrated) return;
-  const obj = await chrome.storage.local.get(SETTINGS_KEY);
-  const raw = obj[SETTINGS_KEY] as Partial<Settings> | undefined;
-  if (raw && raw.maxToolHops === LEGACY_DEFAULT_MAX_TOOL_HOPS) {
-    await chrome.storage.local.set({ [SETTINGS_KEY]: { ...raw, maxToolHops: DEFAULT_MAX_TOOL_HOPS } });
-  }
-  await setFlag("maxToolHopsMigrated", true);
-}

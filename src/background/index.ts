@@ -1,6 +1,6 @@
 import { PORT_NAME, type PanelToBg } from "@/lib/messages";
 import { ChatAgent } from "./openrouter";
-import { invalidateSettingsCache, migrateMaxToolHops } from "./storage";
+import { invalidateSettingsCache } from "./storage";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";
@@ -11,7 +11,6 @@ import {
 } from "./google/auth";
 
 pruneActionLog();
-migrateMaxToolHops().catch((err) => console.warn("[migrateMaxToolHops]", err));
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
