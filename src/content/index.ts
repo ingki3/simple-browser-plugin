@@ -1,5 +1,6 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
 import { extractMainContent } from "./extract";
+import { lookupLinks } from "./links";
 import { stopTranslation, translatePage } from "./translate";
 import { findFormFields, fillFormFields } from "./forms";
 import { listPageImages } from "./images";
@@ -79,6 +80,14 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
       if (location.href !== msg.expectUrl) throw new Error("탭의 주소가 바뀌었습니다.");
       const content = extractMainContent();
       sendResponse({ ok: true, data: { url: location.href, title: content.title, mainText: content.mainText } } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
+  if (msg.kind === "link_lookup") {
+    try {
+      sendResponse({ ok: true, data: lookupLinks(msg.urls) } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
     }

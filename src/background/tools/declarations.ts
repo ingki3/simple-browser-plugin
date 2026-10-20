@@ -76,6 +76,18 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "read_linked_pages",
+    description:
+      "지금 페이지에 있는 링크(기사 등)를 탭 이동 없이 받아 와 본문을 읽는다(최대 8개). 뉴스 목록에서 관련 기사 여러 개를 요약할 때 쓴다. urls는 find_clickables·describe_page로 얻은 링크 주소 그대로. 페이지에 없는 주소는 읽지 않는다. 사용자가 승인 카드에서 읽을 링크를 고른다. 로그인 쿠키 없이 받으며 리다이렉트되는 링크·자바스크립트로 그리는 페이지는 읽지 못할 수 있다. 결과는 링크마다 제목·본문(또는 읽지 못한 이유). short=true면 본문이 짧아 정보가 부족할 수 있다.",
+    parameters: {
+      type: "object",
+      properties: {
+        urls: { type: "array", items: { type: "string" }, description: "읽을 링크의 절대 주소(최대 8개)." },
+      },
+      required: ["urls"],
+    },
+  },
+  {
     name: "read_document",
     description:
       "파일 URL을 내려받아 텍스트로 읽는다. 지원: Word(.docx)·Excel(.xlsx)·PowerPoint(.pptx)·OpenDocument(.odt/.ods/.odp)는 Markdown(제목·목록·표 유지), PDF는 쪽별 글자, 한글(.hwp/.hwpx)은 Markdown(병합 셀 표는 HTML), CSV/TSV는 표, TXT/MD는 원문. 확장자 없는 다운로드 링크(download.do?fileId=… 등)도 받은 뒤 형식을 판별한다. 페이지에 있는 파일 링크는 list_file_links로 URL을 먼저 얻는다. 이미지·스캔 PDF 속 글자는 읽지 못한다.",

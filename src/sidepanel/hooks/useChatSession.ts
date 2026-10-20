@@ -53,7 +53,7 @@ export function useChatSession() {
             previewSummary: msg.previewSummary,
             previewDetails: msg.previewDetails,
             linkGrantOffer: msg.linkGrantOffer === true,
-            ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit } : {}),
+            ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit, choiceDefaults: msg.choiceDefaults } : {}),
             resolved: null,
           });
           return;

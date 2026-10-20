@@ -5,6 +5,7 @@ import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
 import { navigateAutoBlock, pageActionSiteBlock, siteOf } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
+import { discardLinkCall, setChosenLinks } from "./linkedPages";
 import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
@@ -70,6 +71,7 @@ describe_page 결과를 읽는 법:
 - get_youtube_transcript: YouTube 영상 페이지의 자막 스크립트(타임스탬프 포함) 추출.
 - list_file_links(query?): 페이지의 첨부·다운로드 파일 링크 목록.
 - read_other_tabs(purpose): 민감. 같은 창의 다른 탭 본문 읽기. 사용자가 카드에서 탭을 고른다.
+- read_linked_pages(urls): 민감. 페이지의 링크를 탭 이동 없이 받아 본문 읽기(최대 8개). 사용자가 카드에서 고른다.
 - read_document(url): 민감. 링크된 파일(Office·OpenDocument·PDF·한글·CSV·TXT·MD)을 화면 이동 없이 내려받아 텍스트로 읽기.
 
 일반 규칙:
@@ -86,6 +88,11 @@ describe_page 결과를 읽는 법:
 - 막다른 페이지(목표와 무관하거나 더 갈 링크가 없음)면 navigate_to_url로 직전 페이지 주소로 돌아가 다음 후보를 시도한다. 이미 누른 링크·이미 본 주소는 다시 가지 않는다. 4단계 안에 찾지 못하면 멈추고, 거쳐 온 경로와 남은 후보를 알린다.
 - 로그인 화면이 나오면 로그인 정보를 입력하지 말고, 사용자에게 로그인한 뒤 다시 요청해 달라고 한다. 결제·주문하기·구매 버튼은 경로로 쓰지 않는다(조회용 "주문 내역"·"주문/배송 조회" 링크는 된다).
 - 답할 때 거쳐 온 경로를 한 줄로 밝힌다(예: 마이페이지 → 주문/배송 조회).
+
+관련 기사 읽기 모드:
+- 뉴스·글 목록에서 "이런저런 관련 기사들 요약해줘"처럼 여러 링크의 내용이 필요하면, 탭을 이동하지 말고 find_clickables·describe_page로 관련 링크를 골라 read_linked_pages(urls)로 한 번에 읽는다. 어떤 링크가 관련 있는지는 글자·맥락으로 판단한다.
+- 결과로 기사별 요약과 공통점을 답한다. error가 있는 링크는 이유를 전하고, short=true면 본문이 짧아 정보가 부족할 수 있다고 밝힌다.
+- 링크는 페이지에 있는 주소 그대로 쓴다. 주소를 만들거나 고치지 않는다.
 
 다른 탭 참조 모드:
 - 사용자가 다른 탭·열어 둔 탭의 내용을 참고하라고 하면(예: "왼쪽 탭의 상품이랑 비교해줘", "열어 둔 탭들 정리해줘") read_other_tabs(purpose)를 부른다. 탭 목록은 볼 수 없고 사용자가 승인 카드에서 읽을 탭을 고른다. purpose에는 무엇을 참고하려는지 짧게 쓴다.
@@ -234,7 +241,10 @@ export class ChatAgent {
 
   approveTool(callId: string, allowLinksThisTurn = false, choiceIds?: string[]): void {
     // 선택 카드의 선택은 백그라운드가 고정한 후보의 부분집합만 남긴다(otherTabs.setChosen).
-    if (choiceIds && this.pendingApprovals.has(callId)) setChosenTabs(callId, choiceIds);
+    if (choiceIds && this.pendingApprovals.has(callId)) {
+      setChosenTabs(callId, choiceIds);
+      setChosenLinks(callId, choiceIds);
+    }
     const offer = this.linkGrantOffers.get(callId);
     if (allowLinksThisTurn && this.pendingApprovals.has(callId) && offer?.turn === this.currentTurn) {
       this.linkGrant = offer;
@@ -754,7 +764,9 @@ export class ChatAgent {
                   : preview.summary,
               previewDetails: preview.details,
               ...(linkOffer ? { linkGrantOffer: true } : {}),
-              ...(preview.choices ? { choices: preview.choices, choiceLimit: preview.choiceLimit } : {}),
+              ...(preview.choices
+                ? { choices: preview.choices, choiceLimit: preview.choiceLimit, choiceDefaults: preview.choiceDefaults }
+                : {}),
             });
             if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
             approved = await new Promise<boolean>((resolve) => {
@@ -781,6 +793,7 @@ export class ChatAgent {
           if (!approved) {
             recordCancelledAction(callId, this.turnTab);
             discardTabChoices(callId);
+            discardLinkCall(callId);
             this.send({
               kind: "tool_result",
               callId,

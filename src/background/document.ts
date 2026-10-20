@@ -13,7 +13,6 @@ import { peekZip } from "@/lib/zipSanitize";
 import { csvToMarkdown, detectDelimiter } from "@/lib/csvTable";
 import {
   CONVERT_TIMEOUT_MS,
-  OFFSCREEN_PATH,
   type DocumentJob,
   type DocumentJobResult,
   type WorkerEngine,
@@ -21,6 +20,7 @@ import {
 import type { DocumentContent } from "@/lib/messages";
 import { debugLog, timeSpan } from "./debug";
 import { getSettings } from "./storage";
+import { runOffscreenJob } from "./offscreen";
 
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_CHARS = 40_000;
@@ -30,87 +30,6 @@ const MAX_XML_BYTES = 6 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 40 * 1024 * 1024;
 // offscreen 문서가 응답하지 않을 때를 대비한 서비스 워커 쪽 상한(wasm 첫 컴파일 시간 포함 여유).
 const JOB_GUARD_MS = CONVERT_TIMEOUT_MS + 10_000;
-// 마지막 변환 뒤 이 시간 동안 새 작업이 없으면 offscreen 문서를 닫아 wasm 메모리를 돌려준다.
-const OFFSCREEN_IDLE_MS = 60_000;
-
-interface OffscreenClient {
-  url: string;
-  postMessage(message: unknown, transfer: Transferable[]): void;
-}
-
-// 서비스 워커 전역의 clients(타입 정의는 DOM lib 기준이라 필요한 부분만 적는다).
-const swClients = (globalThis as unknown as {
-  clients: { matchAll(options: { includeUncontrolled: boolean; type: "window" }): Promise<readonly OffscreenClient[]> };
-}).clients;
-
-let activeJobs = 0;
-let idleTimer: ReturnType<typeof setTimeout> | null = null;
-let creating: Promise<void> | null = null;
-let closing: Promise<void> | null = null;
-
-async function hasOffscreen(): Promise<boolean> {
-  const contexts = await chrome.runtime.getContexts({
-    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
-    documentUrls: [chrome.runtime.getURL(OFFSCREEN_PATH)],
-  });
-  return contexts.length > 0;
-}
-
-async function ensureOffscreen(): Promise<void> {
-  if (closing) await closing;
-  if (await hasOffscreen()) return;
-  if (!creating) {
-    const end = timeSpan("document:offscreen_create");
-    creating = chrome.offscreen
-      .createDocument({
-        url: OFFSCREEN_PATH,
-        reasons: [chrome.offscreen.Reason.WORKERS],
-        justification: "링크된 문서(Office·PDF·한글·CSV)를 강제 종료할 수 있는 Worker에서 변환한다.",
-      })
-      .then(
-        () => end("ok"),
-        (err: unknown) => {
-          end("fail");
-          throw err;
-        },
-      )
-      .finally(() => {
-        creating = null;
-      });
-  }
-  await creating;
-}
-
-async function offscreenClient(): Promise<OffscreenClient> {
-  const url = chrome.runtime.getURL(OFFSCREEN_PATH);
-  const all = await swClients.matchAll({ includeUncontrolled: true, type: "window" });
-  const client = all.find((c) => c.url === url);
-  if (!client) throw new Error("문서 변환기(offscreen 문서)를 찾지 못했습니다.");
-  return client;
-}
-
-function scheduleIdleClose(): void {
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => {
-    idleTimer = null;
-    if (activeJobs > 0 || closing) return;
-    closing = chrome.offscreen
-      .closeDocument()
-      .catch(() => {})
-      .finally(() => {
-        closing = null;
-      });
-  }, OFFSCREEN_IDLE_MS);
-}
-
-// 닫는 타이머는 서비스 워커 종료와 함께 사라지므로, 다시 뜰 때 이전 실행에서 남은 offscreen 문서를 닫는다.
-closing = hasOffscreen()
-  .then((open) => (open ? chrome.offscreen.closeDocument() : undefined))
-  .catch(() => {})
-  .finally(() => {
-    closing = null;
-  });
-
 // 변환을 offscreen 문서의 Worker에 맡긴다. 중단·시간 초과 시 Worker가 강제 종료된다.
 async function convertInWorker(
   bytes: Uint8Array,
@@ -120,17 +39,8 @@ async function convertInWorker(
   maxChars: number,
   signal?: AbortSignal,
 ): Promise<DocumentJobResult> {
-  activeJobs++;
-  if (idleTimer) {
-    clearTimeout(idleTimer);
-    idleTimer = null;
-  }
   const end = timeSpan("document:convert");
   try {
-    await ensureOffscreen();
-    if (signal?.aborted) return { ok: false, kind: "cancelled" };
-    const client = await offscreenClient();
-    const channel = new MessageChannel();
     const buffer =
       bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
         ? (bytes.buffer as ArrayBuffer)
@@ -144,40 +54,18 @@ async function convertInWorker(
       maxChars,
       limits: { maxXmlBytes: MAX_XML_BYTES, maxTotalBytes: MAX_TOTAL_BYTES },
     };
-    const result = await new Promise<DocumentJobResult>((resolve) => {
-      let settled = false;
-      const settle = (r: DocumentJobResult) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(guard);
-        signal?.removeEventListener("abort", onAbort);
-        channel.port1.close();
-        resolve(r);
-      };
-      const onAbort = () => {
-        channel.port1.postMessage({ kind: "cancel" });
-        settle({ ok: false, kind: "cancelled" });
-      };
-      const guard = setTimeout(() => {
-        // offscreen 문서가 멈췄으면 닫아서 Worker까지 함께 끝낸다.
-        channel.port1.postMessage({ kind: "cancel" });
-        chrome.offscreen.closeDocument().catch(() => {});
-        settle({ ok: false, kind: "timeout" });
-      }, JOB_GUARD_MS);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      // offscreenClient()를 기다리는 사이에 중단됐으면 리스너가 불리지 않으므로 여기서 처리한다.
-      if (signal?.aborted) return onAbort();
-      channel.port1.onmessage = (ev: MessageEvent<DocumentJobResult>) => settle(ev.data);
-      client.postMessage(job, [channel.port2, buffer]);
+    const result = await runOffscreenJob<DocumentJobResult>(job, [buffer], {
+      signal,
+      guardMs: JOB_GUARD_MS,
+      cancelled: { ok: false, kind: "cancelled" },
+      timedOut: { ok: false, kind: "timeout" },
+      closed: { ok: false, kind: "crashed", message: "문서 변환기(offscreen 문서)가 닫혔습니다." },
     });
     end(result.ok ? "ok" : result.kind);
     return result;
   } catch (err) {
     end("fail");
     throw err;
-  } finally {
-    activeJobs--;
-    if (activeJobs === 0) scheduleIdleClose();
   }
 }
 

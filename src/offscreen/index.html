@@ -2,6 +2,11 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
+    <!-- 문서 변환(Worker·wasm·pdf.js)과 기사 HTML 파싱만 한다. 자원 요청은 확장 내부로 제한한다. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self'; media-src 'none'; frame-src 'none'; font-src 'self'; connect-src 'self'; worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'"
+    />
     <title>문서 변환</title>
   </head>
   <body>
