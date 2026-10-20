@@ -73,6 +73,17 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
     }
     return false;
   }
+  if (msg.kind === "read_page_text") {
+    // 다른 탭 참조: 백그라운드가 고정한 그 문서·주소일 때만 본문을 돌려준다.
+    try {
+      if (location.href !== msg.expectUrl) throw new Error("탭의 주소가 바뀌었습니다.");
+      const content = extractMainContent();
+      sendResponse({ ok: true, data: { url: location.href, title: content.title, mainText: content.mainText } } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
   if (msg.kind !== "tool_exec") return false;
 
   execTool(msg.toolName, msg.args, msg.callId)

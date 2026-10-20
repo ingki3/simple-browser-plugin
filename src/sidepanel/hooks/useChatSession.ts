@@ -53,6 +53,7 @@ export function useChatSession() {
             previewSummary: msg.previewSummary,
             previewDetails: msg.previewDetails,
             linkGrantOffer: msg.linkGrantOffer === true,
+            ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit } : {}),
             resolved: null,
           });
           return;
@@ -192,10 +193,15 @@ export function useChatSession() {
     send({ kind: "user_msg", text, conversationId });
   };
 
-  const approveTool = (callId: string, allowLinksThisTurn = false) => {
+  const approveTool = (callId: string, allowLinksThisTurn = false, choiceIds?: string[]) => {
     useChatStore.getState().resolveToolPending(callId, "approved");
     localDebug("approve_tool", allowLinksThisTurn ? `${callId} +links` : callId);
-    send({ kind: "approve_tool", callId, ...(allowLinksThisTurn ? { allowLinksThisTurn: true } : {}) });
+    send({
+      kind: "approve_tool",
+      callId,
+      ...(allowLinksThisTurn ? { allowLinksThisTurn: true } : {}),
+      ...(choiceIds ? { choiceIds } : {}),
+    });
   };
 
   const cancelTool = (callId: string) => {

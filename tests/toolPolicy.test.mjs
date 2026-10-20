@@ -22,6 +22,6 @@ test("only page-reading tools that never change the page are allowed without app
 test("external-content tools: file reading and every Google tool", () => {
   const external = Object.entries(TOOL_POLICY).filter(([, p]) => p.bringsExternal).map(([n]) => n).sort();
   const google = Object.keys(TOOL_POLICY).filter((n) => n.startsWith("google_"));
-  assert.deepEqual(external, ["read_document", ...google].sort());
+  assert.deepEqual(external, ["read_document", "read_other_tabs", ...google].sort());
   for (const [name, p] of Object.entries(TOOL_POLICY)) assert.ok(!(p.bringsExternal && p.observeOnly), name);
 });

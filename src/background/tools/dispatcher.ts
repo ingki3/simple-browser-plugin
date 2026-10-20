@@ -1,4 +1,5 @@
 import { autoApproveBlock } from "@/lib/autoApprove";
+import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import type {
   ClickableElement,
   FileLinkList,
@@ -69,6 +70,9 @@ export interface ToolPreview {
   baseUrls?: string[];
   // 클릭 대상(이번 요청 동안 링크 이동 허락 판정용, grantableLink).
   clickTarget?: TargetInfo;
+  // 선택 카드(다른 탭 고르기)의 후보와 최대 선택 수.
+  choices?: Array<{ id: string; label: string; sub: string }>;
+  choiceLimit?: number;
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -210,6 +214,15 @@ export async function buildToolPreview(
           ...(info.scopeSubmitUrls ?? []),
           ...(info.pingUrls ?? []),
         ].filter(Boolean),
+      };
+    }
+    case "read_other_tabs": {
+      const args = parsedArgs as ToolArgs["read_other_tabs"];
+      const choices = await snapshotCandidates(callId, turnTab);
+      return {
+        summary: `다른 탭의 본문을 읽어 대화에 넣습니다: ${truncate(args.purpose, 120)}. 읽을 탭을 고르세요(최대 ${MAX_TABS_PER_CALL}개). 고른 탭의 내용은 모델 제공자로 전송됩니다.`,
+        choices,
+        choiceLimit: MAX_TABS_PER_CALL,
       };
     }
     case "read_document": {
@@ -463,6 +476,15 @@ async function runTool(
           `스크립트 ${data.segmentCount}줄 추출: ${truncate(data.title, 60)}` +
           (data.truncated ? " (일부 잘림)" : "") +
           (data.complete ? "" : " (로딩 미완료, 뒷부분 누락 가능)"),
+        data,
+      };
+    }
+    case "read_other_tabs": {
+      const data = await readChosenTabs(callId, turnTab, signal);
+      const okCount = data.filter((d) => "mainText" in d).length;
+      return {
+        ok: okCount > 0,
+        summary: `다른 탭 ${data.length}개 중 ${okCount}개 읽음: ${data.map((d) => truncate(d.title || d.origin, 30)).join(", ")}`,
         data,
       };
     }

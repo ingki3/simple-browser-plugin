@@ -9,7 +9,7 @@ import { ToolResultCard } from "./ToolResultCard";
 
 interface Props {
   message: ChatMessage;
-  onApprove: (callId: string, allowLinksThisTurn?: boolean) => void;
+  onApprove: (callId: string, allowLinksThisTurn?: boolean, choiceIds?: string[]) => void;
   onCancel: (callId: string) => void;
   showThinking: boolean;
 }
