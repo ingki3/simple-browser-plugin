@@ -405,7 +405,7 @@ export function sensitiveUrlReason(url: string, { ignorePayment = false }: { ign
 
 // 승인 카드에서 "이번 요청 동안 링크 이동은 묻지 않기"를 고른 뒤 카드 없이 누를 수 있는 링크인지.
 // 글자·주소의 뜻(결제 문구 등)은 보지 않고 구조만 본다: 최상위 문서에서 다른 문서의 http(s) 주소로 가는 링크
-// 역할의 <a>(role="button" 같은 다른 역할은 아님)이고, 감싼 다른 링크·양식 제출·값이 바뀐 범위 안 양식·선택지 주소·
+// 역할의 <a>(role="button" 같은 다른 역할은 아님)이며 버튼·인라인 클릭 처리기 안에 있지 않고, 감싼 다른 링크·양식 제출·값이 바뀐 범위 안 양식·선택지 주소·
 // 내려받기·ping(누르면 이동과 별도로 그 주소에 POST를 보낸다)이 없고, 개인정보가 채워진 양식과 무관하며,
 // 주소(주변 양식의 제출 주소 포함)에 개인정보·계정 정보가 실려 있지 않다. iframe 안의 링크는 같은 문서인지 견줄 그 문서 주소를 모르므로 대상이 아니다.
 // 사이트 경계는 호출하는 쪽(pageActionSiteBlock)이 본다.
@@ -421,6 +421,8 @@ export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boole
   if (!/^https?:$/.test(dest.protocol)) return false;
   if (t.ancestorHref || t.submitTo || t.submitUrl || t.download || t.submitsPersonal) return false;
   if (t.pingUrls?.length) return false;
+  // 버튼·버튼 역할·인라인 클릭 처리기 안의 링크는 바깥 처리기가 이동을 취소하고 다른 동작(결제)을 할 수 있다.
+  if (t.insideControl) return false;
   if (t.choiceUrls?.length || t.scopeSubmitUrls?.length) return false;
   // 같은 문서 안 위치만 바꾸는 링크(#…)는 이동하지 않고 페이지 처리기만 부르는 경우가 많다.
   if (pageUrl) {

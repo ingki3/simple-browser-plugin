@@ -186,6 +186,15 @@ const CLICK_KIND: TargetKind = {
     const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
     // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
     const ancestorHref = enclosingLinkHref(el);
+    // 대상이 클릭 이벤트 경로의 다른 컨트롤(버튼·버튼 역할·summary·label·인라인 클릭 처리기) 안에 있는지.
+    // 그 바깥 처리기가 이동을 취소하고 다른 동작을 할 수 있어, 링크 이동 허락(grantableLink)에서 뺀다.
+    const parent = eventParent(el);
+    const insideControl =
+      !!parent &&
+      !!closestAcross(
+        parent,
+        'button, input[type=submit], input[type=image], input[type=button], input[type=reset], [role="button"], summary, label, [onclick]',
+      );
     // 링크의 ping 주소(하이퍼링크 감사): 누르면 목적지 주소를 담아 ping 주소로도 요청이 간다.
     const pingLink = closestAcross(el, "a[ping], area[ping]");
     const pingUrls = pingLink
@@ -246,6 +255,7 @@ const CLICK_KIND: TargetKind = {
       ...(submitTo ? { submitTo } : {}),
       ...(submitUrl ? { submitUrl } : {}),
       ...(ancestorHref ? { ancestorHref } : {}),
+      ...(insideControl ? { insideControl: true } : {}),
       ...(outerText ? { outerText } : {}),
       ...(scopeForms.changed.length ? { scopeSubmitUrls: scopeForms.changed } : {}),
       ...(scopeForms.actions.length ? { scopeFormActions: scopeForms.actions } : {}),

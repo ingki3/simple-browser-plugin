@@ -277,4 +277,5 @@ test("grantableLink: 구조만 보고 같은 문서 밖으로 가는 일반 링�
   assert.equal(grantableLink(link({ role: "button" }), page), false);
   assert.equal(grantableLink(link({ role: "menuitem" }), page), false);
   assert.equal(grantableLink(link({ inFrame: true }), page), false);
+  assert.equal(grantableLink(link({ insideControl: true }), page), false);
 });
