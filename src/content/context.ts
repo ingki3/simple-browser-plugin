@@ -1,11 +1,5 @@
 // 조작 대상 주변의 맥락 판정(결제 화면인지 등). 클릭 대상과 입력 칸이 함께 쓴다.
-import {
-  PAYMENT_TEXT_RE,
-  decodeDeepText,
-  splitIdentifier,
-  withoutOrderLookup,
-  withoutOrderLookupRoute,
-} from "@/lib/autoApprove";
+import { PAYMENT_TEXT_RE, decodeDeepText, splitIdentifier } from "@/lib/autoApprove";
 import { isShadowRoot } from "./docs";
 
 function parentDocument(doc: Document): Document | null {
@@ -21,12 +15,7 @@ function parentDocument(doc: Document): Document | null {
 function paymentDocument(doc: Document): boolean {
   const loc = doc.defaultView?.location;
   // 경로·쿼리·해시를 따로, 잘못된 인코딩이 섞여도 올바른 부분은 풀어 본다.
-  // 주문 조회 화면(/my/order, 제목 "주문내역")은 결제 화면이 아니다. 조회 낱말·문구를 빼고 본다.
-  const route = [
-    withoutOrderLookupRoute(decodeDeepText(loc?.pathname ?? "")),
-    decodeDeepText(loc?.search ?? ""),
-    decodeDeepText(loc?.hash ?? ""),
-  ].join("");
+  const route = [loc?.pathname ?? "", loc?.search ?? "", loc?.hash ?? ""].map(decodeDeepText).join("");
   const words = splitIdentifier(route);
   // order·pay는 낱말 단위로만(border-collie, display 같은 단어 속 글자는 아님).
   if (/(checkout|payment)/i.test(route) || /(\bpay\b|\border\b)/i.test(words)) return true;
@@ -41,7 +30,7 @@ function paymentDocument(doc: Document): boolean {
   const headings = roots
     .flatMap((r) => Array.from(r.querySelectorAll("h1, h2"), (h) => slottedText(h)))
     .join(" ");
-  return PAYMENT_TEXT_RE.test(withoutOrderLookup(`${route} ${doc.title} ${headings}`));
+  return PAYMENT_TEXT_RE.test(`${route} ${doc.title} ${headings}`);
 }
 
 // 자신부터 위로 올라가며 selector에 맞는 첫 요소. shadow root 경계를 넘어 host로 올라간다.
@@ -84,14 +73,14 @@ export function inPaymentContext(el: HTMLElement, form: HTMLFormElement | null):
     if (!isShadowRoot(root) || seen.has(root)) continue;
     seen.add(root);
     const headings = Array.from(root.querySelectorAll("h1, h2"), (h) => h.textContent ?? "").join(" ");
-    if (PAYMENT_TEXT_RE.test(withoutOrderLookup(headings))) return true;
+    if (PAYMENT_TEXT_RE.test(headings)) return true;
   }
   // 양식과 그 바깥 대화상자를 각각 본다(대화상자의 "결제 금액" 문구 아래 양식 속 '확인' 버튼).
   // 대상의 대화상자와, 연결된 양식이 든 대화상자(<button form=f>가 대화상자 밖에 있는 경우)를 모두 본다.
   const dialogSel = 'dialog, [role="dialog"], [role="alertdialog"]';
   // 겹친 대화상자는 바깥쪽까지 모두 본다(바깥 대화상자의 결제 금액, 안쪽 대화상자의 '확인').
   const dialogs = [...allAcross(el, dialogSel), ...(form ? allAcross(form, dialogSel) : [])];
-  if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test(withoutOrderLookup(deepText(scope))))) {
+  if ([form, ...dialogs].some((scope) => !!scope && PAYMENT_TEXT_RE.test(deepText(scope)))) {
     return true;
   }
   // 같은 출처 iframe 안이면 그 iframe 요소를 부모 문서의 대상으로 보고 대화상자·shadow 맥락을 다시 본다

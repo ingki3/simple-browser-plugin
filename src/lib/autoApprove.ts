@@ -15,30 +15,6 @@ export const AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
 // 돈이 나가는 버튼: 결제·구매·주문·송금 등. 영문 order는 단어로 따로 본다(Confirm order, Place your order).
 export const PAYMENT_TEXT_RE =
   /(결제|구매|구입|주문|송금|이체|충전|후원|기부|입금|\bpay\b|payment|checkout|check\s*out|\bbuy\b|purchase|\border\b|donate|\btransfer\b|\bwire\b|remit|send\s*money)/i;
-// 주문을 '보는' 문구(주문 내역·조회, 주문/배송 조회, order history, Your Orders 등. "Place your order" 때문에 my·your는 복수형만)는 결제가 아니라서 결제 판정 전에 지운다.
-// 지운 나머지에 결제 단서가 있으면 그대로 묻는다("주문 내역에서 결제하기"). "주문 확인"·"Confirm order"처럼
-// 결제 마지막 단계에도 쓰이는 문구는 넣지 않는다(배송 조회와 붙은 "주문확인/배송조회"만 조회로 본다).
-const ORDER_LOOKUP_TEXT_RE =
-  /(주문\s*확인\s*[/·,]\s*배송\s*조회|주문\s*[/·,&]?\s*배송\s*(조회|내역|현황)|주문\s*(내역|조회|목록|현황|이력|상세)|\border\s*(history|status|tracking|details?|lookup|list)\b|\b(my|your)\s*orders\b|\btrack\s*(my\s*|your\s*)?orders?\b)/gi;
-
-export function withoutOrderLookup(text: string): string {
-  return text.replace(ORDER_LOOKUP_TEXT_RE, " ");
-}
-
-// 경로에 조회 낱말(my, history, list, tracking…)이 있으면 그 경로의 order·orders 낱말은 주문 조회로 보고 지운다
-// (/my/order, /order/list, /my11st/order/OrderList). 다른 결제 낱말(checkout, pay, buy…)은 그대로 남아 묻는다.
-const ORDER_LOOKUP_ROUTE_WORDS = new Set([
-  "my", "mypage", "myshopping", "history", "list", "status", "tracking", "track", "delivery", "deliveries",
-  "shipping", "shipment", "detail", "details", "lookup",
-]);
-
-export function withoutOrderLookupRoute(path: string): string {
-  const words = splitIdentifier(path);
-  const tokens = words.toLowerCase().split(/[^a-z0-9]+/);
-  if (!tokens.some((w) => ORDER_LOOKUP_ROUTE_WORDS.has(w) || /^my\d+[a-z]*$/.test(w))) return path;
-  return words.replace(/\b(my)?orders?\b/gi, " ");
-}
-
 // 개인정보를 내보내는 버튼: 가입·신청·제출·인증 등.
 const SUBMIT_TEXT_RE =
   /(가입|신청|제출|접수|본인\s*인증|인증\s*(번호|요청|하기)|예약\s*하기|문의\s*(하기|등록)|sign\s*up|register|submit|verify)/i;
@@ -79,7 +55,7 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       // 붙여 쓴 이름(PayNow, BuyNow, pay_now)도 낱말로 나눠 본다.
       const raw = `${t.name} ${t.outerText ?? ""}`;
       const text = `${raw} ${splitIdentifier(raw)}`;
-      if (PAYMENT_TEXT_RE.test(withoutOrderLookup(text))) return "결제·주문 버튼";
+      if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
       // 파일을 내려받는 링크(download 속성)는 이미지 저장처럼 묻는다.
       if (t.download) return "파일 내려받기 링크";
@@ -379,8 +355,7 @@ export function sensitiveUrlReason(url: string): string | null {
   if (overflow) return "끝까지 확인하지 못한 복잡한 주소";
   for (const u of urls) {
     // 경로·쿼리·해시를 따로 풀어 본다(한 부분의 잘못된 인코딩이 다른 부분 해석을 막지 않게).
-    // 주문 조회 경로(/my/order)의 order 낱말은 뺀다.
-    const route = [withoutOrderLookupRoute(decodeDeepText(u.pathname)), decodeDeepText(u.search), decodeDeepText(u.hash)].join("");
+    const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join("");
     // 이어 붙인 표기(pay_now, confirm_order, placeOrder)도 낱말로 나눠 보고, 버튼 문구와 같은 금전 단서
     // (donate, purchase, buy, 충전 등)도 경로 낱말에 적용한다.
     const words = splitIdentifier(route).replace(/[/?#&=+]+/g, " ");
