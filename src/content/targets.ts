@@ -234,7 +234,9 @@ function staleError(id: string): Error {
 
 // 등록한 그 요소만 쓴다. 다시 그려져 사라졌으면 비슷한 요소로 바꾸지 않고 멈춘다 — 같은 이름·순번의 요소가
 // 다른 행일 수 있다(승인한 행이 지워지고 다음 행이 올라온 경우). 모델이 다시 찾아 새 승인을 받는다.
-function resolve(id: string): { entry: Entry; el: HTMLElement } {
+// restore: 페이지가 지운·바꾼 대상 표시 속성을 되돌릴지. 승인 카드용 확인(inspectTarget)은 요소 참조만으로 확인하고
+// 페이지를 바꾸지 않는다(모델이 고른 대상이 승인 전에 페이지에 드러나지 않게). 되돌리기는 승인 뒤 실행 경로에서만.
+function resolve(id: string, restore = true): { entry: Entry; el: HTMLElement } {
   const entry = registry.get(id);
   if (!entry) throw staleError(id);
   const el = entry.ref.deref();
@@ -243,7 +245,7 @@ function resolve(id: string): { entry: Entry; el: HTMLElement } {
     throw new Error(`대상 '${entry.base.name || id}'이(가) 페이지에서 다시 그려지거나 사라졌습니다. 다시 찾으세요.`);
   }
   // 페이지가 속성만 지우거나 바꿨으면 표시만 되돌린다(기술 확인은 호출한 쪽이 한다).
-  if (el.getAttribute(entry.kind.attr) !== id) el.setAttribute(entry.kind.attr, id);
+  if (restore && el.getAttribute(entry.kind.attr) !== id) el.setAttribute(entry.kind.attr, id);
   return { entry, el };
 }
 
@@ -269,7 +271,7 @@ function checkVisible(entry: Entry, el: HTMLElement, name: string, acting: boole
 // 승인 카드용: 지금 요소가 find_* 때와 같은지 확인하고, 목록 위치까지 담은 기술을 이 호출(callId)의 승인 대상으로 남긴다.
 export function inspectTarget(id: string, callId: string, prefix: string): TargetInfo {
   entryOf(id, prefix);
-  const { entry, el } = resolve(id);
+  const { entry, el } = resolve(id, false);
   const now = baseInfo(entry.kind, el);
   if (!sameBase(now, entry.base)) {
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
