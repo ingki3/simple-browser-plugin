@@ -412,7 +412,9 @@ export class ChatAgent {
 
       const completed = await this.streamLoop(apiKey, model, systemPrompt, turn);
       // 읽기 레시피: 답을 마친 턴에서 통한 읽기 방법만 남긴다(중단·도구 호출 한도 초과는 버림).
-      commitReads(turnTab, completed && !this.isStale(turn));
+      // 외부 본문 보호가 켜진 대화에서는 읽기 레시피를 저장하지 않고 이 턴의 관찰을 버린다(보호 대상에서 유래한
+      // 모델 인자가 레시피로 남아 새 대화의 readHints로 다시 들어오지 않게).
+      commitReads(turnTab, completed && !this.isStale(turn) && !this.externalContent);
       endTurn(this.isStale(turn) ? "aborted" : "ok");
     } catch (err) {
       commitReads(turnTab, false);
