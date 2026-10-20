@@ -54,6 +54,8 @@ export interface TargetInfo {
   ancestorHref?: string;
   // 대상이 버튼·링크 안의 요소면 실제로 작동하는 그 바깥 버튼·링크의 글자. 결제·제출 문구 판정용.
   outerText?: string;
+  // 대상이 클릭 이벤트 경로의 다른 컨트롤(버튼·버튼 역할·summary·label·인라인 onclick) 안에 있는지.
+  insideControl?: boolean;
   // 대상이나 감싼 링크에 download 속성이 있는지(누르면 파일을 내려받는다).
   download?: boolean;
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).

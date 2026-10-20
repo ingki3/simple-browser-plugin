@@ -20,6 +20,7 @@ export type ChatMessage =
       args: unknown;
       previewSummary: string;
       previewDetails?: unknown;
+      linkGrantOffer?: boolean;
       resolved: "approved" | "cancelled" | null;
     }
   | {

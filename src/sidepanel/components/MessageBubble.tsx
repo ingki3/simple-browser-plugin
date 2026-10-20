@@ -6,7 +6,7 @@ import { ToolResultCard } from "./ToolResultCard";
 
 interface Props {
   message: ChatMessage;
-  onApprove: (callId: string) => void;
+  onApprove: (callId: string, allowLinksThisTurn?: boolean) => void;
   onCancel: (callId: string) => void;
 }
 

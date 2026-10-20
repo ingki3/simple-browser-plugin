@@ -244,3 +244,38 @@ test("values split by line breaks are still personal", async () => {
   assert.ok(looksPersonalValue("010-1234-\r\n5678"));
   assert.ok(!looksPersonalValue("hello\nworld"));
 });
+
+test("grantableLink: 구조만 보고 같은 문서 밖으로 가는 일반 링크만 허락 대상", async () => {
+  const { grantableLink } = await import("../src/lib/autoApprove.ts");
+  const page = "https://shop.example/p/1";
+  const link = (over = {}) => t({ tag: "a", role: "link", name: "주문/배송 조회", href: "https://shop.example/my/order", ...over });
+  // 글자·경로에 결제 단서가 있어도 구조가 일반 링크면 대상이다(사이트 경계는 따로 본다).
+  assert.equal(grantableLink(link(), page), true);
+  assert.equal(grantableLink(link({ name: "결제하기", href: "https://shop.example/checkout" }), page), true);
+  // 버튼, 양식 제출, 내려받기, 개인정보 양식, 바뀐 양식이 있는 범위, 감싼 링크는 아니다.
+  assert.equal(grantableLink(t({ name: "주문 조회" }), page), false);
+  assert.equal(grantableLink(link({ submitTo: "https://shop.example/order" }), page), false);
+  assert.equal(grantableLink(link({ download: true }), page), false);
+  assert.equal(grantableLink(link({ submitsPersonal: true }), page), false);
+  assert.equal(grantableLink(link({ scopeSubmitUrls: ["https://shop.example/s?q=1"] }), page), false);
+  assert.equal(grantableLink(link({ ancestorHref: "https://shop.example/x" }), page), false);
+  // 웹 주소가 아니거나 같은 문서 안 위치만 바꾸는 링크는 아니다.
+  assert.equal(grantableLink(link({ href: "javascript:void(0)" }), page), false);
+  assert.equal(grantableLink(link({ href: "https://shop.example/p/1#reviews" }), page), false);
+  assert.equal(grantableLink(link({ href: "https://shop.example/p/1" }), page), false);
+  // 주소에 개인정보·비밀 값이 실리면 아니다. ping이 있는 링크는 이동과 별도로 POST를 보내므로 아니다.
+  assert.equal(grantableLink(link({ href: "https://shop.example/my?email=a%40b.com" }), page), false);
+  assert.equal(grantableLink(link({ href: "https://user:pw@shop.example/my" }), page), false);
+  assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/ping/sk-or-v1-abcdefghijklmnop"] }), page), false);
+  assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/ping"] }), page), false);
+  assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/order/123/confirm"] }), page), false);
+  // 주변 양식의 제출 주소에 개인정보가 실리면 아니다(결제 낱말만 있는 주소는 구조 판정에 영향 없음).
+  assert.equal(grantableLink(link({ scopeFormActions: ["https://shop.example/send?email=alice%40example.com"] }), page), false);
+  assert.equal(grantableLink(link({ aroundFormActions: ["https://shop.example/c/alice@example.com"] }), page), false);
+  assert.equal(grantableLink(link({ scopeFormActions: ["https://shop.example/search"] }), page), true);
+  // 버튼 역할의 앵커, iframe 안 링크는 아니다.
+  assert.equal(grantableLink(link({ role: "button" }), page), false);
+  assert.equal(grantableLink(link({ role: "menuitem" }), page), false);
+  assert.equal(grantableLink(link({ inFrame: true }), page), false);
+  assert.equal(grantableLink(link({ insideControl: true }), page), false);
+});

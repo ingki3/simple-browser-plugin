@@ -137,7 +137,8 @@ export interface PageContent {
 
 export type PanelToBg =
   | { kind: "user_msg"; text: string; conversationId: string }
-  | { kind: "approve_tool"; callId: string }
+  // allowLinksThisTurn: 카드가 제안했을 때만 유효. 이번 요청 동안 같은 사이트 안의 일반 링크 이동은 묻지 않는다.
+  | { kind: "approve_tool"; callId: string; allowLinksThisTurn?: boolean }
   | { kind: "cancel_tool"; callId: string }
   | { kind: "abort_stream" }
   | { kind: "reset_conversation"; conversationId: string }
@@ -165,6 +166,8 @@ export type BgToPanel =
       args: unknown;
       previewSummary: string;
       previewDetails?: unknown;
+      // 일반 링크 클릭 카드면 true: "이번 요청 동안 링크 이동은 묻지 않기"를 함께 보여 준다(grantableLink).
+      linkGrantOffer?: boolean;
     }
   | {
       kind: "tool_result";

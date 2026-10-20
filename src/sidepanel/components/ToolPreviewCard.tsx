@@ -2,12 +2,12 @@ import { KO } from "../i18n/ko";
 import type { ChatMessage } from "../state/chatStore";
 
 type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
-  onApprove: (callId: string) => void;
+  onApprove: (callId: string, allowLinksThisTurn?: boolean) => void;
   onCancel: (callId: string) => void;
 };
 
 export function ToolPreviewCard(props: Props) {
-  const { callId, toolName, previewSummary, previewDetails, resolved, onApprove, onCancel } = props;
+  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, resolved, onApprove, onCancel } = props;
   const disabled = resolved !== null;
 
   return (
@@ -30,6 +30,15 @@ export function ToolPreviewCard(props: Props) {
             <button className="btn-cancel" onClick={() => onCancel(callId)}>
               {KO.cancel}
             </button>
+            {linkGrantOffer && (
+              <button
+                className="btn-approve-links"
+                title={KO.approveLinksThisTurnHelp}
+                onClick={() => onApprove(callId, true)}
+              >
+                {KO.approveLinksThisTurn}
+              </button>
+            )}
             <button className="btn-approve" onClick={() => onApprove(callId)}>
               {KO.approve}
             </button>

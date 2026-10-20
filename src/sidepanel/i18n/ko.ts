@@ -8,6 +8,9 @@ export const KO = {
   emptyState: "페이지에 대해 질문하거나 작업을 요청해 보세요.\n예: \"이 페이지 번역해줘\", \"빈 입력칸 채워줘\", \"이미지 다 다운받아줘\"",
   toolConfirmTitle: "도구 실행 확인",
   approve: "승인",
+  approveLinksThisTurn: "승인 + 이번 요청 동안 링크 이동 묻지 않기",
+  approveLinksThisTurnHelp:
+    "이번 요청이 끝날 때까지 같은 사이트 안의 일반 링크(다른 페이지로 가는 <a> 링크)는 묻지 않고 누릅니다. 버튼·양식 제출·다른 사이트로 가는 링크·개인정보가 채워진 양식은 계속 묻습니다.",
   cancel: "취소",
   errorMissingKey: "API 키가 설정되지 않았습니다. 오른쪽 위 설정에서 OpenRouter API 키를 입력해 주세요.",
   errorGeneric: "요청에 실패했습니다.",

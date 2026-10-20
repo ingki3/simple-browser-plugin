@@ -51,7 +51,7 @@ chrome.runtime.onConnect.addListener((port) => {
         return;
       }
       case "approve_tool":
-        agent?.approveTool(msg.callId);
+        agent?.approveTool(msg.callId, msg.allowLinksThisTurn === true);
         return;
       case "cancel_tool":
         agent?.cancelTool(msg.callId);
