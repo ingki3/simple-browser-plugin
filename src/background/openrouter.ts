@@ -154,10 +154,11 @@ export class ChatAgent {
   // 자동 실행해도 되는 사이트: 이 턴을 시작한 탭의 사이트와, 이 대화에서 승인 카드로 이동을 허락한 사이트.
   private turnSite: string | null = null;
   private approvedSites = new Set<string>();
-  // 승인 카드에서 "이번 요청 동안 링크 이동 묻지 않기"를 고른 턴. 턴 번호는 새 요청·중단마다 바뀌므로
-  // 그 요청이 끝나면 저절로 쓰이지 않는다. 그 선택지를 보여 준 카드(callId → 턴)만 받아들인다.
-  private linkGrantTurn: number | null = null;
-  private linkGrantOffers = new Map<string, number>();
+  // 승인 카드에서 "이번 요청 동안 링크 이동 묻지 않기"를 고른 턴과 그 카드의 페이지 사이트. 턴 번호는 새 요청·중단마다
+  // 바뀌므로 그 요청이 끝나면 저절로 쓰이지 않고, 대화 전체의 신뢰 사이트와 달리 그 사이트 안의 링크에만 쓴다.
+  // 그 선택지를 보여 준 카드(callId → 턴·사이트)만 받아들인다.
+  private linkGrant: { turn: number; site: string } | null = null;
+  private linkGrantOffers = new Map<string, { turn: number; site: string }>();
   private lastAttachedPdfUrl: string | null = null;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
   // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
@@ -217,10 +218,10 @@ export class ChatAgent {
   }
 
   approveTool(callId: string, allowLinksThisTurn = false): void {
-    const offeredTurn = this.linkGrantOffers.get(callId);
-    if (allowLinksThisTurn && this.pendingApprovals.has(callId) && offeredTurn === this.currentTurn) {
-      this.linkGrantTurn = offeredTurn;
-      debugLog("tool:link_grant", `turn ${offeredTurn}`);
+    const offer = this.linkGrantOffers.get(callId);
+    if (allowLinksThisTurn && this.pendingApprovals.has(callId) && offer?.turn === this.currentTurn) {
+      this.linkGrant = offer;
+      debugLog("tool:link_grant", `turn ${offer.turn}`);
     }
     this.pendingApprovals.get(callId)?.(true);
   }
@@ -233,7 +234,7 @@ export class ChatAgent {
     this.history = [];
     this.lastAttachedPdfUrl = null;
     this.approvedSites.clear();
-    this.linkGrantTurn = null;
+    this.linkGrant = null;
   }
 
   private send(msg: BgToPanel): void {
@@ -653,21 +654,25 @@ export class ChatAgent {
           }
           // 클릭·입력은 지금 페이지와 링크가 사용자가 고른 사이트 안일 때만 자동 실행한다.
           // 입력값의 상대 주소는 탭 주소와, 페이지가 실제로 쓰는 기준 주소(<base href>) 모두로 풀어 본다.
-          const siteBlock = (): string | null => {
+          const siteBlock = (sites: ReadonlySet<string>): string | null => {
             for (const base of [pageUrl, ...(preview.baseUrls ?? [])]) {
-              const why = pageActionSiteBlock(trusted, base, preview.linkHrefs ?? [], preview.fillValues ?? []);
+              const why = pageActionSiteBlock(sites, base, preview.linkHrefs ?? [], preview.fillValues ?? []);
               if (why) return why;
             }
             return null;
           };
-          // 구조상 일반 링크(grantableLink)이고 사이트 안으로 가는 클릭이면 카드에 "이번 요청 동안 링크 이동
-          // 묻지 않기"를 제안하고, 이번 요청에서 이미 그렇게 허락받았으면 결제 문구 판정 없이 실행한다.
+          // 구조상 일반 링크(grantableLink)이고 지금 페이지와 같은 사이트 안으로 가는 클릭이면 카드에 "이번 요청 동안
+          // 링크 이동 묻지 않기"를 제안한다. 이번 요청에서 같은 사이트에 그렇게 허락받았으면 결제 문구 판정 없이 실행한다.
+          // 사이트 경계는 대화 전체의 신뢰 사이트가 아니라 지금 페이지의 사이트 하나로만 본다.
+          const pageSite = pageUrl ? siteOf(pageUrl) : null;
           const linkOffer =
             toolName === "click_element" &&
+            !!pageSite &&
             !!preview.clickTarget &&
             grantableLink(preview.clickTarget, pageUrl) &&
-            siteBlock() === null;
-          const linkGranted = linkOffer && this.linkGrantTurn === turn;
+            siteBlock(new Set([pageSite])) === null;
+          const linkGranted =
+            linkOffer && this.linkGrant?.turn === turn && this.linkGrant.site === pageSite;
           const autoMode = autoApprove || linkGranted;
           let block = linkGranted
             ? null
@@ -676,8 +681,9 @@ export class ChatAgent {
               : preview.autoBlock !== undefined
                 ? preview.autoBlock
                 : autoApproveBlock(toolName, []);
-          if (autoMode && !block && (toolName === "click_element" || toolName === "fill_form_fields")) {
-            block = siteBlock();
+          // 링크 허락으로 실행하는 클릭은 위에서 지금 페이지의 사이트 안인지 이미 봤다.
+          if (autoMode && !linkGranted && !block && (toolName === "click_element" || toolName === "fill_form_fields")) {
+            block = siteBlock(trusted);
           }
           let approved: boolean;
           if (autoMode && !block) {
@@ -696,7 +702,7 @@ export class ChatAgent {
               previewDetails: preview.details,
               ...(linkOffer ? { linkGrantOffer: true } : {}),
             });
-            if (linkOffer) this.linkGrantOffers.set(callId, turn);
+            if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
             approved = await new Promise<boolean>((resolve) => {
               this.pendingApprovals.set(callId, resolve);
             });
