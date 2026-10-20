@@ -277,21 +277,20 @@ export function findClickables(args: FindClickablesArgs): ClickableElement[] {
   return scanTargets(() => collectClickables(args));
 }
 
-// 낱말이 여럿일 때 점수로 줄 세우기 전에 모을 최대 후보 수.
-const MAX_RANKED_CANDIDATES = 400;
-
 function collectClickables(args: FindClickablesArgs): ClickableElement[] {
   const limit = Math.min(args.limit ?? 50, 200);
   const terms = queryTerms(args.query);
+  // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
+  // footer의 '주문/배송 조회'가 빠지지 않게). 낱말이 하나 이하면 예전처럼 문서 순서로 limit개에서 멈춘다.
   const ranked = terms.length > 1;
-  const cap = ranked ? MAX_RANKED_CANDIDATES : limit;
   const found: Array<{ el: HTMLElement; item: Omit<ClickableElement, "id">; score: number }> = [];
+  const full = () => !ranked && found.length >= limit;
   const seenKeys = new Set<string>();
   for (const root of getAccessibleRoots()) {
-    if (found.length >= cap) break;
+    if (full()) break;
     const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
     for (const el of nodes) {
-      if (found.length >= cap) break;
+      if (full()) break;
       if (!isVisible(el)) continue;
 
       const inViewport = rectInViewport(el);
@@ -316,13 +315,21 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       if (seenKeys.has(key)) continue;
       seenKeys.add(key);
 
-      found.push({ el, item: { text, href, tag, role, region, inViewport }, score });
+      const entry = { el, item: { text, href, tag, role, region, inViewport }, score };
+      if (!ranked) {
+        found.push(entry);
+        continue;
+      }
+      // 점수 내림차순을 유지하며 넣는다. 같은 점수면 먼저 나온 것(문서 순서)이 앞이다.
+      if (found.length >= limit && score <= found[found.length - 1].score) continue;
+      let i = found.length;
+      while (i > 0 && found[i - 1].score < score) i -= 1;
+      found.splice(i, 0, entry);
+      if (found.length > limit) found.pop();
     }
   }
 
-  // sort는 안정 정렬이라 점수가 같으면 문서 순서가 유지된다.
-  if (ranked) found.sort((a, b) => b.score - a.score);
-  return found.slice(0, limit).map(({ el, item }) => ({ id: registerTarget(CLICK_KIND, el), ...item }));
+  return found.map(({ el, item }) => ({ id: registerTarget(CLICK_KIND, el), ...item }));
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
