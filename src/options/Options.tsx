@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "@/sidepanel/components/ActionLogField";
 import { AutoApproveField } from "@/sidepanel/components/AutoApproveField";
+import { RememberPagesField } from "@/sidepanel/components/RememberPagesField";
 import { ShowThinkingField } from "@/sidepanel/components/ShowThinkingField";
 import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
 import {
@@ -34,6 +35,7 @@ const DEFAULTS: Settings = {
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   autoApprove: false,
   showThinking: false,
+  rememberPages: true,
 };
 
 export function Options() {
@@ -60,6 +62,7 @@ export function Options() {
         csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
         autoApprove: raw.autoApprove === true,
         showThinking: raw.showThinking === true,
+        rememberPages: raw.rememberPages !== false,
       });
     });
   }, []);
@@ -235,6 +238,11 @@ export function Options() {
       <ShowThinkingField
         enabled={draft.showThinking}
         onToggle={(showThinking) => setDraft({ ...draft, showThinking })}
+      />
+
+      <RememberPagesField
+        enabled={draft.rememberPages}
+        onToggle={(rememberPages) => setDraft({ ...draft, rememberPages })}
       />
 
       <ActionLogField

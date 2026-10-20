@@ -22,6 +22,7 @@ const DEFAULTS: Settings = {
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   autoApprove: false,
   showThinking: false,
+  rememberPages: true,
 };
 
 
@@ -49,6 +50,7 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
     csvMaxChars: normalizeCsvMaxChars(raw?.csvMaxChars),
     autoApprove: raw?.autoApprove === true,
     showThinking: raw?.showThinking === true,
+    rememberPages: raw?.rememberPages !== false,
   };
 }
 
