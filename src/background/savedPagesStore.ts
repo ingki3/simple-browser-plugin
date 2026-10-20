@@ -72,11 +72,12 @@ export async function savePage(offerId: string, name: string, confirmedWarning: 
   if (!(await getSettings()).rememberPages) throw new Error("페이지 기억하기가 꺼져 있습니다.");
   if (offer.warning && !confirmedWarning) throw new Error("주소의 경고를 확인해야 저장할 수 있습니다.");
   const clean = normalizeName(name) || offer.title;
-  offers.delete(offerId);
   await enqueue(async () => {
     const next = addPage(await load(), { name: clean, url: offer.url, site: offer.site, savedAt: Date.now(), uses: 0 });
     await chrome.storage.local.set({ [SAVED_PAGES_KEY]: next });
   });
+  // 저장에 성공한 뒤에만 제안을 쓴다(쓰기 실패면 같은 카드로 다시 시도할 수 있게).
+  offers.delete(offerId);
 }
 
 export async function listPages(): Promise<SavedPage[]> {
@@ -105,7 +106,10 @@ export async function candidatesMessage(tabId: number | null): Promise<string | 
   if (tab.incognito || !tab.url) return null;
   const site = siteOf(tab.url);
   if (!site) return null;
-  const items = candidatesFor(await load(), (u) => withinSite(site, u));
+  // 후보 경계는 자동 실행의 신뢰 경계와 다르다: 같은 사이트(등록 도메인)이거나 같은 출처면 후보로 준다
+  // (공유 호스팅인 docs.google.com·*.github.io는 자동 실행 경계에서 늘 밖이지만, 같은 출처의 저장 항목은 쓸 수 있어야 한다).
+  // 이동 자체는 여전히 자동 실행·승인 규칙을 따른다.
+  const items = candidatesFor(await load(), (u) => siteOf(u) === site || withinSite(site, u));
   return items.length ? candidatesText(items) : null;
 }
 
