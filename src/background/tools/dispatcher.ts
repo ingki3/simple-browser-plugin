@@ -1,5 +1,6 @@
 import { autoApproveBlock } from "@/lib/autoApprove";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
+import { readChosenLinks, snapshotLinks } from "../linkedPages";
 import type {
   ClickableElement,
   FileLinkList,
@@ -73,6 +74,7 @@ export interface ToolPreview {
   // 선택 카드(다른 탭 고르기)의 후보와 최대 선택 수.
   choices?: Array<{ id: string; label: string; sub: string }>;
   choiceLimit?: number;
+  choiceDefaults?: string[];
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -214,6 +216,17 @@ export async function buildToolPreview(
           ...(info.scopeSubmitUrls ?? []),
           ...(info.pingUrls ?? []),
         ].filter(Boolean),
+      };
+    }
+    case "read_linked_pages": {
+      const args = parsedArgs as ToolArgs["read_linked_pages"];
+      const { choices, defaults, rejected } = await snapshotLinks(callId, turnTab, args.urls);
+      return {
+        summary: `페이지의 링크 ${choices.length}개를 탭 이동 없이(로그인 쿠키 없이) 받아 본문을 읽습니다. 읽을 링크를 고르세요. 읽은 내용은 모델 제공자로 전송됩니다.`,
+        ...(rejected.length ? { details: `읽지 않는 주소:\n${rejected.join("\n")}` } : {}),
+        choices,
+        choiceLimit: choices.length,
+        choiceDefaults: defaults,
       };
     }
     case "read_other_tabs": {
@@ -476,6 +489,15 @@ async function runTool(
           `스크립트 ${data.segmentCount}줄 추출: ${truncate(data.title, 60)}` +
           (data.truncated ? " (일부 잘림)" : "") +
           (data.complete ? "" : " (로딩 미완료, 뒷부분 누락 가능)"),
+        data,
+      };
+    }
+    case "read_linked_pages": {
+      const data = await readChosenLinks(callId, signal);
+      const okCount = data.filter((d) => "text" in d).length;
+      return {
+        ok: okCount > 0,
+        summary: `링크 ${data.length}개 중 ${okCount}개 읽음`,
         data,
       };
     }

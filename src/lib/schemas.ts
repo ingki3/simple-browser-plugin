@@ -181,6 +181,12 @@ export const readOtherTabsArgs = z
   })
   .strict();
 
+export const readLinkedPagesArgs = z
+  .object({
+    urls: z.array(z.string().min(1).max(2048)).min(1).max(8),
+  })
+  .strict();
+
 export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
@@ -205,6 +211,7 @@ export const toolArgsSchemas = {
   google_drive_list_recent: googleDriveListRecentArgs,
   google_drive_export: googleDriveExportArgs,
   read_other_tabs: readOtherTabsArgs,
+  read_linked_pages: readLinkedPagesArgs,
 } as const;
 
 export type ToolArgs = {

@@ -16,6 +16,7 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `query_dom` — CSS 선택자 기반 DOM 조회
   - `get_youtube_transcript` — YouTube 영상의 "스크립트 표시" 패널을 열어 타임스탬프 포함 자막 추출
   - `list_file_links` — 페이지의 첨부·다운로드 파일 링크와 짐작한 형식 목록
+  - `read_linked_pages` — 지금 페이지에 있는 링크(기사 등)를 탭 이동 없이 받아 본문 읽기 (선택 카드, 최대 8개). 페이지의 a[href]에 실제로 있는 주소만(모델이 만든 주소 거절), 로그인 쿠키 없이, 리다이렉트는 따라가지 않음. 결제·개인정보 신호가 있는 주소는 경고와 함께 기본 미선택, 다른 사이트 표시. 받아 온 HTML은 offscreen 문서의 DOMParser로 파싱해(스크립트 실행·하위 자원 요청 없음, offscreen CSP로 외부 자원 차단) 본문을 뽑음 — 요소 수·깊이·순회 글자 예산과 글자 상한으로 작업량 제한, 기사당 4,000자·전체 24,000자, 짧은 본문은 short 표시. 읽으면 외부 본문 보호가 켜짐
   - `read_other_tabs` — 같은 창의 다른 탭 본문 읽기 (선택 카드). 탭 목록은 모델에 보내지 않고, 카드를 띄우기 전에 후보(탭·최상위 문서·주소)를 고정해 패널에만 제목·사이트를 보임. 사용자가 고른 탭(최대 5개)만, 승인 직후 같은 창·시크릿 아님·로딩 완료·같은 문서·같은 주소인지 다시 확인하고 그 문서에서만 읽음(바뀌었으면 읽지 않음, 재주입 없음). 탭당 12,000자·전체 40,000자, 한 요청 2번까지. 읽으면 외부 본문 보호가 켜짐
   - `read_document` — 링크된 파일을 화면 이동 없이 내려받아 텍스트로 읽기 (브라우저 안에서 처리, 최대 20MB, 한 요청에 5개까지) (승인 카드)
     - Word·Excel·PowerPoint(.docx/.xlsx/.pptx), OpenDocument(.odt/.ods/.odp) → Markdown ([docling.rs-wasm](https://github.com/docling-project/docling.rs))

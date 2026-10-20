@@ -25,7 +25,8 @@ export type ToolName =
   | "google_drive_search"
   | "google_drive_list_recent"
   | "google_drive_export"
-  | "read_other_tabs";
+  | "read_other_tabs"
+  | "read_linked_pages";
 
 export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "fill_form_fields",
@@ -36,6 +37,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "read_document",
   // 사용자가 고른 다른 탭의 본문(다른 사이트의 정보)을 모델 제공자로 보낸다. 늘 사용자가 탭을 고른다.
   "read_other_tabs",
+  // 지금 페이지의 링크를 쿠키 없이 받아 본문을 읽는다. 늘 사용자가 읽을 링크를 고른다.
+  "read_linked_pages",
   "google_sheets_write_range",
   "google_sheets_append_rows",
   "google_sheets_write_markdown_table",
@@ -175,6 +178,8 @@ export type BgToPanel =
       // 선택 카드(다른 탭 고르기): 후보와 최대 선택 수. 고른 id만 승인 메시지로 돌려준다.
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;
+      // 처음부터 체크해 둘 후보(경고가 붙은 후보는 빼서 사용자가 직접 고르게).
+      choiceDefaults?: string[];
     }
   | {
       kind: "tool_result";
@@ -199,7 +204,9 @@ export type BgToContent =
   // 동작 기록용 페이지 뼈대 해시(최상위 문서).
   | { kind: "page_skeleton" }
   // 다른 탭 참조: 이 문서의 본문. 지금 주소가 expectUrl과 다르면 읽지 않는다.
-  | { kind: "read_page_text"; expectUrl: string };
+  | { kind: "read_page_text"; expectUrl: string }
+  // read_linked_pages: 이 주소들이 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 링크에 있는지와 링크 글자.
+  | { kind: "link_lookup"; urls: string[] };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;

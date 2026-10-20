@@ -158,3 +158,8 @@ export function pageActionSiteBlock(
   }
   return null;
 }
+
+// 주소(와 감싼 주소 모두)가 이 출처의 같은 사이트 안인지(read_linked_pages 카드의 "다른 사이트" 표시용).
+export function withinSite(site: string, url: string): boolean {
+  return withinTrusted(new Set([site]), url) === true;
+}

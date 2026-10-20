@@ -43,6 +43,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   google_drive_export: EXTERNAL,
   // 사용자가 고른 다른 탭(다른 사이트)의 본문.
   read_other_tabs: EXTERNAL,
+  // 링크한 페이지(다른 사이트일 수 있음)의 본문.
+  read_linked_pages: EXTERNAL,
 };
 
 // 외부 본문 보호가 켜진 대화에서 이 도구 호출에 승인 카드가 필요한지(관측 전용이 아니면 모두).

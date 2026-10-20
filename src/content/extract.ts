@@ -117,8 +117,10 @@ const FLOW_BREAK_TAGS = new Set([
 // 중복 없는 수집기: 텍스트 노드를 문서 순서대로 한 번씩만 읽는다. <br>은 줄바꿈, 블록 경계는 조각 경계.
 // 부모의 textContent를 통째로 넣지 않으므로 겹친 div가 글을 반복하지 않고, root 바로 아래의 글도 읽힌다.
 // 같은 문장이 서로 다른 곳에 실제로 반복되면 그대로 둔다.
-function collectFlowText(root: HTMLElement): string {
+// maxChars: 모은 글이 이만큼 되면 순회를 멈춘다(offscreen 추출용 상한, 기본은 끝까지).
+function collectFlowText(root: HTMLElement, maxChars = Infinity): string {
   const segments: string[] = [];
+  let total = 0;
   let buf = "";
   const flush = () => {
     const seg = buf
@@ -126,13 +128,18 @@ function collectFlowText(root: HTMLElement): string {
       .map((line) => line.replace(/\s+/g, " ").trim())
       .filter(Boolean)
       .join("\n");
-    if (seg) segments.push(seg);
+    if (seg) {
+      // 실제로 이어 붙일 길이(조각 사이 구분자 2자 포함)를 센다.
+      total += (segments.length ? 2 : 0) + seg.length;
+      segments.push(seg);
+    }
     buf = "";
   };
   // 재귀 대신 형제·부모 포인터로 돈다(아주 깊게 겹친 DOM에서도 호출 스택이 넘치지 않게).
   const isBreak = (n: Node) => n.nodeType === Node.ELEMENT_NODE && FLOW_BREAK_TAGS.has((n as Element).tagName.toUpperCase());
   let node: Node | null = root.firstChild;
   while (node) {
+    if (total >= maxChars) break;
     let descend = false;
     if (node.nodeType === Node.TEXT_NODE) {
       buf += node.nodeValue ?? "";
@@ -204,4 +211,51 @@ export function extractMainContent(): PageContent {
     mainText,
     wordCount: mainText.length,
   };
+}
+
+// offscreen에서 DOMParser로 파싱한 기사 HTML의 본문(read_linked_pages). 레이아웃이 없는 문서라 textContent·
+// TreeWalker 기반 함수만 쓴다. 작업량을 묶는다: 요소가 너무 많거나 깊으면 본문 후보 점수 계산을 건너뛰고,
+// 후보 점수 계산은 누적으로 읽은 글자 수 예산 안에서만 하며, 본문 수집은 글자 상한에서 멈춘다.
+const PARSED_MAX_ELEMENTS = 20_000;
+const PARSED_MAX_DEPTH = 64;
+const PARSED_SCORE_BUDGET_CHARS = 2_000_000;
+
+function depthExceeds(root: Element, limit: number): boolean {
+  // 반복으로 최대 깊이를 잰다(아주 깊은 DOM에서도 호출 스택이 넘치지 않게).
+  const stack: Array<[Element, number]> = [[root, 0]];
+  while (stack.length) {
+    const [el, d] = stack.pop()!;
+    if (d > limit) return true;
+    for (let c = el.firstElementChild; c; c = c.nextElementSibling) stack.push([c, d + 1]);
+  }
+  return false;
+}
+
+export function extractParsedDocument(doc: Document, maxChars: number): { title: string; text: string; truncated: boolean } {
+  // 제목도 상한을 둔다(본문 상한과 별개로 아주 긴 title이 대화 기록을 채우지 않게).
+  const title = (doc.title ?? "").trim().slice(0, 200);
+  if (!doc.body) return { title, text: "", truncated: false };
+  for (const el of Array.from(doc.querySelectorAll("script, style, noscript, template"))) el.remove();
+  const count = doc.getElementsByTagName("*").length;
+  const heavy = count > PARSED_MAX_ELEMENTS || depthExceeds(doc.body, PARSED_MAX_DEPTH);
+  let main: HTMLElement = doc.body;
+  if (!heavy) {
+    let budget = PARSED_SCORE_BUDGET_CHARS;
+    let bestScore = -Infinity;
+    for (const el of Array.from(doc.querySelectorAll<HTMLElement>("article, main, [role='main'], div, section"))) {
+      if (!(BLOCK_TAGS.has(el.tagName) || el.tagName === "ARTICLE" || el.tagName === "MAIN")) continue;
+      budget -= (el.textContent ?? "").length;
+      if (budget < 0) break;
+      const s = scoreElement(el);
+      if (s > bestScore) {
+        bestScore = s;
+        main = el;
+      }
+    }
+  }
+  // 상한보다 조금 더 모아 잘렸는지 안다.
+  let text = collectFlowText(main, maxChars + 1);
+  if (main !== doc.body && text.length < MAIN_MIN_CHARS) text = collectFlowText(doc.body, maxChars + 1);
+  const truncated = text.length > maxChars;
+  return { title, text: truncated ? text.slice(0, maxChars) : text, truncated };
 }

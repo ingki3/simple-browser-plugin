@@ -25,6 +25,17 @@ export interface DocumentJob {
   limits: SanitizeLimits;
 }
 
+// 받아 온 기사 HTML의 본문 추출(read_linked_pages). offscreen 문서의 DOMParser에서 동기로 처리한다.
+export interface HtmlExtractJob {
+  kind: "html_extract";
+  html: string;
+  maxChars: number;
+}
+
+export type HtmlExtractResult =
+  | { ok: true; title: string; text: string; truncated: boolean }
+  | { ok: false; kind: "failed" | "cancelled" | "timeout" | "closed"; message?: string };
+
 // 서비스 워커가 진행 중인 작업을 끝내 달라고 보낼 때 쓴다.
 export interface DocumentJobCancel {
   kind: "cancel";

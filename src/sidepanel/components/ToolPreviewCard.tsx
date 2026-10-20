@@ -8,11 +8,11 @@ type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
 };
 
 export function ToolPreviewCard(props: Props) {
-  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, choices, choiceLimit, resolved, onApprove, onCancel } =
+  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, choices, choiceLimit, choiceDefaults, resolved, onApprove, onCancel } =
     props;
   const disabled = resolved !== null;
-  // 선택 카드(다른 탭 고르기): 아무것도 고르지 않은 상태에서 시작하고, 고른 id만 승인으로 보낸다.
-  const [picked, setPicked] = useState<string[]>([]);
+  // 선택 카드(다른 탭·링크 고르기): choiceDefaults만 체크한 상태에서 시작하고, 고른 id만 승인으로 보낸다.
+  const [picked, setPicked] = useState<string[]>(() => (choiceDefaults ?? []).slice(0, choiceLimit ?? choiceDefaults?.length));
   const limit = choiceLimit ?? choices?.length ?? 0;
   const toggle = (id: string) =>
     setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length >= limit ? cur : [...cur, id]));

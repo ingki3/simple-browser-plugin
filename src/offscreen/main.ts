@@ -1,7 +1,15 @@
 // read_document 변환 전용 offscreen 문서. 서비스 워커는 Worker를 만들 수 없어서 여기서 만든다.
 // 작업마다 새 Worker에서 변환하고, 시간 초과·중단 요청이 오면 terminate()로 바로 끝내 메모리를 돌려받는다.
 import doclingWasmUrl from "docling.rs-wasm/web/docling_wasm_bg.wasm?url";
-import { CONVERT_TIMEOUT_MS, type DocumentJob, type DocumentJobResult, type WorkerJob } from "@/lib/documentJob";
+import {
+  CONVERT_TIMEOUT_MS,
+  type DocumentJob,
+  type DocumentJobResult,
+  type HtmlExtractJob,
+  type HtmlExtractResult,
+  type WorkerJob,
+} from "@/lib/documentJob";
+import { extractParsedDocument } from "@/content/extract";
 
 // docling wasm(약 15MB)은 한 번만 컴파일하고 모듈을 Worker에 넘긴다.
 let compiled: Promise<WebAssembly.Module> | null = null;
@@ -64,9 +72,25 @@ function runJob(job: DocumentJob, port: MessagePort): void {
   );
 }
 
+// 기사 HTML 본문 추출. DOMParser 문서는 스크립트를 실행하지 않고 하위 자원을 요청하지 않으며(실측),
+// 이 페이지의 CSP도 외부 자원을 막는다. 파싱한 노드를 이 문서에 넣지 않는다. 동기 처리라 중간 취소는 없고,
+// 서비스 워커가 취소한 작업의 결과는 그쪽에서 버린다.
+function runHtmlJob(job: HtmlExtractJob, port: MessagePort): void {
+  let result: HtmlExtractResult;
+  try {
+    const doc = new DOMParser().parseFromString(job.html, "text/html");
+    result = { ok: true, ...extractParsedDocument(doc, job.maxChars) };
+  } catch (err) {
+    result = { ok: false, kind: "failed", message: err instanceof Error ? err.message : String(err) };
+  }
+  port.postMessage(result);
+  port.close();
+}
+
 navigator.serviceWorker.onmessage = (ev: MessageEvent) => {
-  const job = ev.data as DocumentJob | null;
+  const job = ev.data as DocumentJob | HtmlExtractJob | null;
   const port = ev.ports[0];
-  if (job?.kind !== "document_convert" || !port) return;
-  runJob(job, port);
+  if (!port) return;
+  if (job?.kind === "document_convert") runJob(job, port);
+  else if (job?.kind === "html_extract") runHtmlJob(job, port);
 };
