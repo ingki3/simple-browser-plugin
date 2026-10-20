@@ -190,6 +190,8 @@ export type BgToPanel =
     }
   | { kind: "error"; message: string }
   | { kind: "info"; title: string; message: string }
+  // 턴을 마친 뒤 탭이 다른 화면에 있으면 "이 페이지 기억하기" 제안(저장은 사용자가 이름을 확인하고 누를 때만).
+  | { kind: "page_save_offer"; offer: { offerId: string; url: string; title: string; site: string; warning: string | null } }
   | { kind: "settings_warning"; message: string };
 
 export type BgToContent =
@@ -238,6 +240,8 @@ export interface Settings {
   autoApprove: boolean;
   // 추론(thinking) 글자를 접이식 상자로 보일지. 끄면(기본) 추론 중에 "생각 중…" 표시만 보인다.
   showThinking: boolean;
+  // "이 페이지 기억하기": 사용자가 저장한 페이지를 같은 사이트에서 모델에 이동 후보로 준다(#30).
+  rememberPages: boolean;
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;

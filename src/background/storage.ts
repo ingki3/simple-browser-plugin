@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   autoApprove: false,
   showThinking: false,
+  rememberPages: true,
 };
 
 export async function readSettings(): Promise<Settings> {
@@ -49,6 +50,7 @@ export async function readSettings(): Promise<Settings> {
     csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
     autoApprove: raw.autoApprove === true,
     showThinking: raw.showThinking === true,
+    rememberPages: raw.rememberPages !== false,
   };
 }
 

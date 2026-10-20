@@ -34,6 +34,11 @@ export type ChatMessage =
       ok: boolean;
       summary: string;
     }
+  | {
+      id: string;
+      type: "page_offer";
+      offer: { offerId: string; url: string; title: string; site: string; warning: string | null };
+    }
   | { id: string; type: "error"; message: string }
   | { id: string; type: "info"; title: string; message: string };
 
@@ -53,6 +58,7 @@ interface ChatState {
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string) => void;
   addInfo: (title: string, message: string) => void;
+  addPageOffer: (offer: Extract<ChatMessage, { type: "page_offer" }>["offer"]) => void;
   setStatus: (text: string | null) => void;
   abortLocal: () => void;
   reset: () => void;
@@ -163,6 +169,9 @@ export const useChatStore = create<ChatState>((set) => ({
       msgs.push({ id: mid(), type: "error", message });
       return { ...s, messages: msgs, streaming: false, statusText: null };
     }),
+
+  addPageOffer: (offer) =>
+    set((s) => ({ messages: [...s.messages, { id: mid(), type: "page_offer", offer }] })),
 
   addInfo: (title, message) =>
     set((s) => ({

@@ -73,6 +73,9 @@ export function useChatSession() {
         case "info":
           s.addInfo(msg.title, msg.message);
           return;
+        case "page_save_offer":
+          s.addPageOffer(msg.offer);
+          return;
         case "settings_warning":
           s.addError(msg.message);
           return;

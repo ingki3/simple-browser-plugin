@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
 import { AutoApproveField } from "./AutoApproveField";
+import { RememberPagesField } from "./RememberPagesField";
 import { ShowThinkingField } from "./ShowThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
@@ -284,6 +285,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <ShowThinkingField
             enabled={draft.showThinking}
             onToggle={(showThinking) => setDraft({ ...draft, showThinking })}
+          />
+
+          <RememberPagesField
+            enabled={draft.rememberPages}
+            onToggle={(rememberPages) => setDraft({ ...draft, rememberPages })}
           />
 
           <ActionLogField

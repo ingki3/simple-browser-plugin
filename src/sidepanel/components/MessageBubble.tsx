@@ -6,6 +6,7 @@ import { thinkingDisplay } from "@/lib/thinkingView";
 import { KO } from "../i18n/ko";
 import { ToolPreviewCard } from "./ToolPreviewCard";
 import { ToolResultCard } from "./ToolResultCard";
+import { PageOfferCard } from "./PageOfferCard";
 
 interface Props {
   message: ChatMessage;
@@ -50,6 +51,12 @@ export function MessageBubble({ message, onApprove, onCancel, showThinking }: Pr
       return (
         <div className="msg msg-tool">
           <ToolResultCard {...message} />
+        </div>
+      );
+    case "page_offer":
+      return (
+        <div className="msg msg-tool">
+          <PageOfferCard {...message} />
         </div>
       );
     case "error":

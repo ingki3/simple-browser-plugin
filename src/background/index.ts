@@ -1,6 +1,7 @@
 import { PORT_NAME, type PanelToBg } from "@/lib/messages";
 import { ChatAgent } from "./openrouter";
 import { invalidateSettingsCache } from "./storage";
+import { deletePages, listPages, savePage } from "./savedPagesStore";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";
@@ -77,9 +78,29 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   if (!msg || typeof msg !== "object") return false;
   const m = msg as { kind?: string };
+
+  // 저장한 페이지: 이 확장의 화면(패널·설정, 탭으로 연 경우 포함)에서만 받는다. content script가 보낸 메시지는
+  // 발신 주소가 웹 페이지라 거절된다.
+  if (m.kind === "save_page" || m.kind === "saved_pages_list" || m.kind === "saved_pages_delete") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { offerId?: unknown; name?: unknown; confirmedWarning?: unknown; url?: unknown };
+    const job =
+      m.kind === "save_page"
+        ? savePage(String(p.offerId ?? ""), String(p.name ?? ""), p.confirmedWarning === true).then(() => null)
+        : m.kind === "saved_pages_delete"
+          ? deletePages(typeof p.url === "string" ? p.url : null).then(() => listPages())
+          : listPages();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
 
   if (m.kind === "settings_updated") {
     invalidateSettingsCache();
