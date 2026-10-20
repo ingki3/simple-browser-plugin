@@ -207,7 +207,8 @@ export const functionDeclarations: FunctionDeclaration[] = [
       properties: {
         query: {
           type: "string",
-          description: "텍스트/href 부분일치 필터(대소문자 무시).",
+          description:
+            "텍스트/href 부분일치 필터(대소문자 무시). '|'로 여러 낱말을 주면 하나라도 맞는 요소를 맞은 낱말이 많은 순으로 반환한다(예: '주문|배송|마이페이지|my').",
         },
         region: {
           type: "string",

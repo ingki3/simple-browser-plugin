@@ -3,6 +3,7 @@ import {
   DEFAULT_CSV_MAX_CHARS,
   DEFAULT_MAX_TOOL_HOPS,
   FLAGS_KEY,
+  LEGACY_DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
   MIN_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
@@ -93,4 +94,17 @@ export async function setFlag<K extends keyof Flags>(key: K, value: Flags[K]): P
   const current = await readFlags();
   const next: Flags = { ...current, [key]: value };
   await chrome.storage.local.set({ [FLAGS_KEY]: next });
+}
+
+// 기본 도구 호출 한도를 8에서 16으로 올렸다. 설정 화면은 설정 전체를 저장하므로 예전 기본값 8이 저장돼 있으면
+// 사용자가 고른 값인지 알 수 없다. 한 번만 새 기본값으로 올리고, 그 뒤에 사용자가 8로 바꾸면 그대로 둔다.
+export async function migrateMaxToolHops(): Promise<void> {
+  const flags = await readFlags();
+  if (flags.maxToolHopsMigrated) return;
+  const obj = await chrome.storage.local.get(SETTINGS_KEY);
+  const raw = obj[SETTINGS_KEY] as Partial<Settings> | undefined;
+  if (raw && raw.maxToolHops === LEGACY_DEFAULT_MAX_TOOL_HOPS) {
+    await chrome.storage.local.set({ [SETTINGS_KEY]: { ...raw, maxToolHops: DEFAULT_MAX_TOOL_HOPS } });
+  }
+  await setFlag("maxToolHopsMigrated", true);
 }

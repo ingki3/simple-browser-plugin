@@ -221,7 +221,7 @@ export function Options() {
           }
         />
         <span className="field-help">
-          한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 8).
+          한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 16).
         </span>
       </label>
 

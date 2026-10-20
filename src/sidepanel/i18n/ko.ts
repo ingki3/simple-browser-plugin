@@ -22,7 +22,7 @@ export const KO = {
   translationLangLabel: "번역 대상 언어 (BCP-47)",
   downloadFolderLabel: "다운로드 폴더 접두사",
   maxToolHopsLabel: "도구 호출 순환 한도",
-  maxToolHopsHelp: "한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 8).",
+  maxToolHopsHelp: "한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 16).",
   save: "저장",
   saved: "저장됨",
   close: "닫기",

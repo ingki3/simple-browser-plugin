@@ -1,5 +1,6 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
+import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
 import { getAccessibleRoots, isTag } from "./docs";
 import {
   choiceUrlsOf,
@@ -276,16 +277,21 @@ export function findClickables(args: FindClickablesArgs): ClickableElement[] {
   return scanTargets(() => collectClickables(args));
 }
 
+// 낱말이 여럿일 때 점수로 줄 세우기 전에 모을 최대 후보 수.
+const MAX_RANKED_CANDIDATES = 400;
+
 function collectClickables(args: FindClickablesArgs): ClickableElement[] {
   const limit = Math.min(args.limit ?? 50, 200);
-  const q = args.query?.toLowerCase().trim() ?? "";
-  const out: ClickableElement[] = [];
+  const terms = queryTerms(args.query);
+  const ranked = terms.length > 1;
+  const cap = ranked ? MAX_RANKED_CANDIDATES : limit;
+  const found: Array<{ el: HTMLElement; item: Omit<ClickableElement, "id">; score: number }> = [];
   const seenKeys = new Set<string>();
   for (const root of getAccessibleRoots()) {
-    if (out.length >= limit) break;
+    if (found.length >= cap) break;
     const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
     for (const el of nodes) {
-      if (out.length >= limit) break;
+      if (found.length >= cap) break;
       if (!isVisible(el)) continue;
 
       const inViewport = rectInViewport(el);
@@ -300,21 +306,23 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       const text = clickText(el);
       if (!text && !href) continue;
 
-      if (q) {
-        const hay = `${text} ${href}`.toLowerCase();
-        if (!hay.includes(q)) continue;
+      let score = 0;
+      if (terms.length) {
+        score = clickMatchScore(terms, text, href);
+        if (!score) continue;
       }
 
       const key = `${tag}|${text}|${href}`;
       if (seenKeys.has(key)) continue;
       seenKeys.add(key);
 
-      const id = registerTarget(CLICK_KIND, el);
-      out.push({ id, text, href, tag, role, region, inViewport });
+      found.push({ el, item: { text, href, tag, role, region, inViewport }, score });
     }
   }
 
-  return out;
+  // sort는 안정 정렬이라 점수가 같으면 문서 순서가 유지된다.
+  if (ranked) found.sort((a, b) => b.score - a.score);
+  return found.slice(0, limit).map(({ el, item }) => ({ id: registerTarget(CLICK_KIND, el), ...item }));
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.

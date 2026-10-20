@@ -228,7 +228,10 @@ export function normalizeCsvMaxChars(v: unknown): number {
   return Math.min(MAX_CSV_MAX_CHARS, Math.max(MIN_CSV_MAX_CHARS, n));
 }
 
-export const DEFAULT_MAX_TOOL_HOPS = 8;
+// 여러 페이지를 거쳐 목표 페이지를 찾아가면 페이지마다 관측·찾기·클릭으로 2~3회를 쓴다.
+export const DEFAULT_MAX_TOOL_HOPS = 16;
+// 예전 기본값. 이 값으로 저장된 설정은 한 번 새 기본값으로 올린다(migrateMaxToolHops).
+export const LEGACY_DEFAULT_MAX_TOOL_HOPS = 8;
 export const MIN_MAX_TOOL_HOPS = 1;
 export const MAX_MAX_TOOL_HOPS = 30;
 
@@ -241,4 +244,5 @@ export const PORT_NAME = "chat";
 
 export interface Flags {
   pdfGuidanceShown?: boolean;
+  maxToolHopsMigrated?: boolean;
 }
