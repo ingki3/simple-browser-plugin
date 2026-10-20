@@ -263,11 +263,12 @@ test("grantableLink: 구조만 보고 같은 문서 밖으로 가는 일반 링�
   assert.equal(grantableLink(link({ href: "javascript:void(0)" }), page), false);
   assert.equal(grantableLink(link({ href: "https://shop.example/p/1#reviews" }), page), false);
   assert.equal(grantableLink(link({ href: "https://shop.example/p/1" }), page), false);
-  // 주소나 ping에 개인정보·비밀 값이 실리면 아니다.
+  // 주소에 개인정보·비밀 값이 실리면 아니다. ping이 있는 링크는 이동과 별도로 POST를 보내므로 아니다.
   assert.equal(grantableLink(link({ href: "https://shop.example/my?email=a%40b.com" }), page), false);
   assert.equal(grantableLink(link({ href: "https://user:pw@shop.example/my" }), page), false);
   assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/ping/sk-or-v1-abcdefghijklmnop"] }), page), false);
-  assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/ping"] }), page), true);
+  assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/ping"] }), page), false);
+  assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/order/123/confirm"] }), page), false);
   // 주변 양식의 제출 주소에 개인정보가 실리면 아니다(결제 낱말만 있는 주소는 구조 판정에 영향 없음).
   assert.equal(grantableLink(link({ scopeFormActions: ["https://shop.example/send?email=alice%40example.com"] }), page), false);
   assert.equal(grantableLink(link({ aroundFormActions: ["https://shop.example/c/alice@example.com"] }), page), false);
