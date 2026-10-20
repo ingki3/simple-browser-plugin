@@ -404,12 +404,14 @@ export function sensitiveUrlReason(url: string, { ignorePayment = false }: { ign
 }
 
 // 승인 카드에서 "이번 요청 동안 링크 이동은 묻지 않기"를 고른 뒤 카드 없이 누를 수 있는 링크인지.
-// 글자·주소의 뜻(결제 문구 등)은 보지 않고 구조만 본다: 다른 문서의 http(s) 주소로 가는 <a>이고, 감싼 다른 링크·
-// 양식 제출·값이 바뀐 범위 안 양식·선택지 주소·내려받기가 없고, 개인정보가 채워진 양식과 무관하며,
-// 주소(ping 포함)에 개인정보·계정 정보가 실려 있지 않다. 사이트 경계는 호출하는 쪽(pageActionSiteBlock)이 본다.
+// 글자·주소의 뜻(결제 문구 등)은 보지 않고 구조만 본다: 최상위 문서에서 다른 문서의 http(s) 주소로 가는 링크
+// 역할의 <a>(role="button" 같은 다른 역할은 아님)이고, 감싼 다른 링크·양식 제출·값이 바뀐 범위 안 양식·선택지 주소·
+// 내려받기가 없고, 개인정보가 채워진 양식과 무관하며, 주소(ping, 주변 양식의 제출 주소 포함)에 개인정보·계정 정보가
+// 실려 있지 않다. iframe 안의 링크는 같은 문서인지 견줄 그 문서 주소를 모르므로 대상이 아니다.
+// 사이트 경계는 호출하는 쪽(pageActionSiteBlock)이 본다.
 // 링크에 붙은 클릭 처리기가 이동 대신 다른 동작을 할 수는 있어, 이 허락은 사용자가 고른 요청 하나에만 쓴다.
 export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boolean {
-  if (t.tag !== "a" || !t.href) return false;
+  if (t.tag !== "a" || t.role !== "link" || t.inFrame || !t.href) return false;
   let dest: URL;
   try {
     dest = new URL(t.href);
@@ -431,7 +433,10 @@ export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boole
       return false;
     }
   }
-  return [t.href, ...(t.pingUrls ?? [])].every((u) => sensitiveUrlReason(u, { ignorePayment: true }) === null);
+  // 링크 처리기가 주변 양식을 제출할 수도 있어, 그 양식들의 제출 주소에도 개인정보가 실려 있지 않아야 한다.
+  return [t.href, ...(t.pingUrls ?? []), ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])].every(
+    (u) => sensitiveUrlReason(u, { ignorePayment: true }) === null,
+  );
 }
 
 // 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소·호스트 이름에 실어 밖으로 보낼 수 있다.

@@ -268,4 +268,12 @@ test("grantableLink: 구조만 보고 같은 문서 밖으로 가는 일반 링�
   assert.equal(grantableLink(link({ href: "https://user:pw@shop.example/my" }), page), false);
   assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/ping/sk-or-v1-abcdefghijklmnop"] }), page), false);
   assert.equal(grantableLink(link({ pingUrls: ["https://shop.example/ping"] }), page), true);
+  // 주변 양식의 제출 주소에 개인정보가 실리면 아니다(결제 낱말만 있는 주소는 구조 판정에 영향 없음).
+  assert.equal(grantableLink(link({ scopeFormActions: ["https://shop.example/send?email=alice%40example.com"] }), page), false);
+  assert.equal(grantableLink(link({ aroundFormActions: ["https://shop.example/c/alice@example.com"] }), page), false);
+  assert.equal(grantableLink(link({ scopeFormActions: ["https://shop.example/search"] }), page), true);
+  // 버튼 역할의 앵커, iframe 안 링크는 아니다.
+  assert.equal(grantableLink(link({ role: "button" }), page), false);
+  assert.equal(grantableLink(link({ role: "menuitem" }), page), false);
+  assert.equal(grantableLink(link({ inFrame: true }), page), false);
 });
