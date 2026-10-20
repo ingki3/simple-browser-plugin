@@ -3,6 +3,7 @@ import { useChatStore } from "../state/chatStore";
 import { MessageBubble } from "./MessageBubble";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { KO } from "../i18n/ko";
+import { useSettings } from "../hooks/useSettings";
 
 interface Props {
   onApprove: (callId: string, allowLinksThisTurn?: boolean) => void;
@@ -12,6 +13,7 @@ interface Props {
 export function MessageList({ onApprove, onCancel }: Props) {
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
+  const { settings } = useSettings();
   const listRef = useRef<HTMLDivElement | null>(null);
   // 사용자가 위로 스크롤해 과거 내용을 보는 중이면 자동 스크롤을 멈춘다.
   const stickRef = useRef(true);
@@ -52,7 +54,13 @@ export function MessageList({ onApprove, onCancel }: Props) {
       }}
     >
       {messages.map((m) => (
-        <MessageBubble key={m.id} message={m} onApprove={onApprove} onCancel={onCancel} />
+        <MessageBubble
+          key={m.id}
+          message={m}
+          onApprove={onApprove}
+          onCancel={onCancel}
+          showThinking={settings.showThinking}
+        />
       ))}
       {showThinking && <ThinkingIndicator />}
     </div>

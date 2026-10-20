@@ -295,6 +295,14 @@ body,
   animation-delay: 0.3s;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dots span,
+  .thought-live {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 @keyframes thinking-dot {
   0%,
   80%,

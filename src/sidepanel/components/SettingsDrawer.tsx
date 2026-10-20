@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
 import { AutoApproveField } from "./AutoApproveField";
+import { ShowThinkingField } from "./ShowThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import {
@@ -278,6 +279,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <AutoApproveField
             enabled={draft.autoApprove}
             onToggle={(autoApprove) => setDraft({ ...draft, autoApprove })}
+          />
+
+          <ShowThinkingField
+            enabled={draft.showThinking}
+            onToggle={(showThinking) => setDraft({ ...draft, showThinking })}
           />
 
           <ActionLogField

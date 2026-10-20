@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActionLogField } from "@/sidepanel/components/ActionLogField";
 import { AutoApproveField } from "@/sidepanel/components/AutoApproveField";
+import { ShowThinkingField } from "@/sidepanel/components/ShowThinkingField";
 import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
 import {
   DEFAULT_MODEL,
@@ -32,6 +33,7 @@ const DEFAULTS: Settings = {
   actionLogEnabled: true,
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   autoApprove: false,
+  showThinking: false,
 };
 
 export function Options() {
@@ -57,6 +59,7 @@ export function Options() {
         actionLogEnabled: raw.actionLogEnabled !== false,
         csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
         autoApprove: raw.autoApprove === true,
+        showThinking: raw.showThinking === true,
       });
     });
   }, []);
@@ -227,6 +230,11 @@ export function Options() {
       <AutoApproveField
         enabled={draft.autoApprove}
         onToggle={(autoApprove) => setDraft({ ...draft, autoApprove })}
+      />
+
+      <ShowThinkingField
+        enabled={draft.showThinking}
+        onToggle={(showThinking) => setDraft({ ...draft, showThinking })}
       />
 
       <ActionLogField
