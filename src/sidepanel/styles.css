@@ -947,3 +947,9 @@ body,
 .streaming-text.markdown-body {
   position: relative;
 }
+
+.md-image-placeholder {
+  color: var(--fg-muted);
+  font-size: 12px;
+  word-break: break-all;
+}

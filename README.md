@@ -114,6 +114,7 @@ gh pr create --base main --title "..." --body "..."
 
 - OpenRouter API 키는 `chrome.storage.local`에 평문 저장 (OpenRouter API 호출에만 사용; v1 트레이드오프)
 - 키는 BG 서비스 워커에서만 읽히며 content script나 페이지 DOM에 전달되지 않음
+- 모델 답변 속 이미지는 불러오지 않고 대체 글자와 주소만 보임(이미지 주소의 쿼리로 대화 내용이 승인 없이 새지 않게). 패널·설정 화면 CSP도 외부 이미지를 막음
 - 민감 툴 실행 전 사용자 승인 필수(자동 실행을 켜면 결제·개인정보 제출 등 예외만 승인)
 - 다운로드·탐색 URL은 `http(s):`만 허용, `javascript:` / 제어문자 차단
 
