@@ -267,8 +267,16 @@ export async function buildToolPreview(
         details: args.markdownTable.slice(0, 400),
       };
     }
-    default:
-      return { summary: `도구 ${toolName} 실행` };
+    default: {
+      // 평소 승인 카드가 없는 도구(외부 본문 보호 중에 묻는 번역·Google 읽기 등)는 실제로 보낼 인자를 그대로 보여 준다.
+      let details = "";
+      try {
+        details = JSON.stringify(parsedArgs, null, 1).slice(0, 800);
+      } catch {
+        details = "";
+      }
+      return { summary: `도구 ${toolName} 실행`, ...(details ? { details } : {}) };
+    }
   }
 }
 

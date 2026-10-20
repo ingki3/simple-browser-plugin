@@ -3,6 +3,7 @@ import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
 import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
 import { navigateAutoBlock, pageActionSiteBlock, siteOf } from "@/lib/siteTrust";
+import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
@@ -160,6 +161,10 @@ export class ChatAgent {
   // 그 선택지를 보여 준 카드(callId → 턴·사이트)만 받아들인다.
   private linkGrant: { turn: number; site: string } | null = null;
   private linkGrantOffers = new Map<string, { turn: number; site: string }>();
+  // 외부 본문 보호: 파일·Google 문서·PDF처럼 외부 유래 데이터가 이 대화의 모델 문맥에 들어오면 켠다(새 대화까지).
+  // 켜진 동안은 관측 전용 도구(TOOL_POLICY.observeOnly) 밖의 모든 도구를 자동 실행·링크 허락 없이 승인 카드로 묻는다
+  // (외부 내용을 신뢰 사이트의 검색어·입력값·번역 언어·Google 검색어 등으로 내보내지 않게).
+  private externalContent = false;
   private lastAttachedPdfUrl: string | null = null;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
   // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
@@ -236,6 +241,7 @@ export class ChatAgent {
     this.lastAttachedPdfUrl = null;
     this.approvedSites.clear();
     this.linkGrant = null;
+    this.externalContent = false;
   }
 
   private send(msg: BgToPanel): void {
@@ -311,12 +317,26 @@ export class ChatAgent {
     await setFlag("pdfGuidanceShown", true);
   }
 
+  // 외부 유래 데이터를 모델 문맥에 넣는 모든 곳이 부르는 공통 관문.
+  private noteExternalContent(reason: string): void {
+    if (this.externalContent) return;
+    this.externalContent = true;
+    debugLog("guard:external_content", reason);
+    this.send({
+      kind: "info",
+      title: "외부 문서 내용을 읽은 대화",
+      message: `${reason} 이 대화에서는 페이지 관측 외의 모든 동작(이동·클릭·입력·번역·Google 도구 등)을 매번 확인받습니다. 새 대화를 시작하면 다시 자동 실행됩니다.`,
+    });
+  }
+
   private async buildUserContent(
     userText: string,
   ): Promise<string | OpenRouterContentPart[]> {
     const pdfInfo = "tabId" in this.turnTab ? await detectPdfAtTab(this.turnTab.tabId) : null;
 
     if (pdfInfo?.isPdf) {
+      // PDF 본문(또는 주소·파일 이름이 실릴 수 있는 자동 로드 실패 안내)이 문맥에 들어간다.
+      this.noteExternalContent("PDF 문서를 대화에 붙였습니다.");
       await this.maybeShowPdfGuidance();
       const alreadyAttached = pdfInfo.url === this.lastAttachedPdfUrl;
       if (alreadyAttached) {
@@ -392,7 +412,9 @@ export class ChatAgent {
 
       const completed = await this.streamLoop(apiKey, model, systemPrompt, turn);
       // 읽기 레시피: 답을 마친 턴에서 통한 읽기 방법만 남긴다(중단·도구 호출 한도 초과는 버림).
-      commitReads(turnTab, completed && !this.isStale(turn));
+      // 외부 본문 보호가 켜진 대화에서는 읽기 레시피를 저장하지 않고 이 턴의 관찰을 버린다(보호 대상에서 유래한
+      // 모델 인자가 레시피로 남아 새 대화의 readHints로 다시 들어오지 않게).
+      commitReads(turnTab, completed && !this.isStale(turn) && !this.externalContent);
       endTurn(this.isStale(turn) ? "aborted" : "ok");
     } catch (err) {
       commitReads(turnTab, false);
@@ -620,7 +642,9 @@ export class ChatAgent {
 
         // 승인 없이 실행한 호출은 결과 카드에 표시한다.
         let autoRan = false;
-        if (SENSITIVE_TOOLS.has(toolName)) {
+        // 외부 본문 보호가 켜졌으면 관측 전용이 아닌 도구는 평소 승인 대상이 아니어도(번역·Google 읽기 등) 묻는다.
+        const guarded = this.externalContent && needsApprovalWhenProtected(toolName);
+        if (SENSITIVE_TOOLS.has(toolName) || guarded) {
           let preview: Awaited<ReturnType<typeof buildToolPreview>>;
           try {
             preview = await buildToolPreview(toolName, parsedArgs, callId, this.turnTab);
@@ -667,6 +691,7 @@ export class ChatAgent {
           // 사이트 경계는 대화 전체의 신뢰 사이트가 아니라 지금 페이지의 사이트 하나로만 본다.
           const pageSite = pageUrl ? siteOf(pageUrl) : null;
           const linkOffer =
+            !guarded &&
             toolName === "click_element" &&
             !!pageSite &&
             !!preview.clickTarget &&
@@ -677,7 +702,8 @@ export class ChatAgent {
           const grant = this.linkGrant;
           const linkGranted =
             linkOffer && !!grant && grant.turn === turn && siteBlock(new Set([grant.site])) === null;
-          const autoMode = autoApprove || linkGranted;
+          // 외부 본문 보호 중에는 자동 실행·링크 허락을 쓰지 않는다.
+          const autoMode = !guarded && (autoApprove || linkGranted);
           let block = linkGranted
             ? null
             : toolName === "navigate_to_url"
@@ -702,7 +728,11 @@ export class ChatAgent {
               callId,
               toolName,
               args: parsedArgs,
-              previewSummary: autoMode ? `${preview.summary} (자동 실행 예외: ${block})` : preview.summary,
+              previewSummary: guarded
+                ? `${preview.summary} (외부 문서 내용을 읽은 대화라 자동 실행하지 않음)`
+                : autoMode
+                  ? `${preview.summary} (자동 실행 예외: ${block})`
+                  : preview.summary,
               previewDetails: preview.details,
               ...(linkOffer ? { linkGrantOffer: true } : {}),
             });
@@ -753,6 +783,11 @@ export class ChatAgent {
         }
         const toolAbort = new AbortController();
         this.activeTool = toolAbort;
+        // 외부 데이터를 가져오는 도구는 성공·실패와 관계없이(오류에도 파일 이름 등이 실린다) 결과를 문맥에 넣기 전에 보호를 켠다.
+        // 같은 응답의 다음 도구 호출은 이 뒤에 순서대로 실행되므로 바로 적용된다.
+        if (TOOL_POLICY[toolName].bringsExternal) {
+          this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
+        }
         try {
           const result = await executeTool(toolName, parsedArgs, callId, this.turnTab, toolAbort.signal);
           if (this.isStale(turn)) return false;
