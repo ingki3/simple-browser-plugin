@@ -3,11 +3,11 @@ import {
   DEFAULT_CSV_MAX_CHARS,
   DEFAULT_MAX_TOOL_HOPS,
   FLAGS_KEY,
-  MAX_MAX_TOOL_HOPS,
-  MIN_MAX_TOOL_HOPS,
+  MAX_TOOL_HOPS_VERSION,
   MAX_SYSTEM_PROMPT_LENGTH,
   SETTINGS_KEY,
   normalizeCsvMaxChars,
+  normalizeMaxToolHops,
   type Flags,
   type Settings,
 } from "@/lib/messages";
@@ -23,11 +23,6 @@ export const DEFAULT_SETTINGS: Settings = {
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   autoApprove: false,
 };
-
-function normalizeMaxHops(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : DEFAULT_MAX_TOOL_HOPS;
-  return Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, n));
-}
 
 export async function readSettings(): Promise<Settings> {
   const obj = await chrome.storage.local.get(SETTINGS_KEY);
@@ -48,7 +43,7 @@ export async function readSettings(): Promise<Settings> {
       typeof raw.downloadFolderPrefix === "string"
         ? raw.downloadFolderPrefix
         : DEFAULT_SETTINGS.downloadFolderPrefix,
-    maxToolHops: normalizeMaxHops(raw.maxToolHops),
+    maxToolHops: normalizeMaxToolHops(raw),
     actionLogEnabled: raw.actionLogEnabled !== false,
     csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
     autoApprove: raw.autoApprove === true,
@@ -60,7 +55,8 @@ export async function writeSettings(next: Settings): Promise<void> {
     [SETTINGS_KEY]: {
       ...next,
       systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
-      maxToolHops: normalizeMaxHops(next.maxToolHops),
+      maxToolHops: normalizeMaxToolHops({ ...next, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }),
+      maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
       csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     },
   });
@@ -94,3 +90,4 @@ export async function setFlag<K extends keyof Flags>(key: K, value: Flags[K]): P
   const next: Flags = { ...current, [key]: value };
   await chrome.storage.local.set({ [FLAGS_KEY]: next });
 }
+

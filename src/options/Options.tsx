@@ -14,9 +14,11 @@ import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
+  MAX_TOOL_HOPS_VERSION,
   MIN_MAX_TOOL_HOPS,
   SETTINGS_KEY,
   normalizeCsvMaxChars,
+  normalizeMaxToolHops,
   type Settings,
 } from "@/lib/messages";
 
@@ -51,10 +53,7 @@ export function Options() {
             : DEFAULTS.systemPrompt,
         translationTargetLang: raw.translationTargetLang ?? DEFAULTS.translationTargetLang,
         downloadFolderPrefix: raw.downloadFolderPrefix ?? DEFAULTS.downloadFolderPrefix,
-        maxToolHops:
-          typeof raw.maxToolHops === "number" && Number.isFinite(raw.maxToolHops)
-            ? Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, Math.floor(raw.maxToolHops)))
-            : DEFAULTS.maxToolHops,
+        maxToolHops: normalizeMaxToolHops(raw),
         actionLogEnabled: raw.actionLogEnabled !== false,
         csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
         autoApprove: raw.autoApprove === true,
@@ -67,13 +66,8 @@ export function Options() {
       ...draft,
       systemPrompt: draft.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
       csvMaxChars: normalizeCsvMaxChars(draft.csvMaxChars),
-      maxToolHops: Math.min(
-        MAX_MAX_TOOL_HOPS,
-        Math.max(
-          MIN_MAX_TOOL_HOPS,
-          Number.isFinite(draft.maxToolHops) ? Math.floor(draft.maxToolHops) : DEFAULT_MAX_TOOL_HOPS,
-        ),
-      ),
+      maxToolHops: normalizeMaxToolHops({ ...draft, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }),
+      maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
     };
     setDraft(normalized);
     await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
@@ -221,7 +215,7 @@ export function Options() {
           }
         />
         <span className="field-help">
-          한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 8).
+          한 요청에서 에이전트가 도구를 연속 호출할 수 있는 최대 횟수 (1~30, 기본 16).
         </span>
       </label>
 

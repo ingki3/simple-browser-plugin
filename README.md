@@ -11,7 +11,7 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - `translate_page` — 가시 텍스트 노드 단위 번역 교체 + MutationObserver 동적 재번역
   - `find_form_fields` / `fill_form_fields` — 입력 필드 탐색·자동 입력, 칸마다 반영 여부 확인 (승인 카드)
   - `list_page_images` / `download_images` — 이미지 URL 수집·일괄 저장 (승인 카드)
-  - `find_clickables` / `click_element` — 링크·버튼 탐색·클릭, 클릭 뒤 이동·화면 변화 보고 (승인 카드)
+  - `find_clickables` / `click_element` — 링크·버튼 탐색·클릭, 클릭 뒤 이동·화면 변화 보고 (승인 카드). 검색어를 `주문|배송|마이페이지`처럼 `|`로 묶으면 맞은 낱말이 많은 순으로 반환
   - `navigate_to_url` — 현재 탭을 지정한 URL이나 사이트 홈으로 직접 이동 (승인 카드)
   - `query_dom` — CSS 선택자 기반 DOM 조회
   - `get_youtube_transcript` — YouTube 영상의 "스크립트 표시" 패널을 열어 타임스탬프 포함 자막 추출
@@ -20,6 +20,7 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
     - Word·Excel·PowerPoint(.docx/.xlsx/.pptx), OpenDocument(.odt/.ods/.odp) → Markdown ([docling.rs-wasm](https://github.com/docling-project/docling.rs))
     - PDF → 쪽별 글자 ([pdf.js](https://github.com/mozilla/pdf.js)), 한글(.hwp/.hwpx) → Markdown ([kordoc](https://github.com/chrisryugj/kordoc)), CSV/TSV → Markdown 표(구분자 자동 판별, 설정한 글자 수 한도에서 멈춤 — 기본 40,000자, 1,000~100,000), TXT/MD → 원문
     - 확장자 없는 다운로드 링크(`download.do?fileId=…`)는 응답 헤더와 파일 서명으로 형식 판별. CSV·TXT의 EUC-KR(CP949) 자동 인식
+- **목표 페이지 찾아가기** — "배송 상황 확인해줘"처럼 지금 페이지에 없는 정보를 물으면 마이페이지 → 주문/배송 조회처럼 링크를 2~4단계 따라가며 찾고, 막다른 페이지면 직전 주소로 돌아가 다른 후보를 시도. 답에 거쳐 온 경로를 밝힘. 로그인 화면에서는 멈추고, 결제·주문하기 버튼은 경로로 쓰지 않음. 자동 실행에서도 주문 조회 링크(글자·주소에 '주문'·order가 있는 링크)는 결제 판정 규칙에 걸려 승인 카드를 띄움. 페이지마다 도구를 2~3회 쓰므로 도구 호출 한도 기본값을 16으로 올림(이 버전 전에 저장된 설정의 8은 예전 기본값으로 보고 16으로 읽음. 이후 설정 화면에서 8로 저장하면 그대로 씀)
 - **민감 작업 승인 UI** — 사이트 이동·폼 입력·다운로드·클릭 같은 페이지 상태 변경과 문서 URL 요청(쿠키 포함)은 실행 전 사이드 패널에 미리보기 카드를 띄워 사용자 승인을 받음
 - **자동 실행 (설정, 기본 꺼짐)** — 켜면 페이지 이동·클릭·입력을 승인 카드 없이 실행하고 결과 카드에 "자동 실행"으로 표시. 그래도 다음은 카드를 띄움:
   - 결제·주문 버튼, 결제 화면(주소의 경로·쿼리·해시, 제목, 큰 제목, 버튼이 든 양식·대화상자에 결제 단서)의 버튼

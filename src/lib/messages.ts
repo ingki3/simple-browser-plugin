@@ -209,6 +209,8 @@ export interface Settings {
   translationTargetLang: string;
   downloadFolderPrefix: string;
   maxToolHops: number;
+  // 저장할 때 MAX_TOOL_HOPS_VERSION을 붙인다(normalizeMaxToolHops).
+  maxToolHopsVersion?: number;
   // 클릭·입력 동작과 읽기 레시피를 이 브라우저에 기록할지(입력 값·페이지 내용은 남기지 않음). 시크릿 창은 늘 기록하지 않는다.
   actionLogEnabled: boolean;
   // read_document가 CSV·TSV 파일을 표로 읽을 때 모델에 넘기는 최대 글자 수(모델이 따로 정하지 않았을 때).
@@ -228,9 +230,25 @@ export function normalizeCsvMaxChars(v: unknown): number {
   return Math.min(MAX_CSV_MAX_CHARS, Math.max(MIN_CSV_MAX_CHARS, n));
 }
 
-export const DEFAULT_MAX_TOOL_HOPS = 8;
+// 여러 페이지를 거쳐 목표 페이지를 찾아가면 페이지마다 관측·찾기·클릭으로 2~3회를 쓴다.
+export const DEFAULT_MAX_TOOL_HOPS = 16;
 export const MIN_MAX_TOOL_HOPS = 1;
 export const MAX_MAX_TOOL_HOPS = 30;
+// 기본값을 8에서 16으로 올렸다. 설정 화면은 설정 전체를 저장해서, 버전 표시가 없는 예전 설정의 8은
+// 사용자가 고른 값이 아니라 예전 기본값이 저장된 것으로 보고 새 기본값으로 읽는다. 이 버전 이후에 저장한
+// 설정에는 maxToolHopsVersion을 붙여 사용자가 고른 8을 그대로 둔다. 배경에서 설정을 다시 쓰지 않으므로
+// 설정 화면의 저장과 겹쳐 값을 잃지 않는다.
+const LEGACY_DEFAULT_MAX_TOOL_HOPS = 8;
+export const MAX_TOOL_HOPS_VERSION = 2;
+
+export function normalizeMaxToolHops(raw: Partial<Settings> | undefined): number {
+  const v = raw?.maxToolHops;
+  if (typeof v !== "number" || !Number.isFinite(v)) return DEFAULT_MAX_TOOL_HOPS;
+  if (v === LEGACY_DEFAULT_MAX_TOOL_HOPS && raw?.maxToolHopsVersion !== MAX_TOOL_HOPS_VERSION) {
+    return DEFAULT_MAX_TOOL_HOPS;
+  }
+  return Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, Math.floor(v)));
+}
 
 export const SETTINGS_KEY = "settings";
 export const FLAGS_KEY = "flags";

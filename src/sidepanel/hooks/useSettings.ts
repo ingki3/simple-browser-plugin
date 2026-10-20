@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   DEFAULT_CSV_MAX_CHARS,
   DEFAULT_MAX_TOOL_HOPS,
-  MAX_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
-  MIN_MAX_TOOL_HOPS,
+  MAX_TOOL_HOPS_VERSION,
   SETTINGS_KEY,
   normalizeCsvMaxChars,
+  normalizeMaxToolHops,
   type Settings,
 } from "@/lib/messages";
 import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
@@ -23,10 +23,6 @@ const DEFAULTS: Settings = {
   autoApprove: false,
 };
 
-function normalizeMaxHops(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : DEFAULT_MAX_TOOL_HOPS;
-  return Math.min(MAX_MAX_TOOL_HOPS, Math.max(MIN_MAX_TOOL_HOPS, n));
-}
 
 function normalize(raw: Partial<Settings> | undefined): Settings {
   return {
@@ -47,7 +43,7 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
       typeof raw?.downloadFolderPrefix === "string"
         ? raw.downloadFolderPrefix
         : DEFAULTS.downloadFolderPrefix,
-    maxToolHops: normalizeMaxHops(raw?.maxToolHops),
+    maxToolHops: normalizeMaxToolHops(raw),
     actionLogEnabled: raw?.actionLogEnabled !== false,
     csvMaxChars: normalizeCsvMaxChars(raw?.csvMaxChars),
     autoApprove: raw?.autoApprove === true,
@@ -80,6 +76,8 @@ export function useSettings() {
       ...next,
       systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
       csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
+      maxToolHops: normalizeMaxToolHops({ ...next, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }),
+      maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
     };
     await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
     await chrome.runtime.sendMessage({ kind: "settings_updated" }).catch(() => {
