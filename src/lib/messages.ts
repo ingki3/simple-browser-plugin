@@ -220,6 +220,8 @@ export interface Settings {
   csvMaxChars: number;
   // 페이지 이동·클릭·입력을 승인 없이 실행할지. 켜도 결제·개인정보 제출은 묻는다(src/lib/autoApprove.ts).
   autoApprove: boolean;
+  // 추론(thinking) 글자를 접이식 상자로 보일지. 끄면(기본) 추론 중에 "생각 중…" 표시만 보인다.
+  showThinking: boolean;
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;

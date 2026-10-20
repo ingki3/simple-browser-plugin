@@ -21,6 +21,7 @@ const DEFAULTS: Settings = {
   actionLogEnabled: true,
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   autoApprove: false,
+  showThinking: false,
 };
 
 
@@ -47,6 +48,7 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
     actionLogEnabled: raw?.actionLogEnabled !== false,
     csvMaxChars: normalizeCsvMaxChars(raw?.csvMaxChars),
     autoApprove: raw?.autoApprove === true,
+    showThinking: raw?.showThinking === true,
   };
 }
 

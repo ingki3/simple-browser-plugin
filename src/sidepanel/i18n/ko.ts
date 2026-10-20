@@ -30,6 +30,7 @@ export const KO = {
   saved: "저장됨",
   close: "닫기",
   streamingLabel: "응답 생성 중…",
+  thinkingLabel: "생각 중…",
 };
 
 export type KoKey = keyof typeof KO;

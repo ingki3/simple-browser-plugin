@@ -1,6 +1,9 @@
 import type { ChatMessage } from "../state/chatStore";
 import { StreamingText } from "./StreamingText";
 import { ThoughtBox } from "./ThoughtBox";
+import { ThinkingIndicator } from "./ThinkingIndicator";
+import { thinkingDisplay } from "@/lib/thinkingView";
+import { KO } from "../i18n/ko";
 import { ToolPreviewCard } from "./ToolPreviewCard";
 import { ToolResultCard } from "./ToolResultCard";
 
@@ -8,9 +11,10 @@ interface Props {
   message: ChatMessage;
   onApprove: (callId: string, allowLinksThisTurn?: boolean) => void;
   onCancel: (callId: string) => void;
+  showThinking: boolean;
 }
 
-export function MessageBubble({ message, onApprove, onCancel }: Props) {
+export function MessageBubble({ message, onApprove, onCancel, showThinking }: Props) {
   switch (message.type) {
     case "user":
       return (
@@ -18,10 +22,14 @@ export function MessageBubble({ message, onApprove, onCancel }: Props) {
           <div className="bubble bubble-user">{message.text}</div>
         </div>
       );
-    case "assistant_text":
+    case "assistant_text": {
+      const thinking = thinkingDisplay(message, showThinking);
+      if (thinking === "indicator") return <ThinkingIndicator label={KO.thinkingLabel} />;
+      // 추론만 있고 답 글자가 없이 끝난 메시지(도구 호출로 넘어감)는 기본 화면에서 아무것도 남기지 않는다.
+      if (thinking === "none" && !message.text && message.thoughtText) return null;
       return (
         <div className="msg msg-assistant">
-          {message.thoughtText && (
+          {thinking === "box" && (
             <ThoughtBox text={message.thoughtText} live={message.streaming && !message.text} />
           )}
           {(message.text || !message.thoughtText) && (
@@ -31,6 +39,7 @@ export function MessageBubble({ message, onApprove, onCancel }: Props) {
           )}
         </div>
       );
+    }
     case "tool_pending":
       return (
         <div className="msg msg-tool">
