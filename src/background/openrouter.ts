@@ -1,7 +1,8 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
-import { autoApproveBlock, grantableLink, navigateAutoBlock, pageActionSiteBlock, siteOf } from "@/lib/autoApprove";
+import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
+import { navigateAutoBlock, pageActionSiteBlock, siteOf } from "@/lib/siteTrust";
 import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
 import {
   openRouterRequest,
@@ -671,8 +672,11 @@ export class ChatAgent {
             !!preview.clickTarget &&
             grantableLink(preview.clickTarget, pageUrl) &&
             siteBlock(new Set([pageSite])) === null;
+          // 허락은 최초 승인 페이지의 출처로 보관하고, 지금 페이지와 목적지가 그 출처의 같은 사이트(등록 도메인) 안일 때만 쓴다.
+          // 허락 범위를 이동할 때마다 새 사이트로 넓히지 않는다.
+          const grant = this.linkGrant;
           const linkGranted =
-            linkOffer && this.linkGrant?.turn === turn && this.linkGrant.site === pageSite;
+            linkOffer && !!grant && grant.turn === turn && siteBlock(new Set([grant.site])) === null;
           const autoMode = autoApprove || linkGranted;
           let block = linkGranted
             ? null
