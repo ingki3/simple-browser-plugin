@@ -6,8 +6,8 @@ import type { ToolName } from "./messages.ts";
 //   모델 문맥에 들어온다. 성공·실패와 관계없이 실행하면 대화의 외부 본문 보호를 켠다.
 // - observeOnly: 지금 턴 탭을 읽기만 하고, 모델 인자에 따라 페이지가 관찰할 수 있는 상태(DOM 속성·이벤트·
 //   포커스·클릭)를 바꾸지 않으며, 모델 유래 값을 밖으로 보내지 않는다. 보호가 켜진 대화에서도 승인 없이 쓴다.
-//   find_clickables·find_form_fields는 고른 요소에 대상 표시 속성을 쓰고, get_youtube_transcript는
-//   페이지 버튼을 누르므로 해당하지 않는다.
+//   find_clickables·find_form_fields는 대상 id를 content script 메모리에만 두고 사용자가 입력한 값을 돌려주지
+//   않으므로(#43) 여기에 든다. get_youtube_transcript는 페이지 버튼을 누르므로 해당하지 않는다.
 export interface ToolPolicy {
   bringsExternal: boolean;
   observeOnly: boolean;
@@ -23,9 +23,9 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   list_page_images: LOCAL_READ,
   list_file_links: LOCAL_READ,
   query_dom: LOCAL_READ,
+  find_clickables: LOCAL_READ,
+  find_form_fields: LOCAL_READ,
   get_youtube_transcript: ACTION,
-  find_clickables: ACTION,
-  find_form_fields: ACTION,
   translate_page: ACTION,
   fill_form_fields: ACTION,
   click_element: ACTION,

@@ -75,13 +75,24 @@ export interface PageDescription {
   readHints?: ReadHint[];
 }
 
+// 모델에 돌려주는 입력 칸(#43). 사용자가 입력한 값은 담지 않는다.
 export interface FormField {
   id: string;
   label: string;
   placeholder: string;
   type: string;
   role: string;
-  currentValue: string;
+  // 글자 칸(input·textarea): 값이 있는지만.
+  hasValue?: boolean;
+  // checkbox·radio: 체크 여부만(value 속성은 담지 않는다).
+  checked?: boolean;
+  // select: 선택지의 보이는 글자(option.label)와 비활성 여부. 고를 때는 이 글자를 그대로 쓴다.
+  // hidden: 숨긴 선택지(글자를 보내지 않고 고를 수 없음). truncated: 글자가 길어 잘림(그 글자로는 고를 수 없음).
+  options?: Array<{ label: string; disabled?: boolean; hidden?: boolean; truncated?: boolean }>;
+  // 선택된 선택지의 위치(0부터). 다중 선택 칸이나 개인정보 단서가 있는 칸이면 담지 않는다.
+  selectedIndex?: number;
+  // 다중 선택 칸(채우기는 지원하지 않는다).
+  multiple?: boolean;
 }
 
 export interface PageImage {

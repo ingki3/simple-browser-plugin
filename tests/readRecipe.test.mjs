@@ -24,6 +24,9 @@ test("recipeArgs: 남길 인자만 고르고 개인정보가 보이면 거부", 
     selector: 'a[href*="download"]',
     attr: "href",
   });
+  // query_dom이 받지 않는 속성(값 성격·data-*·class)의 레시피는 남기지 않는다.
+  assert.equal(recipeArgs("query_dom", { selector: "input", attr: "value" }), null);
+  assert.equal(recipeArgs("query_dom", { selector: ".item", attr: "data-id" }), null);
   assert.equal(recipeArgs("query_dom", { selector: 'a[href="mailto:alice@example.com"]' }), null);
   assert.equal(recipeArgs("query_dom", { selector: 'a[href^="https://ex.test/"]' }), null);
   assert.equal(recipeArgs("query_dom", { selector: "#post-1234567" }), null);

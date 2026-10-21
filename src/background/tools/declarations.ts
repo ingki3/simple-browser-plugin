@@ -1,3 +1,5 @@
+import { QUERY_DOM_ATTRS } from "@/lib/modelText";
+
 export interface FunctionDeclaration {
   name: string;
   description: string;
@@ -129,15 +131,10 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "find_form_fields",
     description:
-      "현재 활성 탭의 가시 입력 요소 (input/textarea/select)를 탐색해 id, 라벨, placeholder, 타입, 현재 값 목록을 반환한다. fill_form_fields를 호출하기 전에 반드시 먼저 호출해 필드 id를 확인한다.",
+      "현재 활성 탭의 보이는 입력 요소(input/textarea/select)를 탐색해 id, 라벨, placeholder, 타입을 반환한다. 사용자가 입력한 값은 돌려주지 않는다: 글자 칸은 값이 있는지(hasValue)만, checkbox·radio는 체크 여부(checked)만, select는 선택지의 보이는 글자(options)와 선택된 위치(selectedIndex, 개인정보 칸이면 생략)만 준다. 화면에 보이지 않는 칸은 돌려주지 않는다. fill_form_fields를 호출하기 전에 반드시 먼저 호출해 필드 id를 확인한다.",
     parameters: {
       type: "object",
-      properties: {
-        onlyVisible: {
-          type: "boolean",
-          description: "보이는 필드만 반환할지 여부. 기본 true.",
-        },
-      },
+      properties: {},
     },
   },
   {
@@ -154,7 +151,11 @@ export const functionDeclarations: FunctionDeclaration[] = [
             type: "object",
             properties: {
               id: { type: "string", description: "find_form_fields가 반환한 필드 id" },
-              value: { type: "string", description: "입력할 값" },
+              value: {
+                type: "string",
+                description:
+                  "입력할 값. select는 options의 보이는 글자 그대로(정확히 하나와 같아야 함), checkbox·radio는 \"true\" 또는 \"false\".",
+              },
             },
             required: ["id", "value"],
           },
@@ -199,12 +200,17 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "query_dom",
     description:
-      "CSS 선택자로 현재 활성 탭의 DOM 요소를 조회해 텍스트와 속성값을 반환한다. 특정 구조를 읽어야 할 때의 이스케이프 해치.",
+      "CSS 선택자로 현재 활성 탭의 DOM 요소를 조회해 화면 글자와 속성값을 반환한다. 특정 구조를 읽어야 할 때의 이스케이프 해치. 입력 칸·편집 영역·숨은 요소 안의 글자는 돌려주지 않는다.",
     parameters: {
       type: "object",
       properties: {
         selector: { type: "string", description: "CSS 선택자" },
-        attr: { type: "string", description: "반환할 속성 이름 (선택)" },
+        attr: {
+          type: "string",
+          enum: [...QUERY_DOM_ATTRS],
+          description:
+            "반환할 속성 이름(선택). 정해 둔 구조 속성만 받는다. 입력값 성격의 속성(value 등)·data-*·class는 받지 않는다.",
+        },
         limit: { type: "number", description: "최대 결과 개수, 기본 50, 최대 200" },
       },
       required: ["selector"],

@@ -12,6 +12,7 @@ import {
 import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
+import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
   noteWritten,
@@ -25,6 +26,16 @@ import {
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
 const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
+
+// checkbox·radio에 넣을 값의 해석(실행·기대 상태·최종 확인이 함께 쓴다). 참 = 기존 참 값, 거짓 = "false",
+// 그 밖은 null(지정 오류). 칸의 value 속성과는 비교하지 않는다(#43 — 모델은 value를 모르고, value가 "false"인
+// 칸에 거짓 요청이 체크로 처리되지 않게).
+export function parseCheckedRequest(value: string): boolean | null {
+  const v = value.trim();
+  if (TRUTHY_VALUES.test(v)) return true;
+  if (/^false$/i.test(v)) return false;
+  return null;
+}
 
 type FieldElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
@@ -605,10 +616,10 @@ export function personalValuedElements(
 
 const FIELD_KIND: TargetKind = {
   prefix: "f",
-  attr: "data-sbp-fid",
   visible: isVisible,
   requireVisible: false,
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
+  modelName: (el) => modelName(el),
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
   personalElements: (el) => {
@@ -689,38 +700,139 @@ const FIELD_KIND: TargetKind = {
   },
 };
 
-function currentValueOf(el: FieldElement): string {
-  if (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")) {
-    return el.checked ? `checked (value=${el.value})` : `unchecked (value=${el.value})`;
+// select 선택지의 보이는 글자(공백 정리). 고르기·최종 확인이 같은 글자를 쓴다. label 속성이 있으면 그것,
+// 없으면 선택지 안의 글자에서 숨긴·편집 하위 내용을 뺀 것(커스텀 select의 <option>공개<span hidden>…</span>).
+// cut: 글자가 너무 길어 끝까지 모으지 못함(그 글자로는 고르지 않는다).
+function optionLabelInfo(o: HTMLOptionElement): { label: string; cut: boolean } {
+  const attr = o.getAttribute("label");
+  if (attr !== null && attr.trim()) return { label: attr.replace(/\s+/g, " ").trim(), cut: false };
+  const { text, cut } = subtreeTextInfo(o, 2000);
+  return { label: text, cut };
+}
+
+function optionLabel(o: HTMLOptionElement): string {
+  return optionLabelInfo(o).label;
+}
+
+// 선택지 자신이나 select까지의 조상 optgroup(사이에 감싼 요소가 있어도)이 비활성이면 고를 수 없다.
+function optionDisabled(o: HTMLOptionElement): boolean {
+  if (o.disabled) return true;
+  for (let cur = o.parentElement; cur && cur.localName !== "select"; cur = cur.parentElement) {
+    if (cur.localName === "optgroup" && (cur as HTMLOptGroupElement).disabled) return true;
   }
-  return el.value ?? "";
+  return false;
 }
 
-export function findFormFields(args: { onlyVisible?: boolean }): FormField[] {
+const MAX_OPTIONS = 200;
+// 돌려주는 선택지 글자의 상한. 넘으면 잘라 truncated로 표시하고, 잘린 글자로는 고르지 못한다(다른 선택지와 섞이지 않게).
+const MAX_OPTION_LABEL = 300;
+
+// 보이는 글자가 요청과 정확히 같은 선택지가 하나뿐이고 고를 수 있으면 그 선택지, 아니면 이유(#43).
+// 찾기·채우기·최종 확인이 이 규칙 하나를 쓴다. value 속성이나 textContent로는 고르지 않는다.
+// 모델에 돌려주는 선택지 글자(길면 잘라 끝에 …).
+function shownOptionLabel(o: HTMLOptionElement): { label: string; truncated: boolean } {
+  const { label, cut } = optionLabelInfo(o);
+  if (label.length > MAX_OPTION_LABEL) return { label: label.slice(0, MAX_OPTION_LABEL) + "…", truncated: true };
+  // 끝까지 모으지 못한 글자도 잘린 것으로 표시한다(모은 부분만 보고 다른 이름으로 고르지 않게).
+  return cut ? { label: label + "…", truncated: true } : { label, truncated: false };
+}
+
+export function optionByLabel(el: HTMLSelectElement, label: string): HTMLOptionElement | string {
+  if (el.multiple) return "다중 선택 칸은 지원하지 않습니다";
+  const want = label.replace(/\s+/g, " ").trim();
+  // 잘린 선택지 글자와 같은 요청은 그 잘린 선택지를 뜻했을 수 있어 거부한다(다른 선택지가 대신 골라지지 않게).
+  if (Array.from(el.options).some((o) => !optionHidden(o) && shownOptionLabel(o).truncated && shownOptionLabel(o).label === want)) {
+    return "글자가 길어 잘린 선택지와 같은 글자라 고를 수 없습니다";
+  }
+  // 숨긴 선택지는 모델에 글자를 보내지 않으므로 고르는 대상에서도 뺀다.
+  const matches = Array.from(el.options).filter((o) => {
+    if (optionHidden(o)) return false;
+    const info = optionLabelInfo(o);
+    return !info.cut && info.label === want;
+  });
+  if (!matches.length) return "보이는 글자가 같은 선택지가 없습니다(find_form_fields의 options 글자를 그대로 쓰세요)";
+  if (matches.length > 1) return "보이는 글자가 같은 선택지가 여럿이라 고를 수 없습니다";
+  if (optionDisabled(matches[0])) return "고를 수 없는(비활성) 선택지입니다";
+  return matches[0];
+}
+
+// 값을 쓰기 전에 요청이 이 칸에 맞는지 본다. 맞지 않으면 이유(그 칸은 건드리지 않는다).
+function requestProblem(el: FieldElement, value: string): string | null {
+  if (isTag(el, "select")) {
+    const m = optionByLabel(el, value);
+    return typeof m === "string" ? m : null;
+  }
+  if (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")) {
+    const want = parseCheckedRequest(value);
+    if (want === null) return "checkbox·radio는 \"true\" 또는 \"false\"로 지정하세요";
+    if (el.type === "radio" && !want && el.checked) return "선택된 라디오는 해제할 수 없습니다";
+  }
+  return null;
+}
+
+// 모델에 돌려줄 칸 하나(#43): 사용자가 입력한 값은 담지 않는다.
+function fieldForModel(el: FieldElement, id: string): FormField {
+  // 칸 자신이 편집 영역·숨은 영역 안이면 이름·선택지도 돌려주지 않는다.
+  const area = inProtectedArea(el, true);
+  const field: FormField = {
+    id,
+    label: modelName(el),
+    placeholder:
+      !area && !isTag(el, "select") ? (el.getAttribute("placeholder") ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "",
+    type: describeType(el),
+    role: el.getAttribute("role") ?? "",
+  };
+  if (isTag(el, "select")) {
+    if (el.multiple) field.multiple = true;
+    if (!area) {
+      field.options = Array.from(el.options)
+        .slice(0, MAX_OPTIONS)
+        .map((o) => {
+          // 숨긴 선택지(hidden·aria-hidden·display:none)는 글자를 보내지 않는다(위치만 남겨 selectedIndex와 맞춘다).
+          if (optionHidden(o)) return { label: "", hidden: true };
+          const shown = shownOptionLabel(o);
+          return {
+            label: shown.label,
+            ...(shown.truncated ? { truncated: true } : {}),
+            ...(optionDisabled(o) ? { disabled: true } : {}),
+          };
+        });
+    }
+    // 개인정보 단서가 있는 칸(저장된 배송지 목록 등)은 선택된 위치를 숨긴다(더 숨기는 방향만).
+    const selected = el.selectedOptions[0];
+    const personal =
+      isPersonalField(el) || (!!selected && (looksPersonalValue(selected.value) || looksPersonalValue(optionLabel(selected))));
+    if (!el.multiple && !personal && !area && el.selectedIndex >= 0 && el.selectedIndex < MAX_OPTIONS) {
+      field.selectedIndex = el.selectedIndex;
+    }
+    return field;
+  }
+  if (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")) {
+    field.checked = el.checked;
+    return field;
+  }
+  field.hasValue = !!(el.value ?? "");
+  return field;
+}
+
+export function findFormFields(_args: { onlyVisible?: boolean }): FormField[] {
   captureHiddenBaselines();
-  return scanTargets(() => collectFormFields(args));
+  return scanTargets(() => collectFormFields());
 }
 
-function collectFormFields(args: { onlyVisible?: boolean }): FormField[] {
-  const onlyVisible = args.onlyVisible !== false;
+// 보이는 칸만 돌려준다. 화면에 보이지 않는 칸(onlyVisible:false로 찾던 숨은 칸)은 이제 돌려주지 않는다(#43).
+function collectFormFields(): FormField[] {
   const fields: FormField[] = [];
 
   for (const root of getAccessibleRoots()) {
     root.querySelectorAll("input, textarea, select").forEach((el) => {
       if (!isFieldElement(el)) return;
       if (isTag(el, "input") && SKIP_INPUT_TYPES.has(el.type)) return;
-      if (onlyVisible && !isVisible(el)) return;
+      if (!isVisible(el)) return;
       if (el.disabled) return;
       if (!isTag(el, "select") && el.readOnly) return;
 
-      fields.push({
-        id: registerTarget(FIELD_KIND, el),
-        label: resolveLabel(el),
-        placeholder: isTag(el, "select") ? "" : el.placeholder ?? "",
-        type: describeType(el),
-        role: el.getAttribute("role") ?? "",
-        currentValue: currentValueOf(el),
-      });
+      fields.push(fieldForModel(el, registerTarget(FIELD_KIND, el)));
     });
   }
 
@@ -729,7 +841,7 @@ function collectFormFields(args: { onlyVisible?: boolean }): FormField[] {
 
 // React 등은 value/checked 속성 setter를 인스턴스에 덮어써 변경을 추적한다.
 // 요소 자신의 프로토타입(= iframe이면 그 창의 프로토타입) setter로 써야 이벤트가 반영된다.
-function setNativeProperty(el: Element, prop: "value" | "checked", value: string | boolean): void {
+function setNativeProperty(el: Element, prop: "value" | "checked" | "selectedIndex", value: string | boolean | number): void {
   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), prop)?.set;
   if (setter) setter.call(el, value);
   else (el as unknown as Record<string, unknown>)[prop] = value;
@@ -748,8 +860,8 @@ function dispatchChange(el: Element, guard?: () => string | null): void {
 // 이 입력이 실제로 넣을 값(페이지 처리기가 돌기 전에 정한 것): 선택 칸은 고를 option.value, checkbox·radio는 자기 value.
 function intendedValue(el: FieldElement, value: string): string {
   if (isTag(el, "select")) {
-    const match = Array.from(el.options).find((opt) => opt.value === value || opt.textContent?.trim() === value);
-    return match ? match.value : value;
+    const match = optionByLabel(el, value);
+    return typeof match === "string" ? value : match.value;
   }
   if (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")) return el.value;
   return value;
@@ -764,17 +876,19 @@ function fillOne(
   guard?: () => string | null,
 ): boolean {
   if (isTag(el, "select")) {
-    const match = Array.from(el.options).find(
-      (opt) => opt.value === value || opt.textContent?.trim() === value,
-    );
-    if (!match) return false;
-    setNativeProperty(el, "value", match.value);
+    const match = optionByLabel(el, value);
+    if (typeof match === "string") return false;
+    // 그 선택지 자체를 고른다(value로 쓰면 같은 value의 다른 선택지가 먼저 골라질 수 있다).
+    setNativeProperty(el, "selectedIndex", match.index);
+    // 이벤트를 보내기 전에 그 선택지 하나만 골라졌는지 본다. 아니면 이벤트 없이 실패.
+    if (el.selectedOptions.length !== 1 || el.selectedOptions[0] !== match) return false;
     dispatchChange(el, guard);
     return true;
   }
   if (isTag(el, "input") && el.type === "checkbox") {
-    // value 속성이 아니라 체크 상태를 바꾼다. "true"/"예" 등이면 체크, 그 외는 해제.
-    const want = TRUTHY_VALUES.test(value.trim()) || value === el.value;
+    // value 속성이 아니라 체크 상태를 바꾼다.
+    const want = parseCheckedRequest(value);
+    if (want === null) return false;
     if (el.checked !== want) {
       setNativeProperty(el, "checked", want);
       dispatchChange(el, guard);
@@ -782,8 +896,10 @@ function fillOne(
     return true;
   }
   if (isTag(el, "input") && el.type === "radio") {
-    // 라디오는 해제할 수 없으니 선택만 한다. 값이 이 항목의 value이거나 참 값이면 선택.
-    if (value !== el.value && !TRUTHY_VALUES.test(value.trim())) return false;
+    // 라디오는 해제할 수 없으니 선택만 한다. 거짓 요청은 이미 해제돼 있을 때만 그대로 둔다.
+    const want = parseCheckedRequest(value);
+    if (want === null) return false;
+    if (!want) return !el.checked;
     if (!el.checked) {
       setNativeProperty(el, "checked", true);
       dispatchChange(el, guard);
@@ -805,13 +921,12 @@ function fillOne(
 // 채운 뒤 값을 다시 읽어 실제로 반영됐는지 본다. 페이지가 값을 고치거나(최대 길이·서식) 거부할 수 있다.
 function appliedValue(el: FieldElement, value: string): boolean {
   if (isTag(el, "select")) {
-    const opt = el.selectedOptions[0];
-    return !!opt && (opt.value === value || opt.textContent?.trim() === value);
+    const match = optionByLabel(el, value);
+    return typeof match !== "string" && el.selectedOptions.length === 1 && el.selectedOptions[0] === match;
   }
-  if (isTag(el, "input") && el.type === "checkbox") {
-    return el.checked === (TRUTHY_VALUES.test(value.trim()) || value === el.value);
+  if (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")) {
+    return el.checked === parseCheckedRequest(value);
   }
-  if (isTag(el, "input") && el.type === "radio") return el.checked;
   return el.value === value;
 }
 
@@ -864,13 +979,19 @@ export async function fillFormFields(
       continue;
     }
     if (!isFieldElement(el)) throw new Error(`id '${f.id}'는 입력 칸이 아닙니다.`);
-    const label = FIELD_KIND.name(el);
+    // 결과 문구에는 모델에 돌려준 이름만 쓴다.
+    const label = FIELD_KIND.modelName(el);
+    const problem = requestProblem(el, f.value);
+    if (problem) {
+      results.push({ id: f.id, label, applied: false, note: problem });
+      continue;
+    }
     // 처리기가 돌기 전에 이 입력이 넣을 값을 정해 둔다(처리기가 덮어쓴 값은 승인한 변화가 아니다).
     const intended = intendedValue(el, f.value);
     // checkbox·radio: 처리기가 돌기 전의 value와 요청한 체크 상태로 기대 값 요약을 만든다(fieldValueSignature와 같은 꼴).
     const expectedSig =
       isTag(el, "input") && (el.type === "checkbox" || el.type === "radio")
-        ? `${el.type === "radio" ? true : TRUTHY_VALUES.test(f.value.trim()) || f.value === el.value}:${el.value}`
+        ? `${parseCheckedRequest(f.value) === true}:${el.value}`
         : null;
     // 승인 뒤 양식이 바뀌었는지(채우기 직전과, input 처리기가 돈 뒤 change를 보내기 전에 본다).
     // 이 묶음에서 넣는 값으로 생긴 것은 승인 때 이미 검사했다.

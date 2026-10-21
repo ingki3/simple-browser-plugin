@@ -2,6 +2,7 @@ import type { ClickableElement, PageRegion } from "@/lib/messages";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
 import { getAccessibleRoots, isTag } from "./docs";
+import { modelName } from "./modelText";
 import {
   choiceUrlsOf,
   controlHasPersonalValue,
@@ -165,10 +166,10 @@ function labelControl(el: HTMLElement): HTMLElement | null {
 
 const CLICK_KIND: TargetKind = {
   prefix: "c",
-  attr: "data-sbp-cid",
   visible: isVisible,
   requireVisible: true,
   name: clickText,
+  modelName: (el) => modelName(el),
   fieldType: () => "",
   sensitive: () => null,
   // 누르면 작동할 컨트롤의 양식에서 값이 채워진 개인정보·비밀 칸들(승인 뒤 새로 채워졌는지 보려고).
@@ -312,7 +313,8 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       const tag = el.tagName.toLowerCase();
       const role = el.getAttribute("role") ?? "";
       const href = isTag(el, "a") ? el.href : "";
-      const text = clickText(el);
+      // 모델에 돌려주는 글자(입력 칸·편집 영역·숨은 글자 제외). 검색어 필터도 이 글자로 본다(#43).
+      const text = modelName(el);
       if (!text && !href) continue;
 
       let score = 0;
@@ -348,7 +350,7 @@ export function clickElement(
   callId: string,
 ): { clicked: boolean; text: string; href: string; effectToken: string } {
   const { el, info } = takeApproved(args.id, callId, CLICK_KIND.prefix);
-  const text = clickText(el);
+  const text = info.modelName ?? "";
   const href = isTag(el, "a") ? el.href : "";
   const effectToken = `${callId}:${Date.now()}`;
 

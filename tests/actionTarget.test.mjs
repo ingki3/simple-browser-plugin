@@ -31,6 +31,8 @@ test("sameBase: 기본 항목 중 하나라도 다르면 다른 대상", () => {
   assert.equal(sameBase(link, { ...link, inFrame: true }), false);
   // 같은 버튼 노드가 다른 행에 다시 쓰이면 행 글자가 달라진다.
   assert.equal(sameBase({ ...link, context: "A 문서 삭제" }, { ...link, context: "B 문서 삭제" }), false);
+  // 모델에 돌려준 이름만 바뀌어도(원문은 같아도) 다른 대상이다.
+  assert.equal(sameBase({ ...link, modelName: "다음 글" }, { ...link, modelName: "광고" }), false);
   // 목록 위치는 기본 비교에서 보지 않는다.
   assert.equal(sameBase(link, { ...link, list: { index: 2, count: 5 } }), true);
 });
@@ -44,7 +46,11 @@ test("sameApproved: 목록 순번은 같아야 하고 항목 수는 늘어도 �
 });
 
 test("describeDifference는 바뀐 항목을 짚는다", () => {
-  assert.match(describeDifference(link, { ...link, name: "광고" }), /'다음 글' → '광고'/);
+  // 글자는 모델에 돌려준 이름만 인용한다(원문 이름에는 입력 칸·편집 영역 글자가 섞일 수 있다).
+  const named = { ...link, modelName: "다음 글" };
+  assert.match(describeDifference(named, { ...named, name: "광고", modelName: "광고" }), /'다음 글' → '광고'/);
+  assert.equal(describeDifference(named, { ...named, name: "다음 글 비밀초안" }), "글자가 바뀜");
+  assert.doesNotMatch(describeDifference(named, { ...named, name: "다음 글 비밀초안" }), /비밀초안/);
   assert.equal(describeDifference(link, { ...link, href: "x" }), "링크 주소가 바뀜");
   assert.equal(describeDifference(link, { ...link, sensitive: "password" }), "입력 칸 종류가 바뀜");
   assert.equal(describeDifference(link, { ...link, context: "다른 행" }), "대상이 든 행의 내용이 바뀜");

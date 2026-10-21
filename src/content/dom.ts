@@ -1,10 +1,13 @@
 import { getAccessibleRoots } from "./docs";
+import { inProtectedArea, modelAttr, modelText } from "./modelText";
 
 export interface QueryResult {
   text: string;
   attrs: Record<string, string>;
 }
 
+// 글자는 화면 글자만(입력 칸·편집 영역·숨은 하위 내용 제외), 속성은 정해 둔 구조 속성만 돌려준다(#43).
+// 선택자 자체는 지금처럼 그대로 실행한다(선택자 조건의 처리는 #45).
 export function queryDom(args: { selector: string; attr?: string; limit?: number }): QueryResult[] {
   const limit = Math.min(args.limit ?? 50, 200);
   const out: QueryResult[] = [];
@@ -23,11 +26,12 @@ export function queryDom(args: { selector: string; attr?: string; limit?: number
 
     nodes.forEach((el) => {
       if (out.length >= limit) return;
-      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
+      const protectedArea = inProtectedArea(el);
+      const text = protectedArea ? "" : modelText(el, 500);
       const attrs: Record<string, string> = {};
       if (args.attr) {
-        const v = el.getAttribute(args.attr);
-        if (v !== null) attrs[args.attr] = v.slice(0, 500);
+        const v = modelAttr(el, args.attr, protectedArea);
+        if (v !== null) attrs[args.attr] = v;
       }
       out.push({ text, attrs });
     });
