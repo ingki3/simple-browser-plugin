@@ -29,11 +29,11 @@ function factsOf(el: Element): ProtectFacts {
 
 const MAX_ANCESTORS = 400;
 
-// select의 선택지가 숨겨졌는지(선택지 자신이나 감싼 optgroup의 hidden·aria-hidden·display:none).
-// select 자신은 값 컨트롤이라 inProtectedArea로 볼 수 없어 따로 본다.
+// select의 선택지가 숨겨졌는지: 선택지에서 select까지의 모든 요소(optgroup, 커스텀 select의 감싼 요소 포함) 중
+// hidden·aria-hidden·display:none·편집 영역이 있으면 숨긴 것. select 자신은 값 컨트롤이라 inProtectedArea로 볼 수
+// 없어 따로 본다(선택지의 계산 스타일에는 조상의 display:none이 드러나지 않는다).
 export function optionHidden(o: Element): boolean {
-  for (const cur of [o, o.parentElement]) {
-    if (!cur || (cur !== o && cur.localName !== "optgroup")) continue;
+  for (let cur: Element | null = o; cur && cur.localName !== "select"; cur = cur.parentElement) {
     const reason = protectedReason(factsOf(cur));
     if (reason === "hidden" || reason === "editable") return true;
   }
@@ -79,8 +79,12 @@ export function inProtectedArea(el: Element, selfIsControl = false): boolean {
   return false;
 }
 
-// 줄 안에 흐르는 요소(이 경계에서는 글자를 띄우지 않는다: <b>계</b>정 → "계정").
-const INLINE_DISPLAYS = new Set(["inline", "contents", "ruby", "ruby-text"]);
+// 줄 안에 흐르는 요소(이 경계에서는 글자를 띄우지 않는다: <b>계</b>정 → "계정"). inline-block·inline-flex 같은
+// 줄 안 박스도 포함한다(사이에 공백 글자가 있으면 그 글자로 띄워진다).
+function inlineDisplay(display: string | null): boolean {
+  const d = display ?? "inline";
+  return d.startsWith("inline") || d === "contents" || d.startsWith("ruby");
+}
 
 // root 아래의 글자(합성 트리 순서: 열린 shadow root와 슬롯에 배치된 노드 포함). 보호 요소의 하위 트리는 뺀다.
 // 슬롯은 평탄화하지 않고 한 단계씩 따라간다(안쪽 슬롯 자신의 보호 속성도 검사하게).
@@ -115,7 +119,7 @@ export function modelText(root: Element, max: number): string {
     const facts = factsOf(node as Element);
     if (protectedReason(facts) !== null) continue;
     // 블록 경계의 글자만 띄운다(줄 안 요소 경계는 붙인다).
-    const block = !INLINE_DISPLAYS.has(facts.display ?? "inline") || facts.tag === "br";
+    const block = !inlineDisplay(facts.display) || facts.tag === "br";
     if (block) {
       out += " ";
       stack.push(" ");

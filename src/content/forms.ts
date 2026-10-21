@@ -717,9 +717,21 @@ const MAX_OPTION_LABEL = 300;
 
 // 보이는 글자가 요청과 정확히 같은 선택지가 하나뿐이고 고를 수 있으면 그 선택지, 아니면 이유(#43).
 // 찾기·채우기·최종 확인이 이 규칙 하나를 쓴다. value 속성이나 textContent로는 고르지 않는다.
+// 모델에 돌려주는 선택지 글자(길면 잘라 끝에 …).
+function shownOptionLabel(o: HTMLOptionElement): { label: string; truncated: boolean } {
+  const label = optionLabel(o);
+  return label.length > MAX_OPTION_LABEL
+    ? { label: label.slice(0, MAX_OPTION_LABEL) + "…", truncated: true }
+    : { label, truncated: false };
+}
+
 export function optionByLabel(el: HTMLSelectElement, label: string): HTMLOptionElement | string {
   if (el.multiple) return "다중 선택 칸은 지원하지 않습니다";
   const want = label.replace(/\s+/g, " ").trim();
+  // 잘린 선택지 글자와 같은 요청은 그 잘린 선택지를 뜻했을 수 있어 거부한다(다른 선택지가 대신 골라지지 않게).
+  if (Array.from(el.options).some((o) => !optionHidden(o) && shownOptionLabel(o).truncated && shownOptionLabel(o).label === want)) {
+    return "글자가 길어 잘린 선택지와 같은 글자라 고를 수 없습니다";
+  }
   // 숨긴 선택지는 모델에 글자를 보내지 않으므로 고르는 대상에서도 뺀다.
   const matches = Array.from(el.options).filter((o) => !optionHidden(o) && optionLabel(o) === want);
   if (!matches.length) return "보이는 글자가 같은 선택지가 없습니다(find_form_fields의 options 글자를 그대로 쓰세요)";
@@ -762,10 +774,10 @@ function fieldForModel(el: FieldElement, id: string): FormField {
         .map((o) => {
           // 숨긴 선택지(hidden·aria-hidden·display:none)는 글자를 보내지 않는다(위치만 남겨 selectedIndex와 맞춘다).
           if (optionHidden(o)) return { label: "", hidden: true };
-          const label = optionLabel(o);
+          const shown = shownOptionLabel(o);
           return {
-            label: label.length > MAX_OPTION_LABEL ? label.slice(0, MAX_OPTION_LABEL) + "…" : label,
-            ...(label.length > MAX_OPTION_LABEL ? { truncated: true } : {}),
+            label: shown.label,
+            ...(shown.truncated ? { truncated: true } : {}),
             ...(optionDisabled(o) ? { disabled: true } : {}),
           };
         });
