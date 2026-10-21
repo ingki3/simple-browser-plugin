@@ -12,7 +12,7 @@ import {
 import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
-import { inProtectedArea, modelName, optionHidden, subtreeText } from "./modelText";
+import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
   noteWritten,
@@ -702,9 +702,16 @@ const FIELD_KIND: TargetKind = {
 
 // select 선택지의 보이는 글자(공백 정리). 고르기·최종 확인이 같은 글자를 쓴다. label 속성이 있으면 그것,
 // 없으면 선택지 안의 글자에서 숨긴·편집 하위 내용을 뺀 것(커스텀 select의 <option>공개<span hidden>…</span>).
-function optionLabel(o: HTMLOptionElement): string {
+// cut: 글자가 너무 길어 끝까지 모으지 못함(그 글자로는 고르지 않는다).
+function optionLabelInfo(o: HTMLOptionElement): { label: string; cut: boolean } {
   const attr = o.getAttribute("label");
-  return (attr !== null && attr.trim() ? attr : subtreeText(o, 2000)).replace(/\s+/g, " ").trim();
+  if (attr !== null && attr.trim()) return { label: attr.replace(/\s+/g, " ").trim(), cut: false };
+  const { text, cut } = subtreeTextInfo(o, 2000);
+  return { label: text, cut };
+}
+
+function optionLabel(o: HTMLOptionElement): string {
+  return optionLabelInfo(o).label;
 }
 
 // 선택지 자신이나 select까지의 조상 optgroup(사이에 감싼 요소가 있어도)이 비활성이면 고를 수 없다.
@@ -724,10 +731,10 @@ const MAX_OPTION_LABEL = 300;
 // 찾기·채우기·최종 확인이 이 규칙 하나를 쓴다. value 속성이나 textContent로는 고르지 않는다.
 // 모델에 돌려주는 선택지 글자(길면 잘라 끝에 …).
 function shownOptionLabel(o: HTMLOptionElement): { label: string; truncated: boolean } {
-  const label = optionLabel(o);
-  return label.length > MAX_OPTION_LABEL
-    ? { label: label.slice(0, MAX_OPTION_LABEL) + "…", truncated: true }
-    : { label, truncated: false };
+  const { label, cut } = optionLabelInfo(o);
+  if (label.length > MAX_OPTION_LABEL) return { label: label.slice(0, MAX_OPTION_LABEL) + "…", truncated: true };
+  // 끝까지 모으지 못한 글자도 잘린 것으로 표시한다(모은 부분만 보고 다른 이름으로 고르지 않게).
+  return cut ? { label: label + "…", truncated: true } : { label, truncated: false };
 }
 
 export function optionByLabel(el: HTMLSelectElement, label: string): HTMLOptionElement | string {
@@ -738,7 +745,11 @@ export function optionByLabel(el: HTMLSelectElement, label: string): HTMLOptionE
     return "글자가 길어 잘린 선택지와 같은 글자라 고를 수 없습니다";
   }
   // 숨긴 선택지는 모델에 글자를 보내지 않으므로 고르는 대상에서도 뺀다.
-  const matches = Array.from(el.options).filter((o) => !optionHidden(o) && optionLabel(o) === want);
+  const matches = Array.from(el.options).filter((o) => {
+    if (optionHidden(o)) return false;
+    const info = optionLabelInfo(o);
+    return !info.cut && info.label === want;
+  });
   if (!matches.length) return "보이는 글자가 같은 선택지가 없습니다(find_form_fields의 options 글자를 그대로 쓰세요)";
   if (matches.length > 1) return "보이는 글자가 같은 선택지가 여럿이라 고를 수 없습니다";
   if (optionDisabled(matches[0])) return "고를 수 없는(비활성) 선택지입니다";

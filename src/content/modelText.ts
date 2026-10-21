@@ -95,6 +95,11 @@ export function modelText(root: Element, max: number): string {
 
 // root 아래 글자만 모은다(root 자신과 조상의 보호 판정은 부르는 쪽이 한다 — select 안의 선택지처럼 조상이 값 컨트롤인 경우).
 export function subtreeText(root: Element, max: number): string {
+  return subtreeTextInfo(root, max).text;
+}
+
+// cut: 순회 한도에 걸려 끝까지 모으지 못했는지(그 글자로 대상을 식별하면 안 된다).
+export function subtreeTextInfo(root: Element, max: number): { text: string; cut: boolean } {
   const limit = max * 4;
   let out = "";
   const childrenOf = (node: Node): Node[] => {
@@ -132,7 +137,10 @@ export function subtreeText(root: Element, max: number): string {
     const kids = childrenOf(node);
     for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
   }
-  return cleanModelText(out, max);
+  const text = cleanModelText(out, max);
+  // 남은 항목이 있거나 정리 뒤에도 상한까지 찼으면 끝까지 모으지 못한 것이다.
+  const cut = stack.some((n) => typeof n !== "string") || out.replace(/\s+/g, " ").trim().length > max;
+  return { text, cut };
 }
 
 function refText(el: Element, attr: string, max: number): string {
