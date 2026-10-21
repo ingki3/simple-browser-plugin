@@ -10,14 +10,15 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { fieldValueSignature, linkHrefOf } from "./context";
 
 export interface TargetKind {
-  // id 앞글자("c" 클릭, "f" 입력 칸)와 요소에 붙이는 속성.
+  // id 앞글자("c" 클릭, "f" 입력 칸).
   prefix: string;
-  attr: string;
   visible(el: HTMLElement): boolean;
   // 클릭은 보이는 요소만. 입력 칸은 find_form_fields({onlyVisible:false})로 숨은 칸도 고를 수 있어
   // 막지 않고 승인 카드에 경고만 한다.
   requireVisible: boolean;
   name(el: HTMLElement): string;
+  // 모델에 돌려주는 이름(입력값·편집 영역·숨은 글자 제외, modelText.ts). 비교에도 넣는다.
+  modelName(el: HTMLElement): string;
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
@@ -39,6 +40,8 @@ interface Entry {
 const TOKEN = Math.random().toString(36).slice(2, 5).padEnd(3, "0");
 const MAX_ENTRIES = 3000;
 const registry = new Map<string, Entry>();
+// 요소 → id(종류별). 같은 요소를 다시 찾으면 같은 id를 준다. 페이지 DOM에는 아무것도 쓰지 않는다(#43).
+const idsByKind = new Map<string, WeakMap<Element, string>>();
 let counter = 0;
 let generation = 0;
 
@@ -134,6 +137,7 @@ function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
     tag: el.localName,
     role: implicitRole(el),
     name: kind.name(el),
+    modelName: kind.modelName(el),
     href: hrefOf(el),
     region: detectRegion(el),
     inFrame: el.ownerDocument !== document,
@@ -209,7 +213,12 @@ export function scanTargets<T>(fn: () => T): T {
 }
 
 export function registerTarget(kind: TargetKind, el: HTMLElement): string {
-  const existing = el.getAttribute(kind.attr);
+  let ids = idsByKind.get(kind.prefix);
+  if (!ids) {
+    ids = new WeakMap();
+    idsByKind.set(kind.prefix, ids);
+  }
+  const existing = ids.get(el);
   const entry = existing ? registry.get(existing) : undefined;
   const base = baseInfo(kind, el);
   if (existing && entry && entry.ref.deref() === el) {
@@ -221,7 +230,7 @@ export function registerTarget(kind: TargetKind, el: HTMLElement): string {
   }
   counter += 1;
   const id = `${kind.prefix}${counter}-${TOKEN}`;
-  el.setAttribute(kind.attr, id);
+  ids.set(el, id);
   registry.set(id, { kind, ref: new WeakRef(el), base, approved: null, gen: generation });
   return id;
 }
@@ -234,18 +243,15 @@ function staleError(id: string): Error {
 
 // 등록한 그 요소만 쓴다. 다시 그려져 사라졌으면 비슷한 요소로 바꾸지 않고 멈춘다 — 같은 이름·순번의 요소가
 // 다른 행일 수 있다(승인한 행이 지워지고 다음 행이 올라온 경우). 모델이 다시 찾아 새 승인을 받는다.
-// restore: 페이지가 지운·바꾼 대상 표시 속성을 되돌릴지. 승인 카드용 확인(inspectTarget)은 요소 참조만으로 확인하고
-// 페이지를 바꾸지 않는다(모델이 고른 대상이 승인 전에 페이지에 드러나지 않게). 되돌리기는 승인 뒤 실행 경로에서만.
-function resolve(id: string, restore = true): { entry: Entry; el: HTMLElement } {
+// 요소 참조만으로 확인하고 페이지를 바꾸지 않는다(모델이 고른 대상이 페이지에 드러나지 않게).
+function resolve(id: string): { entry: Entry; el: HTMLElement } {
   const entry = registry.get(id);
   if (!entry) throw staleError(id);
   const el = entry.ref.deref();
   // iframe이 다른 문서로 이동하면 이전 문서의 요소도 그 문서 안에서는 isConnected다. 지금 보이는 문서인지도 본다.
   if (!el || !el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) {
-    throw new Error(`대상 '${entry.base.name || id}'이(가) 페이지에서 다시 그려지거나 사라졌습니다. 다시 찾으세요.`);
+    throw new Error(`대상 '${entry.base.modelName || id}'이(가) 페이지에서 다시 그려지거나 사라졌습니다. 다시 찾으세요.`);
   }
-  // 페이지가 속성만 지우거나 바꿨으면 표시만 되돌린다(기술 확인은 호출한 쪽이 한다).
-  if (restore && el.getAttribute(entry.kind.attr) !== id) el.setAttribute(entry.kind.attr, id);
   return { entry, el };
 }
 
@@ -271,12 +277,12 @@ function checkVisible(entry: Entry, el: HTMLElement, name: string, acting: boole
 // 승인 카드용: 지금 요소가 find_* 때와 같은지 확인하고, 목록 위치까지 담은 기술을 이 호출(callId)의 승인 대상으로 남긴다.
 export function inspectTarget(id: string, callId: string, prefix: string): TargetInfo {
   entryOf(id, prefix);
-  const { entry, el } = resolve(id, false);
+  const { entry, el } = resolve(id);
   const now = baseInfo(entry.kind, el);
   if (!sameBase(now, entry.base)) {
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
-  checkVisible(entry, el, entry.base.name, false);
+  checkVisible(entry, el, entry.base.modelName || id, false);
   const info: TargetInfo = { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el), ...entry.kind.risk?.(el) };
   entry.approved = { callId, info };
   return info;
@@ -382,7 +388,7 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
   }
   const added = riskAdded(entry.kind, el, approved.info);
   if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
-  checkVisible(entry, el, approved.info.name, true);
+  checkVisible(entry, el, approved.info.modelName || id, true);
   return { el, info: approved.info };
 }
 
@@ -514,11 +520,7 @@ export function startEffectWatch(token: string, target: HTMLElement, aborted: st
     const target = isShadowRoot(root) ? root : root.documentElement;
     if (!target) continue;
     const obs = new MutationObserver((records) => {
-      for (const r of records) {
-        // 우리가 붙이는 id 속성은 세지 않는다.
-        if (r.type === "attributes" && r.attributeName?.startsWith("data-sbp-")) continue;
-        watch.mutations++;
-      }
+      watch.mutations += records.length;
     });
     obs.observe(target, { subtree: true, childList: true, attributes: true, characterData: true });
     watch.observers.push(obs);
@@ -531,10 +533,7 @@ function stopEffectWatch(token: string): EffectWatch | undefined {
   if (!watch) return undefined;
   for (const o of watch.observers) {
     // 아직 콜백으로 넘어오지 않은 기록도 센다.
-    for (const r of o.takeRecords()) {
-      if (r.type === "attributes" && r.attributeName?.startsWith("data-sbp-")) continue;
-      watch.mutations++;
-    }
+    watch.mutations += o.takeRecords().length;
     o.disconnect();
   }
   clearTimeout(watch.timer);

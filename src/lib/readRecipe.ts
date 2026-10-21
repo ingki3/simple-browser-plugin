@@ -3,6 +3,7 @@
 // 여기에는 DOM·chrome API 없이 계산하는 부분만 둔다. 저장은 src/background/readRecipes.ts.
 
 import { ACTION_LOG_MAX_AGE_MS, maskName, pageKeyId, plainWord, type PageKey } from "./actionLog.ts";
+import { QUERY_DOM_ATTRS } from "./modelText.ts";
 
 export type RecipeTool = "query_dom" | "list_file_links" | "find_clickables";
 
@@ -71,6 +72,8 @@ export function recipeArgs(tool: string, raw: unknown): { tool: RecipeTool; args
     const selector = typeof a.selector === "string" && safeSelector(a.selector, 200) ? a.selector : null;
     const attr = str("attr", 60);
     if (!selector || attr === null) return null;
+    // query_dom이 받는 속성만 남긴다(예전 레시피의 다른 속성은 다시 쓸 수 없다, #43).
+    if (attr && !(QUERY_DOM_ATTRS as readonly string[]).includes(attr)) return null;
     const args: ReadRecipe["args"] = { selector };
     if (attr) args.attr = attr;
     if (typeof a.limit === "number") args.limit = a.limit;
@@ -154,7 +157,13 @@ export function pruneRecipes(raw: unknown, now: number): ReadRecipe[] {
       typeof (r as ReadRecipe).page === "string" &&
       typeof (r as ReadRecipe).lastUsed === "number" &&
       now - (r as ReadRecipe).lastUsed <= RECIPE_MAX_AGE_MS &&
-      (r as ReadRecipe).failures < RECIPE_MAX_FAILURES,
+      (r as ReadRecipe).failures < RECIPE_MAX_FAILURES &&
+      // query_dom이 더는 받지 않는 속성을 쓴 예전 레시피는 버린다(#43).
+      !(
+        (r as ReadRecipe).tool === "query_dom" &&
+        typeof (r as ReadRecipe).args?.attr === "string" &&
+        !(QUERY_DOM_ATTRS as readonly string[]).includes((r as ReadRecipe).args.attr as string)
+      ),
   );
   // 최근에 쓴 것부터 남긴다.
   valid.sort((a, b) => b.lastUsed - a.lastUsed);

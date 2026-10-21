@@ -7,8 +7,10 @@ import type { PageRegion } from "./messages";
 export interface TargetInfo {
   tag: string;
   role: string;
-  // 클릭 대상은 보이는 글자, 입력 칸은 label.
+  // 클릭 대상은 보이는 글자, 입력 칸은 label(원문 — 비교·승인 카드용, 모델에는 보내지 않는다).
   name: string;
+  // 모델에 돌려준 이름(입력값·편집 영역·숨은 글자를 뺀 것). 모델이 본 근거가 바뀌어도 다른 대상으로 본다.
+  modelName?: string;
   // 링크의 절대 주소. 링크가 아니면 "".
   href: string;
   region: PageRegion;
@@ -71,6 +73,7 @@ export function sameBase(a: TargetInfo, b: TargetInfo): boolean {
     a.tag === b.tag &&
     a.role === b.role &&
     a.name === b.name &&
+    (a.modelName ?? "") === (b.modelName ?? "") &&
     a.href === b.href &&
     a.region === b.region &&
     a.inFrame === b.inFrame &&
@@ -85,9 +88,13 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
   return sameBase(a, b) && (a.list?.index ?? null) === (b.list?.index ?? null);
 }
 
-// 서로 다른 항목을 사람이 읽을 수 있게 하나 고른다(실패 메시지용).
+// 서로 다른 항목을 사람이 읽을 수 있게 하나 고른다(실패 메시지용 — 모델에도 간다).
+// 글자는 모델에 돌려준 이름(modelName)만 인용한다. 원문 이름에는 입력 칸·편집 영역의 글자가 섞일 수 있다.
 export function describeDifference(before: TargetInfo, after: TargetInfo): string {
-  if (before.name !== after.name) return `글자가 '${clip(before.name, 40)}' → '${clip(after.name, 40)}'`;
+  if ((before.modelName ?? "") !== (after.modelName ?? "")) {
+    return `글자가 '${clip(before.modelName ?? "", 40)}' → '${clip(after.modelName ?? "", 40)}'`;
+  }
+  if (before.name !== after.name) return "글자가 바뀜";
   if (before.href !== after.href) return "링크 주소가 바뀜";
   if (before.tag !== after.tag || before.role !== after.role) return "요소 종류가 바뀜";
   if (before.fieldType !== after.fieldType || before.sensitive !== after.sensitive) return "입력 칸 종류가 바뀜";

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isNavigationSafeUrl } from "./sanitize";
 import { checkFileUrl } from "./fileFormat";
+import { QUERY_DOM_ATTRS } from "./modelText";
 
 export const describePageArgs = z.object({}).strict();
 
@@ -43,6 +44,7 @@ export const translatePageArgs = z
 
 export const findFormFieldsArgs = z
   .object({
+    // 예전 인자. 숨은 칸은 이제 돌려주지 않아 무시한다(#43).
     onlyVisible: z.boolean().optional(),
   })
   .strict();
@@ -82,7 +84,8 @@ export const downloadImagesArgs = z
 export const queryDomArgs = z
   .object({
     selector: z.string().min(1).max(300),
-    attr: z.string().max(100).optional(),
+    // 정해 둔 구조 속성만(값 성격·data-*·class 등은 받지 않는다, #43).
+    attr: z.enum(QUERY_DOM_ATTRS).optional(),
     limit: z.number().int().positive().max(200).optional(),
   })
   .strict();
