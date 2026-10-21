@@ -35,8 +35,19 @@ function isProtectedElement(el: Element): boolean {
 const MAX_ANCESTORS = 400;
 
 // el이 보호 영역 안인지. 위로 올라가며 DOM 부모, shadow root의 host, 슬롯에 배치된 노드의 슬롯 쪽 조상,
-// 같은 출처 iframe의 frame 요소까지 본다. selfIsControl이면 시작 요소 자신(값 컨트롤)은 판정에서 빼고 조상만 본다
-// (컨트롤의 공개 이름은 계산하고 값만 읽지 않는다).
+// 같은 출처 iframe의 frame 요소까지 본다. selfIsControl이면 시작 요소 자신(값 컨트롤)의 '컨트롤' 사유는 빼고 본다
+// (컨트롤의 공개 이름은 계산하고 값만 읽지 않는다). 그때도 컨트롤 자신의 숨김·편집 속성은 본다.
+// select의 선택지가 숨겨졌는지(선택지 자신이나 감싼 optgroup의 hidden·aria-hidden·display:none).
+// select 자신은 값 컨트롤이라 inProtectedArea로 볼 수 없어 따로 본다.
+export function optionHidden(o: Element): boolean {
+  for (const cur of [o, o.parentElement]) {
+    if (!cur || (cur !== o && cur.localName !== "optgroup")) continue;
+    const reason = protectedReason(factsOf(cur));
+    if (reason === "hidden" || reason === "editable") return true;
+  }
+  return false;
+}
+
 export function inProtectedArea(el: Element, selfIsControl = false): boolean {
   const seen = new Set<Element>();
   const queue: Element[] = [el];
@@ -47,12 +58,12 @@ export function inProtectedArea(el: Element, selfIsControl = false): boolean {
     seen.add(cur);
     // 끝까지 보지 못하면 보호 영역으로 본다(덜 보내는 쪽).
     if (++visited > MAX_ANCESTORS) return true;
-    const skipSelf = cur === el && selfIsControl && VALUE_CONTROL_TAGS.has(cur.localName);
-    if (!skipSelf) {
-      const reason = protectedReason(factsOf(cur));
-      // 글자 아닌 요소(script 등)는 조상으로서는 문제가 아니다.
-      if (reason && reason !== "non_text") return true;
-    }
+    const facts = factsOf(cur);
+    // 시작 요소가 값 컨트롤이면 '컨트롤'이라는 사유만 빼고(이름은 계산한다) 자신의 숨김·편집 여부는 그대로 본다.
+    const selfControl = cur === el && selfIsControl && VALUE_CONTROL_TAGS.has(cur.localName);
+    const reason = protectedReason(selfControl ? { ...facts, tag: "" } : facts);
+    // 글자 아닌 요소(script 등)는 조상으로서는 문제가 아니다.
+    if (reason && reason !== "non_text") return true;
     if (cur.ownerDocument.designMode === "on") return true;
     if (cur.assignedSlot) queue.push(cur.assignedSlot);
     if (cur.parentElement) queue.push(cur.parentElement);

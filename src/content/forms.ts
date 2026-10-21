@@ -12,7 +12,7 @@ import {
 import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
-import { inProtectedArea, modelName } from "./modelText";
+import { inProtectedArea, modelName, optionHidden } from "./modelText";
 import {
   RiskAddedError,
   noteWritten,
@@ -712,13 +712,16 @@ function optionDisabled(o: HTMLOptionElement): boolean {
 }
 
 const MAX_OPTIONS = 200;
+// 돌려주는 선택지 글자의 상한. 넘으면 잘라 truncated로 표시하고, 잘린 글자로는 고르지 못한다(다른 선택지와 섞이지 않게).
+const MAX_OPTION_LABEL = 300;
 
 // 보이는 글자가 요청과 정확히 같은 선택지가 하나뿐이고 고를 수 있으면 그 선택지, 아니면 이유(#43).
 // 찾기·채우기·최종 확인이 이 규칙 하나를 쓴다. value 속성이나 textContent로는 고르지 않는다.
 export function optionByLabel(el: HTMLSelectElement, label: string): HTMLOptionElement | string {
   if (el.multiple) return "다중 선택 칸은 지원하지 않습니다";
   const want = label.replace(/\s+/g, " ").trim();
-  const matches = Array.from(el.options).filter((o) => optionLabel(o) === want);
+  // 숨긴 선택지는 모델에 글자를 보내지 않으므로 고르는 대상에서도 뺀다.
+  const matches = Array.from(el.options).filter((o) => !optionHidden(o) && optionLabel(o) === want);
   if (!matches.length) return "보이는 글자가 같은 선택지가 없습니다(find_form_fields의 options 글자를 그대로 쓰세요)";
   if (matches.length > 1) return "보이는 글자가 같은 선택지가 여럿이라 고를 수 없습니다";
   if (optionDisabled(matches[0])) return "고를 수 없는(비활성) 선택지입니다";
@@ -756,7 +759,16 @@ function fieldForModel(el: FieldElement, id: string): FormField {
     if (!area) {
       field.options = Array.from(el.options)
         .slice(0, MAX_OPTIONS)
-        .map((o) => ({ label: optionLabel(o).slice(0, 200), ...(optionDisabled(o) ? { disabled: true } : {}) }));
+        .map((o) => {
+          // 숨긴 선택지(hidden·aria-hidden·display:none)는 글자를 보내지 않는다(위치만 남겨 selectedIndex와 맞춘다).
+          if (optionHidden(o)) return { label: "", hidden: true };
+          const label = optionLabel(o);
+          return {
+            label: label.length > MAX_OPTION_LABEL ? label.slice(0, MAX_OPTION_LABEL) + "…" : label,
+            ...(label.length > MAX_OPTION_LABEL ? { truncated: true } : {}),
+            ...(optionDisabled(o) ? { disabled: true } : {}),
+          };
+        });
     }
     // 개인정보 단서가 있는 칸(저장된 배송지 목록 등)은 선택된 위치를 숨긴다(더 숨기는 방향만).
     const selected = el.selectedOptions[0];

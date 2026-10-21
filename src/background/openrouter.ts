@@ -67,7 +67,7 @@ describe_page 결과를 읽는 법:
 - click_element(id): 민감. id는 반드시 find_clickables에서 얻은 값. 결과의 effect가 클릭 뒤 일어난 일을 알려 준다(navigation: none/fragment(같은 페이지 안 위치)/same_origin/cross_origin/error, sameDocument, newTab, dom.mutations·dialogOpened). 이것으로 이동 여부를 판단하고, 이동했거나 화면이 바뀐 뒤 내용을 말하려면 다시 관측한다. "화면 변화가 감지되지 않았습니다"면 성공했다고 말하지 않는다.
 - find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감). 결과의 results[].applied가 false인 칸은 값이 반영되지 않은 것이니 사용자에게 알린다.
   find_form_fields는 사용자가 입력한 값을 돌려주지 않는다: 글자 칸은 hasValue(값이 있는지)만, checkbox·radio는 checked만, select는 options(보이는 글자)와 selectedIndex만. 칸에 무엇이 들어 있는지 알아야 하면 사용자에게 묻는다.
-  select는 options의 글자를 그대로 value로 넘긴다(같은 글자가 여럿이거나 비활성 선택지면 실패한다). 다중 선택 칸(multiple)은 채울 수 없다. checkbox·radio는 "true"(체크) 또는 "false"(해제)로 넘긴다.
+  select는 options의 글자를 그대로 value로 넘긴다(같은 글자가 여럿이거나 비활성·숨김·잘린(truncated) 선택지면 실패한다). 다중 선택 칸(multiple)은 채울 수 없다. checkbox·radio는 "true"(체크) 또는 "false"(해제)로 넘긴다.
   채우기만으로는 검색·필터가 적용되지 않는 페이지가 많다. 값을 채운 뒤 결과가 바뀌어야 하는 경우(검색어, 가격 범위 같은 필터)에는 find_clickables로 그 칸 근처의 적용·검색·확인 버튼을 찾아 누른 뒤에 결과를 읽는다. 버튼을 누르기 전에 get_page_content로 결과를 다시 읽지 않는다.
 - list_page_images / download_images: 이미지 목록 → 저장(민감).
 - translate_page: 페이지 전체 번역.
