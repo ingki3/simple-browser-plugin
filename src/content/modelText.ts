@@ -27,16 +27,8 @@ function factsOf(el: Element): ProtectFacts {
   };
 }
 
-// 하위 글자를 모델에 보내지 않는 요소인지.
-function isProtectedElement(el: Element): boolean {
-  return protectedReason(factsOf(el)) !== null;
-}
-
 const MAX_ANCESTORS = 400;
 
-// el이 보호 영역 안인지. 위로 올라가며 DOM 부모, shadow root의 host, 슬롯에 배치된 노드의 슬롯 쪽 조상,
-// 같은 출처 iframe의 frame 요소까지 본다. selfIsControl이면 시작 요소 자신(값 컨트롤)의 '컨트롤' 사유는 빼고 본다
-// (컨트롤의 공개 이름은 계산하고 값만 읽지 않는다). 그때도 컨트롤 자신의 숨김·편집 속성은 본다.
 // select의 선택지가 숨겨졌는지(선택지 자신이나 감싼 optgroup의 hidden·aria-hidden·display:none).
 // select 자신은 값 컨트롤이라 inProtectedArea로 볼 수 없어 따로 본다.
 export function optionHidden(o: Element): boolean {
@@ -48,6 +40,9 @@ export function optionHidden(o: Element): boolean {
   return false;
 }
 
+// el이 보호 영역 안인지. 위로 올라가며 DOM 부모, shadow root의 host, 슬롯에 배치된 노드의 슬롯 쪽 조상,
+// 같은 출처 iframe의 frame 요소까지 본다. selfIsControl이면 시작 요소 자신(값 컨트롤)의 '컨트롤' 사유는 빼고 본다
+// (컨트롤의 공개 이름은 계산하고 값만 읽지 않는다). 그때도 컨트롤 자신의 숨김·편집 속성은 본다.
 export function inProtectedArea(el: Element, selfIsControl = false): boolean {
   const seen = new Set<Element>();
   const queue: Element[] = [el];
@@ -84,7 +79,11 @@ export function inProtectedArea(el: Element, selfIsControl = false): boolean {
   return false;
 }
 
+// 줄 안에 흐르는 요소(이 경계에서는 글자를 띄우지 않는다: <b>계</b>정 → "계정").
+const INLINE_DISPLAYS = new Set(["inline", "contents", "ruby", "ruby-text"]);
+
 // root 아래의 글자(합성 트리 순서: 열린 shadow root와 슬롯에 배치된 노드 포함). 보호 요소의 하위 트리는 뺀다.
+// 슬롯은 평탄화하지 않고 한 단계씩 따라간다(안쪽 슬롯 자신의 보호 속성도 검사하게).
 export function modelText(root: Element, max: number): string {
   if (inProtectedArea(root)) return "";
   const limit = max * 4;
@@ -93,24 +92,34 @@ export function modelText(root: Element, max: number): string {
     if (node.nodeType === Node.ELEMENT_NODE) {
       const el = node as Element;
       if (el.localName === "slot") {
-        const assigned = (el as HTMLSlotElement).assignedNodes({ flatten: true });
+        const assigned = (el as HTMLSlotElement).assignedNodes();
         if (assigned.length) return assigned;
       }
       if (el.shadowRoot) return Array.from(el.shadowRoot.childNodes);
     }
     return Array.from(node.childNodes);
   };
-  const stack: Node[] = childrenOf(root).reverse();
+  // 문자열 항목은 블록 요소가 끝날 때 넣을 공백.
+  const stack: Array<Node | string> = childrenOf(root).reverse();
   while (stack.length && out.length < limit) {
     const node = stack.pop()!;
+    if (typeof node === "string") {
+      out += node;
+      continue;
+    }
     if (node.nodeType === Node.TEXT_NODE) {
       out += (node as Text).data;
       continue;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) continue;
-    if (isProtectedElement(node as Element)) continue;
-    // 블록 경계의 글자가 붙지 않게 사이를 띄운다.
-    out += " ";
+    const facts = factsOf(node as Element);
+    if (protectedReason(facts) !== null) continue;
+    // 블록 경계의 글자만 띄운다(줄 안 요소 경계는 붙인다).
+    const block = !INLINE_DISPLAYS.has(facts.display ?? "inline") || facts.tag === "br";
+    if (block) {
+      out += " ";
+      stack.push(" ");
+    }
     const kids = childrenOf(node);
     for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
   }
