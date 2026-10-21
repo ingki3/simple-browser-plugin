@@ -90,6 +90,11 @@ function inlineDisplay(display: string | null): boolean {
 // 슬롯은 평탄화하지 않고 한 단계씩 따라간다(안쪽 슬롯 자신의 보호 속성도 검사하게).
 export function modelText(root: Element, max: number): string {
   if (inProtectedArea(root)) return "";
+  return subtreeText(root, max);
+}
+
+// root 아래 글자만 모은다(root 자신과 조상의 보호 판정은 부르는 쪽이 한다 — select 안의 선택지처럼 조상이 값 컨트롤인 경우).
+export function subtreeText(root: Element, max: number): string {
   const limit = max * 4;
   let out = "";
   const childrenOf = (node: Node): Node[] => {

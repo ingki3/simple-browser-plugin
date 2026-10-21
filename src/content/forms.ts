@@ -12,7 +12,7 @@ import {
 import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
-import { inProtectedArea, modelName, optionHidden } from "./modelText";
+import { inProtectedArea, modelName, optionHidden, subtreeText } from "./modelText";
 import {
   RiskAddedError,
   noteWritten,
@@ -700,15 +700,20 @@ const FIELD_KIND: TargetKind = {
   },
 };
 
-// select 선택지의 보이는 글자(공백 정리). 고르기·최종 확인이 같은 글자를 쓴다.
+// select 선택지의 보이는 글자(공백 정리). 고르기·최종 확인이 같은 글자를 쓴다. label 속성이 있으면 그것,
+// 없으면 선택지 안의 글자에서 숨긴·편집 하위 내용을 뺀 것(커스텀 select의 <option>공개<span hidden>…</span>).
 function optionLabel(o: HTMLOptionElement): string {
-  return (o.label ?? "").replace(/\s+/g, " ").trim();
+  const attr = o.getAttribute("label");
+  return (attr !== null && attr.trim() ? attr : subtreeText(o, 2000)).replace(/\s+/g, " ").trim();
 }
 
+// 선택지 자신이나 select까지의 조상 optgroup(사이에 감싼 요소가 있어도)이 비활성이면 고를 수 없다.
 function optionDisabled(o: HTMLOptionElement): boolean {
   if (o.disabled) return true;
-  const group = o.parentElement;
-  return !!group && group.localName === "optgroup" && (group as HTMLOptGroupElement).disabled;
+  for (let cur = o.parentElement; cur && cur.localName !== "select"; cur = cur.parentElement) {
+    if (cur.localName === "optgroup" && (cur as HTMLOptGroupElement).disabled) return true;
+  }
+  return false;
 }
 
 const MAX_OPTIONS = 200;
