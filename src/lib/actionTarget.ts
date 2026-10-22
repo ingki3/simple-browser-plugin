@@ -78,6 +78,9 @@ export interface TargetInfo {
   insideControl?: boolean;
   // 대상이나 감싼 링크에 download 속성이 있는지(누르면 파일을 내려받는다).
   download?: boolean;
+  // 누르면 삭제 요청을 보낸다고 페이지가 구조로 선언한 대상(#62): data-method·data-turbo-method="delete",
+  // hx-delete, 작동할 컨트롤이나 그 양식의 _method=DELETE(Rails·Laravel의 메서드 덮어쓰기).
+  deleteMethod?: boolean;
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
   // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
   consentPersonal?: boolean;

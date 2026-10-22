@@ -1,4 +1,5 @@
-// 자동 실행(승인 없이 진행) 옵션의 예외 판정. 자동 실행을 켜도 결제와 개인정보 제출은 승인 카드를 띄운다.
+// 자동 실행(승인 없이 진행) 옵션의 예외 판정. 자동 실행을 켜도 결제·개인정보 제출·되돌리기 어려운 동작(삭제·스팸)은
+// 승인 카드를 띄운다.
 // 여기에는 DOM 없이 계산하는 부분만 둔다. 칸·버튼의 성격(개인정보 칸인지, 개인정보가 든 양식을 제출하는지)은
 // content script가 대상 확인 때 TargetInfo에 담아 준다(src/content/forms.ts, src/content/clickables.ts).
 
@@ -18,6 +19,43 @@ export const PAYMENT_TEXT_RE =
 // 개인정보를 내보내는 버튼: 가입·신청·제출·인증 등.
 const SUBMIT_TEXT_RE =
   /(가입|신청|제출|접수|본인\s*인증|인증\s*(번호|요청|하기)|예약\s*하기|문의\s*(하기|등록)|sign\s*up|register|submit|verify)/i;
+
+// 되돌리기 어려운 동작(#62): 삭제·휴지통·스팸·차단 등. 결제 문구처럼 더 묻는 쪽으로만 쓴다(잘못 걸려도 카드가 한 번 더 뜰 뿐).
+// 영문은 낱말 앞을 끊어 본다(undelete·Restore는 아님, deleted·Removes는 걸림).
+export const DESTRUCTIVE_TEXT_RE =
+  /(삭제|지우기|지워|지움|제거|휴지통|스팸|차단|영구|비우기|버리기|폐기|탈퇴|\bdelete|\bremove|\btrash|\bspam|\bjunk\b|\bdiscard|\berase|\bpurge|\bblock\b|\bbin\b|\bdel\b)/i;
+export const DESTRUCTIVE_REASON = "되돌리기 어려운 동작(삭제·스팸)";
+
+// 클릭이 되돌리기 어려운 동작인지(#62). 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않는다
+// (src/background/openrouter.ts가 ToolPreview.alwaysAsk로 받아 늘 카드를 띄운다).
+// - 구조: 삭제 요청을 선언한 대상(deleteMethod — data-method="delete", hx-delete, 양식의 _method=DELETE).
+// - 글자: 버튼 자신과 실제로 작동하는 바깥 버튼·링크의 글자·aria-label·title·alt(name·outerText)만 본다. 행 문맥
+//   (context·modelContext)은 보지 않는다 — 제목에 '삭제'가 든 메일 행의 체크박스·열기 버튼까지 묻지 않게.
+// - 주소: 누르면 가는 링크·양식 제출 주소의 경로 낱말(/cart/remove/3, delete.php, ?action=trash).
+export function destructiveClickBlock(targets: TargetInfo[]): string | null {
+  for (const t of targets) {
+    if (t.deleteMethod) return DESTRUCTIVE_REASON;
+    const raw = `${t.name} ${t.outerText ?? ""}`;
+    if (DESTRUCTIVE_TEXT_RE.test(`${raw} ${splitIdentifier(raw)}`)) return DESTRUCTIVE_REASON;
+    // 양식 제출은 action(submitTo)만 본다. 칸 값까지 합친 주소(submitUrl)는 검색어 '스팸 차단'으로도 걸려 보지 않는다.
+    for (const url of [t.href, t.ancestorHref ?? "", t.submitTo ?? ""]) {
+      if (url && destructiveRoute(url)) return DESTRUCTIVE_REASON;
+    }
+  }
+  return null;
+}
+
+// 주소의 경로·쿼리·해시 낱말에 삭제·스팸 단서가 있는지(결제 경로 판정과 같은 방식으로 나눠 본다).
+function destructiveRoute(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(normalizeUrlText(url));
+  } catch {
+    return false;
+  }
+  const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join(" ");
+  return DESTRUCTIVE_TEXT_RE.test(route) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(route).replace(/[/?#&=+]+/g, " "));
+}
 
 // 자동 실행하면 안 되는 이유. 없으면 null(자동 실행 가능).
 export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | null {
@@ -60,6 +98,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const text = `${raw} ${splitIdentifier(raw)}`;
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
+      // 삭제·휴지통·스팸 같은 되돌리기 어려운 동작(#62). 선택지의 트리거도 같은 목록(targets)으로 들어온다.
+      if (destructiveClickBlock([t])) return DESTRUCTIVE_REASON;
       // 중첩 메뉴의 항목은 바로 위 트리거의 위험만 보고 그 위 트리거들은 보지 않는다(구조로 따라가지 않음).
       if (t.nestedPopup) return "중첩 메뉴의 항목";
       // 파일을 내려받는 링크(download 속성)는 이미지 저장처럼 묻는다.

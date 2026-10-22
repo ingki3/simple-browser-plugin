@@ -171,6 +171,20 @@ function activatedControl(el: HTMLElement): HTMLButtonElement | HTMLInputElement
   return null;
 }
 
+// 누르면 삭제 요청을 보낸다고 구조로 선언했는지(#62 — 되돌리기 어려운 동작은 자동 실행해도 늘 묻는다).
+// HTML 양식의 method는 get·post뿐이라, 프레임워크가 쓰는 선언을 본다: rails-ujs·Turbo의 data-method·data-turbo-method,
+// htmx의 hx-delete, 양식의 숨은 _method 칸이나 제출 버튼의 name=_method(Rails·Laravel의 메서드 덮어쓰기).
+const DELETE_DECL_SELECTOR =
+  '[data-method="delete" i], [data-turbo-method="delete" i], [hx-delete], [data-hx-delete]';
+function declaresDelete(el: HTMLElement, controls: Array<HTMLElement | null>, form: HTMLFormElement | null): boolean {
+  if (closestAcross(el, DELETE_DECL_SELECTOR)) return true;
+  if (form && closestAcross(form, DELETE_DECL_SELECTOR)) return true;
+  const isDelete = (c: Element | null | undefined) =>
+    !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
+  if (controls.some(isDelete)) return true;
+  return !!form && Array.from(form.querySelectorAll('input[name="_method"]')).some(isDelete);
+}
+
 function labelControl(el: HTMLElement): HTMLElement | null {
   const label = closestAcross(el, "label") as HTMLLabelElement | null;
   return (label?.control as HTMLElement | null | undefined) ?? null;
@@ -278,6 +292,7 @@ const CLICK_KIND: TargetKind = {
       // 20개를 넘으면 끝까지 보지 못했다는 표시를 넣는다(늘 묻게 된다).
       ...(pingUrls.length ? { pingUrls: pingUrls.length > 20 ? [...pingUrls.slice(0, 20), "about:too-many-pings"] : pingUrls } : {}),
       ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
+      ...(declaresDelete(el, [control, linked], form) ? { deleteMethod: true } : {}),
     };
   },
 };

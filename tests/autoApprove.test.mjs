@@ -326,3 +326,66 @@ test("숨긴 체크박스를 보이는 label로 바꾸는 칸은 늘 묻는다(#
   // 결제 문구·위험 신호가 없어도(보이는 label의 이름을 다 모으지 못한 경우) 묻는다.
   assert.notEqual(autoApproveBlock("fill_form_fields", [{ ...box, proxy: true, outerText: "" }]), null);
 });
+
+test("삭제·휴지통·스팸 버튼은 자동 실행해도 묻는다(#62)", async () => {
+  const { destructiveClickBlock, DESTRUCTIVE_REASON } = await import("../src/lib/autoApprove.ts");
+  for (const name of [
+    "삭제", "선택 삭제", "영구 삭제", "지우기", "휴지통으로 이동", "스팸 신고", "스팸으로 이동", "차단", "휴지통 비우기", "제거",
+    "Delete", "Delete forever", "Remove", "Move to trash", "Report spam", "Discard draft", "Block sender", "Move to bin",
+    "deleteBtn", "btn-trash",
+  ]) {
+    assert.equal(autoApproveBlock("click_element", [t({ name })]), DESTRUCTIVE_REASON, name);
+    assert.equal(destructiveClickBlock([t({ name })]), DESTRUCTIVE_REASON, name);
+  }
+  // 아이콘 버튼: 화면 글자 없이 aria-label·title만 있는 경우(clickables가 outerText에 담는다).
+  assert.equal(autoApproveBlock("click_element", [t({ name: "Delete", outerText: "Delete" })]), DESTRUCTIVE_REASON);
+  assert.equal(autoApproveBlock("click_element", [t({ name: "🗑", outerText: "휴지통" })]), DESTRUCTIVE_REASON);
+  assert.equal(autoApproveBlock("click_element", [t({ name: "", outerText: "Report spam" })]), DESTRUCTIVE_REASON);
+  // 감싼 버튼의 글자(<button>삭제 <span>확인</span></button>의 span).
+  assert.equal(autoApproveBlock("click_element", [t({ name: "확인", outerText: "삭제 확인" })]), DESTRUCTIVE_REASON);
+});
+
+test("삭제를 구조로 선언한 대상과 삭제 경로로 가는 링크·양식은 묻는다(#62)", async () => {
+  const { DESTRUCTIVE_REASON } = await import("../src/lib/autoApprove.ts");
+  // data-method="delete"·hx-delete·_method=DELETE는 글자가 평범해도 묻는다.
+  assert.equal(autoApproveBlock("click_element", [t({ name: "확인", deleteMethod: true })]), DESTRUCTIVE_REASON);
+  for (const href of ["https://shop.example/cart/remove/3", "https://bbs.example/bbs/delete.php?wr_id=3"]) {
+    assert.equal(autoApproveBlock("click_element", [t({ tag: "a", role: "link", name: "x", href })]), DESTRUCTIVE_REASON, href);
+  }
+  for (const submitTo of ["https://mail.example/messages/batchDelete", "https://mail.example/act?op=trash"]) {
+    assert.equal(autoApproveBlock("click_element", [t({ name: "확인", submitTo })]), DESTRUCTIVE_REASON, submitTo);
+  }
+});
+
+test("선택지는 트리거가 삭제 버튼이어도 묻는다(#62)", async () => {
+  const { DESTRUCTIVE_REASON } = await import("../src/lib/autoApprove.ts");
+  assert.equal(autoApproveBlock("click_element", [t({ role: "menuitem", name: "확인" }), t({ name: "삭제 옵션" })]), DESTRUCTIVE_REASON);
+  assert.equal(
+    autoApproveBlock("click_element", [t({ role: "menuitem", name: "스팸으로 이동" }), t({ name: "더보기" })]),
+    DESTRUCTIVE_REASON,
+  );
+});
+
+test("행 문맥의 '삭제' 글자로는 일반 버튼·체크를 묻지 않는다(#62)", async () => {
+  const { destructiveClickBlock } = await import("../src/lib/autoApprove.ts");
+  const row = "[공지] 계정 삭제 요청 안내 — 스팸 차단 설정";
+  for (const target of [
+    t({ name: "열기", context: row, modelContext: row }),
+    t({ role: "checkbox", name: "선택", outerText: "선택", context: row, modelContext: row, states: { checked: "false" } }),
+    t({ tag: "a", role: "link", name: "자세히", href: "https://mail.example/mail/read?id=123", context: row, modelContext: row }),
+  ]) {
+    assert.equal(destructiveClickBlock([target]), null, target.name);
+    assert.equal(autoApproveBlock("click_element", [target]), null, target.name);
+  }
+  // 칸 값까지 합친 제출 주소(검색어 '스팸')는 보지 않는다.
+  assert.equal(
+    autoApproveBlock("click_element", [
+      t({ name: "검색", submitTo: "https://mail.example/search", submitUrl: "https://mail.example/search?q=%EC%8A%A4%ED%8C%B8" }),
+    ]),
+    null,
+  );
+  // 되돌리기 쉬운 동작은 걸리지 않는다.
+  for (const name of ["Undelete", "복원", "Restore", "보관", "Archive", "검색", "다음 페이지"]) {
+    assert.equal(destructiveClickBlock([t({ name })]), null, name);
+  }
+});

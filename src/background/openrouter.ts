@@ -969,8 +969,10 @@ export class ChatAgent {
           // 링크 이동 묻지 않기"를 제안한다. 이번 요청에서 같은 사이트에 그렇게 허락받았으면 결제 문구 판정 없이 실행한다.
           // 사이트 경계는 대화 전체의 신뢰 사이트가 아니라 지금 페이지의 사이트 하나로만 본다.
           const pageSite = pageUrl ? siteOf(pageUrl) : null;
+          // 되돌리기 어려운 동작(#62, preview.alwaysAsk)은 링크 이동 허락을 제안하지도 쓰지도 않는다.
           const linkOffer =
             !guarded &&
+            !preview.alwaysAsk &&
             toolName === "click_element" &&
             !!pageSite &&
             !!preview.clickTarget &&
@@ -987,15 +989,18 @@ export class ChatAgent {
           // 자동 실행한다(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이 끼어들 수 없다.
           const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(this.turnTab));
           if (this.isStale(turn)) return false;
-          let block = linkGranted
-            ? null
-            : toolName === "navigate_to_url"
-              ? fromInternal
-                ? internalNavigateAutoBlock(trusted, this.turnNamedSites, String(preview.details ?? ""))
-                : navigateAutoBlock(trusted, String(preview.details ?? ""))
-              : preview.autoBlock !== undefined
-                ? preview.autoBlock
-                : autoApproveBlock(toolName, []);
+          // 되돌리기 어려운 동작(#62)은 링크 이동 허락이 있어도 늘 묻는다.
+          let block = preview.alwaysAsk
+            ? preview.alwaysAsk
+            : linkGranted
+              ? null
+              : toolName === "navigate_to_url"
+                ? fromInternal
+                  ? internalNavigateAutoBlock(trusted, this.turnNamedSites, String(preview.details ?? ""))
+                  : navigateAutoBlock(trusted, String(preview.details ?? ""))
+                : preview.autoBlock !== undefined
+                  ? preview.autoBlock
+                  : autoApproveBlock(toolName, []);
           // 링크 허락으로 실행하는 클릭은 위에서 지금 페이지의 사이트 안인지 이미 봤다.
           if (autoMode && !linkGranted && !block && (toolName === "click_element" || toolName === "fill_form_fields")) {
             block = siteBlock(trusted);
@@ -1005,7 +1010,8 @@ export class ChatAgent {
           let chatGrant = chatGrantDecision(this.chatGrants, {
             tool: toolName,
             protected: guarded,
-            block: preview.grantBlock ?? null,
+            // 늘 묻는 동작(#62)은 이번 대화 허락으로도 덮지 않는다(지금은 클릭이 허락 대상이 아니지만 대상이 늘어도 지키게).
+            block: preview.alwaysAsk ?? preview.grantBlock ?? null,
             scope: preview.grantScope ?? "",
           });
           // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
