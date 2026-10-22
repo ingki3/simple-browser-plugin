@@ -80,7 +80,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "read_linked_pages",
     description:
-      "지금 페이지에 있는 링크(기사 등)를 탭 이동 없이 받아 와 본문을 읽는다(최대 8개). 뉴스 목록에서 관련 기사 여러 개를 요약할 때 쓴다. urls는 find_clickables·describe_page로 얻은 링크 주소 그대로. 페이지에 없는 주소는 읽지 않는다. 사용자가 승인 카드에서 읽을 링크를 고른다. 로그인 쿠키 없이 받으며 리다이렉트되는 링크·자바스크립트로 그리는 페이지는 읽지 못할 수 있다. 결과는 링크마다 제목·본문(또는 읽지 못한 이유). short=true면 본문이 짧아 정보가 부족할 수 있다.",
+      "지금 페이지에 있는 링크(기사 등)를 탭 이동 없이 받아 와 본문을 읽는다(최대 8개). 뉴스 목록에서 관련 기사 여러 개를 요약할 때 쓴다. urls는 find_clickables·describe_page로 얻은 링크 주소 그대로. 페이지에 없는 주소는 읽지 않는다. 사용자가 승인 카드에서 읽을 링크를 고른다. 로그인 쿠키 없이 받는다. 같은 사이트 안 리다이렉트는 최대 3번 따라가고(finalUrl에 실제 주소), 다른 사이트로 가는 리다이렉트는 따라가지 않고 목적지를 redirectTo로 알린다 — 그 주소는 이번 요청 동안 urls에 넣어 다시 부를 수 있다(새 승인 카드). 쿠키 없는 요청을 막는 사이트(blocked=true)·자바스크립트로 그리는 페이지는 읽지 못할 수 있다. 결과는 링크마다 제목·본문(또는 읽지 못한 이유). short=true면 본문이 짧아 정보가 부족할 수 있다.",
     parameters: {
       type: "object",
       properties: {
