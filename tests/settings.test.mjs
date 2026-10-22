@@ -26,7 +26,10 @@ test("normalizeMaxToolHops: 버전 표시 없는 예전 기본값 8은 새 기�
   assert.equal(normalizeMaxToolHops({ maxToolHops: 8 }), 16);
   assert.equal(normalizeMaxToolHops({ maxToolHops: 8, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }), 8);
   assert.equal(normalizeMaxToolHops({ maxToolHops: 12 }), 12);
-  assert.equal(normalizeMaxToolHops({ maxToolHops: 99, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }), 30);
+  assert.equal(normalizeMaxToolHops({ maxToolHops: 99, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }), 99);
+  assert.equal(normalizeMaxToolHops({ maxToolHops: 100, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }), 100);
+  assert.equal(normalizeMaxToolHops({ maxToolHops: 250, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }), 100);
+  assert.equal(normalizeMaxToolHops({ maxToolHops: 0, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }), 1);
   assert.equal(normalizeMaxToolHops({ maxToolHops: 0.5 }), 1);
   assert.equal(normalizeMaxToolHops({ maxToolHops: "8" }), 16);
 });

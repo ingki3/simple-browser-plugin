@@ -183,6 +183,17 @@ export type BgToPanel =
   | { kind: "thought_chunk"; text: string }
   | { kind: "assistant_done"; finishReason?: string }
   | { kind: "status"; text: string | null }
+  // 이번 요청에서 몇 번째 모델 요청(도구 순환 단계)인지와 지금 한도(#55). 이어 가기를 허락하면 한도가 늘어난다.
+  | { kind: "hop_progress"; used: number; limit: number }
+  // 도구 호출 순환 한도에 닿음: 지금까지 한 일 요약과 함께 extra번 더 진행할지 묻는다(#55).
+  // 허락·거부는 승인 카드와 같은 approve_tool·cancel_tool(callId)로 돌려준다. 거부하면 도구 없이 지금까지의 결과로 답한다.
+  | {
+      kind: "hop_limit";
+      callId: string;
+      used: number;
+      extra: number;
+      summary: { total: number; failed: number; cancelled: number; byTool: Array<{ tool: string; count: number }>; recent: string[] };
+    }
   | { kind: "debug"; event: DebugEvent }
   | {
       kind: "tool_pending";
@@ -276,7 +287,9 @@ export function normalizeCsvMaxChars(v: unknown): number {
 // 여러 페이지를 거쳐 목표 페이지를 찾아가면 페이지마다 관측·찾기·클릭으로 2~3회를 쓴다.
 export const DEFAULT_MAX_TOOL_HOPS = 16;
 export const MIN_MAX_TOOL_HOPS = 1;
-export const MAX_MAX_TOOL_HOPS = 30;
+// 여러 페이지를 거치는 작업(검색 → 날짜·인원 → 결과 비교)을 위해 100까지 고를 수 있다(#55). 한도에 닿으면
+// 끝내지 않고 이어 가기 카드로 묻고, 같은 호출 반복·같은 실패는 한도와 별개로 멈춘다(src/lib/hopGuard.ts).
+export const MAX_MAX_TOOL_HOPS = 100;
 // 기본값을 8에서 16으로 올렸다. 설정 화면은 설정 전체를 저장해서, 버전 표시가 없는 예전 설정의 8은
 // 사용자가 고른 값이 아니라 예전 기본값이 저장된 것으로 보고 새 기본값으로 읽는다. 이 버전 이후에 저장한
 // 설정에는 maxToolHopsVersion을 붙여 사용자가 고른 8을 그대로 둔다. 배경에서 설정을 다시 쓰지 않으므로

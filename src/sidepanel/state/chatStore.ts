@@ -35,6 +35,16 @@ export type ChatMessage =
       summary: string;
     }
   | {
+      // 도구 호출 순환 한도에서 이어 가기 카드(#55). 승인 카드와 같은 callId 흐름으로 허락·거부를 돌려준다.
+      id: string;
+      type: "hop_limit";
+      callId: string;
+      used: number;
+      extra: number;
+      summary: { total: number; failed: number; cancelled: number; byTool: Array<{ tool: string; count: number }>; recent: string[] };
+      resolved: "approved" | "cancelled" | null;
+    }
+  | {
       id: string;
       type: "page_offer";
       offer: { offerId: string; url: string; title: string; site: string; warning: string | null };
@@ -47,6 +57,8 @@ interface ChatState {
   messages: ChatMessage[];
   streaming: boolean;
   statusText: string | null;
+  // 이번 요청의 도구 순환 단계와 한도(예: 12/30). 응답 중에만 보인다(#55).
+  hopProgress: { used: number; limit: number } | null;
   debugEvents: DebugEvent[];
   appendUser: (text: string) => void;
   beginAssistant: () => void;
@@ -55,6 +67,8 @@ interface ChatState {
   finalizeAssistant: () => void;
   addToolPending: (m: Extract<ChatMessage, { type: "tool_pending" }>) => void;
   resolveToolPending: (callId: string, state: "approved" | "cancelled") => void;
+  addHopLimit: (m: Extract<ChatMessage, { type: "hop_limit" }>) => void;
+  setHopProgress: (p: { used: number; limit: number } | null) => void;
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string) => void;
   addInfo: (title: string, message: string) => void;
@@ -80,10 +94,15 @@ export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   streaming: false,
   statusText: null,
+  hopProgress: null,
   debugEvents: [],
 
   appendUser: (text) =>
-    set((s) => ({ messages: [...s.messages, { id: mid(), type: "user", text }], streaming: true })),
+    set((s) => ({
+      messages: [...s.messages, { id: mid(), type: "user", text }],
+      streaming: true,
+      hopProgress: null,
+    })),
 
   beginAssistant: () =>
     set((s) => {
@@ -156,9 +175,14 @@ export const useChatStore = create<ChatState>((set) => ({
   resolveToolPending: (callId, state) =>
     set((s) => ({
       messages: s.messages.map((m) =>
-        m.type === "tool_pending" && m.callId === callId ? { ...m, resolved: state } : m,
+        (m.type === "tool_pending" || m.type === "hop_limit") && m.callId === callId ? { ...m, resolved: state } : m,
       ),
     })),
+
+  addHopLimit: (m) =>
+    set((s) => ({ messages: [...closeStreamingBubbles(s.messages), m] })),
+
+  setHopProgress: (p) => set((s) => ({ ...s, hopProgress: p })),
 
   addToolResult: (m) =>
     set((s) => ({ messages: [...closeStreamingBubbles(s.messages), m] })),
@@ -182,9 +206,11 @@ export const useChatStore = create<ChatState>((set) => ({
   abortLocal: () =>
     set((s) => {
       const msgs = closeStreamingBubbles(s.messages);
-      const hasPending = msgs.some((m) => m.type === "tool_pending" && m.resolved === null);
+      const isOpenCard = (m: ChatMessage) =>
+        (m.type === "tool_pending" || m.type === "hop_limit") && m.resolved === null;
+      const hasPending = msgs.some(isOpenCard);
       const finalized = msgs.map((m) =>
-        m.type === "tool_pending" && m.resolved === null
+        (m.type === "tool_pending" || m.type === "hop_limit") && m.resolved === null
           ? { ...m, resolved: "cancelled" as const }
           : m,
       );
@@ -204,6 +230,7 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: [],
       streaming: false,
       statusText: null,
+      hopProgress: null,
       debugEvents: s.debugEvents,
     })),
 

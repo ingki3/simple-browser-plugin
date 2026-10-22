@@ -32,6 +32,25 @@ import { captureTurnTab, turnTabIsInternal, type TurnTab } from "./tools/handler
 import { commitReads } from "./readRecipes";
 import { isGoogleConfigured } from "./google/auth";
 import { youtubeVideoId } from "@/lib/youtubeUrl";
+import {
+  canonicalJson,
+  clickObservedChange,
+  detectSpin,
+  fingerprint,
+  summarizeRuns,
+  type ClickEffectLike,
+  type ToolRunRecord,
+} from "@/lib/hopGuard";
+
+// 모델 요청 한 번의 결과(requestModel).
+interface ModelReply {
+  assistantText: string;
+  assistantReasoning: string;
+  reasoningDetails: unknown[];
+  functionCalls: OpenRouterToolCall[];
+  finishReason: string | undefined;
+  thoughtChars: number;
+}
 
 const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 탭을 돕는 한국어 에이전트다.
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
@@ -47,7 +66,7 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
 4. 민감 툴(navigate_to_url, click_element, fill_form_fields, download_images)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다(목표 페이지 찾아가기 모드의 경로 중간 링크는 예외).
 5. 페이지 내용을 지어내지 않는다. 모르면 관측 후 말하거나 "확실하지 않다"고 말한다.
 6. 툴이 ok:false로 실패하거나 에러를 반환하면:
-   - 같은 툴을 같은 인자로 재시도하지 않는다.
+   - 같은 툴을 같은 인자로 재시도하지 않는다. 같은 호출이 같은 결과로 3번 이어지거나(화면 변화가 관측된 클릭은 제외) 한 툴이 성공 없이 3번 실패하면 확장이 도구 사용을 멈춘다.
    - Thought에서 실패 원인을 분석하고 (a) 다른 인자·다른 툴로 대안을 시도하거나, (b) 시도해 볼 만한 대안이 없으면 사용자에게 무엇이 안 됐는지 짧게 설명하고 멈춘다.
    - 특히 click_element 이후 페이지가 이동해 후속 툴이 "컨텐트 스크립트 응답이 … 오지 않았습니다" 같은 타임아웃을 내면 네비게이션이 이미 일어난 것으로 간주하고 describe_page로 한 번 더 관측한다. 그래도 응답이 없을 때만 "페이지 이동이 진행 중입니다. 새 페이지가 로드된 뒤 다시 요청해 주세요."로 사용자에게 알린다.
    - click_element·fill_form_fields가 "다시 찾으세요"로 실패하면 페이지가 바뀌어 예전 id를 쓸 수 없다는 뜻이다. find_clickables·find_form_fields로 다시 찾아 같은 대상이 맞는지 확인한 뒤에만 새 id로 다시 시도한다.
@@ -73,6 +92,7 @@ describe_page 결과를 읽는 법:
 - find_clickables(query?, region?, onlyViewport?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
   링크·버튼에 더해 목록에서 고르는 위젯(role=option·menuitem·menuitemradio·menuitemcheckbox·tab, 선택 팝업 트리거 role=combobox·aria-haspopup=listbox)과 input이 아닌 체크 위젯(role=checkbox·switch·radio)도 돌려준다. 글자가 같은 대상도 요소마다 따로 나온다. context(대상이 든 묶음 — 행·패널·달력의 한 달 — 의 화면 글자, 표제가 있으면 앞에)로 어느 묶음의 대상인지 구분하고, states(selected·checked·pressed·expanded·current·disabled)로 지금 상태를 본다. 글자·context·states로 고를 대상을 구분할 수 없으면 임의로 누르지 않고 다시 관측하거나 사용자에게 묻는다.
   같은 버튼(다음 달·더 보기 등)을 여러 번 눌러야 하면 다시 찾지 말고 같은 id로 다시 누른다. "다시 찾으세요"로 실패했을 때만 다시 찾는다.
+  클릭 결과에 "화면이 바뀌었습니다"가 있어도 그 버튼이 다시 그려졌다는 뜻은 아니다. 클릭할 때마다 find_clickables를 다시 부르지 말고 앞선 찾기 결과의 id를 그대로 쓴다. 다시 찾는 것은 클릭으로 새로 나타난 대상(펼친 목록의 선택지, 새 페이지의 링크 등)이 필요하거나 "다시 찾으세요"로 실패했을 때뿐이다. 도구 호출 단계는 한 요청에 한도가 있다.
 - 목록에서 고르는 칸(상품 옵션, 자동완성, 날짜 고르기)이 find_form_fields에 없으면: find_clickables로 트리거(role=combobox·aria-haspopup=listbox, 또는 입력 칸에 글자를 채운 뒤 뜨는 목록)를 열고 → find_clickables로 다시 찾아 그 결과의 role=option 항목을 누른다(트리거를 누른 뒤 예전 결과의 선택지 id를 쓰지 않는다). 펼쳐진 목록이 여러 개라 어느 위젯의 선택지인지 정할 수 없으면 선택지가 결과에 나오지 않는다. 그때는 다른 목록을 닫거나 사용자에게 알린다.
   고른 뒤에는 그 묶음을 다시 관측(find_clickables의 states·트리거 글자, 또는 describe_page)해 반영됐는지 확인한다. 반영되지 않았으면 같은 클릭을 반복하지 않고 지원 한계를 사용자에게 알린다.
 - 목록에서 여러 항목을 골라 처리할 때(메일 몇 통을 휴지통으로, 게시글 몇 개 삭제):
@@ -185,6 +205,14 @@ function logToolFail(toolName: ToolName, msg: string): void {
 }
 
 const MAX_DOCUMENT_READS_PER_TURN = 5;
+
+// 마무리 요청(도구 없이 답만 받기)에만 붙이는 안내(#55). 대화 기록에는 넣지 않는다.
+const LIMIT_STOP_NOTE =
+  "[확장 안내 — 사용자 글 아님] 도구 호출 순환 한도에 닿아 사용자가 더 진행하지 않기로 했습니다. 도구를 더 부르지 말고, 지금까지 관측한 결과만으로 사용자의 요청에 답하세요. 끝내지 못한 부분이 있으면 무엇이 남았는지와 다음에 할 일을 짧게 밝히세요.";
+
+function spinStopNote(what: string): string {
+  return `[확장 안내 — 사용자 글 아님] 같은 동작이 되풀이되어 확장이 도구 사용을 멈췄습니다(${what}). 도구를 더 부르지 말고, 지금까지 관측한 결과로 사용자에게 답하세요. 무엇을 시도했고 무엇이 반복해서 안 됐는지, 사용자가 대신 해 볼 만한 일을 짧게 밝히세요.`;
+}
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
 
 export class ChatAgent {
@@ -523,6 +551,204 @@ export class ChatAgent {
     }
   }
 
+  // 모델에 한 번 묻고 스트림을 끝까지 읽는다. 중단·새 턴에 밀렸으면 null.
+  // wrapUpNote가 있으면 도구 없이 답만 받는 마무리 요청이다(한도에서 그만두기·헛돌기 감지, #55).
+  private async requestModel(
+    apiKey: string,
+    model: ModelId,
+    systemPrompt: string,
+    turn: number,
+    opts: { lowReasoning?: boolean; wrapUpNote?: string },
+  ): Promise<ModelReply | null> {
+    const CONNECT_TIMEOUT_MS = 20_000;
+    const INACTIVITY_MS = 60_000;
+    const controller = new AbortController();
+    this.activeRequest = controller;
+    let connectTimedOut = false;
+    const connectTimer = setTimeout(() => {
+      connectTimedOut = true;
+      controller.abort();
+    }, CONNECT_TIMEOUT_MS);
+    // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
+    // 마무리 요청(wrapUpNote)에는 붙이지 않는다(이동 후보가 필요 없음).
+    const savedCandidates = opts.wrapUpNote
+      ? null
+      : await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null).catch(() => null);
+    if (this.isStale(turn)) {
+      clearTimeout(connectTimer);
+      return null;
+    }
+    let stream: Response;
+    try {
+      stream = await openRouterRequest(
+        apiKey,
+        {
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...this.history,
+            ...(savedCandidates ? [{ role: "user" as const, content: savedCandidates }] : []),
+            // 마무리 안내는 이 요청에만 붙이고 대화 기록에는 넣지 않는다.
+            ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
+          ],
+          tools: availableTools().map((fn) => ({
+            type: "function",
+            function: fn,
+          })),
+          // 기록에 도구 호출·결과가 있어 도구 정의는 그대로 보내고, 마무리 요청은 도구를 부르지 못하게 한다.
+          tool_choice: opts.wrapUpNote ? "none" : "auto",
+          parallel_tool_calls: false,
+          reasoning: opts.lowReasoning ? agentRetryReasoningConfig(model) : agentReasoningConfig(model),
+          max_tokens: AGENT_MAX_TOKENS,
+          stream: true,
+        },
+        controller.signal,
+      );
+    } catch (err) {
+      if (connectTimedOut) {
+        throw new Error(
+          `OpenRouter 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
+        );
+      }
+      if (this.isStale(turn)) return null;
+      throw err;
+    } finally {
+      clearTimeout(connectTimer);
+    }
+
+    debugLog("stream:connected");
+    let assistantText = "";
+    let assistantReasoning = "";
+    const reasoningDetails: unknown[] = [];
+    const functionCallParts = new Map<number, OpenRouterToolCall>();
+    let chunkCount = 0;
+    let textChars = 0;
+    let thoughtChars = 0;
+    let finishReason: string | undefined;
+    try {
+      await readOpenRouterStream(
+        stream,
+        (chunk) => {
+          chunkCount += 1;
+          const choice = chunk.choices?.[0];
+          const delta = choice?.delta;
+          if (typeof delta?.content === "string" && delta.content) {
+            assistantText += delta.content;
+            textChars += delta.content.length;
+            this.send({ kind: "assistant_chunk", text: delta.content });
+          }
+          if (typeof delta?.reasoning === "string" && delta.reasoning) {
+            assistantReasoning += delta.reasoning;
+            if (!delta.reasoning_details?.length) {
+              thoughtChars += delta.reasoning.length;
+              this.send({ kind: "thought_chunk", text: delta.reasoning });
+            }
+          }
+          for (const detail of delta?.reasoning_details ?? []) {
+            reasoningDetails.push(detail);
+            if (!detail || typeof detail !== "object") continue;
+            const item = detail as { text?: unknown; summary?: unknown };
+            const visible =
+              typeof item.text === "string"
+                ? item.text
+                : typeof item.summary === "string"
+                  ? item.summary
+                  : "";
+            if (visible) {
+              thoughtChars += visible.length;
+              this.send({ kind: "thought_chunk", text: visible });
+            }
+          }
+          for (const part of delta?.tool_calls ?? []) {
+            const current = functionCallParts.get(part.index) ?? {
+              id: "",
+              type: "function" as const,
+              function: { name: "", arguments: "" },
+            };
+            if (part.id) current.id += part.id;
+            if (part.function?.name) current.function.name += part.function.name;
+            if (part.function?.arguments) {
+              current.function.arguments += part.function.arguments;
+            }
+            functionCallParts.set(part.index, current);
+          }
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+        },
+        INACTIVITY_MS,
+      );
+    } catch (err) {
+      controller.abort();
+      if (this.isStale(turn)) return null;
+      throw err;
+    } finally {
+      if (this.activeRequest === controller) this.activeRequest = null;
+    }
+    const functionCalls = [...functionCallParts.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, call]) => ({
+        ...call,
+        id: call.id || crypto.randomUUID(),
+      }));
+    debugLog(
+      "stream:done",
+      `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
+    );
+    if (this.isStale(turn)) return null;
+    return { assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
+  }
+
+  // 도구 호출 순환 한도에 닿았을 때 지금까지 한 일을 보여 주고 extra번 더 진행할지 묻는다(#55). 사용자의 명시적 선택으로만
+  // 한도를 넓힌다. 승인 카드와 같은 대기 목록(pendingApprovals)을 써서 중단·새 요청·패널 닫힘이면 거부로 풀린다.
+  private async askToContinue(turn: number, used: number, extra: number, runs: readonly ToolRunRecord[]): Promise<boolean> {
+    const callId = `hop-limit-${turn}-${used}`;
+    debugLog("hop:limit", `${used}회 · +${extra} 물음`);
+    this.send({ kind: "status", text: null });
+    this.send({ kind: "hop_limit", callId, used, extra, summary: summarizeRuns(runs) });
+    const proceed = await new Promise<boolean>((resolve) => {
+      this.pendingApprovals.set(callId, resolve);
+    });
+    this.pendingApprovals.delete(callId);
+    if (!this.isStale(turn)) debugLog("hop:limit_result", proceed ? `continue +${extra}` : "stop");
+    return proceed;
+  }
+
+  // 도구 없이 지금까지의 관측으로 답을 한 번 받아 턴을 끝낸다(한도에서 그만두기·헛돌기 감지). 모델이 그래도 도구를
+  // 부르면 실행하지 않고 기록에도 남기지 않는다(결과 없는 tool_calls가 다음 요청을 깨지 않게).
+  private async finishWithoutTools(
+    apiKey: string,
+    model: ModelId,
+    systemPrompt: string,
+    turn: number,
+    note: string,
+  ): Promise<void> {
+    this.send({ kind: "status", text: "지금까지의 결과로 답을 정리하는 중…" });
+    const reply = await this.requestModel(apiKey, model, systemPrompt, turn, { wrapUpNote: note, lowReasoning: true });
+    if (!reply) return;
+    if (reply.functionCalls.length) debugLog("wrapup:ignored_tool_calls", `${reply.functionCalls.length}`, "warn");
+    const text = reply.assistantText.trim();
+    if (text) {
+      this.history.push({
+        role: "assistant",
+        content: reply.assistantText,
+        ...(reply.reasoningDetails.length
+          ? { reasoning_details: reply.reasoningDetails }
+          : reply.assistantReasoning
+            ? { reasoning: reply.assistantReasoning }
+            : {}),
+      });
+    }
+    this.send({ kind: "status", text: null });
+    this.send({ kind: "assistant_done", finishReason: reply.finishReason });
+    if (!text) {
+      this.send({ kind: "error", message: "도구 사용을 멈췄지만 모델이 정리한 답을 만들지 못했습니다. 다시 요청해 주세요." });
+    } else if (reply.finishReason === "length") {
+      this.send({
+        kind: "error",
+        message: "답이 응답 길이 한도에서 잘렸습니다. \"이어서\"라고 보내면 계속 씁니다.",
+      });
+    }
+  }
+
   private async streamLoop(
     apiKey: string,
     model: ModelId,
@@ -530,144 +756,45 @@ export class ChatAgent {
     turn: number,
   ): Promise<boolean> {
     const { maxToolHops } = await getSettings();
+    // 이번 요청의 한도. 닿으면 이어 가기 카드로 묻고, 사용자가 허락하면 설정한 한도만큼 늘린다(#55).
+    let limit = maxToolHops;
+    // 이번 요청에서 실행을 마친 도구 호출(헛돌기 판정과 이어 가기 카드의 요약).
+    const runs: ToolRunRecord[] = [];
+    const record = (
+      tool: string,
+      argsKey: string,
+      ok: boolean,
+      result: string,
+      summary: string,
+      extra: { changed?: boolean; cancelled?: boolean } = {},
+    ): void => {
+      runs.push({ tool, argsKey, ok, resultKey: fingerprint(result), summary, changed: extra.changed === true, cancelled: extra.cancelled });
+    };
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
     let documentReads = 0;
     let otherTabReads = 0;
     // 생각만 하다 응답 상한에 걸려 빈 답이 나오면 생각을 줄여 한 번 더 시도한다(턴마다 한 번).
     let lengthRetried = false;
     let lowReasoning = false;
-    for (let hop = 0; hop < maxToolHops; hop += 1) {
+    for (let hop = 0; ; hop += 1) {
       if (this.isStale(turn)) return false;
-      debugLog("hop:start", `#${hop + 1}/${maxToolHops}`);
-
-      const CONNECT_TIMEOUT_MS = 20_000;
-      const INACTIVITY_MS = 60_000;
-      const controller = new AbortController();
-      this.activeRequest = controller;
-      let connectTimedOut = false;
-      const connectTimer = setTimeout(() => {
-        connectTimedOut = true;
-        controller.abort();
-      }, CONNECT_TIMEOUT_MS);
-      // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
-      const savedCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null).catch(() => null);
-      if (this.isStale(turn)) {
-        clearTimeout(connectTimer);
-        return false;
-      }
-      let stream: Response;
-      try {
-        stream = await openRouterRequest(
-          apiKey,
-          {
-            model,
-            messages: [
-              { role: "system", content: systemPrompt },
-              ...this.history,
-              ...(savedCandidates ? [{ role: "user" as const, content: savedCandidates }] : []),
-            ],
-            tools: availableTools().map((fn) => ({
-              type: "function",
-              function: fn,
-            })),
-            tool_choice: "auto",
-            parallel_tool_calls: false,
-            reasoning: lowReasoning ? agentRetryReasoningConfig(model) : agentReasoningConfig(model),
-            max_tokens: AGENT_MAX_TOKENS,
-            stream: true,
-          },
-          controller.signal,
-        );
-      } catch (err) {
-        if (connectTimedOut) {
-          throw new Error(
-            `OpenRouter 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
-          );
+      // 한도에 닿음: 마지막 단계의 도구 결과까지 기록에 있다. 이어 가면 다음 요청이 그 결과를 보고, 그만두면
+      // 도구 없이 지금까지의 결과로 답한다.
+      if (hop >= limit) {
+        const proceed = await this.askToContinue(turn, hop, maxToolHops, runs);
+        if (this.isStale(turn)) return false;
+        if (!proceed) {
+          await this.finishWithoutTools(apiKey, model, systemPrompt, turn, LIMIT_STOP_NOTE);
+          return false;
         }
-        if (this.isStale(turn)) return false;
-        throw err;
-      } finally {
-        clearTimeout(connectTimer);
+        limit += maxToolHops;
       }
+      debugLog("hop:start", `#${hop + 1}/${limit}`);
 
-      debugLog("stream:connected");
-      let assistantText = "";
-      let assistantReasoning = "";
-      const reasoningDetails: unknown[] = [];
-      const functionCallParts = new Map<number, OpenRouterToolCall>();
-      let chunkCount = 0;
-      let textChars = 0;
-      let thoughtChars = 0;
-      let finishReason: string | undefined;
-      try {
-        await readOpenRouterStream(
-          stream,
-          (chunk) => {
-            chunkCount += 1;
-            const choice = chunk.choices?.[0];
-            const delta = choice?.delta;
-            if (typeof delta?.content === "string" && delta.content) {
-              assistantText += delta.content;
-              textChars += delta.content.length;
-              this.send({ kind: "assistant_chunk", text: delta.content });
-            }
-            if (typeof delta?.reasoning === "string" && delta.reasoning) {
-              assistantReasoning += delta.reasoning;
-              if (!delta.reasoning_details?.length) {
-                thoughtChars += delta.reasoning.length;
-                this.send({ kind: "thought_chunk", text: delta.reasoning });
-              }
-            }
-            for (const detail of delta?.reasoning_details ?? []) {
-              reasoningDetails.push(detail);
-              if (!detail || typeof detail !== "object") continue;
-              const item = detail as { text?: unknown; summary?: unknown };
-              const visible =
-                typeof item.text === "string"
-                  ? item.text
-                  : typeof item.summary === "string"
-                    ? item.summary
-                    : "";
-              if (visible) {
-                thoughtChars += visible.length;
-                this.send({ kind: "thought_chunk", text: visible });
-              }
-            }
-            for (const part of delta?.tool_calls ?? []) {
-              const current = functionCallParts.get(part.index) ?? {
-                id: "",
-                type: "function" as const,
-                function: { name: "", arguments: "" },
-              };
-              if (part.id) current.id += part.id;
-              if (part.function?.name) current.function.name += part.function.name;
-              if (part.function?.arguments) {
-                current.function.arguments += part.function.arguments;
-              }
-              functionCallParts.set(part.index, current);
-            }
-            if (choice?.finish_reason) finishReason = choice.finish_reason;
-          },
-          INACTIVITY_MS,
-        );
-      } catch (err) {
-        controller.abort();
-        if (this.isStale(turn)) return false;
-        throw err;
-      } finally {
-        if (this.activeRequest === controller) this.activeRequest = null;
-      }
-      const functionCalls = [...functionCallParts.entries()]
-        .sort(([a], [b]) => a - b)
-        .map(([, call]) => ({
-          ...call,
-          id: call.id || crypto.randomUUID(),
-        }));
-      debugLog(
-        "stream:done",
-        `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
-      );
-      if (this.isStale(turn)) return false;
+      this.send({ kind: "hop_progress", used: hop + 1, limit });
+      const reply = await this.requestModel(apiKey, model, systemPrompt, turn, { lowReasoning });
+      if (!reply) return false;
+      const { assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars } = reply;
 
       // 응답 상한에 걸렸는데 답도 도구 호출도 없으면, 기록에 남기지 않고 생각을 줄여 다시 묻는다.
       if (finishReason === "length" && functionCalls.length === 0 && !assistantText.trim()) {
@@ -726,13 +853,16 @@ export class ChatAgent {
             name: toolName,
             content: JSON.stringify({ error: msg }),
           });
+          record(toolName, fc.function.arguments, false, `error:${msg}`, msg);
           continue;
         }
+        const argsKey = canonicalJson(parsedArgs);
 
         if (toolName === "read_other_tabs" && ++otherTabReads > MAX_OTHER_TAB_READS_PER_TURN) {
           const msg = `한 요청에서 다른 탭 읽기는 최대 ${MAX_OTHER_TAB_READS_PER_TURN}번입니다. 지금까지 읽은 내용으로 답하세요.`;
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
           this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: JSON.stringify({ error: msg }) });
+          record(toolName, argsKey, false, `error:${msg}`, msg);
           continue;
         }
 
@@ -745,6 +875,7 @@ export class ChatAgent {
             name: toolName,
             content: JSON.stringify({ error: msg }),
           });
+          record(toolName, argsKey, false, `error:${msg}`, msg);
           continue;
         }
 
@@ -770,6 +901,7 @@ export class ChatAgent {
               name: toolName,
               content: JSON.stringify({ error: msg }),
             });
+            record(toolName, argsKey, false, `error:${msg}`, msg);
             continue;
           }
           // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
@@ -901,6 +1033,7 @@ export class ChatAgent {
               name: toolName,
               content: JSON.stringify({ error: "user_cancelled" }),
             });
+            record(toolName, argsKey, false, "user_cancelled", "사용자가 취소했습니다.", { cancelled: true });
             continue;
           }
         }
@@ -936,6 +1069,11 @@ export class ChatAgent {
             name: toolName,
             content: JSON.stringify({ result: result.data }),
           });
+          // 클릭은 뒤따른 이동·화면 변화가 관측되면 같은 id를 다시 누르는 것('다음 달' 등)이 반복이 아니다.
+          const changed =
+            toolName === "click_element" &&
+            clickObservedChange((result.data as { effect?: ClickEffectLike } | null)?.effect);
+          record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, { changed });
           if (internalNavSite && result.ok && !this.turnSite) {
             this.turnSite = internalNavSite;
             debugLog("turn:site", `${internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);
@@ -953,18 +1091,25 @@ export class ChatAgent {
             name: toolName,
             content: JSON.stringify({ error: msg }),
           });
+          record(toolName, argsKey, false, `error:${msg}`, msg);
         } finally {
           if (this.activeTool === toolAbort) this.activeTool = null;
         }
       }
+
+      // 헛돌기 감지(#55): 한도와 별개로, 같은 호출이 같은 결과로 되풀이되거나 한 도구가 거듭 실패하면 멈추고 알린다.
+      if (this.isStale(turn)) return false;
+      const spin = detectSpin(runs);
+      if (spin) {
+        debugLog("hop:spin", `${spin.kind} · ${spin.tool} ×${spin.count}`, "warn");
+        const what =
+          spin.kind === "repeat"
+            ? `${spin.tool}를 같은 인자로 ${spin.count}번 연속 불렀지만 결과가 같고 화면도 바뀌지 않았습니다.`
+            : `${spin.tool}가 성공 없이 ${spin.count}번 실패했습니다.`;
+        this.send({ kind: "info", title: "같은 동작이 되풀이되어 멈춤", message: `${what} 단계를 더 쓰지 않고 지금까지의 결과로 답합니다.` });
+        await this.finishWithoutTools(apiKey, model, systemPrompt, turn, spinStopNote(what));
+        return false;
+      }
     }
-
-    if (this.isStale(turn)) return false;
-
-    this.send({
-      kind: "error",
-      message: `도구 호출 순환 한도(${maxToolHops})에 도달했습니다.`,
-    });
-    return false;
   }
 }
