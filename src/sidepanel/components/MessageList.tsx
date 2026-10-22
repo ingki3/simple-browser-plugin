@@ -6,7 +6,7 @@ import { KO } from "../i18n/ko";
 import { useSettings } from "../hooks/useSettings";
 
 interface Props {
-  onApprove: (callId: string, allowLinksThisTurn?: boolean, choiceIds?: string[]) => void;
+  onApprove: (callId: string, allowLinksThisTurn?: boolean, choiceIds?: string[], allowToolThisChat?: boolean) => void;
   onCancel: (callId: string) => void;
 }
 

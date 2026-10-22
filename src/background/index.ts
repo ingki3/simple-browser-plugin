@@ -52,7 +52,15 @@ chrome.runtime.onConnect.addListener((port) => {
         return;
       }
       case "approve_tool":
-        agent?.approveTool(msg.callId, msg.allowLinksThisTurn === true, Array.isArray(msg.choiceIds) ? msg.choiceIds.filter((x): x is string => typeof x === "string") : undefined);
+        agent?.approveTool(
+          msg.callId,
+          msg.allowLinksThisTurn === true,
+          Array.isArray(msg.choiceIds) ? msg.choiceIds.filter((x): x is string => typeof x === "string") : undefined,
+          msg.allowToolThisChat === true,
+        );
+        return;
+      case "revoke_chat_grant":
+        agent?.revokeChatGrant(String(msg.tool));
         return;
       case "cancel_tool":
         agent?.cancelTool(msg.callId);

@@ -1,4 +1,5 @@
 import { autoApproveBlock } from "@/lib/autoApprove";
+import { downloadScope, imageDownloadSources, imageSaveGrantBlock } from "@/lib/chatGrant";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import { readChosenLinks, snapshotLinks } from "../linkedPages";
 import type {
@@ -12,7 +13,7 @@ import type {
   YoutubeTranscript,
 } from "@/lib/messages";
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
-import { normalizeNavigationUrl } from "@/lib/sanitize";
+import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
 import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
 import { startImageDownloads } from "./downloads";
@@ -75,6 +76,12 @@ export interface ToolPreview {
   choices?: Array<{ id: string; label: string; sub: string }>;
   choiceLimit?: number;
   choiceDefaults?: string[];
+  // 이번 대화 허락(#53)으로 덮지 못하는 구조적 이유(경고 링크 섞임, 페이지에 없는 이미지 등). 없으면 null.
+  grantBlock?: string | null;
+  // 이번 대화 허락의 범위(download_images의 저장 폴더). 같은 범위일 때만 허락을 쓴다.
+  grantScope?: string;
+  // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
+  execArgs?: unknown;
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -191,12 +198,17 @@ export async function buildToolPreview(
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
       const { downloadFolderPrefix } = await getSettings();
-      const folder = args.folderPrefix || downloadFolderPrefix;
+      // 빈 값도 실제로 저장할 기본 폴더로 확정한다(카드·허락 판정·실행이 같은 폴더를 보게).
+      const folder = args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER;
       const sample = args.urls.slice(0, 5).map((u) => `• ${truncate(u, 100)}`);
       const extra = args.urls.length > 5 ? `\n… 그 외 ${args.urls.length - 5}개` : "";
       return {
         summary: `이미지 ${args.urls.length}개를 '${folder}/' 폴더에 저장합니다.`,
         details: sample.join("\n") + extra,
+        grantBlock: await imageGrantBlockAt(args.urls, callId, turnTab),
+        grantScope: downloadScope(folder),
+        // 폴더를 생략한 호출은 실행 때 설정을 다시 읽지 않고, 카드·허락 판정에 쓴 이 폴더에 저장한다.
+        execArgs: { ...args, folderPrefix: folder },
       };
     }
     case "click_element": {
@@ -226,13 +238,14 @@ export async function buildToolPreview(
     }
     case "read_linked_pages": {
       const args = parsedArgs as ToolArgs["read_linked_pages"];
-      const { choices, defaults, rejected } = await snapshotLinks(callId, turnTab, args.urls);
+      const { choices, defaults, rejected, grantBlock } = await snapshotLinks(callId, turnTab, args.urls);
       return {
         summary: `페이지의 링크 ${choices.length}개를 탭 이동 없이(로그인 쿠키 없이) 받아 본문을 읽습니다. 읽을 링크를 고르세요. 읽은 내용은 모델 제공자로 전송됩니다.`,
         ...(rejected.length ? { details: `읽지 않는 주소:\n${rejected.join("\n")}` } : {}),
         choices,
         choiceLimit: choices.length,
         choiceDefaults: defaults,
+        grantBlock,
       };
     }
     case "read_other_tabs": {
@@ -312,6 +325,18 @@ export async function buildToolPreview(
   }
 }
 
+// 이미지 저장을 이번 대화 허락(#53)으로 덮을 수 있는지: 주소가 모두 지금 페이지의 이미지(list_page_images와 같은 수집)
+// 그대로여야 한다. 페이지를 읽지 못하면 덮지 않는다(카드로 묻는다).
+async function imageGrantBlockAt(urls: string[], callId: string, turnTab: TurnTab): Promise<string | null> {
+  let images: PageImage[];
+  try {
+    images = await callContentTool<PageImage[]>("list_page_images", {}, callId, turnTab);
+  } catch {
+    return "지금 페이지의 이미지를 확인하지 못함";
+  }
+  return imageSaveGrantBlock(urls, new Set(images.map((i) => i.url)));
+}
+
 // 클릭 뒤 이동이 시작될 틈. markOptimisticNavigation은 500ms 안에 이동이 시작되지 않으면 기다림을 푼다.
 const CLICK_SETTLE_MS = 700;
 
@@ -381,20 +406,29 @@ export function recordCancelledAction(callId: string, turnTab: TurnTab): void {
 
 const RECIPE_TOOLS = new Set<ToolName>(["query_dom", "list_file_links", "find_clickables"]);
 
+// 그 호출 하나에만 쓰는 실행 옵션. 대화 객체가 호출마다 만들어 넘기고 전역에 두지 않는다.
+export interface ExecOptions {
+  // 이번 대화 허락(#53)으로 카드 없이 실행하는 호출인지(실행하는 쪽이 명시). 데이터 유무로 추측하지 않는다.
+  viaGrant?: boolean;
+  // 허락 경로의 이미지 저장: 이 호출을 위해 쿠키 없이 미리 받은 이미지(주소 → data: 주소).
+  grantImages?: ReadonlyMap<string, string>;
+}
+
 export async function executeTool(
   toolName: ToolName,
   parsedArgs: unknown,
   callId: string,
   turnTab: TurnTab,
   signal?: AbortSignal,
+  opts: ExecOptions = {},
 ): Promise<ToolExecResult> {
   if (RECIPE_TOOLS.has(toolName)) {
     const picked = recipeArgs(toolName, parsedArgs);
-    if (!picked) return runTool(toolName, parsedArgs, callId, turnTab, signal);
+    if (!picked) return runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
     const before = await pageKeyFor(turnTab);
     let result: ToolExecResult;
     try {
-      result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+      result = await runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
     } catch (err) {
       await observeRead(turnTab, before, picked, null, true);
       throw err;
@@ -403,15 +437,15 @@ export async function executeTool(
     return result;
   }
   if (toolName === "describe_page") {
-    const result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+    const result = await runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
     return attachReadHints(result, turnTab);
   }
   if (toolName !== "click_element" && toolName !== "fill_form_fields") {
-    return runTool(toolName, parsedArgs, callId, turnTab, signal);
+    return runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
   }
   let result: ToolExecResult;
   try {
-    result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+    result = await runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
   } catch (err) {
     const reason = reasonCode(err instanceof Error ? err.message : String(err));
     void finishAction(turnTab, callId, isPreActionStop(reason) ? "aborted" : "failed", { reason });
@@ -467,6 +501,7 @@ async function runTool(
   callId: string,
   turnTab: TurnTab,
   signal?: AbortSignal,
+  opts: ExecOptions = {},
 ): Promise<ToolExecResult> {
   switch (toolName) {
     case "describe_page": {
@@ -603,9 +638,14 @@ async function runTool(
     }
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
-      const { downloadFolderPrefix } = await getSettings();
-      const folder = args.folderPrefix || downloadFolderPrefix;
-      const res = await startImageDownloads(args.urls, folder);
+      // download_images는 늘 미리보기(카드·허락 판정)를 거치고, 미리보기가 확정한 폴더(execArgs)로 온다.
+      // 실행부는 설정을 다시 읽지 않는다(그 사이 설정이 바뀌어도 확인한 폴더에 저장).
+      const folder = args.folderPrefix || DEFAULT_DOWNLOAD_FOLDER;
+      // 이번 대화 허락으로 실행하는 호출은 그 호출을 위해 쿠키 없이 미리 받은 이미지만 저장한다(grantImages.ts).
+      // 미리 받은 것이 없으면 원본 주소로 내려받지 않고 실패한다(fail-closed, imageDownloadSources).
+      const sources = imageDownloadSources(args.urls, opts.viaGrant === true, opts.grantImages);
+      if ("error" in sources) throw new Error(sources.error);
+      const res = await startImageDownloads(sources, folder);
       return {
         ok: true,
         summary: `${res.startedCount}개 다운로드 시작 (건너뜀 ${res.skippedCount}).`,

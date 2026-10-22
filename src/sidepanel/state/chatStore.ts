@@ -21,6 +21,7 @@ export type ChatMessage =
       previewSummary: string;
       previewDetails?: unknown;
       linkGrantOffer?: boolean;
+      chatGrantOffer?: boolean;
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;
       choiceDefaults?: string[];
@@ -59,6 +60,8 @@ interface ChatState {
   statusText: string | null;
   // 이번 요청의 도구 순환 단계와 한도(예: 12/30). 응답 중에만 보인다(#55).
   hopProgress: { used: number; limit: number } | null;
+  // 이 대화에서 "묻지 않기"로 허락한 도구와 범위(#53). 백그라운드가 보낸 목록을 그대로 보인다.
+  chatGrants: Array<{ tool: ToolName; scope: string }>;
   debugEvents: DebugEvent[];
   appendUser: (text: string) => void;
   beginAssistant: () => void;
@@ -69,6 +72,7 @@ interface ChatState {
   resolveToolPending: (callId: string, state: "approved" | "cancelled") => void;
   addHopLimit: (m: Extract<ChatMessage, { type: "hop_limit" }>) => void;
   setHopProgress: (p: { used: number; limit: number } | null) => void;
+  setChatGrants: (grants: Array<{ tool: ToolName; scope: string }>) => void;
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string) => void;
   addInfo: (title: string, message: string) => void;
@@ -95,6 +99,7 @@ export const useChatStore = create<ChatState>((set) => ({
   streaming: false,
   statusText: null,
   hopProgress: null,
+  chatGrants: [],
   debugEvents: [],
 
   appendUser: (text) =>
@@ -184,6 +189,8 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setHopProgress: (p) => set((s) => ({ ...s, hopProgress: p })),
 
+  setChatGrants: (grants) => set((s) => ({ ...s, chatGrants: grants })),
+
   addToolResult: (m) =>
     set((s) => ({ messages: [...closeStreamingBubbles(s.messages), m] })),
 
@@ -231,6 +238,7 @@ export const useChatStore = create<ChatState>((set) => ({
       streaming: false,
       statusText: null,
       hopProgress: null,
+      chatGrants: [],
       debugEvents: s.debugEvents,
     })),
 

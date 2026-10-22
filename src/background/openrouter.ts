@@ -11,6 +11,7 @@ import {
   userNamedSites,
 } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
+import { chatGrantDecision, isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
 import { discardLinkCall, setChosenLinks } from "./linkedPages";
 import { candidatesMessage, isSavedUrl, makeOffer, noteObservedAt } from "./savedPagesStore";
@@ -24,6 +25,7 @@ import {
 } from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction } from "./tools/dispatcher";
+import { prepareGrantImages } from "./tools/grantImages";
 import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
@@ -237,6 +239,12 @@ export class ChatAgent {
   // 그 선택지를 보여 준 카드(callId → 턴·사이트)만 받아들인다.
   private linkGrant: { turn: number; site: string } | null = null;
   private linkGrantOffers = new Map<string, { turn: number; site: string }>();
+  // "이번 대화 동안 이 도구 묻지 않기"(#53): 허락한 도구 → 범위(download_images는 저장 폴더). 이 객체는 대화마다 새로
+  // 만들어지고(새 대화·패널 닫힘·서비스 워커 재시작) 저장소에 남기지 않으므로 그 대화가 끝나면 함께 사라진다.
+  // 링크 이동 허락(linkGrant)과는 대상 도구가 겹치지 않는다: 그쪽은 페이지 상태를 바꾸는 클릭이라 한 요청에만 쓴다.
+  // 그 선택지를 보여 준 카드(callId → 도구·범위)만 받아들인다.
+  private chatGrants = new Map<ChatGrantTool, string>();
+  private chatGrantOffers = new Map<string, { tool: ChatGrantTool; scope: string }>();
   // 외부 본문 보호: 파일·Google 문서·PDF처럼 외부 유래 데이터가 이 대화의 모델 문맥에 들어오면 켠다(새 대화까지).
   // 켜진 동안은 관측 전용 도구(TOOL_POLICY.observeOnly) 밖의 모든 도구를 자동 실행·링크 허락 없이 승인 카드로 묻는다
   // (외부 내용을 신뢰 사이트의 검색어·입력값·번역 언어·Google 검색어 등으로 내보내지 않게).
@@ -264,6 +272,7 @@ export class ChatAgent {
     for (const resolve of this.pendingApprovals.values()) resolve(false);
     this.pendingApprovals.clear();
     this.linkGrantOffers.clear();
+    this.chatGrantOffers.clear();
   }
 
   private isStale(turn: number): boolean {
@@ -301,7 +310,7 @@ export class ChatAgent {
     this.translatedTabs.clear();
   }
 
-  approveTool(callId: string, allowLinksThisTurn = false, choiceIds?: string[]): void {
+  approveTool(callId: string, allowLinksThisTurn = false, choiceIds?: string[], allowToolThisChat = false): void {
     // 선택 카드의 선택은 백그라운드가 고정한 후보의 부분집합만 남긴다(otherTabs.setChosen).
     if (choiceIds && this.pendingApprovals.has(callId)) {
       setChosenTabs(callId, choiceIds);
@@ -312,6 +321,12 @@ export class ChatAgent {
       this.linkGrant = offer;
       debugLog("tool:link_grant", `turn ${offer.turn}`);
     }
+    const chatOffer = this.chatGrantOffers.get(callId);
+    if (allowToolThisChat && this.pendingApprovals.has(callId) && chatOffer) {
+      this.chatGrants.set(chatOffer.tool, chatOffer.scope);
+      debugLog("tool:chat_grant", `${chatOffer.tool}${chatOffer.scope ? ` · ${chatOffer.scope}` : ""}`);
+      this.sendChatGrants();
+    }
     this.pendingApprovals.get(callId)?.(true);
   }
 
@@ -319,11 +334,23 @@ export class ChatAgent {
     this.pendingApprovals.get(callId)?.(false);
   }
 
+  // 패널에서 허락을 취소한다. 다음 호출부터 다시 카드로 묻는다.
+  revokeChatGrant(tool: string): void {
+    if (!isChatGrantTool(tool) || !this.chatGrants.delete(tool)) return;
+    debugLog("tool:chat_grant_revoked", tool);
+    this.sendChatGrants();
+  }
+
+  private sendChatGrants(): void {
+    this.send({ kind: "chat_grants", grants: [...this.chatGrants].map(([tool, scope]) => ({ tool, scope })) });
+  }
+
   reset(): void {
     this.history = [];
     this.lastAttachedPdfUrl = null;
     this.approvedSites.clear();
     this.linkGrant = null;
+    this.chatGrants.clear();
     this.externalContent = false;
     this.savedNavTarget = null;
   }
@@ -512,6 +539,8 @@ export class ChatAgent {
     if (!this.isStale(turn)) {
       this.turnSite = site;
       this.turnNamedSites = userNamedSites(userText);
+      // 패널의 허락 표시를 이 대화 객체의 상태에 맞춘다(서비스 워커가 다시 떠 새 대화 객체면 빈 목록).
+      this.sendChatGrants();
     }
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
@@ -881,6 +910,12 @@ export class ChatAgent {
 
         // 승인 없이 실행한 호출은 결과 카드에 표시한다.
         let autoRan = false;
+        // 이번 대화 허락(#53)으로 카드 없이 실행한 호출.
+        let grantRan = false;
+        // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
+        let execArgs: unknown = parsedArgs;
+        // 이번 대화 허락으로 저장할 이미지를 이 호출을 위해 쿠키 없이 미리 받은 것(실행 옵션으로 직접 넘긴다).
+        let grantImages: Map<string, string> | undefined;
         // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
         let internalNavSite: string | null = null;
         // 외부 본문 보호가 켜졌으면 관측 전용이 아닌 도구는 평소 승인 대상이 아니어도(번역·Google 읽기 등) 묻는다.
@@ -906,6 +941,7 @@ export class ChatAgent {
           }
           // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
           if (this.isStale(turn)) return false;
+          if (preview.execArgs !== undefined) execArgs = preview.execArgs;
           // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
           const { autoApprove } = await getSettings();
           if (this.isStale(turn)) return false;
@@ -964,8 +1000,38 @@ export class ChatAgent {
           if (autoMode && !linkGranted && !block && (toolName === "click_element" || toolName === "fill_form_fields")) {
             block = siteBlock(trusted);
           }
+          // 이번 대화 동안 묻지 않기(#53): 대상 도구이고, 이 호출에 경고가 없고(grantBlock), 범위가 같으면 카드 없이 실행한다.
+          // 외부 전송 도구는 외부 본문 보호 중에 허락을 쓰지 않는다(src/lib/chatGrant.ts).
+          let chatGrant = chatGrantDecision(this.chatGrants, {
+            tool: toolName,
+            protected: guarded,
+            block: preview.grantBlock ?? null,
+            scope: preview.grantScope ?? "",
+          });
+          // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
+          // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
+          if (chatGrant.covered && toolName === "download_images") {
+            // 받는 동안 중단·새 대화·패널 닫힘이면(cancelInFlight가 activeTool을 끊는다) 남은 주소로 요청하지 않는다.
+            const prefetchAbort = new AbortController();
+            this.activeTool = prefetchAbort;
+            let got: Awaited<ReturnType<typeof prepareGrantImages>>;
+            try {
+              got = await prepareGrantImages((parsedArgs as { urls: string[] }).urls, prefetchAbort.signal);
+            } finally {
+              if (this.activeTool === prefetchAbort) this.activeTool = null;
+            }
+            if (this.isStale(turn)) return false;
+            if ("why" in got) chatGrant = { covered: false, offer: false, reason: got.why };
+            else grantImages = got.images;
+          }
           let approved: boolean;
-          if (autoMode && !block) {
+          if (chatGrant.covered && isChatGrantTool(toolName)) {
+            debugLog("tool:chat_grant_approved", toolName);
+            // 선택 카드(링크 고르기)는 고정한 후보 전부를 고른 것으로 한다. 경고가 붙은 후보가 있으면 위에서 덮지 않았다.
+            if (preview.choices) setChosenLinks(callId, preview.choices.map((c) => c.id));
+            approved = true;
+            grantRan = true;
+          } else if (autoMode && !block) {
             debugLog(
               "tool:auto_approved",
               `${toolName}${linkGranted && !autoApprove ? " (link grant)" : ""}${fromInternal ? " (내부 페이지에서)" : ""}`,
@@ -977,29 +1043,38 @@ export class ChatAgent {
             if (fromInternal && !this.turnSite) internalNavSite = siteOf(String(preview.details ?? ""));
           } else {
             if (autoMode) debugLog("tool:auto_blocked", `${toolName} · ${block}`);
+            if (chatGrant.reason) debugLog("tool:chat_grant_blocked", `${toolName} · ${chatGrant.reason}`);
             debugLog("tool:awaiting_approval", `${toolName}`);
             this.send({
               kind: "tool_pending",
               callId,
               toolName,
               args: parsedArgs,
-              previewSummary: guarded
-                ? `${preview.summary} (외부 문서 내용을 읽은 대화라 자동 실행하지 않음)`
-                : autoMode
-                  ? `${preview.summary} (자동 실행 예외: ${block})`
-                  : preview.summary,
+              // 이 도구를 이번 대화에서 허락했는데 묻는 것이면 그 이유를 먼저 보인다(보호 중이라 쓰지 않는 경우 포함).
+              previewSummary: chatGrant.reason
+                ? `${preview.summary} (이번 대화 허락 예외: ${chatGrant.reason})`
+                : guarded
+                  ? `${preview.summary} (외부 문서 내용을 읽은 대화라 자동 실행하지 않음)`
+                  : autoMode
+                    ? `${preview.summary} (자동 실행 예외: ${block})`
+                    : preview.summary,
               previewDetails: preview.details,
               ...(linkOffer ? { linkGrantOffer: true } : {}),
+              ...(chatGrant.offer ? { chatGrantOffer: true } : {}),
               ...(preview.choices
                 ? { choices: preview.choices, choiceLimit: preview.choiceLimit, choiceDefaults: preview.choiceDefaults }
                 : {}),
             });
             if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
+            if (chatGrant.offer && isChatGrantTool(toolName)) {
+              this.chatGrantOffers.set(callId, { tool: toolName, scope: preview.grantScope ?? "" });
+            }
             approved = await new Promise<boolean>((resolve) => {
               this.pendingApprovals.set(callId, resolve);
             });
             this.pendingApprovals.delete(callId);
             this.linkGrantOffers.delete(callId);
+            this.chatGrantOffers.delete(callId);
             if (this.isStale(turn)) return false;
             debugLog(
               "tool:approval_result",
@@ -1050,7 +1125,10 @@ export class ChatAgent {
           this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
         }
         try {
-          const result = await executeTool(toolName, parsedArgs, callId, this.turnTab, toolAbort.signal);
+          const result = await executeTool(toolName, execArgs, callId, this.turnTab, toolAbort.signal, {
+            viaGrant: grantRan,
+            ...(grantRan && grantImages ? { grantImages } : {}),
+          });
           if (this.isStale(turn)) return false;
           debugLog(
             "tool:result",
@@ -1061,7 +1139,11 @@ export class ChatAgent {
             callId,
             toolName,
             ok: result.ok,
-            summary: autoRan ? `자동 실행 · ${result.summary}` : result.summary,
+            summary: grantRan
+              ? `이번 대화 허락으로 실행 · ${result.summary}`
+              : autoRan
+                ? `자동 실행 · ${result.summary}`
+                : result.summary,
           });
           this.history.push({
             role: "tool",
@@ -1084,7 +1166,7 @@ export class ChatAgent {
           const msg = err instanceof Error ? err.message : String(err);
           // 턴 탭 해석(내부 페이지·닫힌 탭) 등 실행 전 단계에서 실패해도 결과 줄을 남긴다(#54).
           logToolFail(toolName, msg);
-          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
+          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: grantRan ? `이번 대화 허락으로 실행 · ${msg}` : msg });
           this.history.push({
             role: "tool",
             tool_call_id: callId,
