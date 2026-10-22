@@ -69,3 +69,13 @@ test("hosts inside a path or query parameter are not named sites", () => {
 test("only the leading non-ASCII prefix is stripped", () => {
   assert.deepEqual(userNamedSites("naver.com/검색https://attacker.com 열어"), ["https://naver.com"]);
 });
+
+test("hosts inside brackets in a path, or cut at a fullwidth dot, are not named sites", () => {
+  assert.deepEqual(userNamedSites("https://naver.com/(attacker.com)/ 열어줘"), ["https://naver.com"]);
+  // 전각 마침표는 URL 파서가 '.'로 정규화한다: attacker.com.example.org(등록 도메인 example.org)이지 attacker.com이 아니다.
+  const named = userNamedSites("https://attacker.com。example.org/ 열어줘");
+  assert.ok(!named.includes("https://attacker.com"));
+  assert.notEqual(internalNavigateAutoBlock([], named, "https://attacker.com/collect"), null);
+  assert.deepEqual(userNamedSites("(naver.com) 가줘"), ["https://naver.com"]);
+  assert.deepEqual(userNamedSites("ref:attacker.com 참고"), []);
+});

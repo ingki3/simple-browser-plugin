@@ -173,13 +173,22 @@ export function isBrowserInternalUrl(url: string | undefined): boolean {
 // http(s) 주소는 그 출처(http면 https 출처도), 그 밖의 글에서는 "이름.접미사" 모양이면서 공개 접미사 목록으로
 // 등록 도메인이 확인되는 호스트를 https 출처로 본다. 이메일(@ 뒤), 주소 속 경로·매개변수, IP는 뽑지 않는다.
 // 주소 글자는 ASCII만 본다(바로 붙은 한글 조사 "…com으로"를 주소에 넣지 않게).
-// 글을 공백·괄호·따옴표로 나눈 덩어리의 맨 앞만 본다. 맨 앞이 http(s) 주소면 그 출처, 맨 앞이 호스트 모양이면 그 호스트.
-// 덩어리의 나머지(경로·매개변수 속 주소, 이메일, "next=https://…" 같은 값)는 사이트로 보지 않는다.
-const TOKEN_SPLIT_RE = /[\s<>"'`()[\]{}\u201c\u201d\u2018\u2019\u300c\u300d\u300e\u300f]+/;
-const URL_AT_START_RE = /^https?:\/\/[^\s<>"'`()[\]{}\u0080-\uffff]+/i;
-const HOST_AT_START_RE =
-  /^((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59}))(:\d{1,5})?(?=$|[/?#]|[^\w@.\-])/i;
+// 글을 공백으로만 나눈 덩어리 하나를 주소 하나로 본다(덩어리 안을 다시 쪼개지 않는다 — 경로·매개변수 속 주소를
+// 따로 뽑지 않게). 덩어리 앞뒤의 괄호·따옴표·문장부호와 붙은 한글(조사 등)만 걷어 낸다. 호스트는 정규식으로 자르지 않고
+// URL 파서가 정규화한 결과를 쓴다(전각 마침표 등으로 다른 호스트가 되는 경우도 브라우저와 같게).
+const LEADING_WRAP_RE = /^(?:[\u0080-\uffff]+:?|[(<\[{"'`])+/;
+const TRAILING_WRAP_RE = /(?:[\u0080-\uffff]+|[)>\]}"'`.,!?;:])+$/;
+const SCHEME_RE = /^https?:\/\//i;
 const MAX_NAMED_SITES = 10;
+
+function trimToken(piece: string): string {
+  let t = piece;
+  for (;;) {
+    const next = t.replace(LEADING_WRAP_RE, "").replace(TRAILING_WRAP_RE, "");
+    if (next === t) return t;
+    t = next;
+  }
+}
 
 export function userNamedSites(text: string): string[] {
   const out = new Set<string>();
@@ -191,25 +200,24 @@ export function userNamedSites(text: string): string[] {
     const host = normHost(u.hostname);
     return !isIpHost(host) && registrableDomain(host) !== null;
   };
-  for (const piece of text.split(TOKEN_SPLIT_RE)) {
-    // 맨 앞에 붙은 한글 등(과 뒤의 ':')만 걷어 낸다("주소:example.org"). 덩어리 중간의 주소는 보지 않는다.
-    const token = piece.replace(/^[\u0080-\uffff]+:?/, "");
+  for (const piece of text.split(/\s+/)) {
+    const token = trimToken(piece);
     if (!token) continue;
-    const full = token.match(URL_AT_START_RE);
     try {
-      if (full) {
-        const u = new URL(full[0]);
-        if (accept(u)) {
+      if (SCHEME_RE.test(token)) {
+        const u = new URL(token);
+        if (!u.username && !u.password && accept(u)) {
           add(u.origin);
           if (u.protocol === "http:") add(`https://${u.host}`);
         }
         continue;
       }
-      const host = token.match(HOST_AT_START_RE);
-      if (host) {
-        const u = new URL(`https://${host[1]}${host[2] ?? ""}`);
-        if (accept(u)) add(u.origin);
-      }
+      // 맨 도메인: 첫 '/'·'?'·'#' 앞이 호스트(와 포트)여야 한다. 계정 정보·값 모양(@·=)이면 보지 않는다.
+      const hostPart = token.split(/[/?#]/, 1)[0];
+      if (!hostPart || /[@=]/.test(hostPart)) continue;
+      const u = new URL(`https://${hostPart}`);
+      if (u.username || u.password || u.pathname !== "/" || u.search || u.hash) continue;
+      if (accept(u)) add(u.origin);
     } catch {
       /* 주소·호스트 모양이 아님 */
     }
