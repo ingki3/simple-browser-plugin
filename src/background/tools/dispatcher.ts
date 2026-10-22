@@ -178,9 +178,16 @@ export async function buildToolPreview(
         turnTab,
         infos.map((info, i) => logTarget(info, args.fills[i].value)),
       );
+      const fillCardInfo = fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value })));
+      // 삭제·스팸 신호가 있는 칸(change 처리기가 지우는 체크박스 등)도 클릭처럼 늘 묻는다(#62).
+      const destructiveFill = destructiveClickBlock(infos);
       return {
-        ...fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value }))),
+        ...fillCardInfo,
+        ...(destructiveFill
+          ? { details: `${fillCardInfo.details}\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` }
+          : {}),
         autoBlock: autoApproveBlock("fill_form_fields", infos),
+        alwaysAsk: destructiveFill,
         // 양식 제출 주소(기존 값 포함)와 선택지 주소. 입력할 값은 fillValues로 따로 본다.
         linkHrefs: infos
           .flatMap((info) => [

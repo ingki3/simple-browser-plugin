@@ -396,3 +396,13 @@ test("#62: 신뢰 사이트 안이어도 삭제·스팸 경로로의 이동은 �
   assert.equal(navigateAutoBlock(trusted, "https://mail.example/inbox?action=trash&id=3"), "되돌리기 어려운 동작(삭제·스팸)");
   assert.equal(navigateAutoBlock(trusted, "https://mail.example/inbox/3"), null);
 });
+
+test("#62: 삭제 신호가 있는 칸 입력과 ping 삭제 주소도 묻는다", () => {
+  const R = "되돌리기 어려운 동작(삭제·스팸)";
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ name: "삭제" })]), R);
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ name: "받는 사람" })]), null);
+  assert.equal(
+    autoApproveBlock("click_element", [t({ name: "다음", href: "https://shop.example/inbox/2", pingUrls: ["https://shop.example/messages/delete/3"] })]),
+    R,
+  );
+});

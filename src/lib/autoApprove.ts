@@ -38,7 +38,8 @@ export function destructiveClickBlock(targets: TargetInfo[]): string | null {
     const raw = `${t.name} ${t.outerText ?? ""}`;
     if (DESTRUCTIVE_TEXT_RE.test(`${raw} ${splitIdentifier(raw)}`)) return DESTRUCTIVE_REASON;
     // 양식 제출은 action(submitTo)만 본다. 칸 값까지 합친 주소(submitUrl)는 검색어 '스팸 차단'으로도 걸려 보지 않는다.
-    for (const url of [t.href, t.ancestorHref ?? "", t.submitTo ?? ""]) {
+    // 링크의 ping 주소(쿠키를 실은 POST)와 선택지가 가리키는 주소도 본다.
+    for (const url of [t.href, t.ancestorHref ?? "", t.submitTo ?? "", ...(t.pingUrls ?? []), ...(t.choiceUrls ?? [])]) {
       if (url && destructiveRoute(url)) return DESTRUCTIVE_REASON;
     }
   }
@@ -73,6 +74,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const label = `${t.name} ${t.outerText ?? ""}`;
       if (PAYMENT_TEXT_RE.test(`${label} ${splitIdentifier(label)}`)) return "결제 문구가 붙은 칸 입력";
       if (t.paymentContext) return "결제 화면의 칸 입력";
+      // 체크·선택의 change 처리기가 삭제를 실행하는 페이지가 있어 칸에도 같은 판정을 쓴다(#62 — 클릭 대신 입력으로 우회 방지).
+      if (destructiveClickBlock([t])) return DESTRUCTIVE_REASON;
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
