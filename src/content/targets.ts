@@ -148,12 +148,44 @@ function modelContextOf(row: Element | null): string {
   if (!row) return "";
   const text = modelText(row, MODEL_CONTEXT_MAX);
   if (!text) return "";
-  let heading = groupLabel(row, 80);
-  if (!heading) {
-    const h = row.querySelector(HEADING_SELECTOR);
-    heading = h ? modelText(h, 80) : "";
-  }
+  const heading = groupHeading(row);
   return cleanModelText(heading && !text.startsWith(heading) ? `${heading} · ${text}` : text, MODEL_CONTEXT_MAX);
+}
+
+const GROUP_CLIMB = 6;
+
+// 행의 표제. 행 자신의 접근성 이름·행 안의 첫 표제, 없으면 위로 올라가며(최대 6단계) 그 묶음에 구조로 연결된 표제를 찾는다:
+// 접근성 이름, 표의 caption, fieldset의 legend, 그리고 묶음 안의 표제가 하나뿐이면 그 표제
+// (여럿이면 어느 것이 이 행의 표제인지 구조로 정할 수 없어 쓰지 않는다).
+function groupHeading(row: Element): string {
+  const own = groupLabel(row, 80);
+  if (own) return own;
+  const inRow = row.querySelector(HEADING_SELECTOR);
+  if (inRow) return modelText(inRow, 80);
+  let cur = parentAcross(row);
+  for (let depth = 0; cur && cur !== cur.ownerDocument.body && depth < GROUP_CLIMB; depth++) {
+    const label = groupLabel(cur, 80);
+    if (label) return label;
+    const tag = cur.localName;
+    const child =
+      tag === "table"
+        ? (cur as HTMLTableElement).caption
+        : tag === "fieldset"
+          ? (Array.from(cur.children).find((c) => c.localName === "legend") ?? null)
+          : null;
+    if (child) {
+      const t = modelText(child, 80);
+      if (t) return t;
+    }
+    const headings = cur.querySelectorAll(HEADING_SELECTOR);
+    if (headings.length === 1) {
+      const t = modelText(headings[0], 80);
+      if (t) return t;
+    }
+    if (headings.length > 1) return "";
+    cur = parentAcross(cur);
+  }
+  return "";
 }
 
 // 대상의 ARIA·HTML 상태. class 이름으로 상태를 추측하지 않는다.
@@ -515,6 +547,9 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
     const el = entry?.ref.deref();
     if (!entry || !el) return;
     for (const p of entry.kind.personalElements?.(el) ?? []) allowed.set(p, fieldValueSignature(p));
+    // 선택지를 연 트리거 쪽 양식의 개인정보·비밀 칸도 승인 당시 상태로 남긴다(실행 직전 트리거 재검사가 쓴다).
+    const trigger = entry.approved?.callId === callId ? entry.approved.relation?.trigger?.deref() : undefined;
+    if (trigger) for (const p of entry.kind.personalElements?.(trigger) ?? []) allowed.set(p, fieldValueSignature(p));
   });
   consentAllowed.set(callId, allowed);
   while (consentAllowed.size > 50) {
@@ -525,7 +560,7 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
   if (!batchHasPersonal) {
     return ids.map((id, i) => {
       const entry = registry.get(id);
-      const info = { ...infos[i], consentCall: callId };
+      const info = stampConsent(infos[i], callId);
       if (entry?.approved?.callId === callId) entry.approved = { ...entry.approved, info };
       return info;
     });
@@ -541,14 +576,23 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
     const scope = scopeOf(id);
     const entry = registry.get(id);
     if (!scope || !consentScopes.has(scope)) {
-      const info = { ...infos[i], consentCall: callId };
+      const info = stampConsent(infos[i], callId);
       if (entry?.approved?.callId === callId) entry.approved = { ...entry.approved, info };
       return info;
     }
-    const info = { ...infos[i], consentPersonal: true, consentCall: callId };
+    const info = { ...stampConsent(infos[i], callId), consentPersonal: true };
     if (entry?.approved?.callId === callId) entry.approved = { ...entry.approved, info };
     return info;
   });
+}
+
+// 승인 호출을 기술에 붙인다. 트리거 기술에도 붙여 트리거 재검사가 같은 허용 목록을 보게 한다.
+function stampConsent(info: TargetInfo, callId: string): TargetInfo {
+  return {
+    ...info,
+    consentCall: callId,
+    ...(info.trigger ? { trigger: { ...info.trigger, consentCall: callId } } : {}),
+  };
 }
 
 // 승인 뒤 위험(개인정보·제출 주소·이름 등)이 새로 생겨 멈췄다는 표시. 묶음 입력은 남은 칸도 멈춘다.
