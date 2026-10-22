@@ -32,6 +32,15 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 모델·추론 강도·시간 제한은 `CODEX_REVIEW_MODEL`, `CODEX_REVIEW_EFFORT`, `CODEX_REVIEW_TIMEOUT`
 환경변수로 바꿀 수 있다(기본 gpt-6.1-sol, high, 540초).
 
+## 버전 관리
+
+- 형식은 `X.X.XX`(주.부.수정). 수정 번호는 0~99이고 앞자리를 0으로 채우지 않는다(Chrome manifest가 `0.1.03`을 거부한다).
+  99 다음은 부 번호를 올리고 수정 번호를 0으로 한다(`0.1.99` → `0.2.0`).
+- main에 머지하는 PR마다 수정 번호를 1 올린다(같은 PR에서 `package.json`·`package-lock.json`·`manifest.config.ts`를 함께).
+  `tests/version.test.mjs`가 세 곳이 같고 형식이 맞는지 확인한다.
+- 큰 기능 묶음이나 호환이 깨지는 변경은 사용자와 정해 부·주 번호를 올린다.
+- 머지 뒤 main의 머지 커밋에 `vX.X.XX` 태그를 달고 push한다.
+
 ## 구현 규칙
 
 - **키워드 매칭으로 승인을 면제하거나 동작을 바꾸지 않는다.** 코드에 낱말·문구 목록이나 정규식을 두고
