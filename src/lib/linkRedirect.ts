@@ -52,7 +52,7 @@ export function sameSiteRedirect(fromUrl: string, toUrl: string): boolean {
   }
 }
 
-export type RedirectStop = "invalid" | "structural" | "loop" | "too_many" | "sensitive" | "cross_site";
+export type RedirectStop = "invalid" | "structural" | "loop" | "too_many" | "downgrade" | "sensitive" | "cross_site";
 
 export type RedirectStep =
   | { kind: "follow"; url: string }
@@ -72,6 +72,11 @@ export function nextRedirectStep(
   if (structural) return { kind: "stop", reason: "structural", url: location, detail: structural };
   if (visited.includes(target)) return { kind: "stop", reason: "loop", url: location };
   if (visited.length - 1 >= maxHops) return { kind: "stop", reason: "too_many", url: location };
+  // 직전 요청이 https였으면 http로 내려가는 목적지는 따라가지 않는다(평문 요청을 만들지 않음).
+  const previous = visited[visited.length - 1];
+  if (previous && new URL(previous).protocol === "https:" && new URL(target).protocol === "http:") {
+    return { kind: "stop", reason: "downgrade", url: location };
+  }
   // 결제·개인정보 신호는 더 묻는 쪽으로만 쓴다: 걸리면 따라가지 않고 목적지를 알린다.
   const sensitive = sensitiveUrlReason(location);
   if (sensitive) return { kind: "stop", reason: "sensitive", url: location, detail: sensitive };

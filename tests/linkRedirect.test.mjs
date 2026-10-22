@@ -95,3 +95,12 @@ test("helpers", () => {
   assert.equal(blockedWithoutCookies(404), false);
   assert.equal(blockedWithoutCookies(500), false);
 });
+
+test("nextRedirectStep: https에서 http로 내려가는 리다이렉트는 따라가지 않는다", () => {
+  const visited = ["http://example.com/start", "https://example.com/secure"];
+  const step = nextRedirectStep("http://example.com/start", "http://example.com/plain", visited);
+  assert.equal(step.kind, "stop");
+  assert.equal(step.reason, "downgrade");
+  // http → https 승격은 그대로 따라간다.
+  assert.equal(nextRedirectStep("http://example.com/start", "https://example.com/secure", ["http://example.com/start"]).kind, "follow");
+});

@@ -208,6 +208,22 @@ function watchRedirect(url: string): { settled(): Promise<string | null>; stop()
   };
 }
 
+// 같은 주소의 요청은 하나씩 보낸다. webRequest 이벤트를 주소로만 가려내므로, 같은 주소를 동시에 요청하면
+// 서로의 리다이렉트 목적지가 섞일 수 있다.
+const urlLocks = new Map<string, Promise<unknown>>();
+
+async function oneAtATime<T>(url: string, fn: () => Promise<T>): Promise<T> {
+  const prev = urlLocks.get(url) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  urlLocks.set(url, tail);
+  try {
+    return await run;
+  } finally {
+    if (urlLocks.get(url) === tail) urlLocks.delete(url);
+  }
+}
+
 function short(url: string): string {
   return url.length > 200 ? `${url.slice(0, 199)}…` : url;
 }
@@ -231,6 +247,11 @@ function redirectStopError(step: Extract<RedirectStep, { kind: "stop" }>, memory
       return new LinkReadError(`리다이렉트가 이미 거친 주소(${to})로 되돌아옵니다(리다이렉트 루프). 직접 열어 확인해 주세요.`, {
         redirectTo: step.url,
       });
+    case "downgrade":
+      return new LinkReadError(
+        `이 링크는 https에서 암호화되지 않은 http 주소(${to})로 리다이렉트되어 따라가지 않았습니다. 직접 열어 확인해 주세요.`,
+        { redirectTo: step.url },
+      );
     case "too_many":
       return new LinkReadError(
         `리다이렉트가 ${MAX_LINK_REDIRECTS}번을 넘어 멈췄습니다(다음 목적지: ${to}). 직접 열어 확인해 주세요.`,
@@ -259,16 +280,28 @@ async function fetchHtml(
   let current = start;
   let res: Response;
   for (;;) {
-    const redirect = watchRedirect(current);
-    try {
-      // 쿠키를 싣지 않는다. 리다이렉트는 fetch가 따라가지 않게 하고(redirect: "error"), 목적지를 단계마다 다시 검사한 뒤
-      // 같은 사이트 안이면 새 요청으로 받는다(카드에 보인 링크의 사이트 밖으로는 요청을 보내지 않는다).
-      res = await fetch(current, { credentials: "omit", redirect: "error", signal: combined });
+    // 쿠키를 싣지 않는다. 리다이렉트는 fetch가 따라가지 않게 하고(redirect: "error"), 목적지를 단계마다 다시 검사한 뒤
+    // 같은 사이트 안이면 새 요청으로 받는다(카드에 보인 링크의 사이트 밖으로는 요청을 보내지 않는다).
+    const target = current;
+    const attempt = await oneAtATime(target, async () => {
+      const redirect = watchRedirect(target);
+      try {
+        return { res: await fetch(target, { credentials: "omit", redirect: "error", signal: combined }), location: null };
+      } catch {
+        if (signal?.aborted || timeout.aborted) return { res: null, location: null };
+        return { res: null, location: await redirect.settled() };
+      } finally {
+        redirect.stop();
+      }
+    });
+    if (attempt.res) {
+      res = attempt.res;
       break;
-    } catch {
+    }
+    {
       if (signal?.aborted) throw new Error("사용자가 중단했습니다.");
       if (timeout.aborted) throw new LinkReadError(`${FETCH_TIMEOUT_MS / 1000}초 안에 받지 못했습니다.`);
-      const location = await redirect.settled();
+      const location = attempt.location;
       if (!location) {
         debugLog("linked_pages:network", short(current), "warn");
         throw new LinkReadError("네트워크 오류로 받지 못했습니다(연결할 수 없거나 응답이 끊김). 직접 열어 확인해 주세요.");
@@ -278,8 +311,6 @@ async function fetchHtml(
       if (step.kind !== "follow") throw redirectStopError(step, memory, pageLink);
       visited.push(step.url);
       current = step.url;
-    } finally {
-      redirect.stop();
     }
   }
   if (!res.ok) {
