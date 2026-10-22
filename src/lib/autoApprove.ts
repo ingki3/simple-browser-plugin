@@ -24,9 +24,9 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
   if (!AUTO_APPROVE_TOOLS.has(tool)) return "자동 실행 대상이 아닌 도구";
   if (tool === "fill_form_fields") {
     for (const t of targets) {
-      // 숨긴 checkbox·radio를 보이는 label을 눌러 바꾸는 칸(#56)은 늘 묻는다. 누르는 label과 그 주변의 처리기가 돌고,
+      // 숨긴 checkbox·radio를 보이는 label로 표시하는 칸(#56)은 늘 묻는다. 사용자가 보는 label과 그 주변의 위험 신호를
       // 그 위험 신호를 칸 쪽에서 빠짐없이 모으기 어렵다(구조 판정 — 더 묻는 쪽).
-      if (t.proxy) return "보이지 않는 칸(보이는 라벨을 눌러 바꿈) 입력";
+      if (t.proxy) return "보이지 않는 칸(보이는 라벨로 표시) 입력";
       if (t.sensitive === "password") return "비밀번호 칸 입력";
       if (t.sensitive === "payment") return "결제 정보 칸 입력";
       if (t.personal) return `개인정보 칸 입력('${t.name.slice(0, 30) || t.fieldType}')`;

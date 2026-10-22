@@ -131,7 +131,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "find_form_fields",
     description:
-      "현재 활성 탭의 보이는 입력 요소(input/textarea/select)를 탐색해 id, 라벨, placeholder, 타입을 반환한다. 사용자가 입력한 값은 돌려주지 않는다: 글자 칸은 값이 있는지(hasValue)만, checkbox·radio는 체크 여부(checked)만, select는 선택지의 보이는 글자(options)와 선택된 위치(selectedIndex, 개인정보 칸이면 생략)만 준다. 각 칸이 든 행·묶음의 화면 글자(context, 입력값 제외)를 함께 주므로 라벨 없는 칸(메일 목록의 행 체크박스 등)은 context로 구분한다. 화면에 보이지 않는 칸은 돌려주지 않는다. 다만 숨긴 checkbox·radio라도 연결된 보이는 label이 있으면 돌려주며, 채울 때 그 label을 누른다. fill_form_fields를 호출하기 전에 반드시 먼저 호출해 필드 id를 확인한다.",
+      "현재 활성 탭의 보이는 입력 요소(input/textarea/select)를 탐색해 id, 라벨, placeholder, 타입을 반환한다. 사용자가 입력한 값은 돌려주지 않는다: 글자 칸은 값이 있는지(hasValue)만, checkbox·radio는 체크 여부(checked)만, select는 선택지의 보이는 글자(options)와 선택된 위치(selectedIndex, 개인정보 칸이면 생략)만 준다. 각 칸이 든 행·묶음의 화면 글자(context, 입력값 제외)를 함께 주므로 라벨 없는 칸(메일 목록의 행 체크박스 등)은 context로 구분한다. 화면에 보이지 않는 칸은 돌려주지 않는다. 다만 숨긴 checkbox·radio라도 연결된 보이는 label이 있으면 돌려준다(채우기는 다른 checkbox·radio와 같다). fill_form_fields를 호출하기 전에 반드시 먼저 호출해 필드 id를 확인한다.",
     parameters: {
       type: "object",
       properties: {},

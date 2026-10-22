@@ -234,9 +234,9 @@ test("fillCard: 이름 없는 칸·이름이 겹치는 칸은 행 문맥을 보�
   const lines = card.details.split("\n");
   assert.match(lines[0], /^• \(이름 없는 칸\) — 행: '카닥 이용약관 개정 안내 10:21' \(checkbox, 본문\): ☑ 체크/);
   assert.match(lines[1], /행: '네이버 보안 안내 09:00'.*: ☐ 해제$/);
-  // 숨긴 칸은 보이는 label을 누른다는 경고.
+  // 숨긴 칸은 보이는 label로 표시된다는 경고.
   assert.doesNotMatch(lines[0], /보이지 않는 칸/);
-  assert.match(fillCard([{ info: { ...rowBox, hidden: true }, value: "true" }]).details, /⚠ 화면에 보이지 않는 칸\(보이는 라벨을 눌러 바꿈\)/);
+  assert.match(fillCard([{ info: { ...rowBox, hidden: true }, value: "true" }]).details, /⚠ 화면에 보이지 않는 칸\(보이는 라벨로 표시\)/);
   // checkbox·radio는 이름이 있고 한 칸만 채워도 행 문맥을 보여 준다(모든 행 체크박스가 '메일 선택'인 목록).
   const named = { ...rowBox, name: "메일 선택" };
   assert.match(fillCard([{ info: named, value: "true" }]).details, /메일 선택 — 행: '카닥 이용약관 개정 안내 10:21'/);
@@ -276,11 +276,11 @@ test("sameApprovedInFlight: 모델용 행 문맥이 바뀌어도 추가만 허�
   assert.equal(sameApprovedInFlight({ ...f, modelContext: "상품 B 수량" }, f), false);
 });
 
-test("fillCard·sameBase: 대리 label 칸은 실제로 누르는 라벨을 보여 주고 비교한다(#56 4차)", () => {
+test("fillCard·sameBase: 대리 label 칸은 보이는 라벨을 보여 주고 비교한다(#56 4차)", () => {
   const box = { ...rowBox, name: "선택", proxyLabel: "유료 구독 시작", hidden: true };
-  assert.match(fillCard([{ info: box, value: "true" }]).details, /누르는 라벨: '유료 구독 시작'/);
-  assert.match(fillCard([{ info: { ...box, proxyLabel: "" }, value: "true" }]).details, /누르는 라벨: '\(글자 없음\)'/);
-  assert.doesNotMatch(fillCard([{ info: { ...box, proxy: undefined, proxyLabel: undefined }, value: "true" }]).details, /누르는 라벨/);
+  assert.match(fillCard([{ info: box, value: "true" }]).details, /보이는 라벨: '유료 구독 시작'/);
+  assert.match(fillCard([{ info: { ...box, proxyLabel: "" }, value: "true" }]).details, /보이는 라벨: '\(글자 없음\)'/);
+  assert.doesNotMatch(fillCard([{ info: { ...box, proxy: undefined, proxyLabel: undefined }, value: "true" }]).details, /보이는 라벨/);
   assert.equal(sameBase(box, { ...box, proxyLabel: "보관함으로 이동" }), false);
   assert.match(describeDifference(box, { ...box, proxyLabel: "보관함으로 이동" }), /보이는 라벨이 바뀜/);
 });

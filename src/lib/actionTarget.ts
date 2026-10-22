@@ -25,10 +25,10 @@ export interface TargetInfo {
   // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상과 입력 칸(#56).
   // 모델의 선택 근거라 비교한다.
   modelContext?: string;
-  // 화면에서 숨긴 checkbox·radio를 구조로 연결된 보이는 label을 눌러 바꾸는 칸(#56). 그 label이 사라지거나
+  // 화면에서 숨긴 checkbox·radio를 구조로 연결된 보이는 label이 대신 보여 주는 칸(#56). 그 label이 사라지거나
   // 칸이 보이게 되면 다른 대상으로 본다.
   proxy?: boolean;
-  // 그때 실제로 누르는 label의 표시 이름(aria-labelledby·aria-label·화면 글자·title). 승인 카드에 보여 주고 비교한다.
+  // 그 보이는 label의 표시 이름(aria-labelledby·aria-label·화면 글자·title). 승인 카드에 보여 주고 비교한다.
   proxyLabel?: string;
   // 대상의 ARIA·HTML 상태(aria-selected·aria-checked·aria-pressed·aria-expanded·aria-current·aria-disabled·disabled).
   // 클릭 대상만. 승인 뒤 상태가 바뀌면(이미 체크됨·이미 펼쳐짐) 누르면 반대로 되므로 다른 대상으로 본다.
@@ -258,9 +258,9 @@ export function fillCard(
             : clip(value, 80);
     let warn =
       info.sensitive === "password" ? " ⚠ 비밀번호 칸" : info.sensitive === "payment" ? " ⚠ 결제 정보 칸" : "";
-    if (info.hidden) warn += info.proxy ? " ⚠ 화면에 보이지 않는 칸(보이는 라벨을 눌러 바꿈)" : " ⚠ 화면에 보이지 않는 칸";
-    // 실제로 누르는 label의 표시 이름(칸 이름은 첫 label에서 와서 다를 수 있다).
-    if (info.proxy) warn += ` — 누르는 라벨: '${clip(info.proxyLabel || "(글자 없음)", 60)}'`;
+    if (info.hidden) warn += info.proxy ? " ⚠ 화면에 보이지 않는 칸(보이는 라벨로 표시)" : " ⚠ 화면에 보이지 않는 칸";
+    // 칸을 대신 보여 주는 label의 표시 이름(칸 이름은 첫 label에서 와서 다를 수 있다).
+    if (info.proxy) warn += ` — 보이는 라벨: '${clip(info.proxyLabel || "(글자 없음)", 60)}'`;
     const where = [info.fieldType, REGION_LABELS[info.region]];
     if (info.inFrame) where.push("프레임 안");
     return `• ${name}${row} (${where.join(", ")}): ${shownValue}${warn}`;
