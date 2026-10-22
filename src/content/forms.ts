@@ -9,33 +9,23 @@ import {
   sensitiveUrlReason,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
-import type { TargetInfo } from "@/lib/actionTarget";
+import { closestAcross, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
+import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
-import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
+import { inProtectedArea, modelName, modelText, optionHidden, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
   noteWritten,
   peekApproved,
   recheckApproved,
   registerTarget,
+  registeredInfo,
   scanTargets,
   takeApproved,
   type TargetKind,
 } from "./targets";
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
-const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
-
-// checkbox·radio에 넣을 값의 해석(실행·기대 상태·최종 확인이 함께 쓴다). 참 = 기존 참 값, 거짓 = "false",
-// 그 밖은 null(지정 오류). 칸의 value 속성과는 비교하지 않는다(#43 — 모델은 value를 모르고, value가 "false"인
-// 칸에 거짓 요청이 체크로 처리되지 않게).
-export function parseCheckedRequest(value: string): boolean | null {
-  const v = value.trim();
-  if (TRUTHY_VALUES.test(v)) return true;
-  if (/^false$/i.test(v)) return false;
-  return null;
-}
 
 type FieldElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
@@ -51,6 +41,37 @@ function isVisible(el: HTMLElement): boolean {
   if (style.display === "none" || style.visibility === "hidden") return false;
   if (style.opacity === "0") return false;
   return true;
+}
+
+// label을 눌렀을 때 다른 컨트롤(링크·버튼)이 작동할 수 있는 자리. 그런 label은 대리 요소로 쓰지 않는다.
+const PROXY_BLOCKERS = 'a[href], area[href], button, summary, [role="button"], [role="link"]';
+
+// 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label(#56). 구조로만 정한다: 그 칸에 연결된 label(for 또는 감싼 label)
+// 중 누르면 그 칸이 작동하고(label.control이 그 칸), 화면에 보이며, 편집·숨은 영역 안이 아니고, 링크·버튼 같은 다른
+// 컨트롤 안에 있지 않은 첫 label. 메일 목록처럼 진짜 체크박스를 숨기고 꾸민 label을 보여 주는 화면을 다룬다.
+function proxyLabel(el: Element): HTMLLabelElement | null {
+  if (!isTag(el, "input") || (el.type !== "checkbox" && el.type !== "radio")) return null;
+  for (const label of Array.from(el.labels ?? [])) {
+    if (label.control !== el) continue;
+    if (!isVisible(label) || inProtectedArea(label)) continue;
+    if (closestAcross(label, PROXY_BLOCKERS)) continue;
+    return label;
+  }
+  return null;
+}
+
+// 숨긴 칸을 보이는 label로 바꾸는 칸인지(보이는 칸은 지금처럼 칸 자신에 쓴다).
+function proxied(el: HTMLElement): boolean {
+  return !isVisible(el) && proxyLabel(el) !== null;
+}
+
+// 모델에 돌려주는 칸 이름. 숨긴 칸 자신에서 이름을 얻지 못하면(display:none·aria-hidden인 칸은 modelName이 비운다)
+// 대신 보여 주는 label의 화면 글자를 쓴다(입력값·편집 영역·숨은 글자는 modelText가 뺀다).
+function fieldModelName(el: HTMLElement): string {
+  const name = modelName(el);
+  if (name) return name;
+  const label = proxied(el) ? proxyLabel(el) : null;
+  return label ? modelText(label, 200) : "";
 }
 
 // label 안에 든 입력 요소의 글자(select의 선택지 등)는 빼고 label 자신의 글자만 읽는다.
@@ -619,7 +640,10 @@ const FIELD_KIND: TargetKind = {
   visible: isVisible,
   requireVisible: false,
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
-  modelName: (el) => modelName(el),
+  modelName: fieldModelName,
+  // 모델용 행 문맥(라벨 없는 행 체크박스를 보낸 사람·제목 같은 행 글자로 구분, #56).
+  rowContext: true,
+  proxied,
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
   personalElements: (el) => {
@@ -774,13 +798,16 @@ function requestProblem(el: FieldElement, value: string): string | null {
 function fieldForModel(el: FieldElement, id: string): FormField {
   // 칸 자신이 편집 영역·숨은 영역 안이면 이름·선택지도 돌려주지 않는다.
   const area = inProtectedArea(el, true);
+  // 행 문맥은 등록한 기술의 것(비교에 고정된 글자)을 그대로 돌려준다.
+  const context = registeredInfo(id)?.modelContext;
   const field: FormField = {
     id,
-    label: modelName(el),
+    label: fieldModelName(el),
     placeholder:
       !area && !isTag(el, "select") ? (el.getAttribute("placeholder") ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "",
     type: describeType(el),
     role: el.getAttribute("role") ?? "",
+    ...(context ? { context } : {}),
   };
   if (isTag(el, "select")) {
     if (el.multiple) field.multiple = true;
@@ -821,6 +848,7 @@ export function findFormFields(_args: { onlyVisible?: boolean }): FormField[] {
 }
 
 // 보이는 칸만 돌려준다. 화면에 보이지 않는 칸(onlyVisible:false로 찾던 숨은 칸)은 이제 돌려주지 않는다(#43).
+// 다만 숨긴 checkbox·radio라도 구조로 연결된 보이는 label이 있으면 돌려준다(#56 — 채울 때 그 label을 누른다).
 function collectFormFields(): FormField[] {
   const fields: FormField[] = [];
 
@@ -828,7 +856,7 @@ function collectFormFields(): FormField[] {
     root.querySelectorAll("input, textarea, select").forEach((el) => {
       if (!isFieldElement(el)) return;
       if (isTag(el, "input") && SKIP_INPUT_TYPES.has(el.type)) return;
-      if (!isVisible(el)) return;
+      if (!isVisible(el) && !proxyLabel(el)) return;
       if (el.disabled) return;
       if (!isTag(el, "select") && el.readOnly) return;
 
@@ -857,6 +885,29 @@ function dispatchChange(el: Element, guard?: () => string | null): void {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+// 숨긴 checkbox·radio는 보이는 label을 눌러 바꾼다(#56 — 사용자가 누를 때와 같은 click·input·change가 나간다).
+// label의 click 처리기가 돈 뒤 칸 자신의 click이 시작될 때(브라우저가 input·change를 보내기 전) guard로 다시 확인하고,
+// 막히면 그 click을 취소해 체크 상태를 되돌린다(input·change는 나가지 않는다). 반영은 부르는 쪽이 checked로 확인한다.
+function toggleViaLabel(el: HTMLInputElement, label: HTMLLabelElement, guard?: () => string | null): void {
+  const win = el.ownerDocument.defaultView;
+  let blocked: string | null = null;
+  const onClick = (e: Event) => {
+    if (blocked || e.composedPath()[0] !== el) return;
+    blocked = guard?.() ?? null;
+    if (blocked) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  };
+  win?.addEventListener("click", onClick, true);
+  try {
+    label.click();
+  } finally {
+    win?.removeEventListener("click", onClick, true);
+  }
+  if (blocked) throw new ChangeBlocked(blocked);
+}
+
 // 이 입력이 실제로 넣을 값(페이지 처리기가 돌기 전에 정한 것): 선택 칸은 고를 option.value, checkbox·radio는 자기 value.
 function intendedValue(el: FieldElement, value: string): string {
   if (isTag(el, "select")) {
@@ -869,11 +920,13 @@ function intendedValue(el: FieldElement, value: string): string {
 
 // onSet: 글자 칸에 브라우저가 정리한 실제 값(앞뒤 공백 제거 등)을 페이지 처리기가 돌기 전에 알려 준다.
 // guard: input 처리기가 돈 뒤 change를 보내기 전에 부른다. 이유를 돌려주면 change를 보내지 않는다(ChangeBlocked).
+// via: 숨긴 checkbox·radio를 대신 누를 보이는 label(#56). 있으면 체크 상태를 직접 쓰지 않고 그 label을 누른다.
 function fillOne(
   el: FieldElement,
   value: string,
   onSet?: (actual: string) => void,
   guard?: () => string | null,
+  via: HTMLLabelElement | null = null,
 ): boolean {
   if (isTag(el, "select")) {
     const match = optionByLabel(el, value);
@@ -890,8 +943,11 @@ function fillOne(
     const want = parseCheckedRequest(value);
     if (want === null) return false;
     if (el.checked !== want) {
-      setNativeProperty(el, "checked", want);
-      dispatchChange(el, guard);
+      if (via) toggleViaLabel(el, via, guard);
+      else {
+        setNativeProperty(el, "checked", want);
+        dispatchChange(el, guard);
+      }
     }
     return true;
   }
@@ -901,8 +957,11 @@ function fillOne(
     if (want === null) return false;
     if (!want) return !el.checked;
     if (!el.checked) {
-      setNativeProperty(el, "checked", true);
-      dispatchChange(el, guard);
+      if (via) toggleViaLabel(el, via, guard);
+      else {
+        setNativeProperty(el, "checked", true);
+        dispatchChange(el, guard);
+      }
     }
     return true;
   }
@@ -984,6 +1043,12 @@ export async function fillFormFields(
     const problem = requestProblem(el, f.value);
     if (problem) {
       results.push({ id: f.id, label, applied: false, note: problem });
+      continue;
+    }
+    // 승인한 칸이 보이는 label로 바꾸는 칸이면 지금 그 label을 다시 정한다(승인 확인에서 proxy가 그대로임을 봤다).
+    const via = info.proxy ? proxyLabel(el) : null;
+    if (info.proxy && !via) {
+      results.push({ id: f.id, label, applied: false, note: "칸을 바꾸는 보이는 라벨을 찾지 못했습니다. 다시 찾으세요." });
       continue;
     }
     // 처리기가 돌기 전에 이 입력이 넣을 값을 정해 둔다(처리기가 덮어쓴 값은 승인한 변화가 아니다).
@@ -1087,7 +1152,7 @@ export async function fillFormFields(
     noteWritten(callId, el, expectedSig ?? intended);
     // input 처리기가 action·숨은 값·대상을 바꿨으면 change(제출로 이어질 수 있다)를 보내지 않는다.
     const guard = (): string | null => {
-      const changed = recheckApproved(FIELD_KIND, el, info);
+      const changed = recheckApproved(FIELD_KIND, el, info, null, true);
       if (changed) return `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${changed}). 다시 찾으세요.`;
       return driftReason();
     };
@@ -1106,6 +1171,7 @@ export async function fillFormFields(
           if (!expectedSig) noteWritten(callId, el, v);
         },
         guard,
+        via,
       );
     } catch (err) {
       if (!(err instanceof ChangeBlocked)) throw err;
@@ -1140,7 +1206,7 @@ export async function fillFormFields(
       continue;
     }
     // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다.
-    const changed = recheckApproved(FIELD_KIND, el, info);
+    const changed = recheckApproved(FIELD_KIND, el, info, null, true);
     if (changed) {
       result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
     } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual && sameIgnoringSpace(actual, value))) {

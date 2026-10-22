@@ -22,8 +22,12 @@ export interface TargetInfo {
   sensitive: "password" | "payment" | null;
   // 대상이 든 목록 항목(행)의 글자. 목록 밖이면 "". 같은 버튼 노드를 다른 행에 다시 쓰는 목록에서 행이 바뀐 것을 잡는다.
   context: string;
-  // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상만. 모델의 선택 근거라 비교한다.
+  // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상과 입력 칸(#56).
+  // 모델의 선택 근거라 비교한다.
   modelContext?: string;
+  // 화면에서 숨긴 checkbox·radio를 구조로 연결된 보이는 label을 눌러 바꾸는 칸(#56). 그 label이 사라지거나
+  // 칸이 보이게 되면 다른 대상으로 본다.
+  proxy?: boolean;
   // 대상의 ARIA·HTML 상태(aria-selected·aria-checked·aria-pressed·aria-expanded·aria-current·aria-disabled·disabled).
   // 클릭 대상만. 승인 뒤 상태가 바뀌면(이미 체크됨·이미 펼쳐짐) 누르면 반대로 되므로 다른 대상으로 본다.
   states?: Record<string, string>;
@@ -93,6 +97,7 @@ export function sameBase(a: TargetInfo, b: TargetInfo): boolean {
     a.sensitive === b.sensitive &&
     a.context === b.context &&
     (a.modelContext ?? "") === (b.modelContext ?? "") &&
+    !!a.proxy === !!b.proxy &&
     statesKey(a.states) === statesKey(b.states)
   );
 }
@@ -110,6 +115,14 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
   return sameBase(a, b) && (a.list?.index ?? null) === (b.list?.index ?? null);
 }
 
+// 입력 도중(입력 처리기가 돈 뒤 change 전, 채운 뒤 반영 확인)의 비교(#56). 원문 행 글자(context)가 그대로면
+// 모델용 행 문맥(modelContext)만 바뀐 것은 같은 대상으로 본다 — 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이
+// 입력 처리기로 보이게 되면 모델용 글자만 달라진다(#43 C의 오탐을 늘리지 않게). 승인 카드·실행 직전 비교는 sameApproved.
+export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
+  if (now.context !== approved.context) return false;
+  return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
+}
+
 // 서로 다른 항목을 사람이 읽을 수 있게 하나 고른다(실패 메시지용 — 모델에도 간다).
 // 글자는 모델에 돌려준 이름(modelName)만 인용한다. 원문 이름에는 입력 칸·편집 영역의 글자가 섞일 수 있다.
 export function describeDifference(before: TargetInfo, after: TargetInfo): string {
@@ -125,6 +138,7 @@ export function describeDifference(before: TargetInfo, after: TargetInfo): strin
     return "대상이 든 행의 내용이 바뀜";
   }
   if (statesKey(before.states) !== statesKey(after.states)) return "대상의 상태(선택·체크·펼침 등)가 바뀜";
+  if (!!before.proxy !== !!after.proxy) return "칸을 바꾸는 보이는 라벨이 바뀜";
   if ((before.list?.index ?? null) !== (after.list?.index ?? null)) return "목록 안 순서가 바뀜";
   return "요소 속성이 바뀜";
 }
@@ -181,24 +195,52 @@ export function clickCard(info: TargetInfo): { summary: string; details: string 
   if (info.context && info.context !== info.name) lines.push(`행 내용: '${clip(info.context, 100)}'`);
   if (info.href) lines.push(`주소: ${clip(info.href, 300)}`);
   if (info.trigger) lines.push(`열린 목록의 트리거: ${roleLabel(info.trigger)} '${clip(info.trigger.name, 60)}'`);
+  // 체크 위젯(role=checkbox·switch·radio, menuitemcheckbox 등)은 지금 상태를 보여 준다(누르면 반대로 바뀐다).
+  const checked = info.states?.checked;
+  if (checked !== undefined) lines.push(`지금 상태: ${checked === "true" ? "체크됨" : checked === "mixed" ? "일부 체크" : "체크 안 됨"}`);
   if (!info.name) lines.push("⚠ 글자가 없는 요소입니다. 무엇을 누르는지 확인하기 어렵습니다.");
   return { summary: `${label} ${name}을(를) 클릭합니다.`, details: lines.join("\n") };
 }
 
+const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
+
+// checkbox·radio에 넣을 값의 해석(실행·기대 상태·최종 확인·승인 카드가 함께 쓴다). 참 = 기존 참 값, 거짓 = "false",
+// 그 밖은 null(지정 오류). 칸의 value 속성과는 비교하지 않는다(#43 — 모델은 value를 모르고, value가 "false"인
+// 칸에 거짓 요청이 체크로 처리되지 않게).
+export function parseCheckedRequest(value: string): boolean | null {
+  const v = value.trim();
+  if (TRUTHY_VALUES.test(v)) return true;
+  if (/^false$/i.test(v)) return false;
+  return null;
+}
+
 // 입력 승인 카드. 비밀번호 칸은 값을 가리고 글자 수만 보여 준다.
+// 이름 없는 칸이나 묶음 안에서 이름이 겹치는 칸(메일 목록의 행 체크박스)은 행 문맥을 함께 보여 준다(#56).
 export function fillCard(
   items: Array<{ info: TargetInfo; value: string }>,
 ): { summary: string; details: string } {
+  const nameCount = new Map<string, number>();
+  for (const { info } of items) nameCount.set(info.name, (nameCount.get(info.name) ?? 0) + 1);
   const shown = items.slice(0, 10).map(({ info, value }) => {
     const name = info.name ? clip(info.name, 40) : "(이름 없는 칸)";
+    // 행 문맥은 모델에 돌려준 글자(modelContext)를 쓴다(입력값·편집 영역·숨은 글자 제외).
+    const row = (!info.name || (nameCount.get(info.name) ?? 0) > 1) && info.modelContext ? ` — 행: '${clip(info.modelContext, 60)}'` : "";
+    const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
+    const want = toggle ? parseCheckedRequest(value) : null;
     const shownValue =
-      info.sensitive === "password" ? `${"●".repeat(Math.min(value.length, 8))} (${value.length}자)` : clip(value, 80);
+      info.sensitive === "password"
+        ? `${"●".repeat(Math.min(value.length, 8))} (${value.length}자)`
+        : want === true
+          ? "☑ 체크"
+          : want === false
+            ? "☐ 해제"
+            : clip(value, 80);
     let warn =
       info.sensitive === "password" ? " ⚠ 비밀번호 칸" : info.sensitive === "payment" ? " ⚠ 결제 정보 칸" : "";
-    if (info.hidden) warn += " ⚠ 화면에 보이지 않는 칸";
+    if (info.hidden) warn += info.proxy ? " ⚠ 화면에 보이지 않는 칸(보이는 라벨을 눌러 바꿈)" : " ⚠ 화면에 보이지 않는 칸";
     const where = [info.fieldType, REGION_LABELS[info.region]];
     if (info.inFrame) where.push("프레임 안");
-    return `• ${name} (${where.join(", ")}): ${shownValue}${warn}`;
+    return `• ${name}${row} (${where.join(", ")}): ${shownValue}${warn}`;
   });
   if (items.length > 10) shown.push(`… 그 외 ${items.length - 10}개`);
   return { summary: `입력 칸 ${items.length}개에 값을 채웁니다.`, details: shown.join("\n") };

@@ -7,7 +7,9 @@ import {
   describeEffect,
   fillCard,
   navKind,
+  parseCheckedRequest,
   sameApproved,
+  sameApprovedInFlight,
   sameBase,
 } from "../src/lib/actionTarget.ts";
 
@@ -176,4 +178,75 @@ test("describeEffect", () => {
     /^누르기 직전에 대상이 바뀌어 클릭하지 않았습니다\(링크 주소가 바뀜\)/,
   );
   assert.equal(describeEffect({ ...base, navigation: "error", sameDocument: false }), "이동했지만 오류 페이지입니다.");
+});
+
+// #56: 목록 행 체크박스(숨긴 칸 + 보이는 label, 행 문맥).
+const rowBox = {
+  tag: "input",
+  role: "checkbox",
+  name: "",
+  modelName: "",
+  href: "",
+  region: "main",
+  inFrame: false,
+  fieldType: "checkbox",
+  sensitive: null,
+  context: "카닥 이용약관 개정 안내 10:21",
+  modelContext: "카닥 이용약관 개정 안내 10:21",
+  proxy: true,
+};
+
+test("sameBase: 입력 칸의 행 문맥과 보이는 label로 바꾸는지도 비교한다(#56)", () => {
+  assert.equal(sameBase(rowBox, { ...rowBox }), true);
+  // 행이 바뀌면(목록 갱신으로 같은 칸 노드가 다른 메일 행에 쓰임) 다른 대상.
+  assert.equal(sameBase(rowBox, { ...rowBox, modelContext: "보안 안내 09:00" }), false);
+  // 보이는 label이 사라지거나 칸이 보이게 되면 다른 대상.
+  assert.equal(sameBase(rowBox, { ...rowBox, proxy: undefined }), false);
+  assert.match(describeDifference(rowBox, { ...rowBox, proxy: false }), /보이는 라벨이 바뀜/);
+});
+
+test("sameApprovedInFlight: 원문 행 글자가 그대로면 모델용 행 문맥만 바뀐 것은 허용한다(#56, #43 C)", () => {
+  const field = { ...rowBox, tag: "input", fieldType: "email", proxy: undefined, context: "이메일 형식이 아닙니다", modelContext: "이메일" };
+  // 입력 처리기가 행 안의 숨은 안내 글을 보이게 함 → 원문은 같고 모델용 글자만 늘어남.
+  assert.equal(sameApprovedInFlight({ ...field, modelContext: "이메일 형식이 아닙니다" }, field), true);
+  // 승인 카드·실행 직전 비교(sameApproved)는 그대로 엄격하다.
+  assert.equal(sameApproved({ ...field, modelContext: "이메일 형식이 아닙니다" }, field), false);
+  // 원문 행 글자가 바뀌면 입력 도중이어도 다른 대상.
+  assert.equal(sameApprovedInFlight({ ...field, context: "다른 행", modelContext: "다른 행" }, field), false);
+  // 그 밖의 항목은 그대로 비교한다.
+  assert.equal(sameApprovedInFlight({ ...field, name: "비밀번호" }, field), false);
+  assert.equal(sameApprovedInFlight({ ...field, list: { index: 2, count: 5, semantic: true } }, { ...field, list: { index: 3, count: 5, semantic: true } }), false);
+});
+
+test("parseCheckedRequest: 참·거짓 외의 값은 지정 오류", () => {
+  assert.equal(parseCheckedRequest("true"), true);
+  assert.equal(parseCheckedRequest(" 체크 "), true);
+  assert.equal(parseCheckedRequest("False"), false);
+  assert.equal(parseCheckedRequest("off"), null);
+});
+
+test("fillCard: 이름 없는 칸·이름이 겹치는 칸은 행 문맥을 보여 준다(#56)", () => {
+  const card = fillCard([
+    { info: rowBox, value: "true" },
+    { info: { ...rowBox, modelContext: "네이버 보안 안내 09:00", proxy: undefined, hidden: false }, value: "false" },
+  ]);
+  const lines = card.details.split("\n");
+  assert.match(lines[0], /^• \(이름 없는 칸\) — 행: '카닥 이용약관 개정 안내 10:21' \(checkbox, 본문\): ☑ 체크/);
+  assert.match(lines[1], /행: '네이버 보안 안내 09:00'.*: ☐ 해제$/);
+  // 숨긴 칸은 보이는 label을 누른다는 경고.
+  assert.doesNotMatch(lines[0], /보이지 않는 칸/);
+  assert.match(fillCard([{ info: { ...rowBox, hidden: true }, value: "true" }]).details, /⚠ 화면에 보이지 않는 칸\(보이는 라벨을 눌러 바꿈\)/);
+  // 같은 이름이 둘이면 행 문맥을 함께, 이름이 하나뿐이면 행 문맥을 붙이지 않는다.
+  const named = { ...rowBox, name: "메일 선택" };
+  assert.match(fillCard([{ info: named, value: "true" }, { info: { ...named, modelContext: "다른 메일" }, value: "true" }]).details, /메일 선택 — 행: '다른 메일'/);
+  assert.doesNotMatch(fillCard([{ info: named, value: "true" }]).details, /행:/);
+  // 원문 행 글자(context)는 카드에 쓰지 않는다(모델용 글자만).
+  assert.doesNotMatch(fillCard([{ info: { ...rowBox, context: "RAW_ONLY", modelContext: "" }, value: "true" }]).details, /RAW_ONLY/);
+});
+
+test("clickCard: 체크 위젯은 지금 상태를 보여 준다(#56)", () => {
+  const box = { ...link, tag: "div", role: "checkbox", name: "", href: "", states: { checked: "false" } };
+  assert.match(clickCard(box).details, /대상: 체크박스 .*\n[\s\S]*지금 상태: 체크 안 됨/);
+  assert.match(clickCard({ ...box, states: { checked: "true" } }).details, /지금 상태: 체크됨/);
+  assert.doesNotMatch(clickCard(link).details, /지금 상태/);
 });

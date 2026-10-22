@@ -5,7 +5,7 @@
 
 import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
-import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
+import { describeDifference, sameApproved, sameApprovedInFlight, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { cleanModelText } from "@/lib/modelText";
@@ -28,6 +28,10 @@ export interface TargetKind {
   personalElements?(el: HTMLElement): Element[];
   // 클릭 대상: 모델용 묶음 문맥(modelContext)·상태(states)를 기술에 넣고, 선택지(option·menuitem*)는 트리거 관계를 고정한다.
   detail?: boolean;
+  // 입력 칸: 모델용 행 문맥(modelContext)만 기술에 넣는다(#56 — 라벨 없는 행 체크박스를 행 글자로 구분).
+  rowContext?: boolean;
+  // 숨긴 칸을 보이는 대리 요소(연결된 label)로 바꾸는지(#56). 기술의 proxy로 고정한다.
+  proxied?(el: HTMLElement): boolean;
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
@@ -205,12 +209,15 @@ function statesOf(el: HTMLElement): Record<string, string> | undefined {
 function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
   const row = rowElement(el);
   const detail: Partial<TargetInfo> = {};
-  if (kind.detail) {
+  if (kind.detail || kind.rowContext) {
     const modelContext = modelContextOf(row?.row ?? null);
     if (modelContext) detail.modelContext = modelContext;
+  }
+  if (kind.detail) {
     const states = statesOf(el);
     if (states) detail.states = states;
   }
+  if (kind.proxied?.(el)) detail.proxy = true;
   return {
     tag: el.localName,
     role: implicitRole(el),
@@ -711,16 +718,18 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
 }
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
-// 같으면 null, 다르면 이유.
+// 같으면 null, 다르면 이유. inFlight: 입력 도중·직후의 확인이면 원문 행 글자가 그대로일 때 모델용 행 문맥만 바뀐 것은
+// 허용한다(sameApprovedInFlight — 입력 처리기가 행 안의 숨은 안내 글을 보이게 하는 경우).
 export function recheckApproved(
   kind: TargetKind,
   el: HTMLElement,
   info: TargetInfo,
   relation: Relation | null = null,
+  inFlight = false,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const now = fullInfo(kind, el);
-  if (!sameApproved(now, info)) return describeDifference(info, now);
+  if (!(inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info))) return describeDifference(info, now);
   const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
   const relationMoved = relationChanged(kind, el, relation);
