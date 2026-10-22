@@ -11,6 +11,8 @@ const t = (over = {}) => ({
 test("navigation, plain clicks and plain fills run automatically", () => {
   assert.equal(autoApproveBlock("navigate_to_url", []), null);
   assert.equal(autoApproveBlock("click_element", [t({ name: "검색" })]), null);
+  // 중첩 메뉴(트리거 자신이 다른 목록 안)의 항목은 자동 실행하지 않는다.
+  assert.equal(autoApproveBlock("click_element", [t({ name: "보기", nestedPopup: true })]), "중첩 메뉴의 항목");
   assert.equal(autoApproveBlock("click_element", [t({ name: "다음 페이지" })]), null);
   assert.equal(autoApproveBlock("click_element", [t({ name: "Apply filters" })]), null);
   assert.equal(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", name: "검색어" })]), null);

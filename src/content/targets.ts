@@ -387,6 +387,8 @@ function withTrigger(kind: TargetKind, info: TargetInfo, relation: Relation | nu
     ...info,
     popup: relation.mode,
     ...(trigger ? { trigger: { ...fullInfo(kind, trigger), ...kind.risk?.(trigger) } } : {}),
+    // 트리거가 선택지이거나 다른 목록(listbox·menu) 안에 있으면 중첩 메뉴다.
+    ...(trigger && (isChoice(trigger) || popupOf(trigger) !== trigger) ? { nestedPopup: true } : {}),
   };
 }
 
