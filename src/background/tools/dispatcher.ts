@@ -628,7 +628,8 @@ async function runTool(
     case "navigate_to_url": {
       const args = parsedArgs as ToolArgs["navigate_to_url"];
       const url = normalizeNavigationUrl(args.url);
-      const tabId = await resolveTurnTab(turnTab);
+      // 새 탭·설정 같은 내부 페이지에서도 웹 주소로는 이동할 수 있다(normalizeNavigationUrl이 http(s)만 통과시킨다).
+      const tabId = await resolveTurnTab(turnTab, { allowInternal: true });
       markOptimisticNavigation(tabId);
       await chrome.tabs.update(tabId, { url });
       return {

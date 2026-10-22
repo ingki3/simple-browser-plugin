@@ -2,7 +2,14 @@ import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
 import type { ModelId } from "@/lib/models";
 import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
-import { navigateAutoBlock, pageActionSiteBlock, siteOf } from "@/lib/siteTrust";
+import {
+  internalNavigateAutoBlock,
+  isBrowserInternalUrl,
+  navigateAutoBlock,
+  pageActionSiteBlock,
+  siteOf,
+  userNamedSites,
+} from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
 import { discardLinkCall, setChosenLinks } from "./linkedPages";
@@ -21,7 +28,7 @@ import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
-import { captureTurnTab, type TurnTab } from "./tools/handlers";
+import { captureTurnTab, turnTabIsInternal, type TurnTab } from "./tools/handlers";
 import { commitReads } from "./readRecipes";
 import { isGoogleConfigured } from "./google/auth";
 import { youtubeVideoId } from "@/lib/youtubeUrl";
@@ -30,7 +37,7 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
 
 절대 규칙:
-1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다. 단, 사용자가 현재 페이지와 무관하게 특정 URL이나 사이트 홈으로 이동해 달라고 명시한 경우에는 describe_page 없이 navigate_to_url을 바로 호출한다. 또 YouTube 영상 페이지에서 영상 내용(요약·질문 등)을 물으면 describe_page 없이 get_youtube_transcript를 먼저 호출하고(아래 YouTube 모드), 페이지에 링크된 파일의 내용을 물으면 describe_page 없이 list_file_links를 먼저 호출한다(아래 링크된 파일 읽기 모드).
+1. 페이지와 상호작용하거나 페이지 내용을 근거로 말해야 하는 요청은, 어떤 조작 툴(find_clickables, click_element, fill_form_fields, download_images, translate_page, list_page_images, find_form_fields 등)보다 먼저 describe_page를 호출해 페이지를 관측한다. 같은 대화에서 방금 describe_page 결과를 본 직후라면 다시 부르지 않는다. 단, 사용자가 현재 페이지와 무관하게 특정 URL이나 사이트 홈으로 이동해 달라고 명시한 경우에는 describe_page 없이 navigate_to_url을 바로 호출한다. 탭 메타데이터의 URL이 브라우저 내부 페이지(chrome://·edge://·about: — 새 탭·설정 등)면 페이지를 관측·조작할 수 없으니 describe_page 등 다른 도구를 부르지 말고, 사용자가 가려는 사이트로 navigate_to_url을 바로 호출한 뒤 도착한 페이지를 관측한다. 어느 사이트로 가야 할지 알 수 없으면 사용자에게 묻는다. 또 YouTube 영상 페이지에서 영상 내용(요약·질문 등)을 물으면 describe_page 없이 get_youtube_transcript를 먼저 호출하고(아래 YouTube 모드), 페이지에 링크된 파일의 내용을 물으면 describe_page 없이 list_file_links를 먼저 호출한다(아래 링크된 파일 읽기 모드).
 2. 모든 툴 호출 직전에 짧은 Thought를 텍스트로 먼저 말한다. Thought는 다음을 포함한다:
    (a) 관측 결과에 근거한 현재 페이지의 성격(어떤 종류의 사이트/화면으로 보이는지, 주요 랜드마크는 무엇인지).
    (b) 사용자의 요청이 이 페이지 맥락에서 구체적으로 무엇을 가리키는지.
@@ -167,6 +174,11 @@ function availableTools(): typeof functionDeclarations {
   return functionDeclarations.filter((fn) => !fn.name.startsWith("google_"));
 }
 
+// 실패한 도구 호출도 실행 결과와 같은 형식의 디버그 줄로 남긴다.
+function logToolFail(toolName: ToolName, msg: string): void {
+  debugLog("tool:result", `${toolName} fail · ${msg.slice(0, 140)}`);
+}
+
 const MAX_DOCUMENT_READS_PER_TURN = 5;
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
 
@@ -185,6 +197,8 @@ export class ChatAgent {
   // 자동 실행해도 되는 사이트: 이 턴을 시작한 탭의 사이트와, 이 대화에서 승인 카드로 이동을 허락한 사이트.
   private turnSite: string | null = null;
   private approvedSites = new Set<string>();
+  // 이번 요청 글에 사용자가 적은 웹 주소·도메인의 출처(#54). 턴 탭이 내부 페이지(새 탭·설정)일 때의 이동에만 쓴다.
+  private turnNamedSites: string[] = [];
   // 승인 카드에서 "이번 요청 동안 링크 이동 묻지 않기"를 고른 턴과 그 카드의 페이지 사이트. 턴 번호는 새 요청·중단마다
   // 바뀌므로 그 요청이 끝나면 저절로 쓰이지 않고, 대화 전체의 신뢰 사이트와 달리 그 사이트 안의 링크에만 쓴다.
   // 그 선택지를 보여 준 카드(callId → 턴·사이트)만 받아들인다.
@@ -323,9 +337,11 @@ export class ChatAgent {
       const title = tab.title ?? "";
       if (!url && !title) return "";
       // 가벼운 모델은 시스템 프롬프트 뒤쪽의 YouTube 모드보다 이 머리말을 따르므로 여기서 도구를 안내한다.
-      const guide = youtubeVideoId(url)
-        ? "YouTube 영상 페이지 — 영상 내용(요약·질문 등)은 describe_page·get_page_content 대신 get_youtube_transcript로 먼저 확인하세요"
-        : "상세 내용은 describe_page로 관측하세요";
+      const guide = isBrowserInternalUrl(url)
+        ? "브라우저 내부 페이지(새 탭·설정 등) — 관측·조작 도구를 쓸 수 없으니 describe_page 없이 navigate_to_url로 사용자가 가려는 사이트로 바로 이동하세요"
+        : youtubeVideoId(url)
+          ? "YouTube 영상 페이지 — 영상 내용(요약·질문 등)은 describe_page·get_page_content 대신 get_youtube_transcript로 먼저 확인하세요"
+          : "상세 내용은 describe_page로 관측하세요";
       return `[탭 메타데이터 — ${guide}]\nURL: ${url}\n제목: ${title}`;
     } catch {
       return "";
@@ -442,7 +458,11 @@ export class ChatAgent {
     this.turnTab = await captureTurnTab();
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
-    if ("tabId" in this.turnTab) debugLog("turn:tab", `tab ${this.turnTab.tabId}`);
+    if ("tabId" in this.turnTab) {
+      debugLog("turn:tab", `tab ${this.turnTab.tabId}${this.turnTab.internal ? " (내부 페이지)" : ""}`);
+    } else {
+      debugLog("turn:tab", `fail · ${this.turnTab.error}`, "warn");
+    }
     // 탭 조회를 기다리는 사이 새 턴이 시작됐으면 그 턴의 신뢰 사이트를 덮어쓰지 않는다.
     let site: string | null = null;
     // 턴이 끝났을 때 다른 화면으로 옮겨 갔는지 보려고 시작 주소(해시 포함)를 기억한다.
@@ -456,7 +476,10 @@ export class ChatAgent {
         /* 탭을 못 읽으면 신뢰 사이트 없이 진행(이동은 카드로 묻는다) */
       }
     }
-    if (!this.isStale(turn)) this.turnSite = site;
+    if (!this.isStale(turn)) {
+      this.turnSite = site;
+      this.turnNamedSites = userNamedSites(userText);
+    }
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);
@@ -690,6 +713,7 @@ export class ChatAgent {
           parsedArgs = parseToolArgs(toolName, JSON.parse(fc.function.arguments || "{}"));
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          logToolFail(toolName, msg);
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
           this.history.push({
             role: "tool",
@@ -721,6 +745,8 @@ export class ChatAgent {
 
         // 승인 없이 실행한 호출은 결과 카드에 표시한다.
         let autoRan = false;
+        // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
+        let internalNavSite: string | null = null;
         // 외부 본문 보호가 켜졌으면 관측 전용이 아닌 도구는 평소 승인 대상이 아니어도(번역·Google 읽기 등) 묻는다.
         const guarded = this.externalContent && needsApprovalWhenProtected(toolName);
         if (SENSITIVE_TOOLS.has(toolName) || guarded) {
@@ -731,6 +757,7 @@ export class ChatAgent {
             // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
             if (this.isStale(turn)) return false;
             const msg = err instanceof Error ? err.message : String(err);
+            logToolFail(toolName, msg);
             this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
             this.history.push({
               role: "tool",
@@ -783,10 +810,16 @@ export class ChatAgent {
             linkOffer && !!grant && grant.turn === turn && siteBlock(new Set([grant.site])) === null;
           // 외부 본문 보호 중에는 자동 실행·링크 허락을 쓰지 않는다.
           const autoMode = !guarded && (autoApprove || linkGranted);
+          // 턴 탭이 지금 내부 페이지(새 탭·설정)면 이동은 요청 글에 사용자가 적은 사이트·카드로 허락한 사이트 안에서만
+          // 자동 실행한다(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이 끼어들 수 없다.
+          const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(this.turnTab));
+          if (this.isStale(turn)) return false;
           let block = linkGranted
             ? null
             : toolName === "navigate_to_url"
-              ? navigateAutoBlock(trusted, String(preview.details ?? ""))
+              ? fromInternal
+                ? internalNavigateAutoBlock(trusted, this.turnNamedSites, String(preview.details ?? ""))
+                : navigateAutoBlock(trusted, String(preview.details ?? ""))
               : preview.autoBlock !== undefined
                 ? preview.autoBlock
                 : autoApproveBlock(toolName, []);
@@ -796,9 +829,15 @@ export class ChatAgent {
           }
           let approved: boolean;
           if (autoMode && !block) {
-            debugLog("tool:auto_approved", `${toolName}${linkGranted && !autoApprove ? " (link grant)" : ""}`);
+            debugLog(
+              "tool:auto_approved",
+              `${toolName}${linkGranted && !autoApprove ? " (link grant)" : ""}${fromInternal ? " (내부 페이지에서)" : ""}`,
+            );
             approved = true;
             autoRan = true;
+            // 내부 페이지에서 사용자가 적은 사이트로 자동 이동했으면, 이동이 성공한 뒤 그 사이트를 이 턴의 사이트로 삼아
+            // 이후 클릭·입력의 자동 실행 범위로 쓴다(카드로 허락한 이동이 approvedSites가 되는 것과 같은 범위).
+            if (fromInternal && !this.turnSite) internalNavSite = siteOf(String(preview.details ?? ""));
           } else {
             if (autoMode) debugLog("tool:auto_blocked", `${toolName} · ${block}`);
             debugLog("tool:awaiting_approval", `${toolName}`);
@@ -892,10 +931,16 @@ export class ChatAgent {
             name: toolName,
             content: JSON.stringify({ result: result.data }),
           });
+          if (internalNavSite && result.ok && !this.turnSite) {
+            this.turnSite = internalNavSite;
+            debugLog("turn:site", `${internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);
+          }
           await this.trackSavedPageUse(toolName, parsedArgs, result.ok);
         } catch (err) {
           if (this.isStale(turn)) return false;
           const msg = err instanceof Error ? err.message : String(err);
+          // 턴 탭 해석(내부 페이지·닫힌 탭) 등 실행 전 단계에서 실패해도 결과 줄을 남긴다(#54).
+          logToolFail(toolName, msg);
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
           this.history.push({
             role: "tool",

@@ -163,3 +163,65 @@ export function pageActionSiteBlock(
 export function withinSite(site: string, url: string): boolean {
   return withinTrusted(new Set([site]), url) === true;
 }
+
+// 브라우저 내부 페이지(새 탭·설정·빈 페이지 등). content script를 넣을 수 없어 페이지를 읽거나 조작할 수 없다.
+export function isBrowserInternalUrl(url: string | undefined): boolean {
+  return !!url && /^(chrome|edge|about|chrome-search|chrome-untrusted|devtools):/i.test(url);
+}
+
+// 사용자 요청 글에 적힌 웹 주소·도메인의 출처(#54). 낱말 뜻이 아니라 주소·호스트 모양으로만 뽑는다:
+// http(s) 주소는 그 출처(http면 https 출처도), 그 밖의 글에서는 "이름.접미사" 모양이면서 공개 접미사 목록으로
+// 등록 도메인이 확인되는 호스트를 https 출처로 본다. 이메일(@ 뒤), 주소 속 경로·매개변수, IP는 뽑지 않는다.
+// 주소 글자는 ASCII만 본다(바로 붙은 한글 조사 "…com으로"를 주소에 넣지 않게).
+const URL_IN_TEXT_RE = /https?:\/\/[^\s<>"'`()[\]{}\u0080-￿]+/gi;
+const HOST_IN_TEXT_RE =
+  /(?<![\w@.\-/=?&#%])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59}))(:\d{1,5})?(?![\w@-]|\.[a-z0-9])/gi;
+const MAX_NAMED_SITES = 10;
+
+export function userNamedSites(text: string): string[] {
+  const out = new Set<string>();
+  const add = (origin: string) => {
+    if (out.size < MAX_NAMED_SITES) out.add(origin);
+  };
+  const accept = (u: URL): boolean => {
+    if (!/^https?:$/.test(u.protocol) || !u.hostname) return false;
+    const host = normHost(u.hostname);
+    return !isIpHost(host) && registrableDomain(host) !== null;
+  };
+  // 전체 주소를 먼저 뽑고 글에서 지운다(주소 속 매개변수의 호스트 모양 글자를 따로 뽑지 않게).
+  const rest = text.replace(URL_IN_TEXT_RE, (raw) => {
+    try {
+      const u = new URL(raw);
+      if (accept(u)) {
+        add(u.origin);
+        if (u.protocol === "http:") add(`https://${u.host}`);
+      }
+    } catch {
+      /* 주소 모양이 아님 */
+    }
+    return " ";
+  });
+  for (const m of rest.matchAll(HOST_IN_TEXT_RE)) {
+    try {
+      const u = new URL(`https://${m[1]}${m[2] ?? ""}`);
+      if (accept(u)) add(u.origin);
+    } catch {
+      /* 호스트 모양이 아님 */
+    }
+  }
+  return [...out];
+}
+
+// 내부 페이지(새 탭·설정)에서 시작한 이동의 자동 실행 경계(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이
+// 끼어들 수 없지만, 모델이 만든 주소로 대화 내용이 나갈 수 있어 사용자가 이번 요청 글에 적은 사이트(등록 도메인이
+// 같음)나 이 대화에서 승인 카드로 허락한 사이트 안에서만 자동 실행한다.
+export function internalNavigateAutoBlock(
+  approvedSites: Iterable<string>,
+  namedSites: Iterable<string>,
+  targetUrl: string,
+): string | null {
+  const inside = withinTrusted(new Set([...approvedSites, ...namedSites]), targetUrl);
+  if (inside === null) return "웹 주소가 아님";
+  if (!inside) return "요청 글에 적지 않은 사이트로 이동";
+  return sensitiveUrlReason(targetUrl);
+}
