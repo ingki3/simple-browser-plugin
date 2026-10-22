@@ -55,3 +55,17 @@ test("browser internal pages", () => {
     assert.equal(isBrowserInternalUrl(u), false, String(u));
   }
 });
+
+test("hosts inside a path or query parameter are not named sites", () => {
+  assert.deepEqual(userNamedSites("naver.com/redirect?next=https://attacker.com/ 열어줘"), ["https://naver.com"]);
+  assert.deepEqual(userNamedSites("https://naver.com/r?u=https://attacker.com/x 열어"), ["https://naver.com"]);
+  assert.deepEqual(userNamedSites("next=https://attacker.com 로 가"), []);
+  assert.deepEqual(userNamedSites("“naver.com”으로 가줘"), ["https://naver.com"]);
+  // 사용자가 적은 주소 속 매개변수의 사이트로는 자동 이동하지 않는다.
+  const named = userNamedSites("naver.com/redirect?next=https://attacker.com/ 열어줘");
+  assert.notEqual(internalNavigateAutoBlock([], named, "https://attacker.com/collect?d=x"), null);
+});
+
+test("only the leading non-ASCII prefix is stripped", () => {
+  assert.deepEqual(userNamedSites("naver.com/검색https://attacker.com 열어"), ["https://naver.com"]);
+});
