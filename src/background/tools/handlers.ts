@@ -7,6 +7,7 @@ const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const TOOL_TIMEOUT_MS: Partial<Record<ToolName, number>> = {
   translate_page: 180_000,
   download_images: 60_000,
+  download_files: 60_000,
 };
 
 export const INTERNAL_PAGE_ERROR =

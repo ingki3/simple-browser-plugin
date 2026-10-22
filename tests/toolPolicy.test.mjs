@@ -16,14 +16,14 @@ test("only page-reading tools that never change the page are allowed without app
     "describe_page", "find_clickables", "find_form_fields", "get_page_content", "list_file_links", "list_page_images", "query_dom",
   ]);
   for (const name of ["get_youtube_transcript", "translate_page", "navigate_to_url",
-    "click_element", "fill_form_fields", "download_images", "read_document", "google_drive_search", "google_sheets_append_rows"]) {
+    "click_element", "fill_form_fields", "download_images", "download_files", "read_document", "google_drive_search", "google_sheets_append_rows"]) {
     assert.equal(needsApprovalWhenProtected(name), true, name);
   }
 });
 
-test("external-content tools: file reading and every Google tool", () => {
+test("external-content tools: file reading, file saving (server file names) and every Google tool", () => {
   const external = Object.entries(TOOL_POLICY).filter(([, p]) => p.bringsExternal).map(([n]) => n).sort();
   const google = Object.keys(TOOL_POLICY).filter((n) => n.startsWith("google_"));
-  assert.deepEqual(external, ["read_document", "read_linked_pages", "read_other_tabs", ...google].sort());
+  assert.deepEqual(external, ["download_files", "read_document", "read_linked_pages", "read_other_tabs", ...google].sort());
   for (const [name, p] of Object.entries(TOOL_POLICY)) assert.ok(!(p.bringsExternal && p.observeOnly), name);
 });

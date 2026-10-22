@@ -25,6 +25,42 @@ function formatFromText(text: string): FileLink["format"] {
   return formatFromExtension(m ? extensionOf(m[0]) : null);
 }
 
+// 링크가 파일 링크로 보이는지(list_file_links의 목록 기준). 목록에 보일지만 정하고 승인에는 쓰지 않는다.
+function looksLikeFile(a: HTMLAnchorElement | HTMLAreaElement, url: string, format: FileLink["format"], text: string): boolean {
+  return format !== null || a.hasAttribute("download") || DOWNLOAD_URL.test(url) || DOWNLOAD_TEXT.test(text);
+}
+
+const MAX_PAGE_LINKS = 3_000;
+
+// download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임 + 열린 shadow root, list_file_links와 같은 범위)의
+// http(s) 링크 전부. 백그라운드가 모델이 넘긴 주소가 이 안에 있는지 구조로 확인해 후보를 고정한다.
+// listed는 모델이 고르지 않은 링크를 카드에 선택 해제로 함께 보일지(파일 링크로 보이는 것만)다.
+export function pageDownloadLinks(): Array<{ url: string; label: string; meta: string; listed: boolean }> {
+  const out: Array<{ url: string; label: string; meta: string; listed: boolean }> = [];
+  const seen = new Set<string>();
+  for (const root of getAccessibleRoots()) {
+    for (const a of Array.from(root.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>("a[href], area[href]"))) {
+      if (out.length >= MAX_PAGE_LINKS) return out;
+      let key: string;
+      try {
+        const u = new URL(a.href);
+        if (u.protocol !== "http:" && u.protocol !== "https:") continue;
+        u.hash = "";
+        key = u.href;
+      } catch {
+        continue;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const text = linkText(a);
+      const checked = checkFileUrl(key);
+      const format = checked.ok ? (checked.target.hint ?? formatFromText(text)) : null;
+      out.push({ url: key, label: text, meta: format ?? "", listed: looksLikeFile(a, key, format, text) });
+    }
+  }
+  return out;
+}
+
 export function listFileLinks(args: { query?: string; limit?: number }): FileLinkList {
   const limit = args.limit ?? DEFAULT_LIMIT;
   const query = args.query?.trim().toLowerCase() ?? "";
@@ -48,9 +84,7 @@ export function listFileLinks(args: { query?: string; limit?: number }): FileLin
       const { url, hint } = checked.target;
       if (seen.has(url)) return;
       const format = hint ?? formatFromText(text);
-      const isFile =
-        format !== null || a.hasAttribute("download") || DOWNLOAD_URL.test(url) || DOWNLOAD_TEXT.test(text);
-      if (!isFile) return;
+      if (!looksLikeFile(a, url, format, text)) return;
       // 같은 URL의 다른 링크("다운로드" 뒤의 "보고서.hwp" 등)가 검색어와 맞을 수 있으므로, 검색어를 통과한 뒤에 등록한다.
       if (query && !`${text} ${url}`.toLowerCase().includes(query)) return;
       seen.add(url);

@@ -8,7 +8,7 @@ import { queryDom } from "./dom";
 import { findClickables, clickElement } from "./clickables";
 import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
-import { listFileLinks } from "./fileLinks";
+import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect } from "./targets";
 import { pageSkeleton } from "./skeleton";
 
@@ -39,7 +39,8 @@ async function execTool(toolName: ToolName, args: unknown, callId: string): Prom
     case "click_element":
       return clickElement(args as { id: string }, callId);
     case "download_images":
-      throw new Error("download_images는 백그라운드에서 실행해야 합니다.");
+    case "download_files":
+      throw new Error(`${toolName}는 백그라운드에서 실행해야 합니다.`);
     case "navigate_to_url":
       throw new Error("navigate_to_url은 백그라운드에서 실행해야 합니다.");
   }
@@ -88,6 +89,14 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   if (msg.kind === "link_lookup") {
     try {
       sendResponse({ ok: true, data: lookupLinks(msg.urls) } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
+  if (msg.kind === "download_links") {
+    try {
+      sendResponse({ ok: true, data: pageDownloadLinks() } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
     }
