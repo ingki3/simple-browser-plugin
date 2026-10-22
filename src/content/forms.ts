@@ -650,79 +650,117 @@ const FIELD_KIND: TargetKind = {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
     // 양식 안 칸도 change 처리기가 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있어 주변 범위를 함께 본다.
     const around = personalValuedInScopes(fieldFormlessScopes(el));
-    return form ? [...new Set([...personalValuedElements(form), ...around])] : around;
+    // 보이는 label을 눌러 바꾸는 칸은 그 label 주변 범위도 본다(label의 click이 그 조상들의 처리기를 거친다).
+    const label = proxied(el) ? proxyLabel(el) : null;
+    const nearLabel = label ? personalValuedInScopes(fieldFormlessScopes(label)) : [];
+    return [...new Set([...(form ? personalValuedElements(form) : []), ...around, ...nearLabel])];
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
-  // (change 처리기로 바로 제출하는 칸이 있다).
-  risk: (el) => {
-    const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
-    const submitTo = formDestination(el, form);
-    // 기존 칸 값까지 합친 제출 주소(change 처리기로 바로 제출되면 숨은 next=https://… 도 함께 간다).
-    const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
-    // 선택 칸은 표시 문구로 고르면 실제 option.value가, checkbox·radio는 자기 value가 들어가므로 주소처럼 보이는
-    // 값을 미리 풀어 둔다(change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지). 한도를 넘으면 묻는다.
-    const choiceUrls = choiceUrlsOf(el);
-    return {
-      // checkbox·radio는 체크하면 자기 value가 실리므로, 그 값이 개인정보 모양이어도 개인정보 칸으로 본다.
-      // 선택 칸은 표시 문구로 골라도 실제 option.value가 들어가므로, 개인정보 모양의 선택지가 있으면 개인정보 칸으로 본다.
-      personal:
-        isPersonalField(el) ||
-        (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)) ||
-        (isTag(el, "select") && Array.from(el.options).some((o) => looksPersonalValue(o.value))),
-      // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
-      // 양식 안 칸도 주변 범위(대화상자, 없으면 화면)의 다른 양식을 본다(change 처리기가 그 양식을 제출할 수 있다).
-      submitsPersonal:
-        (!!form && formHasPersonalValues(form)) ||
-        personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
-      // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
-      ...(() => {
-        const full = isFieldElement(el)
-          ? `${resolveLabel(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
-          : "";
-        return full ? { outerText: full } : {};
-      })(),
-      // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
-      paymentContext:
-        inPaymentContext(el, form) ||
-        // 체크하면 실리는 checkbox·radio의 name=value에 결제 문구가 있으면(value="purchase", name="confirm_order").
-        (isTag(el, "input") &&
-          (el.type === "checkbox" || el.type === "radio") &&
-          [el.value, el.name].some((v) => PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v)))) ||
-        (isTag(el, "select") &&
-          Array.from(el.options).some((o) => {
-            const text = `${o.textContent ?? ""} ${o.value}`;
-            return PAYMENT_TEXT_RE.test(text) || PAYMENT_TEXT_RE.test(splitIdentifier(text));
-          })),
-      ...(submitTo ? { submitTo } : {}),
-      ...(submitUrl ? { submitUrl } : {}),
-      // 양식 밖 칸이면 범위 안 다른 양식들의 제출 주소도 본다.
-      ...(() => {
-        if (form) {
-          // 양식 안 칸: 제출 버튼들의 formaction(기본 action과 다른 것)과 지금 값을 합친 주소도 본다
-          // (change 처리기가 form.requestSubmit(button)으로 그 주소에 제출할 수 있다).
-          const own = otherDestinations(form, submitTo);
-          // 주변 범위의 다른 양식: 값이 바뀐 양식의 제출 주소와, 모든 양식의 action(change 처리기가 입력값을 옮겨
-          // 제출할 수 있다 — 승인 판정에서 사이트 경계와 결제·개인정보 주소를 본다).
-          const around = scopeSubmitUrls(fieldFormlessScopes(el).filter((s) => s.node !== form));
-          const urls = [...(own.scopeSubmitUrls ?? []), ...around.changed.filter((u) => !(own.scopeSubmitUrls ?? []).includes(u))];
-          return {
-            ...(own.scopeFormActions ? { scopeFormActions: own.scopeFormActions } : {}),
-            ...(urls.length ? { scopeSubmitUrls: urls } : {}),
-            ...(around.actions.length ? { aroundFormActions: around.actions } : {}),
-          };
-        }
-        const { changed, actions } = scopeSubmitUrls(fieldFormlessScopes(el));
-        return {
-          ...(changed.length ? { scopeSubmitUrls: changed } : {}),
-          ...(actions.length ? { scopeFormActions: actions } : {}),
-        };
-      })(),
-      ...(choiceUrls.length ? { choiceUrls } : {}),
-      ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
-      baseUri: el.baseURI,
-    };
-  },
+  // (change 처리기로 바로 제출하는 칸이 있다). 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
+  risk: (el) => labelRisk(el, fieldRisk(el)),
 };
+
+type FieldRisk = NonNullable<ReturnType<NonNullable<TargetKind["risk"]>>>;
+
+// 숨긴 칸을 보이는 label로 바꾸면 실제로 누르는 것은 label이다. label이 칸과 다른 곳(결제 대화상자 안 등)에 있으면
+// 그 자리의 위험 신호(결제 화면, 개인정보가 채워진 주변 양식, 주변 양식의 제출 주소)도 칸의 위험에 더한다(더 묻는 쪽만).
+function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
+  const label = proxied(el) ? proxyLabel(el) : null;
+  if (!label) return risk;
+  const labelForm = closestAcross(label, "form") as HTMLFormElement | null;
+  const scopes = fieldFormlessScopes(label);
+  // 칸 자신의 양식은 fieldRisk가 이미 본다. 주변 양식의 action은 비교 목록(aroundFormActions)에, 지금 값을 합친 제출
+  // 주소는 판정용 목록(scopeSubmitUrls — 입력 칸은 묶음 입력이 값을 바꾸므로 값까지는 비교하지 않는다)에 더한다.
+  const ownForm = isFieldElement(el) ? el.form : null;
+  const around = scopeSubmitUrls(scopes.filter((sc) => sc.node !== ownForm));
+  const merge = (base: string[] | undefined, extra: string[]) => {
+    const out = [...(base ?? [])];
+    for (const u of extra) if (!out.includes(u)) out.push(u);
+    return out;
+  };
+  const actions = merge(risk.aroundFormActions, around.actions);
+  const urls = merge(risk.scopeSubmitUrls, around.changed);
+  return {
+    ...risk,
+    paymentContext: !!risk.paymentContext || inPaymentContext(label, labelForm),
+    submitsPersonal:
+      !!risk.submitsPersonal ||
+      (!!labelForm && labelForm !== ownForm && formHasPersonalValues(labelForm)) ||
+      personalValuedInScopes(scopes).some((p) => p !== el),
+    ...(actions.length ? { aroundFormActions: actions } : {}),
+    ...(urls.length ? { scopeSubmitUrls: urls } : {}),
+  };
+}
+
+// 칸 자신의 위험 신호.
+function fieldRisk(el: HTMLElement): FieldRisk {
+  const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
+  const submitTo = formDestination(el, form);
+  // 기존 칸 값까지 합친 제출 주소(change 처리기로 바로 제출되면 숨은 next=https://… 도 함께 간다).
+  const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
+  // 선택 칸은 표시 문구로 고르면 실제 option.value가, checkbox·radio는 자기 value가 들어가므로 주소처럼 보이는
+  // 값을 미리 풀어 둔다(change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지). 한도를 넘으면 묻는다.
+  const choiceUrls = choiceUrlsOf(el);
+  return {
+    // checkbox·radio는 체크하면 자기 value가 실리므로, 그 값이 개인정보 모양이어도 개인정보 칸으로 본다.
+    // 선택 칸은 표시 문구로 골라도 실제 option.value가 들어가므로, 개인정보 모양의 선택지가 있으면 개인정보 칸으로 본다.
+    personal:
+      isPersonalField(el) ||
+      (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)) ||
+      (isTag(el, "select") && Array.from(el.options).some((o) => looksPersonalValue(o.value))),
+    // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
+    // 양식 안 칸도 주변 범위(대화상자, 없으면 화면)의 다른 양식을 본다(change 처리기가 그 양식을 제출할 수 있다).
+    submitsPersonal:
+      (!!form && formHasPersonalValues(form)) ||
+      personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
+    // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
+    ...(() => {
+      const full = isFieldElement(el)
+        ? `${resolveLabel(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
+        : "";
+      return full ? { outerText: full } : {};
+    })(),
+    // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
+    paymentContext:
+      inPaymentContext(el, form) ||
+      // 체크하면 실리는 checkbox·radio의 name=value에 결제 문구가 있으면(value="purchase", name="confirm_order").
+      (isTag(el, "input") &&
+        (el.type === "checkbox" || el.type === "radio") &&
+        [el.value, el.name].some((v) => PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v)))) ||
+      (isTag(el, "select") &&
+        Array.from(el.options).some((o) => {
+          const text = `${o.textContent ?? ""} ${o.value}`;
+          return PAYMENT_TEXT_RE.test(text) || PAYMENT_TEXT_RE.test(splitIdentifier(text));
+        })),
+    ...(submitTo ? { submitTo } : {}),
+    ...(submitUrl ? { submitUrl } : {}),
+    // 양식 밖 칸이면 범위 안 다른 양식들의 제출 주소도 본다.
+    ...(() => {
+      if (form) {
+        // 양식 안 칸: 제출 버튼들의 formaction(기본 action과 다른 것)과 지금 값을 합친 주소도 본다
+        // (change 처리기가 form.requestSubmit(button)으로 그 주소에 제출할 수 있다).
+        const own = otherDestinations(form, submitTo);
+        // 주변 범위의 다른 양식: 값이 바뀐 양식의 제출 주소와, 모든 양식의 action(change 처리기가 입력값을 옮겨
+        // 제출할 수 있다 — 승인 판정에서 사이트 경계와 결제·개인정보 주소를 본다).
+        const around = scopeSubmitUrls(fieldFormlessScopes(el).filter((s) => s.node !== form));
+        const urls = [...(own.scopeSubmitUrls ?? []), ...around.changed.filter((u) => !(own.scopeSubmitUrls ?? []).includes(u))];
+        return {
+          ...(own.scopeFormActions ? { scopeFormActions: own.scopeFormActions } : {}),
+          ...(urls.length ? { scopeSubmitUrls: urls } : {}),
+          ...(around.actions.length ? { aroundFormActions: around.actions } : {}),
+        };
+      }
+      const { changed, actions } = scopeSubmitUrls(fieldFormlessScopes(el));
+      return {
+        ...(changed.length ? { scopeSubmitUrls: changed } : {}),
+        ...(actions.length ? { scopeFormActions: actions } : {}),
+      };
+    })(),
+    ...(choiceUrls.length ? { choiceUrls } : {}),
+    ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
+    baseUri: el.baseURI,
+  };
+}
 
 // select 선택지의 보이는 글자(공백 정리). 고르기·최종 확인이 같은 글자를 쓴다. label 속성이 있으면 그것,
 // 없으면 선택지 안의 글자에서 숨긴·편집 하위 내용을 뺀 것(커스텀 select의 <option>공개<span hidden>…</span>).
@@ -885,19 +923,30 @@ function dispatchChange(el: Element, guard?: () => string | null): void {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-// 숨긴 checkbox·radio는 보이는 label을 눌러 바꾼다(#56 — 사용자가 누를 때와 같은 click·input·change가 나간다).
-// label의 click 처리기가 돈 뒤 칸 자신의 click이 시작될 때(브라우저가 input·change를 보내기 전) guard로 다시 확인하고,
-// 막히면 그 click을 취소해 체크 상태를 되돌린다(input·change는 나가지 않는다). 반영은 부르는 쪽이 checked로 확인한다.
-function toggleViaLabel(el: HTMLInputElement, label: HTMLLabelElement, guard?: () => string | null): void {
+// 숨긴 checkbox·radio는 보이는 label을 눌러 바꾼다(#56 — label과 칸의 click 처리기가 사용자가 누를 때처럼 돈다).
+// label.click() 동안 전달되는 click 중 label 자신의 것만 그대로 둔다:
+// - 칸으로 전달된 click(label의 기본 동작): 처리기는 돌게 두되 guard로 다시 확인하고, 기본 동작(체크 바꿈과 브라우저의
+//   input·change)은 취소한다. 체크 상태는 그 뒤 직접 쓰고 input → guard → change 순서로 보내(dispatchChange) 입력 처리기가
+//   제출 주소 등을 바꿨으면 change를 보내지 않는다. 막히면 칸 처리기에도 click을 전하지 않는다.
+// - 그 밖의 요소로 전달된 click(처리기가 label의 for를 다른 컨트롤로 바꾸거나 다른 요소를 click()): 처리기·기본 동작
+//   모두 막는다(승인하지 않은 컨트롤). 취소는 리스너 순서와 관계없이 기본 동작을 막는다.
+function toggleViaLabel(el: HTMLInputElement, label: HTMLLabelElement, want: boolean, guard?: () => string | null): void {
   const win = el.ownerDocument.defaultView;
   let blocked: string | null = null;
+  let reached = false;
+  let redirected = false;
   const onClick = (e: Event) => {
-    if (blocked || e.composedPath()[0] !== el) return;
-    blocked = guard?.() ?? null;
-    if (blocked) {
-      e.preventDefault();
+    const target = e.composedPath()[0];
+    if (target === label) return;
+    e.preventDefault();
+    if (target !== el || reached || blocked) {
+      redirected = redirected || target !== el;
       e.stopImmediatePropagation();
+      return;
     }
+    reached = true;
+    blocked = guard?.() ?? null;
+    if (blocked) e.stopImmediatePropagation();
   };
   win?.addEventListener("click", onClick, true);
   try {
@@ -906,6 +955,15 @@ function toggleViaLabel(el: HTMLInputElement, label: HTMLLabelElement, guard?: (
     win?.removeEventListener("click", onClick, true);
   }
   if (blocked) throw new ChangeBlocked(blocked);
+  if (redirected) {
+    throw new ChangeBlocked("라벨을 누르는 중 다른 컨트롤이 눌리려 해 막았습니다. 다시 찾으세요.");
+  }
+  // label의 처리기가 기본 동작을 막아 칸에 click이 가지 않았으면 바꾸지 않는다(반영 확인이 알린다).
+  if (!reached) return;
+  // 취소한 click으로 체크 상태는 원래대로 돌아왔다. 처리기가 직접 바꿔 두었으면 다시 쓰지 않는다.
+  if (el.checked === want) return;
+  setNativeProperty(el, "checked", want);
+  dispatchChange(el, guard);
 }
 
 // 이 입력이 실제로 넣을 값(페이지 처리기가 돌기 전에 정한 것): 선택 칸은 고를 option.value, checkbox·radio는 자기 value.
@@ -943,7 +1001,7 @@ function fillOne(
     const want = parseCheckedRequest(value);
     if (want === null) return false;
     if (el.checked !== want) {
-      if (via) toggleViaLabel(el, via, guard);
+      if (via) toggleViaLabel(el, via, want, guard);
       else {
         setNativeProperty(el, "checked", want);
         dispatchChange(el, guard);
@@ -957,7 +1015,7 @@ function fillOne(
     if (want === null) return false;
     if (!want) return !el.checked;
     if (!el.checked) {
-      if (via) toggleViaLabel(el, via, guard);
+      if (via) toggleViaLabel(el, via, true, guard);
       else {
         setNativeProperty(el, "checked", true);
         dispatchChange(el, guard);
