@@ -89,3 +89,12 @@ test("internationalized hosts are not cut, and long inputs stay fast", () => {
   userNamedSites("https://example.com/" + "가".repeat(20000) + "1 " + "naver.com" + "가".repeat(20000) + ")".repeat(5000));
   assert.ok(Date.now() - t0 < 200, `slow: ${Date.now() - t0}ms`);
 });
+
+test("characters that normalize to ASCII are never removed from a host", () => {
+  // 전각 m: 브라우저는 example.com으로 본다. example.co로 잘리면 안 된다.
+  assert.deepEqual(userNamedSites("https://example.coｍ 열어줘"), ["https://example.com"]);
+  assert.ok(!userNamedSites("https://example.coｍ").includes("https://example.co"));
+  assert.notEqual(internalNavigateAutoBlock([], userNamedSites("https://example.coｍ"), "https://example.co/x"), null);
+  assert.deepEqual(userNamedSites("ｅxample.com 가줘"), ["https://example.com"]);
+  assert.deepEqual(userNamedSites("주소:example.org:8443 열어"), ["https://example.org:8443"]);
+});
