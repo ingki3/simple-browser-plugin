@@ -203,19 +203,25 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["click_element"];
       const [info] = await inspectTargets([args.id], "c", callId, turnTab);
       await beginActionLog(callId, "click_element", turnTab, [logTarget(info)]);
+      // 선택지(option·menuitem*)는 펼친 트리거의 위험 정보도 따로 받는다. 승인·사이트 판정은 선택지와 트리거
+      // 양쪽을 모두 본다(하나로 합치지 않아 어느 쪽의 목적지·위험 문구도 사라지지 않는다).
+      const sides = info.trigger ? [info, info.trigger] : [info];
       return {
         ...clickCard(info),
-        autoBlock: autoApproveBlock("click_element", [info]),
-        clickTarget: info,
-        linkHrefs: [
-          info.href,
-          info.submitTo ?? "",
-          info.submitUrl ?? "",
-          info.ancestorHref ?? "",
-          ...(info.choiceUrls ?? []),
-          ...(info.scopeSubmitUrls ?? []),
-          ...(info.pingUrls ?? []),
-        ].filter(Boolean),
+        autoBlock: autoApproveBlock("click_element", sides),
+        // 트리거가 있는 선택지는 링크 이동 허락(grantableLink) 대상이 아니다.
+        ...(info.trigger ? {} : { clickTarget: info }),
+        linkHrefs: sides
+          .flatMap((t) => [
+            t.href,
+            t.submitTo ?? "",
+            t.submitUrl ?? "",
+            t.ancestorHref ?? "",
+            ...(t.choiceUrls ?? []),
+            ...(t.scopeSubmitUrls ?? []),
+            ...(t.pingUrls ?? []),
+          ])
+          .filter(Boolean),
       };
     }
     case "read_linked_pages": {

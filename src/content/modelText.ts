@@ -189,6 +189,12 @@ export function modelName(el: HTMLElement, max = 200): string {
   return "";
 }
 
+// 묶음(행·패널)의 접근성 이름: aria-labelledby → aria-label. 보호 영역 안이면 "".
+export function groupLabel(el: Element, max: number): string {
+  if (inProtectedArea(el)) return "";
+  return refText(el, "aria-labelledby", max) || cleanModelText(el.getAttribute("aria-label") ?? "", max);
+}
+
 // query_dom 한 항목: 보호 영역 안이면 글자를 비우고 이름 성격의 속성도 돌려주지 않는다.
 export function modelAttr(el: Element, name: string, protectedArea: boolean): string | null {
   if (protectedArea && NAME_ATTRS.has(name)) return null;

@@ -8,6 +8,8 @@ import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { fieldValueSignature, linkHrefOf } from "./context";
+import { cleanModelText } from "@/lib/modelText";
+import { groupLabel, modelText } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -24,6 +26,8 @@ export interface TargetKind {
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
   // 그 칸의 양식에서 값이 채워진 개인정보·비밀 칸들(묶음 승인 예외 판정용).
   personalElements?(el: HTMLElement): Element[];
+  // 클릭 대상: 모델용 묶음 문맥(modelContext)·상태(states)를 기술에 넣고, 선택지(option·menuitem*)는 트리거 관계를 고정한다.
+  detail?: boolean;
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
@@ -31,7 +35,9 @@ interface Entry {
   kind: TargetKind;
   ref: WeakRef<HTMLElement>;
   base: TargetInfo;
-  approved: { callId: string; info: TargetInfo } | null;
+  approved: { callId: string; info: TargetInfo; relation: Relation | null } | null;
+  // 선택지(option·menuitem*)면 찾을 때 확인한 트리거 관계. 승인 카드 때 지금 관계와 같아야 한다.
+  relation: Relation | null;
   // 이 항목을 마지막으로 돌려준 탐색 회차. 한도를 넘어 정리할 때 이번 탐색 결과는 지우지 않는다.
   gen: number;
 }
@@ -118,21 +124,61 @@ function parentAcross(el: Element): Element | null {
 }
 
 // 대상 자신의 글자만 있는 단계(같은 모양 버튼이 나란히 있는 '수정'·'삭제' 묶음 등)는 행이 아니니 더 올라간다.
-function rowContext(el: HTMLElement): string {
+function rowElement(el: HTMLElement): { row: Element; text: string } | null {
   const own = textOf(el);
   let cur: Element | null = el;
   for (let depth = 0; cur && depth < 10; depth++) {
     if (cur === cur.ownerDocument.body) break;
     if (cur.matches(ROW_SELECTOR) || repeated(cur)) {
       const text = textOf(cur);
-      if (text !== own) return text;
+      if (text !== own) return { row: cur, text };
     }
     cur = parentAcross(cur);
   }
-  return "";
+  return null;
+}
+
+const MODEL_CONTEXT_MAX = 200;
+// 묶음 안의 표제(구조로만 판정): 제목 요소·role=heading·표 caption·fieldset legend.
+const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role='heading'], caption, legend";
+
+// 모델에 돌려주는 묶음 문맥: 행 글자를 modelText로(입력 칸·편집 영역·숨은 글자 제외) 만들고, 묶음의 접근성 이름이나
+// 묶음 안 첫 표제가 있으면 앞에 둔다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼을 구분하게).
+function modelContextOf(row: Element | null): string {
+  if (!row) return "";
+  const text = modelText(row, MODEL_CONTEXT_MAX);
+  if (!text) return "";
+  let heading = groupLabel(row, 80);
+  if (!heading) {
+    const h = row.querySelector(HEADING_SELECTOR);
+    heading = h ? modelText(h, 80) : "";
+  }
+  return cleanModelText(heading && !text.startsWith(heading) ? `${heading} · ${text}` : text, MODEL_CONTEXT_MAX);
+}
+
+// 대상의 ARIA·HTML 상태. class 이름으로 상태를 추측하지 않는다.
+const STATE_ATTRS = ["selected", "checked", "pressed", "expanded", "current"] as const;
+
+function statesOf(el: HTMLElement): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const name of STATE_ATTRS) {
+    const v = el.getAttribute(`aria-${name}`);
+    if (v !== null) out[name] = v.trim().toLowerCase().slice(0, 20);
+  }
+  const ariaDisabled = (el.getAttribute("aria-disabled") ?? "").trim().toLowerCase() === "true";
+  if (ariaDisabled || el.hasAttribute("disabled")) out.disabled = "true";
+  return Object.keys(out).length ? out : undefined;
 }
 
 function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
+  const row = rowElement(el);
+  const detail: Partial<TargetInfo> = {};
+  if (kind.detail) {
+    const modelContext = modelContextOf(row?.row ?? null);
+    if (modelContext) detail.modelContext = modelContext;
+    const states = statesOf(el);
+    if (states) detail.states = states;
+  }
   return {
     tag: el.localName,
     role: implicitRole(el),
@@ -143,7 +189,8 @@ function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
     inFrame: el.ownerDocument !== document,
     fieldType: kind.fieldType(el),
     sensitive: kind.sensitive(el),
-    context: rowContext(el),
+    context: row?.text ?? "",
+    ...detail,
   };
 }
 
@@ -198,6 +245,127 @@ function fullInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
   return { ...baseInfo(kind, el), list: listPosition(el) };
 }
 
+// ---------------------------------------------------------------------------
+// 선택지와 그것을 펼친 트리거의 관계(#43 B). 소속을 포함 구조나 글자로 추론하지 않는다.
+// - linked: 펼쳐진(aria-expanded=true) 트리거(combobox·aria-haspopup 요소) 중 aria-controls/aria-owns로 선택지나
+//   선택지를 담은 팝업(가장 가까운 listbox·menu 조상, 없으면 선택지 자신)을 가리키는 것이 정확히 하나.
+// - unlinked: 그런 연결이 없고, 접근 가능한 모든 문서에서 펼쳐진 트리거가 0개나 1개.
+// - 그 밖(펼쳐진 트리거가 둘 이상인데 연결 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
+// 관계는 찾을 때·승인 카드 때·실행 직전·스크롤과 포커스 뒤에 다시 계산해 같아야 한다.
+// ---------------------------------------------------------------------------
+
+const CHOICE_ROLES = new Set(["option", "menuitem", "menuitemradio", "menuitemcheckbox"]);
+const POPUP_ROLES = new Set(["listbox", "menu", "menubar"]);
+
+export interface Relation {
+  mode: "linked" | "unlinked";
+  via: "controls" | "owns" | null;
+  trigger: WeakRef<HTMLElement> | null;
+  triggerBase: TargetInfo | null;
+  popup: WeakRef<Element>;
+}
+
+export function isChoice(el: HTMLElement): boolean {
+  return CHOICE_ROLES.has(implicitRole(el));
+}
+
+function isTrigger(el: Element): boolean {
+  if ((el.getAttribute("role") ?? "").trim().toLowerCase() === "combobox") return true;
+  const popup = el.getAttribute("aria-haspopup");
+  return popup !== null && popup.trim().toLowerCase() !== "false";
+}
+
+function popupOf(el: HTMLElement): Element {
+  let cur: Element | null = parentAcross(el);
+  for (let depth = 0; cur && depth < 40; depth++) {
+    if (POPUP_ROLES.has((cur.getAttribute("role") ?? "").trim().toLowerCase())) return cur;
+    cur = parentAcross(cur);
+  }
+  return el;
+}
+
+// 펼쳐진 트리거들(접근 가능한 모든 문서·열린 shadow root).
+export function expandedTriggers(): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (const root of getAccessibleRoots()) {
+    for (const t of root.querySelectorAll<HTMLElement>('[aria-expanded="true" i]')) {
+      if (isTrigger(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
+// 트리거가 aria-controls/aria-owns로 대상(팝업 또는 선택지)을 가리키는지. 참조는 트리거와 같은 Document/ShadowRoot 안에서만 푼다.
+function linkVia(trigger: Element, targets: Element[]): "controls" | "owns" | null {
+  const root = trigger.getRootNode() as Document | ShadowRoot;
+  for (const attr of ["controls", "owns"] as const) {
+    for (const id of (trigger.getAttribute(`aria-${attr}`) ?? "").split(/\s+/).filter(Boolean)) {
+      const ref = root.getElementById?.(id) ?? null;
+      if (ref && targets.includes(ref)) return attr;
+    }
+  }
+  return null;
+}
+
+// 선택지의 관계. 정할 수 없으면 null.
+export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = expandedTriggers()): Relation | null {
+  const popup = popupOf(el);
+  const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
+  for (const t of expanded) {
+    const via = linkVia(t, [popup, el]);
+    if (via) linked.push({ trigger: t, via });
+  }
+  const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"]): Relation => ({
+    mode,
+    via,
+    trigger: trigger ? new WeakRef(trigger) : null,
+    triggerBase: trigger ? baseInfo(kind, trigger) : null,
+    popup: new WeakRef(popup),
+  });
+  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via);
+  if (linked.length > 1) return null;
+  if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null);
+  return null;
+}
+
+// 두 관계가 같은지. 다르면 이유.
+function relationDifference(before: Relation, now: Relation | null): string | null {
+  if (!now) return "선택지를 연 위젯을 정할 수 없게 됨";
+  if (before.mode !== now.mode || before.via !== now.via) return "선택지와 트리거의 연결이 바뀜";
+  if (before.popup.deref() !== now.popup.deref()) return "선택지 목록이 바뀜";
+  if ((before.trigger?.deref() ?? null) !== (now.trigger?.deref() ?? null)) return "펼쳐진 트리거가 바뀜";
+  if (before.triggerBase && now.triggerBase && !sameBase(before.triggerBase, now.triggerBase)) {
+    return `펼쳐진 트리거의 ${describeDifference(before.triggerBase, now.triggerBase)}`;
+  }
+  return null;
+}
+
+// 선택지면 지금 관계를 다시 계산해 before와 비교한다(선택지가 아니면 늘 null).
+// (선택지가 아니던 요소가 선택지 역할로 바뀐 것은 sameBase의 role 비교가 잡는다.)
+function relationChanged(kind: TargetKind, el: HTMLElement, before: Relation | null): string | null {
+  if (!before) return null;
+  return relationDifference(before, choiceRelation(kind, el));
+}
+
+// 승인 기술에 트리거의 기술·위험 정보와 관계 확인 상태를 붙인다(background가 양쪽을 따로 판정한다).
+function withTrigger(kind: TargetKind, info: TargetInfo, relation: Relation | null): TargetInfo {
+  if (!relation) return info;
+  const trigger = relation.trigger?.deref();
+  return {
+    ...info,
+    popup: relation.mode,
+    ...(trigger ? { trigger: { ...fullInfo(kind, trigger), ...kind.risk?.(trigger) } } : {}),
+  };
+}
+
+// 승인한 트리거에 그 뒤 위험이 생겼는지.
+function triggerRiskAdded(kind: TargetKind, relation: Relation | null, info: TargetInfo): string | null {
+  const trigger = relation?.trigger?.deref();
+  if (!trigger || !info.trigger) return null;
+  const added = riskAdded(kind, trigger, info.trigger);
+  return added ? `펼쳐진 트리거: ${added}` : null;
+}
+
 // 탐색(find_clickables·find_form_fields) 한 번을 감싼다. 한도를 넘은 오래된 항목은 탐색이 끝난 뒤,
 // 이번 탐색에서 돌려주지 않은 것만 지운다(방금 돌려준 id가 같은 탐색 안에서 밀려나지 않게).
 export function scanTargets<T>(fn: () => T): T {
@@ -212,7 +380,8 @@ export function scanTargets<T>(fn: () => T): T {
   }
 }
 
-export function registerTarget(kind: TargetKind, el: HTMLElement): string {
+// relation: 선택지(option·menuitem*)면 찾을 때 확인한 트리거 관계(choiceRelation).
+export function registerTarget(kind: TargetKind, el: HTMLElement, relation: Relation | null = null): string {
   let ids = idsByKind.get(kind.prefix);
   if (!ids) {
     ids = new WeakMap();
@@ -224,6 +393,7 @@ export function registerTarget(kind: TargetKind, el: HTMLElement): string {
   if (existing && entry && entry.ref.deref() === el) {
     // 다시 찾을 때 글자 등이 바뀌었으면 새 기술로 갱신한다(모델은 지금 결과를 보고 고른다).
     entry.base = base;
+    entry.relation = relation;
     entry.approved = null;
     entry.gen = generation;
     return existing;
@@ -231,8 +401,13 @@ export function registerTarget(kind: TargetKind, el: HTMLElement): string {
   counter += 1;
   const id = `${kind.prefix}${counter}-${TOKEN}`;
   ids.set(el, id);
-  registry.set(id, { kind, ref: new WeakRef(el), base, approved: null, gen: generation });
+  registry.set(id, { kind, ref: new WeakRef(el), base, relation, approved: null, gen: generation });
   return id;
+}
+
+// 등록한 대상의 기술(찾기 결과에 모델용 문맥·상태를 붙이려고).
+export function registeredInfo(id: string): TargetInfo | undefined {
+  return registry.get(id)?.base;
 }
 
 function staleError(id: string): Error {
@@ -283,8 +458,19 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
   checkVisible(entry, el, entry.base.modelName || id, false);
-  const info: TargetInfo = { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el), ...entry.kind.risk?.(el) };
-  entry.approved = { callId, info };
+  // 선택지면 지금 트리거 관계가 찾을 때와 같아야 한다. 승인은 지금 관계를 기준으로 남긴다.
+  let relation: Relation | null = null;
+  if (entry.relation) {
+    relation = choiceRelation(entry.kind, el);
+    const changed = relationDifference(entry.relation, relation);
+    if (changed) throw new Error(`대상 '${id}'의 ${changed}. 다시 찾으세요.`);
+  }
+  const info = withTrigger(
+    entry.kind,
+    { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el), ...entry.kind.risk?.(el) },
+    relation,
+  );
+  entry.approved = { callId, info, relation };
   return info;
 }
 
@@ -340,7 +526,7 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
     return ids.map((id, i) => {
       const entry = registry.get(id);
       const info = { ...infos[i], consentCall: callId };
-      if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+      if (entry?.approved?.callId === callId) entry.approved = { ...entry.approved, info };
       return info;
     });
   }
@@ -356,11 +542,11 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
     const entry = registry.get(id);
     if (!scope || !consentScopes.has(scope)) {
       const info = { ...infos[i], consentCall: callId };
-      if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+      if (entry?.approved?.callId === callId) entry.approved = { ...entry.approved, info };
       return info;
     }
     const info = { ...infos[i], consentPersonal: true, consentCall: callId };
-    if (entry?.approved?.callId === callId) entry.approved = { callId, info };
+    if (entry?.approved?.callId === callId) entry.approved = { ...entry.approved, info };
     return info;
   });
 }
@@ -369,7 +555,11 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
 export class RiskAddedError extends Error {}
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
-export function takeApproved(id: string, callId: string, prefix: string): { el: HTMLElement; info: TargetInfo } {
+export function takeApproved(
+  id: string,
+  callId: string,
+  prefix: string,
+): { el: HTMLElement; info: TargetInfo; relation: Relation | null } {
   const known = entryOf(id, prefix);
   const approved = known.approved;
   if (!approved || approved.callId !== callId) {
@@ -386,10 +576,12 @@ export function takeApproved(id: string, callId: string, prefix: string): { el: 
     if (riskAdded(entry.kind, el, approved.info)) throw new RiskAddedError(msg);
     throw new Error(msg);
   }
-  const added = riskAdded(entry.kind, el, approved.info);
+  const added = riskAdded(entry.kind, el, approved.info) ?? triggerRiskAdded(entry.kind, approved.relation, approved.info);
   if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
+  const relationMoved = relationChanged(entry.kind, el, approved.relation);
+  if (relationMoved) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${relationMoved}). 다시 찾으세요.`);
   checkVisible(entry, el, approved.info.modelName || id, true);
-  return { el, info: approved.info };
+  return { el, info: approved.info, relation: approved.relation };
 }
 
 // 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
@@ -449,12 +641,19 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
 // 같으면 null, 다르면 이유.
-export function recheckApproved(kind: TargetKind, el: HTMLElement, info: TargetInfo): string | null {
+export function recheckApproved(
+  kind: TargetKind,
+  el: HTMLElement,
+  info: TargetInfo,
+  relation: Relation | null = null,
+): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const now = fullInfo(kind, el);
   if (!sameApproved(now, info)) return describeDifference(info, now);
-  const added = riskAdded(kind, el, info);
+  const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
+  const relationMoved = relationChanged(kind, el, relation);
+  if (relationMoved) return relationMoved;
   if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";
   return null;
 }
