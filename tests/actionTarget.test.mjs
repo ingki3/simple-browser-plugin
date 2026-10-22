@@ -236,10 +236,13 @@ test("fillCard: 이름 없는 칸·이름이 겹치는 칸은 행 문맥을 보�
   // 숨긴 칸은 보이는 label을 누른다는 경고.
   assert.doesNotMatch(lines[0], /보이지 않는 칸/);
   assert.match(fillCard([{ info: { ...rowBox, hidden: true }, value: "true" }]).details, /⚠ 화면에 보이지 않는 칸\(보이는 라벨을 눌러 바꿈\)/);
-  // 같은 이름이 둘이면 행 문맥을 함께, 이름이 하나뿐이면 행 문맥을 붙이지 않는다.
+  // checkbox·radio는 이름이 있고 한 칸만 채워도 행 문맥을 보여 준다(모든 행 체크박스가 '메일 선택'인 목록).
   const named = { ...rowBox, name: "메일 선택" };
-  assert.match(fillCard([{ info: named, value: "true" }, { info: { ...named, modelContext: "다른 메일" }, value: "true" }]).details, /메일 선택 — 행: '다른 메일'/);
-  assert.doesNotMatch(fillCard([{ info: named, value: "true" }]).details, /행:/);
+  assert.match(fillCard([{ info: named, value: "true" }]).details, /메일 선택 — 행: '카닥 이용약관 개정 안내 10:21'/);
+  // 글자 칸은 이름이 겹칠 때만 행 문맥을 붙인다.
+  const qty = { ...rowBox, name: "수량", fieldType: "number", proxy: undefined, modelContext: "상품 A" };
+  assert.doesNotMatch(fillCard([{ info: qty, value: "2" }]).details, /행:/);
+  assert.match(fillCard([{ info: qty, value: "2" }, { info: { ...qty, modelContext: "상품 B" }, value: "1" }]).details, /수량 — 행: '상품 B'/);
   // 원문 행 글자(context)는 카드에 쓰지 않는다(모델용 글자만).
   assert.doesNotMatch(fillCard([{ info: { ...rowBox, context: "RAW_ONLY", modelContext: "" }, value: "true" }]).details, /RAW_ONLY/);
 });

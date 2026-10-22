@@ -215,7 +215,8 @@ export function parseCheckedRequest(value: string): boolean | null {
 }
 
 // 입력 승인 카드. 비밀번호 칸은 값을 가리고 글자 수만 보여 준다.
-// 이름 없는 칸이나 묶음 안에서 이름이 겹치는 칸(메일 목록의 행 체크박스)은 행 문맥을 함께 보여 준다(#56).
+// checkbox·radio(메일 목록의 행 체크박스 — 모두 같은 이름일 수 있다), 이름 없는 칸, 묶음 안에서 이름이 겹치는 칸은
+// 행 문맥을 함께 보여 준다(#56). 한 칸만 채워도 어느 행인지 알 수 있게 이름 중복만으로 정하지 않는다.
 export function fillCard(
   items: Array<{ info: TargetInfo; value: string }>,
 ): { summary: string; details: string } {
@@ -224,8 +225,9 @@ export function fillCard(
   const shown = items.slice(0, 10).map(({ info, value }) => {
     const name = info.name ? clip(info.name, 40) : "(이름 없는 칸)";
     // 행 문맥은 모델에 돌려준 글자(modelContext)를 쓴다(입력값·편집 영역·숨은 글자 제외).
-    const row = (!info.name || (nameCount.get(info.name) ?? 0) > 1) && info.modelContext ? ` — 행: '${clip(info.modelContext, 60)}'` : "";
     const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
+    const showRow = toggle || !info.name || (nameCount.get(info.name) ?? 0) > 1;
+    const row = showRow && info.modelContext ? ` — 행: '${clip(info.modelContext, 60)}'` : "";
     const want = toggle ? parseCheckedRequest(value) : null;
     const shownValue =
       info.sensitive === "password"

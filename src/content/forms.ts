@@ -673,6 +673,13 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   // 주소는 판정용 목록(scopeSubmitUrls — 입력 칸은 묶음 입력이 값을 바꾸므로 값까지는 비교하지 않는다)에 더한다.
   const ownForm = isFieldElement(el) ? el.form : null;
   const around = scopeSubmitUrls(scopes.filter((sc) => sc.node !== ownForm));
+  // 실제로 누르는 label의 글자(원문 전체와 접근성 이름)를 감싼 글자로 더한다. 칸의 이름은 첫 label(숨긴 것일 수 있다)에서
+  // 오므로, 누르는 label의 결제 문구('구매 확정')가 자동 실행 판정에서 빠지지 않게 하고 그 글자 변화도 재확인에 고정한다.
+  const pressed = [labelText(label), label.getAttribute("aria-label") ?? "", label.getAttribute("title") ?? ""]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const outerText = [risk.outerText ?? "", pressed].filter(Boolean).join(" ");
   const merge = (base: string[] | undefined, extra: string[]) => {
     const out = [...(base ?? [])];
     for (const u of extra) if (!out.includes(u)) out.push(u);
@@ -689,6 +696,7 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
       personalValuedInScopes(scopes).some((p) => p !== el),
     ...(actions.length ? { aroundFormActions: actions } : {}),
     ...(urls.length ? { scopeSubmitUrls: urls } : {}),
+    ...(outerText ? { outerText } : {}),
   };
 }
 
@@ -960,6 +968,10 @@ function toggleViaLabel(el: HTMLInputElement, label: HTMLLabelElement, want: boo
   }
   // label의 처리기가 기본 동작을 막아 칸에 click이 가지 않았으면 바꾸지 않는다(반영 확인이 알린다).
   if (!reached) return;
+  // label·칸의 click 처리기가 모두 돈 뒤, 체크 상태를 쓰고 input을 보내기 전에 다시 확인한다(칸의 click 처리기가
+  // 양식 제출 주소를 바꾸고 input 처리기가 제출하는 페이지). 바뀌었으면 아무것도 쓰지 않는다.
+  const after = guard?.();
+  if (after) throw new ChangeBlocked(after);
   // 취소한 click으로 체크 상태는 원래대로 돌아왔다. 처리기가 직접 바꿔 두었으면 다시 쓰지 않는다.
   if (el.checked === want) return;
   setNativeProperty(el, "checked", want);
