@@ -12,6 +12,23 @@ export const KO = {
   approveLinksThisTurn: "승인 + 이번 요청 동안 링크 이동 묻지 않기",
   approveLinksThisTurnHelp:
     "이번 요청이 끝날 때까지 같은 사이트 안의 일반 링크(다른 페이지로 가는 <a> 링크)는 묻지 않고 누릅니다. 버튼·양식 제출·다른 사이트로 가는 링크·개인정보가 채워진 양식은 계속 묻습니다.",
+  approveToolThisChat: "승인 + 이번 대화 동안 이 도구 묻지 않기",
+  // 도구별 허락 범위 설명(버튼 title). 대상 밖 도구에는 제안이 뜨지 않는다(#53).
+  chatGrantHelp: {
+    read_linked_pages:
+      "이번 대화가 끝날 때까지(새 대화·확장 재시작이면 끝) 지금 페이지에 있는 같은 사이트 링크는 묻지 않고 쿠키 없이 읽습니다. 다른 사이트·결제·개인정보 신호가 있는 링크나 페이지에 없는 주소가 섞이면 계속 묻습니다.",
+    translate_page:
+      "이번 대화가 끝날 때까지 페이지 번역은 묻지 않습니다. 외부 문서 내용을 읽은 대화에서는 계속 묻습니다.",
+    download_images:
+      "이번 대화가 끝날 때까지 같은 폴더에 지금 페이지의 이미지를 저장할 때는 묻지 않습니다. 다른 폴더, 페이지에 없는 주소, 결제·개인정보 신호가 있는 주소, 외부 문서 내용을 읽은 대화에서는 계속 묻습니다.",
+  },
+  chatGrantBarLabel: "이번 대화에서 묻지 않음",
+  chatGrantRevoke: "눌러서 취소",
+  chatGrantToolNames: {
+    read_linked_pages: "링크 읽기",
+    translate_page: "번역",
+    download_images: "이미지 저장",
+  },
   cancel: "취소",
   errorMissingKey: "API 키가 설정되지 않았습니다. 오른쪽 위 설정에서 OpenRouter API 키를 입력해 주세요.",
   errorGeneric: "요청에 실패했습니다.",

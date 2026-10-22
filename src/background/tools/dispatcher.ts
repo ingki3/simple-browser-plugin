@@ -1,4 +1,5 @@
 import { autoApproveBlock } from "@/lib/autoApprove";
+import { downloadScope, imageSaveGrantBlock } from "@/lib/chatGrant";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import { readChosenLinks, snapshotLinks } from "../linkedPages";
 import type {
@@ -75,6 +76,10 @@ export interface ToolPreview {
   choices?: Array<{ id: string; label: string; sub: string }>;
   choiceLimit?: number;
   choiceDefaults?: string[];
+  // 이번 대화 허락(#53)으로 덮지 못하는 구조적 이유(경고 링크 섞임, 페이지에 없는 이미지 등). 없으면 null.
+  grantBlock?: string | null;
+  // 이번 대화 허락의 범위(download_images의 저장 폴더). 같은 범위일 때만 허락을 쓴다.
+  grantScope?: string;
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -197,6 +202,8 @@ export async function buildToolPreview(
       return {
         summary: `이미지 ${args.urls.length}개를 '${folder}/' 폴더에 저장합니다.`,
         details: sample.join("\n") + extra,
+        grantBlock: await imageGrantBlockAt(args.urls, callId, turnTab),
+        grantScope: downloadScope(folder),
       };
     }
     case "click_element": {
@@ -226,13 +233,14 @@ export async function buildToolPreview(
     }
     case "read_linked_pages": {
       const args = parsedArgs as ToolArgs["read_linked_pages"];
-      const { choices, defaults, rejected } = await snapshotLinks(callId, turnTab, args.urls);
+      const { choices, defaults, rejected, grantBlock } = await snapshotLinks(callId, turnTab, args.urls);
       return {
         summary: `페이지의 링크 ${choices.length}개를 탭 이동 없이(로그인 쿠키 없이) 받아 본문을 읽습니다. 읽을 링크를 고르세요. 읽은 내용은 모델 제공자로 전송됩니다.`,
         ...(rejected.length ? { details: `읽지 않는 주소:\n${rejected.join("\n")}` } : {}),
         choices,
         choiceLimit: choices.length,
         choiceDefaults: defaults,
+        grantBlock,
       };
     }
     case "read_other_tabs": {
@@ -310,6 +318,18 @@ export async function buildToolPreview(
       return { summary: `도구 ${toolName} 실행`, ...(details ? { details } : {}) };
     }
   }
+}
+
+// 이미지 저장을 이번 대화 허락(#53)으로 덮을 수 있는지: 주소가 모두 지금 페이지의 이미지(list_page_images와 같은 수집)
+// 그대로여야 한다. 페이지를 읽지 못하면 덮지 않는다(카드로 묻는다).
+async function imageGrantBlockAt(urls: string[], callId: string, turnTab: TurnTab): Promise<string | null> {
+  let images: PageImage[];
+  try {
+    images = await callContentTool<PageImage[]>("list_page_images", {}, callId, turnTab);
+  } catch {
+    return "지금 페이지의 이미지를 확인하지 못함";
+  }
+  return imageSaveGrantBlock(urls, new Set(images.map((i) => i.url)));
 }
 
 // 클릭 뒤 이동이 시작될 틈. markOptimisticNavigation은 500ms 안에 이동이 시작되지 않으면 기다림을 푼다.

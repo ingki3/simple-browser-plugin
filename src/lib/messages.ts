@@ -163,8 +163,11 @@ export type PanelToBg =
   | { kind: "user_msg"; text: string; conversationId: string }
   // allowLinksThisTurn: 카드가 제안했을 때만 유효. 이번 요청 동안 같은 사이트 안의 일반 링크 이동은 묻지 않는다.
   // choiceIds: 선택 카드(choices)에서 고른 후보 id. 백그라운드가 고정한 후보의 부분집합만 받아들인다.
-  | { kind: "approve_tool"; callId: string; allowLinksThisTurn?: boolean; choiceIds?: string[] }
+  // allowToolThisChat: 카드가 제안했을 때만 유효(chatGrantOffer). 이번 대화 동안 이 도구는 같은 조건이면 묻지 않는다(#53).
+  | { kind: "approve_tool"; callId: string; allowLinksThisTurn?: boolean; choiceIds?: string[]; allowToolThisChat?: boolean }
   | { kind: "cancel_tool"; callId: string }
+  // 이 대화에서 허락한 도구를 취소한다(#53).
+  | { kind: "revoke_chat_grant"; tool: string }
   | { kind: "abort_stream" }
   | { kind: "reset_conversation"; conversationId: string }
   | { kind: "heartbeat" };
@@ -204,6 +207,9 @@ export type BgToPanel =
       previewDetails?: unknown;
       // 일반 링크 클릭 카드면 true: "이번 요청 동안 링크 이동은 묻지 않기"를 함께 보여 준다(grantableLink).
       linkGrantOffer?: boolean;
+      // 이번 대화 허락 대상 도구(src/lib/chatGrant.ts)이고 허락으로 덮을 수 있는 호출이면 true:
+      // "승인 + 이번 대화 동안 이 도구 묻지 않기"를 함께 보여 준다(#53).
+      chatGrantOffer?: boolean;
       // 선택 카드(다른 탭 고르기): 후보와 최대 선택 수. 고른 id만 승인 메시지로 돌려준다.
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;
@@ -217,6 +223,8 @@ export type BgToPanel =
       ok: boolean;
       summary: string;
     }
+  // 이 대화에서 허락한 도구와 범위(download_images는 저장 폴더). 바뀔 때와 요청을 시작할 때 보낸다(#53).
+  | { kind: "chat_grants"; grants: Array<{ tool: ToolName; scope: string }> }
   | { kind: "error"; message: string }
   | { kind: "info"; title: string; message: string }
   // 턴을 마친 뒤 탭이 다른 화면에 있으면 "이 페이지 기억하기" 제안(저장은 사용자가 이름을 확인하고 누를 때만).

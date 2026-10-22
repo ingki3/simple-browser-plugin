@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { PORT_NAME, type BgToPanel, type PanelToBg } from "@/lib/messages";
+import { PORT_NAME, type BgToPanel, type PanelToBg, type ToolName } from "@/lib/messages";
 import { useChatStore } from "../state/chatStore";
 
 const HEARTBEAT_MS = 20_000;
@@ -43,6 +43,9 @@ export function useChatSession() {
         case "status":
           s.setStatus(msg.text);
           return;
+        case "chat_grants":
+          s.setChatGrants(msg.grants);
+          return;
         case "hop_progress":
           s.setHopProgress({ used: msg.used, limit: msg.limit });
           return;
@@ -67,6 +70,7 @@ export function useChatSession() {
             previewSummary: msg.previewSummary,
             previewDetails: msg.previewDetails,
             linkGrantOffer: msg.linkGrantOffer === true,
+            chatGrantOffer: msg.chatGrantOffer === true,
             ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit, choiceDefaults: msg.choiceDefaults } : {}),
             resolved: null,
           });
@@ -139,6 +143,8 @@ export function useChatSession() {
       port.onDisconnect.addListener(() => {
         portRef.current = null;
         clearHeartbeat();
+        // 연결이 끊기면 백그라운드가 대화 객체를 버리므로 그 대화의 허락도 사라진다(#53).
+        useChatStore.getState().setChatGrants([]);
         const lastErr = chrome.runtime.lastError?.message;
         pushPanelDebug("port:disconnect", lastErr, "warn");
         if (!alive) return;
@@ -210,15 +216,24 @@ export function useChatSession() {
     send({ kind: "user_msg", text, conversationId });
   };
 
-  const approveTool = (callId: string, allowLinksThisTurn = false, choiceIds?: string[]) => {
+  const approveTool = (callId: string, allowLinksThisTurn = false, choiceIds?: string[], allowToolThisChat = false) => {
     useChatStore.getState().resolveToolPending(callId, "approved");
-    localDebug("approve_tool", allowLinksThisTurn ? `${callId} +links` : callId);
+    localDebug("approve_tool", `${callId}${allowLinksThisTurn ? " +links" : ""}${allowToolThisChat ? " +chat" : ""}`);
     send({
       kind: "approve_tool",
       callId,
       ...(allowLinksThisTurn ? { allowLinksThisTurn: true } : {}),
       ...(choiceIds ? { choiceIds } : {}),
+      ...(allowToolThisChat ? { allowToolThisChat: true } : {}),
     });
+  };
+
+  // 이 대화의 허락을 취소한다. 표시는 바로 지우고, 백그라운드가 바뀐 목록을 다시 보낸다.
+  const revokeChatGrant = (tool: ToolName) => {
+    const s = useChatStore.getState();
+    s.setChatGrants(s.chatGrants.filter((g) => g.tool !== tool));
+    localDebug("revoke_chat_grant", tool);
+    send({ kind: "revoke_chat_grant", tool });
   };
 
   const cancelTool = (callId: string) => {
@@ -239,5 +254,5 @@ export function useChatSession() {
     send({ kind: "reset_conversation", conversationId });
   };
 
-  return { sendUser, approveTool, cancelTool, abortStream, resetConversation };
+  return { sendUser, approveTool, cancelTool, abortStream, resetConversation, revokeChatGrant };
 }

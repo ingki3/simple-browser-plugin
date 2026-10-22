@@ -11,7 +11,7 @@ import { HopLimitCard } from "./HopLimitCard";
 
 interface Props {
   message: ChatMessage;
-  onApprove: (callId: string, allowLinksThisTurn?: boolean, choiceIds?: string[]) => void;
+  onApprove: (callId: string, allowLinksThisTurn?: boolean, choiceIds?: string[], allowToolThisChat?: boolean) => void;
   onCancel: (callId: string) => void;
   showThinking: boolean;
 }
