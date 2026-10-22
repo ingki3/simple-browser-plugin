@@ -26,17 +26,28 @@ import {
   type FormlessScope,
 } from "./context";
 import {
+  choiceRelation,
   detectRegion,
+  expandedTriggers,
+  isChoice,
   recheckApproved,
   registerTarget,
+  registeredInfo,
   scanTargets,
   startEffectWatch,
   takeApproved,
+  type Relation,
   type TargetKind,
 } from "./targets";
+import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
 
-const CLICK_SELECTOR =
+const BASE_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
+// 목록에서 고르는 위젯(#43 B): 선택지·메뉴 항목·탭과 비편집 선택 팝업 트리거. 구조(ARIA 역할)로만 정한다.
+// aria-haspopup="true"는 메뉴를 뜻하므로 트리거로 더하지 않는다(그런 버튼은 button이라 이미 잡힌다).
+const ROLE_SELECTOR =
+  '[role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="tab"], [role="combobox"], [aria-haspopup="listbox" i]';
+const CLICK_SELECTOR = `${BASE_SELECTOR}, ${ROLE_SELECTOR}`;
 
 function isVisible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
@@ -170,6 +181,7 @@ const CLICK_KIND: TargetKind = {
   requireVisible: true,
   name: clickText,
   modelName: (el) => modelName(el),
+  detail: true,
   fieldType: () => "",
   sensitive: () => null,
   // 누르면 작동할 컨트롤의 양식에서 값이 채워진 개인정보·비밀 칸들(승인 뒤 새로 채워졌는지 보려고).
@@ -294,15 +306,26 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
   // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
   // footer의 '주문/배송 조회'가 빠지지 않게). 낱말이 하나 이하면 예전처럼 문서 순서로 limit개에서 멈춘다.
   const ranked = terms.length > 1;
-  const found: Array<{ el: HTMLElement; item: Omit<ClickableElement, "id">; score: number }> = [];
+  const found: Array<{
+    el: HTMLElement;
+    item: Omit<ClickableElement, "id">;
+    relation: Relation | null;
+    score: number;
+  }> = [];
   const full = () => !ranked && found.length >= limit;
-  const seenKeys = new Set<string>();
+  // 같은 요소만 합친다(한 문서의 querySelectorAll은 요소를 한 번씩만 준다). 글자·주소가 같아도 다른 요소면 따로
+  // 돌려준다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼). 모델은 묶음 문맥(context)으로 구분한다.
+  let expanded: HTMLElement[] | null = null;
   for (const root of getAccessibleRoots()) {
     if (full()) break;
     const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
     for (const el of nodes) {
       if (full()) break;
       if (!isVisible(el)) continue;
+      // 역할로만 잡힌 새 대상에서 값 컨트롤·편집 영역은 뺀다(편집형 combobox의 입력값이 클릭 대상 글자로 나가지 않게;
+      // 그런 칸은 find_form_fields의 값 미전송 계약을 따른다).
+      const roleOnly = !el.matches(BASE_SELECTOR);
+      if (roleOnly && (VALUE_CONTROL_TAGS.has(el.localName) || el.isContentEditable)) continue;
 
       const inViewport = rectInViewport(el);
       if (args.onlyViewport && !inViewport) continue;
@@ -315,7 +338,8 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       const href = isTag(el, "a") ? el.href : "";
       // 모델에 돌려주는 글자(입력 칸·편집 영역·숨은 글자 제외). 검색어 필터도 이 글자로 본다(#43).
       const text = modelName(el);
-      if (!text && !href) continue;
+      // 역할 기반 대상은 글자가 비어도 돌려준다(role·상태로 구분). 기존 대상은 글자·주소가 모두 비면 뺀다.
+      if (!text && !href && !roleOnly) continue;
 
       let score = 0;
       if (terms.length) {
@@ -323,11 +347,15 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
         if (!score) continue;
       }
 
-      const key = `${tag}|${text}|${href}`;
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
+      // 선택지(option·menuitem*)는 펼친 트리거와의 관계를 정할 수 있을 때만 돌려준다(targets.ts의 choiceRelation).
+      let relation: Relation | null = null;
+      if (isChoice(el)) {
+        expanded ??= expandedTriggers();
+        relation = choiceRelation(CLICK_KIND, el, expanded);
+        if (!relation) continue;
+      }
 
-      const entry = { el, item: { text, href, tag, role, region, inViewport }, score };
+      const entry = { el, item: { text, href, tag, role, region, inViewport }, relation, score };
       if (!ranked) {
         found.push(entry);
         continue;
@@ -341,7 +369,16 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
     }
   }
 
-  return found.map(({ el, item }) => ({ id: registerTarget(CLICK_KIND, el), ...item }));
+  return found.map(({ el, item, relation }) => {
+    const id = registerTarget(CLICK_KIND, el, relation);
+    const info = registeredInfo(id);
+    return {
+      id,
+      ...item,
+      ...(info?.modelContext ? { context: info.modelContext } : {}),
+      ...(info?.states ? { states: info.states } : {}),
+    };
+  });
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
@@ -349,7 +386,7 @@ export function clickElement(
   args: { id: string },
   callId: string,
 ): { clicked: boolean; text: string; href: string; effectToken: string } {
-  const { el, info } = takeApproved(args.id, callId, CLICK_KIND.prefix);
+  const { el, info, relation } = takeApproved(args.id, callId, CLICK_KIND.prefix);
   const text = info.modelName ?? "";
   const href = isTag(el, "a") ? el.href : "";
   const effectToken = `${callId}:${Date.now()}`;
@@ -373,7 +410,7 @@ export function clickElement(
     }
     // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
     // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
-    const changed = recheckApproved(CLICK_KIND, el, info);
+    const changed = recheckApproved(CLICK_KIND, el, info, relation);
     // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
     startEffectWatch(effectToken, el, changed);
     if (changed) return;

@@ -57,6 +57,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const text = `${raw} ${splitIdentifier(raw)}`;
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
+      // 중첩 메뉴의 항목은 바로 위 트리거의 위험만 보고 그 위 트리거들은 보지 않는다(구조로 따라가지 않음).
+      if (t.nestedPopup) return "중첩 메뉴의 항목";
       // 파일을 내려받는 링크(download 속성)는 이미지 저장처럼 묻는다.
       if (t.download) return "파일 내려받기 링크";
       // 누르면 가는 링크·양식 제출 주소에 결제 경로나 개인정보가 실려 있으면 묻는다.

@@ -64,6 +64,10 @@ describe_page 결과를 읽는 법:
 - get_page_content: 본문 텍스트 전체 추출 (요약·질의응답 근거 보강).
 - navigate_to_url(url): 민감. 현재 탭을 신뢰할 수 있는 전체 http/https URL로 직접 이동. 현재 페이지 관측 불필요.
 - find_clickables(query?, region?, onlyViewport?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
+  링크·버튼에 더해 목록에서 고르는 위젯(role=option·menuitem·menuitemradio·menuitemcheckbox·tab, 선택 팝업 트리거 role=combobox·aria-haspopup=listbox)도 돌려준다. 글자가 같은 대상도 요소마다 따로 나온다. context(대상이 든 묶음 — 행·패널·달력의 한 달 — 의 화면 글자, 표제가 있으면 앞에)로 어느 묶음의 대상인지 구분하고, states(selected·checked·pressed·expanded·current·disabled)로 지금 상태를 본다. 글자·context·states로 고를 대상을 구분할 수 없으면 임의로 누르지 않고 다시 관측하거나 사용자에게 묻는다.
+  같은 버튼(다음 달·더 보기 등)을 여러 번 눌러야 하면 다시 찾지 말고 같은 id로 다시 누른다. "다시 찾으세요"로 실패했을 때만 다시 찾는다.
+- 목록에서 고르는 칸(상품 옵션, 자동완성, 날짜 고르기)이 find_form_fields에 없으면: find_clickables로 트리거(role=combobox·aria-haspopup=listbox, 또는 입력 칸에 글자를 채운 뒤 뜨는 목록)를 열고 → find_clickables로 다시 찾아 그 결과의 role=option 항목을 누른다(트리거를 누른 뒤 예전 결과의 선택지 id를 쓰지 않는다). 펼쳐진 목록이 여러 개라 어느 위젯의 선택지인지 정할 수 없으면 선택지가 결과에 나오지 않는다. 그때는 다른 목록을 닫거나 사용자에게 알린다.
+  고른 뒤에는 그 묶음을 다시 관측(find_clickables의 states·트리거 글자, 또는 describe_page)해 반영됐는지 확인한다. 반영되지 않았으면 같은 클릭을 반복하지 않고 지원 한계를 사용자에게 알린다.
 - click_element(id): 민감. id는 반드시 find_clickables에서 얻은 값. 결과의 effect가 클릭 뒤 일어난 일을 알려 준다(navigation: none/fragment(같은 페이지 안 위치)/same_origin/cross_origin/error, sameDocument, newTab, dom.mutations·dialogOpened). 이것으로 이동 여부를 판단하고, 이동했거나 화면이 바뀐 뒤 내용을 말하려면 다시 관측한다. "화면 변화가 감지되지 않았습니다"면 성공했다고 말하지 않는다.
 - find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감). 결과의 results[].applied가 false인 칸은 값이 반영되지 않은 것이니 사용자에게 알린다.
   find_form_fields는 사용자가 입력한 값을 돌려주지 않는다: 글자 칸은 hasValue(값이 있는지)만, checkbox·radio는 checked만, select는 options(보이는 글자)와 selectedIndex만. 칸에 무엇이 들어 있는지 알아야 하면 사용자에게 묻는다.

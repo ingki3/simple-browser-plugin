@@ -37,6 +37,28 @@ test("sameBase: 기본 항목 중 하나라도 다르면 다른 대상", () => {
   assert.equal(sameBase(link, { ...link, list: { index: 2, count: 5 } }), true);
 });
 
+test("sameBase: 모델용 묶음 문맥과 상태도 비교한다(#43 B)", () => {
+  const day = { ...link, tag: "a", role: "link", name: "29", modelContext: "2026년 12월 · 일 월 화 …" };
+  assert.equal(sameBase(day, { ...day }), true);
+  // 원문 행 글자는 같고 모델에 준 묶음 문맥만 달라도 다른 대상이다.
+  assert.equal(sameBase(day, { ...day, modelContext: "2027년 1월 · 일 월 화 …" }), false);
+  assert.match(describeDifference(day, { ...day, modelContext: "x" }), /행의 내용/);
+  // 상태는 순서와 관계없이 같은 값이면 같다.
+  const opt = { ...link, role: "menuitemcheckbox", states: { checked: "false", disabled: "true" } };
+  assert.equal(sameBase(opt, { ...opt, states: { disabled: "true", checked: "false" } }), true);
+  assert.equal(sameBase(opt, { ...opt, states: { checked: "true", disabled: "true" } }), false);
+  assert.equal(sameBase(opt, { ...opt, states: undefined }), false);
+  assert.match(describeDifference(opt, { ...opt, states: { checked: "true" } }), /상태/);
+  // 트리거 관계 정보는 기본 비교에 넣지 않는다(content script가 따로 다시 확인한다).
+  assert.equal(sameBase({ ...opt, popup: "linked" }, { ...opt, popup: "unlinked" }), true);
+});
+
+test("clickCard: 선택지의 트리거를 보여 준다", () => {
+  const opt = { ...link, tag: "div", role: "option", name: "빨강", href: "" };
+  const trigger = { ...link, tag: "div", role: "combobox", name: "색상 선택", href: "" };
+  assert.match(clickCard({ ...opt, trigger }).details, /열린 목록의 트리거: 선택 상자 '색상 선택'/);
+});
+
 test("sameApproved: 목록 순번은 같아야 하고 항목 수는 늘어도 된다", () => {
   const a = { ...link, list: { index: 3, count: 10, semantic: true } };
   assert.equal(sameApproved(a, { ...a, list: { index: 3, count: 20, semantic: true } }), true);

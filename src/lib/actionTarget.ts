@@ -22,6 +22,18 @@ export interface TargetInfo {
   sensitive: "password" | "payment" | null;
   // 대상이 든 목록 항목(행)의 글자. 목록 밖이면 "". 같은 버튼 노드를 다른 행에 다시 쓰는 목록에서 행이 바뀐 것을 잡는다.
   context: string;
+  // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상만. 모델의 선택 근거라 비교한다.
+  modelContext?: string;
+  // 대상의 ARIA·HTML 상태(aria-selected·aria-checked·aria-pressed·aria-expanded·aria-current·aria-disabled·disabled).
+  // 클릭 대상만. 승인 뒤 상태가 바뀌면(이미 체크됨·이미 펼쳐짐) 누르면 반대로 되므로 다른 대상으로 본다.
+  states?: Record<string, string>;
+  // 선택지(option·menuitem*)를 펼친 트리거와의 관계 확인 상태(linked: aria-controls/owns로 연결, unlinked: 펼쳐진 트리거 0~1개).
+  // 관계 자체(요소 참조)는 content script에만 두고 실행 직전에 따로 다시 확인한다.
+  popup?: "linked" | "unlinked";
+  // 그 트리거(있으면)의 기술과 위험 정보. 승인·사이트 판정은 선택지와 트리거 양쪽을 따로 본다. 모델에는 보내지 않는다.
+  trigger?: TargetInfo;
+  // 그 트리거 자신이 다른 목록 안의 항목(중첩 메뉴)이면 true. 상위 트리거들의 위험은 따라가지 않으므로 자동 실행하지 않는다.
+  nestedPopup?: boolean;
   // 같은 틀의 형제가 3개 이상인 목록 안이면 항목 순번(1부터)과 항목 수. 승인 카드를 띄울 때 계산한다.
   // semantic은 ul·ol·표·role=list 같은 목록 표시가 있는지. 없으면 나란히 놓인 버튼 몇 개일 수도 있어,
   // 카드에는 목록 표시가 있거나 항목이 5개 이상일 때만 보여 준다(확인에는 늘 쓴다).
@@ -79,8 +91,18 @@ export function sameBase(a: TargetInfo, b: TargetInfo): boolean {
     a.inFrame === b.inFrame &&
     a.fieldType === b.fieldType &&
     a.sensitive === b.sensitive &&
-    a.context === b.context
+    a.context === b.context &&
+    (a.modelContext ?? "") === (b.modelContext ?? "") &&
+    statesKey(a.states) === statesKey(b.states)
   );
+}
+
+export function statesKey(s: Record<string, string> | undefined): string {
+  if (!s) return "";
+  return Object.keys(s)
+    .sort()
+    .map((k) => `${k}=${s[k]}`)
+    .join(";");
 }
 
 // 승인한 대상과 같은지: 기본 항목에 더해 목록 순번도 같아야 한다(항목 수는 더 불러오면 늘 수 있어 보지 않는다).
@@ -99,7 +121,10 @@ export function describeDifference(before: TargetInfo, after: TargetInfo): strin
   if (before.tag !== after.tag || before.role !== after.role) return "요소 종류가 바뀜";
   if (before.fieldType !== after.fieldType || before.sensitive !== after.sensitive) return "입력 칸 종류가 바뀜";
   if (before.region !== after.region) return "페이지 영역이 바뀜";
-  if (before.context !== after.context) return "대상이 든 행의 내용이 바뀜";
+  if (before.context !== after.context || (before.modelContext ?? "") !== (after.modelContext ?? "")) {
+    return "대상이 든 행의 내용이 바뀜";
+  }
+  if (statesKey(before.states) !== statesKey(after.states)) return "대상의 상태(선택·체크·펼침 등)가 바뀜";
   if ((before.list?.index ?? null) !== (after.list?.index ?? null)) return "목록 안 순서가 바뀜";
   return "요소 속성이 바뀜";
 }
@@ -155,6 +180,7 @@ export function clickCard(info: TargetInfo): { summary: string; details: string 
   const lines = [`대상: ${label} ${name}`, `위치: ${placeLine(info)}`];
   if (info.context && info.context !== info.name) lines.push(`행 내용: '${clip(info.context, 100)}'`);
   if (info.href) lines.push(`주소: ${clip(info.href, 300)}`);
+  if (info.trigger) lines.push(`열린 목록의 트리거: ${roleLabel(info.trigger)} '${clip(info.trigger.name, 60)}'`);
   if (!info.name) lines.push("⚠ 글자가 없는 요소입니다. 무엇을 누르는지 확인하기 어렵습니다.");
   return { summary: `${label} ${name}을(를) 클릭합니다.`, details: lines.join("\n") };
 }

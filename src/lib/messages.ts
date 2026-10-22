@@ -54,6 +54,10 @@ export interface ClickableElement {
   role: string;
   region: PageRegion;
   inViewport: boolean;
+  // 대상이 든 묶음(행·패널·목록 항목)의 화면 글자(입력값·편집 영역·숨은 글자 제외, 200자). 같은 글자의 대상을 구분한다.
+  context?: string;
+  // ARIA·HTML 상태(selected·checked·pressed·expanded·current·disabled). 있는 것만.
+  states?: Record<string, string>;
 }
 
 export interface LandmarkSnapshot {
