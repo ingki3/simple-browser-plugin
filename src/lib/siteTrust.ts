@@ -163,3 +163,77 @@ export function pageActionSiteBlock(
 export function withinSite(site: string, url: string): boolean {
   return withinTrusted(new Set([site]), url) === true;
 }
+
+// 브라우저 내부 페이지(새 탭·설정·빈 페이지 등). content script를 넣을 수 없어 페이지를 읽거나 조작할 수 없다.
+export function isBrowserInternalUrl(url: string | undefined): boolean {
+  return !!url && /^(chrome|edge|about|chrome-search|chrome-untrusted|devtools):/i.test(url);
+}
+
+// 사용자 요청 글에 적힌 웹 주소·도메인의 출처(#54). 낱말 뜻이 아니라 주소·호스트 모양으로만 뽑는다:
+// http(s) 주소는 그 출처(http면 https 출처도), 맨 도메인은 공개 접미사 목록으로 등록 도메인이 확인될 때 https 출처.
+// 글을 공백으로만 나눈 덩어리 하나를 주소 하나로 본다(덩어리 안을 다시 쪼개지 않는다 — 경로·매개변수 속 주소를
+// 따로 뽑지 않게). 앞뒤의 ASCII 괄호·따옴표·문장부호만 걷어 내고, 호스트 글자는 지우거나 자르지 않은 채 URL 파서가
+// 정규화한 결과를 쓴다(전각 문자·국제화 도메인도 브라우저와 같게). 그대로 주소가 되지 않는 덩어리("naver.com으로"처럼
+// 조사가 붙은 것 포함)는 사이트로 보지 않는다 — 모호한 주소는 승인 카드로 묻는다. 이메일(@)·값 모양(=)·IP는 뽑지 않는다.
+const SCHEME_RE = /^https?:\/\//i;
+const MAX_NAMED_SITES = 10;
+const OPENERS = new Set([..."(<[{\"'`"]);
+const CLOSERS = new Set([...")>]}\"'`.,!?;:"]);
+
+function trimWrappers(piece: string): string {
+  let start = 0;
+  let end = piece.length;
+  while (start < end && OPENERS.has(piece[start])) start += 1;
+  while (end > start && CLOSERS.has(piece[end - 1])) end -= 1;
+  return piece.slice(start, end);
+}
+
+export function userNamedSites(text: string): string[] {
+  const out = new Set<string>();
+  const add = (origin: string) => {
+    if (out.size < MAX_NAMED_SITES) out.add(origin);
+  };
+  const accept = (u: URL): boolean => {
+    if (!/^https?:$/.test(u.protocol) || !u.hostname) return false;
+    const host = normHost(u.hostname);
+    return !isIpHost(host) && registrableDomain(host) !== null;
+  };
+  // 덩어리 하나를 주소로 읽는다. 읽었으면 그 출처들, 아니면 null.
+  const read = (token: string): string[] | null => {
+    try {
+      if (SCHEME_RE.test(token)) {
+        const u = new URL(token);
+        if (u.username || u.password || !accept(u)) return null;
+        return u.protocol === "http:" ? [u.origin, `https://${u.host}`] : [u.origin];
+      }
+      // 맨 도메인: 첫 '/'·'?'·'#' 앞이 호스트(와 포트)여야 한다. 계정 정보·값 모양(@·=)이면 보지 않는다.
+      const hostPart = token.split(/[/?#]/, 1)[0];
+      if (!hostPart || /[@=]/.test(hostPart)) return null;
+      const u = new URL(`https://${hostPart}`);
+      if (u.username || u.password || u.pathname !== "/" || u.search || u.hash || !accept(u)) return null;
+      return [u.origin];
+    } catch {
+      return null;
+    }
+  };
+  for (const piece of text.split(/\s+/)) {
+    const token = trimWrappers(piece);
+    if (!token) continue;
+    for (const o of read(token) ?? []) add(o);
+  }
+  return [...out];
+}
+
+// 내부 페이지(새 탭·설정)에서 시작한 이동의 자동 실행 경계(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이
+// 끼어들 수 없지만, 모델이 만든 주소로 대화 내용이 나갈 수 있어 사용자가 이번 요청 글에 적은 사이트(등록 도메인이
+// 같음)나 이 대화에서 승인 카드로 허락한 사이트 안에서만 자동 실행한다.
+export function internalNavigateAutoBlock(
+  approvedSites: Iterable<string>,
+  namedSites: Iterable<string>,
+  targetUrl: string,
+): string | null {
+  const inside = withinTrusted(new Set([...approvedSites, ...namedSites]), targetUrl);
+  if (inside === null) return "웹 주소가 아님";
+  if (!inside) return "요청 글에 적지 않은 사이트로 이동";
+  return sensitiveUrlReason(targetUrl);
+}

@@ -1,6 +1,7 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
 import { waitForNavigationSettle } from "../navigation";
 import { debugLog, timeSpan } from "../debug";
+import { isBrowserInternalUrl } from "@/lib/siteTrust";
 
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const TOOL_TIMEOUT_MS: Partial<Record<ToolName, number>> = {
@@ -8,28 +9,26 @@ const TOOL_TIMEOUT_MS: Partial<Record<ToolName, number>> = {
   download_images: 60_000,
 };
 
-export async function getActiveTabId(): Promise<number> {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab?.id) throw new Error("활성 탭을 찾을 수 없습니다.");
-  if (tab.url && /^(chrome|edge|about):/i.test(tab.url)) {
-    throw new Error("브라우저 내부 페이지에서는 이 도구를 사용할 수 없습니다.");
-  }
-  return tab.id;
-}
+export const INTERNAL_PAGE_ERROR =
+  "브라우저 내부 페이지(새 탭·설정 등)라 페이지를 읽거나 조작할 수 없습니다. navigate_to_url로 웹 페이지로 먼저 이동하세요.";
 
 // 턴을 시작한 순간의 탭. 모델이 생각하는 동안 사용자가 다른 탭(예: 메일)으로 옮겨도
 // 도구가 그 탭을 건드리지 않도록 턴 내내 이 탭에만 작업한다.
-export type TurnTab = { tabId: number } | { error: string };
+// 새 탭·설정 같은 내부 페이지여도 탭을 잡아 두고(internal), 그 탭에서 웹 주소로의 이동만 허용한다(#54).
+export type TurnTab = { tabId: number; internal: boolean } | { error: string };
 
 export async function captureTurnTab(): Promise<TurnTab> {
   try {
-    return { tabId: await getActiveTabId() };
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.id) return { error: "활성 탭을 찾을 수 없습니다." };
+    return { tabId: tab.id, internal: isBrowserInternalUrl(tab.url) };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-export async function resolveTurnTab(turnTab: TurnTab): Promise<number> {
+// 턴 탭의 id. 지금 내부 페이지면 allowInternal(웹 주소로의 이동)일 때만 돌려주고, 그 밖의 도구는 안내 오류를 낸다.
+export async function resolveTurnTab(turnTab: TurnTab, opts: { allowInternal?: boolean } = {}): Promise<number> {
   if ("error" in turnTab) throw new Error(turnTab.error);
   let tab: chrome.tabs.Tab;
   try {
@@ -37,10 +36,28 @@ export async function resolveTurnTab(turnTab: TurnTab): Promise<number> {
   } catch {
     throw new Error("요청을 시작한 탭이 닫혀서 작업을 계속할 수 없습니다.");
   }
-  if (tab.url && /^(chrome|edge|about):/i.test(tab.url)) {
-    throw new Error("브라우저 내부 페이지에서는 이 도구를 사용할 수 없습니다.");
+  if (!opts.allowInternal && isBrowserInternalUrl(tab.url)) {
+    // 방금 내부 페이지에서 웹 주소로 이동을 시작했으면 탭 주소는 이동이 확정될 때까지 내부 페이지로 남는다.
+    // 진행 중인 이동을 기다린 뒤 다시 본다.
+    await waitForNavigationSettle(turnTab.tabId, 10_000);
+    try {
+      tab = await chrome.tabs.get(turnTab.tabId);
+    } catch {
+      throw new Error("요청을 시작한 탭이 닫혀서 작업을 계속할 수 없습니다.");
+    }
+    if (isBrowserInternalUrl(tab.url)) throw new Error(INTERNAL_PAGE_ERROR);
   }
   return turnTab.tabId;
+}
+
+// 턴 탭이 지금 내부 페이지인지(턴 도중 이동했을 수 있어 매번 탭 주소를 본다). 탭을 못 읽으면 false.
+export async function turnTabIsInternal(turnTab: TurnTab): Promise<boolean> {
+  if ("error" in turnTab) return false;
+  try {
+    return isBrowserInternalUrl((await chrome.tabs.get(turnTab.tabId)).url);
+  } catch {
+    return false;
+  }
 }
 
 function getContentScriptFiles(): string[] {
