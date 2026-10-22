@@ -741,6 +741,11 @@ export class ChatAgent {
     this.send({ kind: "assistant_done", finishReason: reply.finishReason });
     if (!text) {
       this.send({ kind: "error", message: "도구 사용을 멈췄지만 모델이 정리한 답을 만들지 못했습니다. 다시 요청해 주세요." });
+    } else if (reply.finishReason === "length") {
+      this.send({
+        kind: "error",
+        message: "답이 응답 길이 한도에서 잘렸습니다. \"이어서\"라고 보내면 계속 씁니다.",
+      });
     }
   }
 
