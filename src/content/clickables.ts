@@ -182,7 +182,8 @@ function declaresDelete(el: HTMLElement, controls: Array<HTMLElement | null>, fo
   const isDelete = (c: Element | null | undefined) =>
     !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
   if (controls.some(isDelete)) return true;
-  return !!form && Array.from(form.querySelectorAll('input[name="_method"]')).some(isDelete);
+  // form.elements는 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 준다(자손만 보면 놓친다).
+  return !!form && Array.from(form.elements).some(isDelete);
 }
 
 function labelControl(el: HTMLElement): HTMLElement | null {
