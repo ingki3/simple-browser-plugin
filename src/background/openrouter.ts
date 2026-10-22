@@ -25,6 +25,7 @@ import {
 } from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction } from "./tools/dispatcher";
+import { discardGrantImages, prepareGrantImages } from "./tools/grantImages";
 import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
@@ -911,6 +912,8 @@ export class ChatAgent {
         let autoRan = false;
         // 이번 대화 허락(#53)으로 카드 없이 실행한 호출.
         let grantRan = false;
+        // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
+        let execArgs: unknown = parsedArgs;
         // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
         let internalNavSite: string | null = null;
         // 외부 본문 보호가 켜졌으면 관측 전용이 아닌 도구는 평소 승인 대상이 아니어도(번역·Google 읽기 등) 묻는다.
@@ -936,6 +939,7 @@ export class ChatAgent {
           }
           // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
           if (this.isStale(turn)) return false;
+          if (preview.execArgs !== undefined) execArgs = preview.execArgs;
           // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
           const { autoApprove } = await getSettings();
           if (this.isStale(turn)) return false;
@@ -996,12 +1000,22 @@ export class ChatAgent {
           }
           // 이번 대화 동안 묻지 않기(#53): 대상 도구이고, 이 호출에 경고가 없고(grantBlock), 범위가 같으면 카드 없이 실행한다.
           // 외부 전송 도구는 외부 본문 보호 중에 허락을 쓰지 않는다(src/lib/chatGrant.ts).
-          const chatGrant = chatGrantDecision(this.chatGrants, {
+          let chatGrant = chatGrantDecision(this.chatGrants, {
             tool: toolName,
             protected: guarded,
             block: preview.grantBlock ?? null,
             scope: preview.grantScope ?? "",
           });
+          // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
+          // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
+          if (chatGrant.covered && toolName === "download_images") {
+            const why = await prepareGrantImages(callId, (parsedArgs as { urls: string[] }).urls);
+            if (this.isStale(turn)) {
+              discardGrantImages(callId);
+              return false;
+            }
+            if (why) chatGrant = { covered: false, offer: false, reason: why };
+          }
           let approved: boolean;
           if (chatGrant.covered && isChatGrantTool(toolName)) {
             debugLog("tool:chat_grant_approved", toolName);
@@ -1070,6 +1084,7 @@ export class ChatAgent {
           }
 
           if (!approved) {
+            discardGrantImages(callId);
             recordCancelledAction(callId, this.turnTab);
             discardTabChoices(callId);
             discardLinkCall(callId);
@@ -1103,7 +1118,7 @@ export class ChatAgent {
           this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
         }
         try {
-          const result = await executeTool(toolName, parsedArgs, callId, this.turnTab, toolAbort.signal);
+          const result = await executeTool(toolName, execArgs, callId, this.turnTab, toolAbort.signal);
           if (this.isStale(turn)) return false;
           debugLog(
             "tool:result",

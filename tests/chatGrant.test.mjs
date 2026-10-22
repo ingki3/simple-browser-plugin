@@ -4,6 +4,9 @@ import {
   CHAT_GRANT_TOOLS,
   chatGrantDecision,
   downloadScope,
+  GRANT_IMAGE_LIMITS,
+  grantImageCountBlock,
+  grantImageResponseBlock,
   imageSaveGrantBlock,
   isChatGrantTool,
   linkReadGrantBlock,
@@ -84,4 +87,20 @@ test("image save grant: only images present on the page, no sensitive URLs", () 
   assert.match(imageSaveGrantBlock(["https://evil.example/x.png?q=secret"], page), /페이지에 없는/);
   assert.match(imageSaveGrantBlock(["https://img.example.com/b.png?u=alice%40example.com"], page), /개인정보/);
   assert.match(imageSaveGrantBlock([], page), /없음/);
+});
+
+test("granted image fetch: no redirects, image content type only, size and count caps", () => {
+  const ok = { status: 200, redirected: false, contentType: "image/png", bytes: 1000 };
+  assert.equal(grantImageResponseBlock(ok), null);
+  assert.equal(grantImageResponseBlock({ ...ok, bytes: null }), null);
+  assert.equal(grantImageResponseBlock({ ...ok, contentType: "IMAGE/JPEG; charset=binary" }), null);
+  // redirect: "manual"의 opaqueredirect(status 0)와 따라간 응답 모두 리다이렉트로 본다.
+  assert.match(grantImageResponseBlock({ ...ok, status: 0, redirected: true }), /리다이렉트/);
+  assert.match(grantImageResponseBlock({ ...ok, status: 302 }), /리다이렉트/);
+  assert.match(grantImageResponseBlock({ ...ok, status: 401 }), /401/);
+  assert.match(grantImageResponseBlock({ ...ok, contentType: "text/html" }), /이미지가 아닌/);
+  assert.match(grantImageResponseBlock({ ...ok, contentType: "" }), /이미지가 아닌/);
+  assert.match(grantImageResponseBlock({ ...ok, bytes: GRANT_IMAGE_LIMITS.maxBytes + 1 }), /너무 큰/);
+  assert.equal(grantImageCountBlock(GRANT_IMAGE_LIMITS.maxCount), null);
+  assert.match(grantImageCountBlock(GRANT_IMAGE_LIMITS.maxCount + 1), /많음/);
 });

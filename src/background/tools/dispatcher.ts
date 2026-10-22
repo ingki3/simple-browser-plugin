@@ -17,6 +17,7 @@ import { normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
 import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
 import { startImageDownloads } from "./downloads";
+import { takeGrantImages } from "./grantImages";
 import { markOptimisticNavigation, waitForNavigationSettle } from "../navigation";
 import {
   clickCard,
@@ -80,6 +81,8 @@ export interface ToolPreview {
   grantBlock?: string | null;
   // 이번 대화 허락의 범위(download_images의 저장 폴더). 같은 범위일 때만 허락을 쓴다.
   grantScope?: string;
+  // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
+  execArgs?: unknown;
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -204,6 +207,8 @@ export async function buildToolPreview(
         details: sample.join("\n") + extra,
         grantBlock: await imageGrantBlockAt(args.urls, callId, turnTab),
         grantScope: downloadScope(folder),
+        // 폴더를 생략한 호출은 실행 때 설정을 다시 읽지 않고, 카드·허락 판정에 쓴 이 폴더에 저장한다.
+        execArgs: { ...args, folderPrefix: folder },
       };
     }
     case "click_element": {
@@ -623,9 +628,11 @@ async function runTool(
     }
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
-      const { downloadFolderPrefix } = await getSettings();
-      const folder = args.folderPrefix || downloadFolderPrefix;
-      const res = await startImageDownloads(args.urls, folder);
+      // 승인을 거친 호출은 미리보기가 폴더를 고정한 인자(execArgs)로 온다. 설정은 그 폴더가 비었을 때만 본다.
+      const folder = args.folderPrefix || (await getSettings()).downloadFolderPrefix;
+      // 이번 대화 허락으로 실행하는 호출이면 쿠키 없이 미리 받은 이미지만 저장한다(grantImages.ts).
+      const prepared = takeGrantImages(callId);
+      const res = await startImageDownloads(args.urls, folder, prepared ?? undefined);
       return {
         ok: true,
         summary: `${res.startedCount}개 다운로드 시작 (건너뜀 ${res.skippedCount}).`,

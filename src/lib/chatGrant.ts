@@ -108,3 +108,32 @@ export function imageSaveGrantBlock(urls: readonly string[], pageImages: Readonl
 export function downloadScope(folder: string): string {
   return sanitizeFilenameSegment(folder || "downloads");
 }
+
+// 허락으로 카드 없이 저장할 때는 브라우저 다운로드(그 호스트의 쿠키를 싣고 리다이렉트를 따라간다)를 쓰지 않고,
+// 쿠키 없이·리다이렉트 없이 직접 받은 이미지 바이트만 저장한다. 그 상한과 응답 판정.
+export const GRANT_IMAGE_LIMITS = {
+  // 한 번에 받을 수 있는 이미지 수. 넘으면 카드로 묻는다(카드로 승인하면 기존 다운로드 경로).
+  maxCount: 30,
+  // 이미지 하나·전체 바이트 상한.
+  maxBytes: 10 * 1024 * 1024,
+  maxTotalBytes: 40 * 1024 * 1024,
+} as const;
+
+export function grantImageCountBlock(count: number): string | null {
+  return count > GRANT_IMAGE_LIMITS.maxCount ? `이미지가 ${GRANT_IMAGE_LIMITS.maxCount}개보다 많음` : null;
+}
+
+// 쿠키 없이 받은 응답이 허락으로 저장해도 되는 이미지인지. 리다이렉트(3xx·따라간 응답)는 목적지를 검증하지 않으므로
+// 받지 않는다. 이미지 Content-Type이 아니면 저장하지 않는다. bytes를 아직 모르면 null(Content-Length 없음).
+export function grantImageResponseBlock(r: {
+  status: number;
+  redirected: boolean;
+  contentType: string;
+  bytes: number | null;
+}): string | null {
+  if (r.redirected || (r.status >= 300 && r.status < 400)) return "리다이렉트하는 이미지 주소";
+  if (r.status < 200 || r.status >= 300) return `이미지 응답 오류(HTTP ${r.status})`;
+  if (!/^image\//i.test(r.contentType.trim())) return "이미지가 아닌 응답";
+  if (r.bytes !== null && r.bytes > GRANT_IMAGE_LIMITS.maxBytes) return "너무 큰 이미지";
+  return null;
+}
