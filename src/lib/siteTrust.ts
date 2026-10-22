@@ -170,24 +170,55 @@ export function isBrowserInternalUrl(url: string | undefined): boolean {
 }
 
 // 사용자 요청 글에 적힌 웹 주소·도메인의 출처(#54). 낱말 뜻이 아니라 주소·호스트 모양으로만 뽑는다:
-// http(s) 주소는 그 출처(http면 https 출처도), 그 밖의 글에서는 "이름.접미사" 모양이면서 공개 접미사 목록으로
-// 등록 도메인이 확인되는 호스트를 https 출처로 본다. 이메일(@ 뒤), 주소 속 경로·매개변수, IP는 뽑지 않는다.
-// 주소 글자는 ASCII만 본다(바로 붙은 한글 조사 "…com으로"를 주소에 넣지 않게).
+// http(s) 주소는 그 출처(http면 https 출처도), 맨 도메인은 공개 접미사 목록으로 등록 도메인이 확인될 때 https 출처.
 // 글을 공백으로만 나눈 덩어리 하나를 주소 하나로 본다(덩어리 안을 다시 쪼개지 않는다 — 경로·매개변수 속 주소를
-// 따로 뽑지 않게). 덩어리 앞뒤의 괄호·따옴표·문장부호와 붙은 한글(조사 등)만 걷어 낸다. 호스트는 정규식으로 자르지 않고
-// URL 파서가 정규화한 결과를 쓴다(전각 마침표 등으로 다른 호스트가 되는 경우도 브라우저와 같게).
-const LEADING_WRAP_RE = /^(?:[\u0080-\uffff]+:?|[(<\[{"'`])+/;
-const TRAILING_WRAP_RE = /(?:[\u0080-\uffff]+|[)>\]}"'`.,!?;:])+$/;
+// 따로 뽑지 않게). 호스트는 정규식으로 자르지 않고 URL 파서가 정규화한 결과를 쓴다(전각 마침표·국제화 도메인도
+// 브라우저와 같게). 정리는 정규식 대신 앞뒤에서 문자를 하나씩 걷어 내는 반복으로 한다(긴 입력에서도 선형 시간).
+// 이메일(@)·값 모양(=)·IP는 뽑지 않는다.
 const SCHEME_RE = /^https?:\/\//i;
 const MAX_NAMED_SITES = 10;
+const OPENERS = new Set([..."(<[{\"'`\u201c\u2018\u300c\u300e"]);
+const CLOSERS = new Set([...")>]}\"'`.,!?;:\u201d\u2019\u300d\u300f"]);
 
+const isAscii = (c: string) => c.charCodeAt(0) < 0x80;
+const isAsciiAlnum = (c: string) => /^[a-z0-9]$/i.test(c);
+
+// 끝의 비ASCII(조사 등)는 영문자·숫자 바로 뒤에 붙은 것만 걷어 낸다("naver.com으로"). 점 뒤의 비ASCII(".한국")는
+// 국제화 도메인의 일부일 수 있어 남긴다(걷어 내면 다른 호스트가 된다).
 function trimToken(piece: string): string {
-  let t = piece;
-  for (;;) {
-    const next = t.replace(LEADING_WRAP_RE, "").replace(TRAILING_WRAP_RE, "");
-    if (next === t) return t;
-    t = next;
+  let start = 0;
+  let end = piece.length;
+  while (start < end) {
+    const c = piece[start];
+    if (OPENERS.has(c)) {
+      start += 1;
+      continue;
+    }
+    // 맨 앞의 비ASCII 덩어리와 뒤의 ':'("주소:example.org").
+    if (!isAscii(c)) {
+      while (start < end && !isAscii(piece[start])) start += 1;
+      if (piece[start] === ":") start += 1;
+      continue;
+    }
+    break;
   }
+  while (end > start) {
+    const c = piece[end - 1];
+    if (CLOSERS.has(c)) {
+      end -= 1;
+      continue;
+    }
+    if (!isAscii(c)) {
+      let k = end;
+      while (k > start && !isAscii(piece[k - 1])) k -= 1;
+      if (k > start && isAsciiAlnum(piece[k - 1])) {
+        end = k;
+        continue;
+      }
+    }
+    break;
+  }
+  return piece.slice(start, end);
 }
 
 export function userNamedSites(text: string): string[] {

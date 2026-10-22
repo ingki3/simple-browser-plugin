@@ -79,3 +79,13 @@ test("hosts inside brackets in a path, or cut at a fullwidth dot, are not named 
   assert.deepEqual(userNamedSites("(naver.com) 가줘"), ["https://naver.com"]);
   assert.deepEqual(userNamedSites("ref:attacker.com 참고"), []);
 });
+
+test("internationalized hosts are not cut, and long inputs stay fast", () => {
+  assert.ok(!userNamedSites("https://attacker.com.한국").includes("https://attacker.com"));
+  assert.notEqual(internalNavigateAutoBlock([], userNamedSites("https://attacker.com.한국"), "https://attacker.com/x"), null);
+  assert.ok(!userNamedSites("attacker.com.한국 열어").includes("https://attacker.com"));
+  assert.deepEqual(userNamedSites("naver.com으로 가줘"), ["https://naver.com"]);
+  const t0 = Date.now();
+  userNamedSites("https://example.com/" + "가".repeat(20000) + "1 " + "naver.com" + "가".repeat(20000) + ")".repeat(5000));
+  assert.ok(Date.now() - t0 < 200, `slow: ${Date.now() - t0}ms`);
+});
