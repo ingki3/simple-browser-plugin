@@ -186,8 +186,15 @@ function declaresDelete(el: HTMLElement, controls: Array<HTMLElement | null>, fo
     !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
   if (controls.some(isDelete)) return true;
   // 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 본다(자손만 보면 놓친다). name="elements"
-  // 칸이 form.elements를 가리지 못하게 플랫폼 접근자로 읽는다.
-  return !!form && formElements(form).some(isDelete);
+  // 칸이 form.elements를 가리지 못하게 플랫폼 접근자로 읽는다. 제출 버튼은 누른 것(controls)만 값이 실리므로 다른
+  // 제출 버튼(같은 양식의 '삭제' 버튼)의 _method는 보지 않는다.
+  return !!form && formElements(form).some((c) => !isSubmitter(c) && isDelete(c));
+}
+
+// 눌렀을 때만 이름·값이 제출에 실리는 컨트롤(제출 버튼).
+function isSubmitter(c: Element): boolean {
+  if (isTag(c, "button")) return (c as HTMLButtonElement).type === "submit";
+  return isTag(c, "input") && ["submit", "image"].includes((c as HTMLInputElement).type);
 }
 
 function labelControl(el: HTMLElement): HTMLElement | null {

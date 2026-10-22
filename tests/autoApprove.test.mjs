@@ -389,3 +389,10 @@ test("행 문맥의 '삭제' 글자로는 일반 버튼·체크를 묻지 않는
     assert.equal(destructiveClickBlock([t({ name })]), null, name);
   }
 });
+
+test("#62: 신뢰 사이트 안이어도 삭제·스팸 경로로의 이동은 묻는다", () => {
+  const trusted = new Set([siteOf("https://mail.example/")]);
+  assert.equal(navigateAutoBlock(trusted, "https://mail.example/messages/delete/3"), "되돌리기 어려운 동작(삭제·스팸)");
+  assert.equal(navigateAutoBlock(trusted, "https://mail.example/inbox?action=trash&id=3"), "되돌리기 어려운 동작(삭제·스팸)");
+  assert.equal(navigateAutoBlock(trusted, "https://mail.example/inbox/3"), null);
+});

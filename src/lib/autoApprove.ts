@@ -46,7 +46,8 @@ export function destructiveClickBlock(targets: TargetInfo[]): string | null {
 }
 
 // 주소의 경로·쿼리·해시 낱말에 삭제·스팸 단서가 있는지(결제 경로 판정과 같은 방식으로 나눠 본다).
-function destructiveRoute(url: string): boolean {
+// navigate_to_url도 같은 판정을 쓴다(GET으로 지우는 사이트에서 클릭 대신 주소로 이동해 카드를 건너뛰지 못하게).
+export function destructiveRoute(url: string): boolean {
   let u: URL;
   try {
     u = new URL(normalizeUrlText(url));
