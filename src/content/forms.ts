@@ -158,7 +158,7 @@ function nativeGetter<T>(proto: object, prop: string, obj: object): T | undefine
   return get ? (get.call(obj) as T) : undefined;
 }
 
-function formElements(form: HTMLFormElement): Element[] {
+export function formElements(form: HTMLFormElement): Element[] {
   const list = nativeGetter<HTMLFormControlsCollection>(HTMLFormElement.prototype, "elements", form);
   return list ? Array.from(list) : [];
 }

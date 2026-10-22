@@ -7,6 +7,7 @@ import {
   choiceUrlsOf,
   controlHasPersonalValue,
   formDestination,
+  formElements,
   formHasPersonalValues,
   formSubmissionUrl,
   isPersonalField,
@@ -179,11 +180,14 @@ const DELETE_DECL_SELECTOR =
 function declaresDelete(el: HTMLElement, controls: Array<HTMLElement | null>, form: HTMLFormElement | null): boolean {
   if (closestAcross(el, DELETE_DECL_SELECTOR)) return true;
   if (form && closestAcross(form, DELETE_DECL_SELECTOR)) return true;
+  // label이 작동시키는 컨트롤 등 실제로 눌릴 컨트롤의 선언도 본다(label만 보면 연결된 input의 hx-delete를 놓친다).
+  if (controls.some((c) => !!c && !!closestAcross(c, DELETE_DECL_SELECTOR))) return true;
   const isDelete = (c: Element | null | undefined) =>
     !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
   if (controls.some(isDelete)) return true;
-  // form.elements는 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 준다(자손만 보면 놓친다).
-  return !!form && Array.from(form.elements).some(isDelete);
+  // 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 본다(자손만 보면 놓친다). name="elements"
+  // 칸이 form.elements를 가리지 못하게 플랫폼 접근자로 읽는다.
+  return !!form && formElements(form).some(isDelete);
 }
 
 function labelControl(el: HTMLElement): HTMLElement | null {
