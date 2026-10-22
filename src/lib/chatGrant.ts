@@ -119,6 +119,25 @@ export const GRANT_IMAGE_LIMITS = {
   maxTotalBytes: 40 * 1024 * 1024,
 } as const;
 
+// 이미지 저장에서 무엇을 내려받을지(주소 → 실제로 넘길 출처). 허락 경로(viaGrant, 실행하는 쪽이 명시)면 그 호출을 위해
+// 쿠키 없이 미리 받은 바이트(data: 주소)만 쓰고, 하나라도 없으면 원본 주소로 바꾸지 않고 실패한다(fail-closed).
+// 카드로 승인한 일반 경로는 원본 주소 그대로(브라우저 다운로드).
+export function imageDownloadSources(
+  urls: readonly string[],
+  viaGrant: boolean,
+  prepared: ReadonlyMap<string, string> | null | undefined,
+): Array<{ url: string; source: string }> | { error: string } {
+  if (!viaGrant) return urls.map((url) => ({ url, source: url }));
+  if (!prepared) return { error: "이번 대화 허락으로 저장할 이미지를 미리 받지 못했습니다." };
+  const out: Array<{ url: string; source: string }> = [];
+  for (const url of urls) {
+    const source = prepared.get(url);
+    if (!source || !source.startsWith("data:")) return { error: "이번 대화 허락으로 저장할 이미지를 미리 받지 못했습니다." };
+    out.push({ url, source });
+  }
+  return out;
+}
+
 export function grantImageCountBlock(count: number): string | null {
   return count > GRANT_IMAGE_LIMITS.maxCount ? `이미지가 ${GRANT_IMAGE_LIMITS.maxCount}개보다 많음` : null;
 }

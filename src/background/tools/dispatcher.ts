@@ -1,5 +1,5 @@
 import { autoApproveBlock } from "@/lib/autoApprove";
-import { downloadScope, imageSaveGrantBlock } from "@/lib/chatGrant";
+import { downloadScope, imageDownloadSources, imageSaveGrantBlock } from "@/lib/chatGrant";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import { readChosenLinks, snapshotLinks } from "../linkedPages";
 import type {
@@ -17,7 +17,6 @@ import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize"
 import { getSettings } from "../storage";
 import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
 import { startImageDownloads } from "./downloads";
-import { takeGrantImages } from "./grantImages";
 import { markOptimisticNavigation, waitForNavigationSettle } from "../navigation";
 import {
   clickCard,
@@ -407,20 +406,29 @@ export function recordCancelledAction(callId: string, turnTab: TurnTab): void {
 
 const RECIPE_TOOLS = new Set<ToolName>(["query_dom", "list_file_links", "find_clickables"]);
 
+// 그 호출 하나에만 쓰는 실행 옵션. 대화 객체가 호출마다 만들어 넘기고 전역에 두지 않는다.
+export interface ExecOptions {
+  // 이번 대화 허락(#53)으로 카드 없이 실행하는 호출인지(실행하는 쪽이 명시). 데이터 유무로 추측하지 않는다.
+  viaGrant?: boolean;
+  // 허락 경로의 이미지 저장: 이 호출을 위해 쿠키 없이 미리 받은 이미지(주소 → data: 주소).
+  grantImages?: ReadonlyMap<string, string>;
+}
+
 export async function executeTool(
   toolName: ToolName,
   parsedArgs: unknown,
   callId: string,
   turnTab: TurnTab,
   signal?: AbortSignal,
+  opts: ExecOptions = {},
 ): Promise<ToolExecResult> {
   if (RECIPE_TOOLS.has(toolName)) {
     const picked = recipeArgs(toolName, parsedArgs);
-    if (!picked) return runTool(toolName, parsedArgs, callId, turnTab, signal);
+    if (!picked) return runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
     const before = await pageKeyFor(turnTab);
     let result: ToolExecResult;
     try {
-      result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+      result = await runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
     } catch (err) {
       await observeRead(turnTab, before, picked, null, true);
       throw err;
@@ -429,15 +437,15 @@ export async function executeTool(
     return result;
   }
   if (toolName === "describe_page") {
-    const result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+    const result = await runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
     return attachReadHints(result, turnTab);
   }
   if (toolName !== "click_element" && toolName !== "fill_form_fields") {
-    return runTool(toolName, parsedArgs, callId, turnTab, signal);
+    return runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
   }
   let result: ToolExecResult;
   try {
-    result = await runTool(toolName, parsedArgs, callId, turnTab, signal);
+    result = await runTool(toolName, parsedArgs, callId, turnTab, signal, opts);
   } catch (err) {
     const reason = reasonCode(err instanceof Error ? err.message : String(err));
     void finishAction(turnTab, callId, isPreActionStop(reason) ? "aborted" : "failed", { reason });
@@ -493,6 +501,7 @@ async function runTool(
   callId: string,
   turnTab: TurnTab,
   signal?: AbortSignal,
+  opts: ExecOptions = {},
 ): Promise<ToolExecResult> {
   switch (toolName) {
     case "describe_page": {
@@ -632,9 +641,11 @@ async function runTool(
       // download_images는 늘 미리보기(카드·허락 판정)를 거치고, 미리보기가 확정한 폴더(execArgs)로 온다.
       // 실행부는 설정을 다시 읽지 않는다(그 사이 설정이 바뀌어도 확인한 폴더에 저장).
       const folder = args.folderPrefix || DEFAULT_DOWNLOAD_FOLDER;
-      // 이번 대화 허락으로 실행하는 호출이면 쿠키 없이 미리 받은 이미지만 저장한다(grantImages.ts).
-      const prepared = takeGrantImages(callId);
-      const res = await startImageDownloads(args.urls, folder, prepared ?? undefined);
+      // 이번 대화 허락으로 실행하는 호출은 그 호출을 위해 쿠키 없이 미리 받은 이미지만 저장한다(grantImages.ts).
+      // 미리 받은 것이 없으면 원본 주소로 내려받지 않고 실패한다(fail-closed, imageDownloadSources).
+      const sources = imageDownloadSources(args.urls, opts.viaGrant === true, opts.grantImages);
+      if ("error" in sources) throw new Error(sources.error);
+      const res = await startImageDownloads(sources, folder);
       return {
         ok: true,
         summary: `${res.startedCount}개 다운로드 시작 (건너뜀 ${res.skippedCount}).`,

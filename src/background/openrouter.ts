@@ -25,7 +25,7 @@ import {
 } from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction } from "./tools/dispatcher";
-import { discardGrantImages, prepareGrantImages } from "./tools/grantImages";
+import { prepareGrantImages } from "./tools/grantImages";
 import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
@@ -914,6 +914,8 @@ export class ChatAgent {
         let grantRan = false;
         // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
         let execArgs: unknown = parsedArgs;
+        // 이번 대화 허락으로 저장할 이미지를 이 호출을 위해 쿠키 없이 미리 받은 것(실행 옵션으로 직접 넘긴다).
+        let grantImages: Map<string, string> | undefined;
         // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
         let internalNavSite: string | null = null;
         // 외부 본문 보호가 켜졌으면 관측 전용이 아닌 도구는 평소 승인 대상이 아니어도(번역·Google 읽기 등) 묻는다.
@@ -1012,17 +1014,15 @@ export class ChatAgent {
             // 받는 동안 중단·새 대화·패널 닫힘이면(cancelInFlight가 activeTool을 끊는다) 남은 주소로 요청하지 않는다.
             const prefetchAbort = new AbortController();
             this.activeTool = prefetchAbort;
-            let why: string | null;
+            let got: Awaited<ReturnType<typeof prepareGrantImages>>;
             try {
-              why = await prepareGrantImages(callId, (parsedArgs as { urls: string[] }).urls, prefetchAbort.signal);
+              got = await prepareGrantImages((parsedArgs as { urls: string[] }).urls, prefetchAbort.signal);
             } finally {
               if (this.activeTool === prefetchAbort) this.activeTool = null;
             }
-            if (this.isStale(turn)) {
-              discardGrantImages(callId);
-              return false;
-            }
-            if (why) chatGrant = { covered: false, offer: false, reason: why };
+            if (this.isStale(turn)) return false;
+            if ("why" in got) chatGrant = { covered: false, offer: false, reason: got.why };
+            else grantImages = got.images;
           }
           let approved: boolean;
           if (chatGrant.covered && isChatGrantTool(toolName)) {
@@ -1092,7 +1092,6 @@ export class ChatAgent {
           }
 
           if (!approved) {
-            discardGrantImages(callId);
             recordCancelledAction(callId, this.turnTab);
             discardTabChoices(callId);
             discardLinkCall(callId);
@@ -1126,7 +1125,10 @@ export class ChatAgent {
           this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
         }
         try {
-          const result = await executeTool(toolName, execArgs, callId, this.turnTab, toolAbort.signal);
+          const result = await executeTool(toolName, execArgs, callId, this.turnTab, toolAbort.signal, {
+            viaGrant: grantRan,
+            ...(grantRan && grantImages ? { grantImages } : {}),
+          });
           if (this.isStale(turn)) return false;
           debugLog(
             "tool:result",

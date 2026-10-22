@@ -7,6 +7,7 @@ import {
   GRANT_IMAGE_LIMITS,
   grantImageCountBlock,
   grantImageResponseBlock,
+  imageDownloadSources,
   imageSaveGrantBlock,
   isChatGrantTool,
   linkReadGrantBlock,
@@ -103,4 +104,17 @@ test("granted image fetch: no redirects, image content type only, size and count
   assert.match(grantImageResponseBlock({ ...ok, bytes: GRANT_IMAGE_LIMITS.maxBytes + 1 }), /너무 큰/);
   assert.equal(grantImageCountBlock(GRANT_IMAGE_LIMITS.maxCount), null);
   assert.match(grantImageCountBlock(GRANT_IMAGE_LIMITS.maxCount + 1), /많음/);
+});
+
+test("image download sources: the grant path never falls back to the original URL", () => {
+  const urls = ["https://img.example.com/a.png", "https://img.example.com/b.png"];
+  // 카드로 승인한 일반 경로: 원본 주소 그대로.
+  assert.deepEqual(imageDownloadSources(urls, false, null), urls.map((url) => ({ url, source: url })));
+  // 허락 경로: 미리 받은 바이트만. 없거나 하나라도 빠지면 실패(원본 주소로 바꾸지 않음).
+  const data = "data:image/png;base64,AAAA";
+  assert.deepEqual(imageDownloadSources(urls, true, new Map(urls.map((u) => [u, data]))), urls.map((url) => ({ url, source: data })));
+  assert.ok("error" in imageDownloadSources(urls, true, null));
+  assert.ok("error" in imageDownloadSources(urls, true, undefined));
+  assert.ok("error" in imageDownloadSources(urls, true, new Map([[urls[0], data]])));
+  assert.ok("error" in imageDownloadSources(urls, true, new Map(urls.map((u) => [u, u]))));
 });

@@ -4,12 +4,10 @@ import { GRANT_IMAGE_LIMITS, grantImageCountBlock, grantImageResponseBlock } fro
 // 쿠키를 싣고 리다이렉트를 따라가므로(로그인 사이트의 GET 상태 변경 주소로 리다이렉트하는 "이미지"가 승인 없이
 // 인증된 요청이 된다), 허락 경로에서는 쿠키 없이(credentials: omit) 리다이렉트를 따르지 않고 받은 이미지 바이트만
 // data: 주소로 저장한다. 하나라도 받지 못하면 허락을 쓰지 않고 카드로 묻는다(카드로 승인하면 기존 다운로드 경로).
-// 받은 바이트는 그 호출(callId)에만 쓰고, 실행에서 꺼내 가거나 취소되면 버린다.
+// 받은 바이트는 전역에 두지 않고 호출한 쪽(그 대화의 그 호출)에 돌려주며, 호출한 쪽이 실행 옵션으로 직접 넘긴다
+// (모델이 정하는 callId는 대화마다 겹칠 수 있어 키로 쓰지 않는다).
 
 const FETCH_TIMEOUT_MS = 15_000;
-const MAX_PREPARED_CALLS = 4;
-
-const prepared = new Map<string, Map<string, string>>();
 
 function toBase64(bytes: Uint8Array): string {
   let bin = "";
@@ -67,44 +65,30 @@ async function fetchImage(url: string, signal?: AbortSignal): Promise<{ dataUrl:
   return { dataUrl: `data:${type};base64,${toBase64(bytes)}`, bytes: total };
 }
 
-// 허락으로 저장할 이미지를 미리 받아 둔다. 저장할 수 없으면 그 이유(카드로 묻는다), 다 받았으면 null.
-export async function prepareGrantImages(callId: string, urls: string[], signal?: AbortSignal): Promise<string | null> {
+// 허락으로 저장할 이미지를 쿠키 없이 받는다. 다 받았으면 주소 → data: 주소, 저장할 수 없으면 그 이유(카드로 묻는다).
+export async function prepareGrantImages(
+  urls: string[],
+  signal?: AbortSignal,
+): Promise<{ images: Map<string, string> } | { why: string }> {
   const unique = [...new Set(urls)];
   const countWhy = grantImageCountBlock(unique.length);
-  if (countWhy) return countWhy;
-  const out = new Map<string, string>();
+  if (countWhy) return { why: countWhy };
+  const images = new Map<string, string>();
   let total = 0;
   for (const url of unique) {
     // 중단되면 남은 주소로 요청을 보내지 않는다.
-    if (signal?.aborted) return "중단됨";
+    if (signal?.aborted) return { why: "중단됨" };
     let got: Awaited<ReturnType<typeof fetchImage>>;
     try {
       got = await fetchImage(url, signal);
     } catch {
       // 리다이렉트를 따르지 않는 요청의 네트워크 오류·시간 초과.
-      return "쿠키 없이 이미지를 받지 못함";
+      return { why: "쿠키 없이 이미지를 받지 못함" };
     }
-    if (typeof got === "string") return got;
+    if (typeof got === "string") return { why: got };
     total += got.bytes;
-    if (total > GRANT_IMAGE_LIMITS.maxTotalBytes) return "이미지 전체 크기가 너무 큼";
-    out.set(url, got.dataUrl);
+    if (total > GRANT_IMAGE_LIMITS.maxTotalBytes) return { why: "이미지 전체 크기가 너무 큼" };
+    images.set(url, got.dataUrl);
   }
-  prepared.set(callId, out);
-  while (prepared.size > MAX_PREPARED_CALLS) {
-    const oldest = prepared.keys().next().value;
-    if (oldest === undefined) break;
-    prepared.delete(oldest);
-  }
-  return null;
-}
-
-// 실행에서 이 호출의 미리 받은 이미지(주소 → data: 주소)를 꺼낸다. 없으면 null(카드로 승인한 일반 경로).
-export function takeGrantImages(callId: string): Map<string, string> | null {
-  const m = prepared.get(callId) ?? null;
-  prepared.delete(callId);
-  return m;
-}
-
-export function discardGrantImages(callId: string): void {
-  prepared.delete(callId);
+  return { images };
 }
