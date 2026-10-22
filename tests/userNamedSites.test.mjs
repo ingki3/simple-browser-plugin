@@ -3,17 +3,20 @@ import assert from "node:assert/strict";
 import { internalNavigateAutoBlock, isBrowserInternalUrl, userNamedSites } from "../src/lib/siteTrust.ts";
 
 test("bare domains in Korean text become https origins", () => {
-  assert.deepEqual(userNamedSites("naver.com으로 이동해서 날씨 알려줘"), ["https://naver.com"]);
+  assert.deepEqual(userNamedSites("naver.com 으로 이동해서 날씨 알려줘"), ["https://naver.com"]);
+  // 조사가 붙어 그대로 주소가 되지 않는 덩어리는 사이트로 보지 않는다(카드로 묻는다).
+  assert.deepEqual(userNamedSites("naver.com으로 이동해서 날씨 알려줘"), []);
   assert.deepEqual(userNamedSites("www.coupang.com 가서 주문 내역 봐줘."), ["https://www.coupang.com"]);
   assert.deepEqual(userNamedSites("shopping.naver.com/home 열어줘"), ["https://shopping.naver.com"]);
   assert.deepEqual(userNamedSites("GMARKET.CO.KR 들어가줘"), ["https://gmarket.co.kr"]);
-  assert.deepEqual(userNamedSites("주소:example.org:8443 열어"), ["https://example.org:8443"]);
+  assert.deepEqual(userNamedSites("주소: example.org:8443 열어"), ["https://example.org:8443"]);
 });
 
 test("full URLs keep their origin, and http also allows https", () => {
   assert.deepEqual(userNamedSites("https://www.11st.co.kr/main 로 가줘"), ["https://www.11st.co.kr"]);
   assert.deepEqual(userNamedSites("http://example.com/a 열어줘"), ["http://example.com", "https://example.com"]);
-  assert.deepEqual(userNamedSites("https://www.naver.com으로 가줘"), ["https://www.naver.com"]);
+  assert.deepEqual(userNamedSites("https://www.naver.com 으로 가줘"), ["https://www.naver.com"]);
+  assert.deepEqual(userNamedSites("https://www.naver.com으로 가줘"), []);
 });
 
 test("e-mail addresses, URL parameters and IPs are not sites", () => {
@@ -60,7 +63,7 @@ test("hosts inside a path or query parameter are not named sites", () => {
   assert.deepEqual(userNamedSites("naver.com/redirect?next=https://attacker.com/ 열어줘"), ["https://naver.com"]);
   assert.deepEqual(userNamedSites("https://naver.com/r?u=https://attacker.com/x 열어"), ["https://naver.com"]);
   assert.deepEqual(userNamedSites("next=https://attacker.com 로 가"), []);
-  assert.deepEqual(userNamedSites("“naver.com”으로 가줘"), ["https://naver.com"]);
+  assert.deepEqual(userNamedSites("(naver.com) 가줘"), ["https://naver.com"]);
   // 사용자가 적은 주소 속 매개변수의 사이트로는 자동 이동하지 않는다.
   const named = userNamedSites("naver.com/redirect?next=https://attacker.com/ 열어줘");
   assert.notEqual(internalNavigateAutoBlock([], named, "https://attacker.com/collect?d=x"), null);
@@ -84,7 +87,6 @@ test("internationalized hosts are not cut, and long inputs stay fast", () => {
   assert.ok(!userNamedSites("https://attacker.com.한국").includes("https://attacker.com"));
   assert.notEqual(internalNavigateAutoBlock([], userNamedSites("https://attacker.com.한국"), "https://attacker.com/x"), null);
   assert.ok(!userNamedSites("attacker.com.한국 열어").includes("https://attacker.com"));
-  assert.deepEqual(userNamedSites("naver.com으로 가줘"), ["https://naver.com"]);
   const t0 = Date.now();
   userNamedSites("https://example.com/" + "가".repeat(20000) + "1 " + "naver.com" + "가".repeat(20000) + ")".repeat(5000));
   assert.ok(Date.now() - t0 < 200, `slow: ${Date.now() - t0}ms`);
@@ -96,5 +98,11 @@ test("characters that normalize to ASCII are never removed from a host", () => {
   assert.ok(!userNamedSites("https://example.coｍ").includes("https://example.co"));
   assert.notEqual(internalNavigateAutoBlock([], userNamedSites("https://example.coｍ"), "https://example.co/x"), null);
   assert.deepEqual(userNamedSites("ｅxample.com 가줘"), ["https://example.com"]);
-  assert.deepEqual(userNamedSites("주소:example.org:8443 열어"), ["https://example.org:8443"]);
+  assert.deepEqual(userNamedSites("주소:example.org:8443 열어"), []);
+});
+
+test("hosts that do not pass as written are not trimmed into another site", () => {
+  assert.deepEqual(userNamedSites("https://attacker.com☃ 열어"), []);
+  assert.deepEqual(userNamedSites("https://attacker.com한국 열어"), []);
+  assert.notEqual(internalNavigateAutoBlock([], userNamedSites("https://attacker.com☃"), "https://attacker.com/x"), null);
 });

@@ -172,48 +172,20 @@ export function isBrowserInternalUrl(url: string | undefined): boolean {
 // 사용자 요청 글에 적힌 웹 주소·도메인의 출처(#54). 낱말 뜻이 아니라 주소·호스트 모양으로만 뽑는다:
 // http(s) 주소는 그 출처(http면 https 출처도), 맨 도메인은 공개 접미사 목록으로 등록 도메인이 확인될 때 https 출처.
 // 글을 공백으로만 나눈 덩어리 하나를 주소 하나로 본다(덩어리 안을 다시 쪼개지 않는다 — 경로·매개변수 속 주소를
-// 따로 뽑지 않게). 호스트는 URL 파서가 정규화한 결과를 쓰고(전각 문자·전각 마침표·국제화 도메인도 브라우저와 같게),
-// 파싱 전에 호스트 글자를 지우지 않는다. 덩어리 그대로 주소가 되지 않을 때만, 앞뒤에 붙은 글자 중 정규화(NFKC)해도
-// ASCII가 되지 않는 것(한글 조사 등 — "naver.com으로", "주소:example.org")을 걷어 내고 다시 본다.
-// 정리는 정규식 대신 문자를 하나씩 보는 반복으로 한다(긴 입력에서도 선형 시간). 이메일(@)·값 모양(=)·IP는 뽑지 않는다.
+// 따로 뽑지 않게). 앞뒤의 ASCII 괄호·따옴표·문장부호만 걷어 내고, 호스트 글자는 지우거나 자르지 않은 채 URL 파서가
+// 정규화한 결과를 쓴다(전각 문자·국제화 도메인도 브라우저와 같게). 그대로 주소가 되지 않는 덩어리("naver.com으로"처럼
+// 조사가 붙은 것 포함)는 사이트로 보지 않는다 — 모호한 주소는 승인 카드로 묻는다. 이메일(@)·값 모양(=)·IP는 뽑지 않는다.
 const SCHEME_RE = /^https?:\/\//i;
 const MAX_NAMED_SITES = 10;
-const OPENERS = new Set([..."(<[{\"'`\u201c\u2018\u300c\u300e"]);
-const CLOSERS = new Set([...")>]}\"'`.,!?;:\u201d\u2019\u300d\u300f"]);
+const OPENERS = new Set([..."(<[{\"'`"]);
+const CLOSERS = new Set([...")>]}\"'`.,!?;:"]);
 
-const isAscii = (c: string) => c.charCodeAt(0) < 0x80;
-const isAsciiAlnum = (c: string) => /^[a-z0-9]$/i.test(c);
-// 정규화해도 ASCII 글자를 만들지 않는 비ASCII 덩어리(지워도 호스트의 ASCII 글자가 바뀌지 않는다).
-// 호스트에서 '.'로 바뀌는 마침표(U+3002·U+FF0E·U+FF61)가 든 덩어리도 지우지 않는다.
-const removableRun = (run: string) =>
-  !/[\u3002\uff0e\uff61]/.test(run) && [...run.normalize("NFKC")].every((c) => !isAscii(c));
-
-// 앞뒤의 괄호·따옴표·문장부호만 걷어 낸다(호스트 글자는 건드리지 않음).
 function trimWrappers(piece: string): string {
   let start = 0;
   let end = piece.length;
   while (start < end && OPENERS.has(piece[start])) start += 1;
   while (end > start && CLOSERS.has(piece[end - 1])) end -= 1;
   return piece.slice(start, end);
-}
-
-// 덩어리 그대로 주소가 되지 않을 때 시도할 형태: 맨 앞 비ASCII 덩어리(+':')와, 영문자·숫자 바로 뒤에 붙은 맨 끝
-// 비ASCII 덩어리를 — 정규화해도 ASCII가 되지 않을 때만 — 걷어 낸 것.
-function particleTrimmed(token: string): string | null {
-  let start = 0;
-  let end = token.length;
-  if (start < end && !isAscii(token[start])) {
-    let k = start;
-    while (k < end && !isAscii(token[k])) k += 1;
-    if (removableRun(token.slice(start, k))) start = token[k] === ":" ? k + 1 : k;
-  }
-  if (end > start && !isAscii(token[end - 1])) {
-    let k = end;
-    while (k > start && !isAscii(token[k - 1])) k -= 1;
-    if (k > start && isAsciiAlnum(token[k - 1]) && removableRun(token.slice(k, end))) end = k;
-  }
-  const t = trimWrappers(token.slice(start, end));
-  return t && t !== token ? t : null;
 }
 
 export function userNamedSites(text: string): string[] {
@@ -247,12 +219,7 @@ export function userNamedSites(text: string): string[] {
   for (const piece of text.split(/\s+/)) {
     const token = trimWrappers(piece);
     if (!token) continue;
-    let origins = read(token);
-    if (!origins) {
-      const trimmed = particleTrimmed(token);
-      if (trimmed) origins = read(trimmed);
-    }
-    for (const o of origins ?? []) add(o);
+    for (const o of read(token) ?? []) add(o);
   }
   return [...out];
 }
