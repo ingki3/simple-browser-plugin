@@ -7,6 +7,7 @@ import {
   describeEffect,
   fillCard,
   navKind,
+  onlyAdded,
   parseCheckedRequest,
   sameApproved,
   sameApprovedInFlight,
@@ -252,4 +253,34 @@ test("clickCard: 체크 위젯은 지금 상태를 보여 준다(#56)", () => {
   assert.match(clickCard(box).details, /대상: 체크박스 .*\n[\s\S]*지금 상태: 체크 안 됨/);
   assert.match(clickCard({ ...box, states: { checked: "true" } }).details, /지금 상태: 체크됨/);
   assert.doesNotMatch(clickCard(link).details, /지금 상태/);
+});
+
+test("onlyAdded: 글자가 더해지기만 했을 때만 참(#56 4차)", () => {
+  // 숨은 안내 글이 나타남 = 추가만.
+  assert.equal(onlyAdded("상품 A 수량", "상품 A 수량 재고 확인 필요"), true);
+  assert.equal(onlyAdded("상품 A 수량", "안내 상품 A 수량"), true);
+  assert.equal(onlyAdded("", "무엇이든"), true);
+  // A 문구를 숨기고 B 문구를 보임(같은 노드를 다른 항목에 재사용) = 거부.
+  assert.equal(onlyAdded("상품 A 수량", "상품 B 수량"), false);
+  // 순서가 바뀌면 거부.
+  assert.equal(onlyAdded("상품 A 수량", "수량 상품 A"), false);
+  // 상한(200자)으로 뒤가 잘려 낱말이 사라지면 거부.
+  const before = "가 ".repeat(98) + "끝말";
+  const after = ("안내 " + before).slice(0, 200);
+  assert.equal(onlyAdded(before, after), false);
+});
+
+test("sameApprovedInFlight: 모델용 행 문맥이 바뀌어도 추가만 허용(#56 4차)", () => {
+  const f = { ...rowBox, proxy: undefined, context: "상품 A 상품 B 수량", modelContext: "상품 A 수량" };
+  assert.equal(sameApprovedInFlight({ ...f, modelContext: "상품 A 수량 재고 확인 필요" }, f), true);
+  assert.equal(sameApprovedInFlight({ ...f, modelContext: "상품 B 수량" }, f), false);
+});
+
+test("fillCard·sameBase: 대리 label 칸은 실제로 누르는 라벨을 보여 주고 비교한다(#56 4차)", () => {
+  const box = { ...rowBox, name: "선택", proxyLabel: "유료 구독 시작", hidden: true };
+  assert.match(fillCard([{ info: box, value: "true" }]).details, /누르는 라벨: '유료 구독 시작'/);
+  assert.match(fillCard([{ info: { ...box, proxyLabel: "" }, value: "true" }]).details, /누르는 라벨: '\(글자 없음\)'/);
+  assert.doesNotMatch(fillCard([{ info: { ...box, proxy: undefined, proxyLabel: undefined }, value: "true" }]).details, /누르는 라벨/);
+  assert.equal(sameBase(box, { ...box, proxyLabel: "보관함으로 이동" }), false);
+  assert.match(describeDifference(box, { ...box, proxyLabel: "보관함으로 이동" }), /보이는 라벨이 바뀜/);
 });

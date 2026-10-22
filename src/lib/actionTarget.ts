@@ -28,6 +28,8 @@ export interface TargetInfo {
   // 화면에서 숨긴 checkbox·radio를 구조로 연결된 보이는 label을 눌러 바꾸는 칸(#56). 그 label이 사라지거나
   // 칸이 보이게 되면 다른 대상으로 본다.
   proxy?: boolean;
+  // 그때 실제로 누르는 label의 표시 이름(aria-labelledby·aria-label·화면 글자·title). 승인 카드에 보여 주고 비교한다.
+  proxyLabel?: string;
   // 대상의 ARIA·HTML 상태(aria-selected·aria-checked·aria-pressed·aria-expanded·aria-current·aria-disabled·disabled).
   // 클릭 대상만. 승인 뒤 상태가 바뀌면(이미 체크됨·이미 펼쳐짐) 누르면 반대로 되므로 다른 대상으로 본다.
   states?: Record<string, string>;
@@ -98,6 +100,7 @@ export function sameBase(a: TargetInfo, b: TargetInfo): boolean {
     a.context === b.context &&
     (a.modelContext ?? "") === (b.modelContext ?? "") &&
     !!a.proxy === !!b.proxy &&
+    (a.proxyLabel ?? "") === (b.proxyLabel ?? "") &&
     statesKey(a.states) === statesKey(b.states)
   );
 }
@@ -115,12 +118,26 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
   return sameBase(a, b) && (a.list?.index ?? null) === (b.list?.index ?? null);
 }
 
-// 입력 도중(입력 처리기가 돈 뒤 change 전, 채운 뒤 반영 확인)의 비교(#56). 원문 행 글자(context)가 그대로면
-// 모델용 행 문맥(modelContext)만 바뀐 것은 같은 대상으로 본다 — 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이
-// 입력 처리기로 보이게 되면 모델용 글자만 달라진다(#43 C의 오탐을 늘리지 않게). 승인 카드·실행 직전 비교는 sameApproved.
+// 입력 도중(입력 처리기가 돈 뒤 change 전, 같은 묶음의 앞 칸을 채운 뒤, 채운 뒤 반영 확인)의 비교(#56).
+// 원문 행 글자(context)가 그대로이고 모델용 행 문맥(modelContext)에 글자가 더해지기만 했으면 같은 대상으로 본다 —
+// 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게).
+// 문구를 바꿔 보여 주는 것(A 문구를 숨기고 B 문구를 보임)은 다른 대상이다. 승인 카드·실행 직전 비교는 sameApproved.
 export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
   if (now.context !== approved.context) return false;
+  if (!onlyAdded(approved.modelContext ?? "", now.modelContext ?? "")) return false;
   return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
+}
+
+// after가 before에 글자를 더하기만 한 것인지: before의 낱말(공백 기준)이 after 안에 같은 순서로 모두 남아 있어야 한다.
+// 하나라도 사라지거나 순서가 바뀌면 거짓(상한 200자 때문에 뒤가 밀려 잘린 경우도 거짓 — 더 막는 쪽).
+export function onlyAdded(before: string, after: string): boolean {
+  const want = before.split(/\s+/).filter(Boolean);
+  const have = after.split(/\s+/).filter(Boolean);
+  let i = 0;
+  for (const w of have) {
+    if (i < want.length && w === want[i]) i++;
+  }
+  return i === want.length;
 }
 
 // 서로 다른 항목을 사람이 읽을 수 있게 하나 고른다(실패 메시지용 — 모델에도 간다).
@@ -138,7 +155,9 @@ export function describeDifference(before: TargetInfo, after: TargetInfo): strin
     return "대상이 든 행의 내용이 바뀜";
   }
   if (statesKey(before.states) !== statesKey(after.states)) return "대상의 상태(선택·체크·펼침 등)가 바뀜";
-  if (!!before.proxy !== !!after.proxy) return "칸을 바꾸는 보이는 라벨이 바뀜";
+  if (!!before.proxy !== !!after.proxy || (before.proxyLabel ?? "") !== (after.proxyLabel ?? "")) {
+    return "칸을 바꾸는 보이는 라벨이 바뀜";
+  }
   if ((before.list?.index ?? null) !== (after.list?.index ?? null)) return "목록 안 순서가 바뀜";
   return "요소 속성이 바뀜";
 }
@@ -240,6 +259,8 @@ export function fillCard(
     let warn =
       info.sensitive === "password" ? " ⚠ 비밀번호 칸" : info.sensitive === "payment" ? " ⚠ 결제 정보 칸" : "";
     if (info.hidden) warn += info.proxy ? " ⚠ 화면에 보이지 않는 칸(보이는 라벨을 눌러 바꿈)" : " ⚠ 화면에 보이지 않는 칸";
+    // 실제로 누르는 label의 표시 이름(칸 이름은 첫 label에서 와서 다를 수 있다).
+    if (info.proxy) warn += ` — 누르는 라벨: '${clip(info.proxyLabel || "(글자 없음)", 60)}'`;
     const where = [info.fieldType, REGION_LABELS[info.region]];
     if (info.inFrame) where.push("프레임 안");
     return `• ${name}${row} (${where.join(", ")}): ${shownValue}${warn}`;

@@ -30,8 +30,9 @@ export interface TargetKind {
   detail?: boolean;
   // 입력 칸: 모델용 행 문맥(modelContext)만 기술에 넣는다(#56 — 라벨 없는 행 체크박스를 행 글자로 구분).
   rowContext?: boolean;
-  // 숨긴 칸을 보이는 대리 요소(연결된 label)로 바꾸는지(#56). 기술의 proxy로 고정한다.
-  proxied?(el: HTMLElement): boolean;
+  // 숨긴 칸을 보이는 대리 요소(연결된 label)로 바꾸면 그 label의 표시 이름, 아니면 null(#56).
+  // 기술의 proxy·proxyLabel로 고정하고 승인 카드에 보여 준다.
+  proxyLabelName?(el: HTMLElement): string | null;
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
@@ -217,7 +218,11 @@ function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
     const states = statesOf(el);
     if (states) detail.states = states;
   }
-  if (kind.proxied?.(el)) detail.proxy = true;
+  const pressed = kind.proxyLabelName?.(el) ?? null;
+  if (pressed !== null) {
+    detail.proxy = true;
+    detail.proxyLabel = pressed;
+  }
   return {
     tag: el.localName,
     role: implicitRole(el),

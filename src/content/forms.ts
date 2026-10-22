@@ -644,7 +644,11 @@ const FIELD_KIND: TargetKind = {
   modelName: fieldModelName,
   // 모델용 행 문맥(라벨 없는 행 체크박스를 보낸 사람·제목 같은 행 글자로 구분, #56).
   rowContext: true,
-  proxied,
+  // 누르는 label의 표시 이름(aria-labelledby·aria-label·화면 글자·title 순, 입력값·편집·숨은 글자 제외).
+  proxyLabelName: (el) => {
+    const label = proxied(el) ? proxyLabel(el) : null;
+    return label ? modelName(label, 200) : null;
+  },
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
   personalElements: (el) => {
