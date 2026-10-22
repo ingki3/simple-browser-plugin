@@ -45,8 +45,10 @@ const BASE_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
 // 목록에서 고르는 위젯(#43 B): 선택지·메뉴 항목·탭과 비편집 선택 팝업 트리거. 구조(ARIA 역할)로만 정한다.
 // aria-haspopup="true"는 메뉴를 뜻하므로 트리거로 더하지 않는다(그런 버튼은 button이라 이미 잡힌다).
+// input이 아닌 체크 위젯(role=checkbox·switch·radio — 메일 목록의 꾸민 행 체크박스 등, #56)도 더한다. 지금 상태는
+// states.checked(aria-checked)로 돌려주고 대상 비교에 고정한다(승인 뒤 이미 바뀌었으면 누르면 반대가 되므로).
 const ROLE_SELECTOR =
-  '[role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="tab"], [role="combobox"], [aria-haspopup="listbox" i]';
+  '[role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="tab"], [role="combobox"], [aria-haspopup="listbox" i], [role="checkbox"], [role="switch"], [role="radio"]';
 const CLICK_SELECTOR = `${BASE_SELECTOR}, ${ROLE_SELECTOR}`;
 
 function isVisible(el: HTMLElement): boolean {

@@ -5,7 +5,7 @@
 
 import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
-import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
+import { describeDifference, sameApproved, sameApprovedInFlight, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { cleanModelText } from "@/lib/modelText";
@@ -28,6 +28,11 @@ export interface TargetKind {
   personalElements?(el: HTMLElement): Element[];
   // 클릭 대상: 모델용 묶음 문맥(modelContext)·상태(states)를 기술에 넣고, 선택지(option·menuitem*)는 트리거 관계를 고정한다.
   detail?: boolean;
+  // 입력 칸: 모델용 행 문맥(modelContext)만 기술에 넣는다(#56 — 라벨 없는 행 체크박스를 행 글자로 구분).
+  rowContext?: boolean;
+  // 숨긴 칸을 보이는 대리 요소(연결된 label)로 바꾸면 그 label의 표시 이름, 아니면 null(#56).
+  // 기술의 proxy·proxyLabel로 고정하고 승인 카드에 보여 준다.
+  proxyLabelName?(el: HTMLElement): string | null;
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
@@ -205,11 +210,18 @@ function statesOf(el: HTMLElement): Record<string, string> | undefined {
 function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
   const row = rowElement(el);
   const detail: Partial<TargetInfo> = {};
-  if (kind.detail) {
+  if (kind.detail || kind.rowContext) {
     const modelContext = modelContextOf(row?.row ?? null);
     if (modelContext) detail.modelContext = modelContext;
+  }
+  if (kind.detail) {
     const states = statesOf(el);
     if (states) detail.states = states;
+  }
+  const pressed = kind.proxyLabelName?.(el) ?? null;
+  if (pressed !== null) {
+    detail.proxy = true;
+    detail.proxyLabel = pressed;
   }
   return {
     tag: el.localName,
@@ -626,10 +638,12 @@ function stampConsent(info: TargetInfo, callId: string): TargetInfo {
 export class RiskAddedError extends Error {}
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
+// inFlight: 같은 승인 묶음의 앞 칸에 이미 입력 이벤트를 보낸 뒤면 입력 도중의 비교(sameApprovedInFlight)를 쓴다.
 export function takeApproved(
   id: string,
   callId: string,
   prefix: string,
+  inFlight = false,
 ): { el: HTMLElement; info: TargetInfo; relation: Relation | null } {
   const known = entryOf(id, prefix);
   const approved = known.approved;
@@ -639,7 +653,7 @@ export function takeApproved(
   const { entry, el } = resolve(id);
   entry.approved = null;
   const now = fullInfo(entry.kind, el);
-  if (!sameApproved(now, approved.info)) {
+  if (!(inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info))) {
     const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
     // (묶음 입력의 남은 칸도 멈춘다).
@@ -711,16 +725,18 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
 }
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
-// 같으면 null, 다르면 이유.
+// 같으면 null, 다르면 이유. inFlight: 입력 도중·직후의 확인이면 원문 행 글자가 그대로일 때 모델용 행 문맥만 바뀐 것은
+// 허용한다(sameApprovedInFlight — 입력 처리기가 행 안의 숨은 안내 글을 보이게 하는 경우).
 export function recheckApproved(
   kind: TargetKind,
   el: HTMLElement,
   info: TargetInfo,
   relation: Relation | null = null,
+  inFlight = false,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const now = fullInfo(kind, el);
-  if (!sameApproved(now, info)) return describeDifference(info, now);
+  if (!(inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info))) return describeDifference(info, now);
   const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
   const relationMoved = relationChanged(kind, el, relation);

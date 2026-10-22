@@ -131,7 +131,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "find_form_fields",
     description:
-      "현재 활성 탭의 보이는 입력 요소(input/textarea/select)를 탐색해 id, 라벨, placeholder, 타입을 반환한다. 사용자가 입력한 값은 돌려주지 않는다: 글자 칸은 값이 있는지(hasValue)만, checkbox·radio는 체크 여부(checked)만, select는 선택지의 보이는 글자(options)와 선택된 위치(selectedIndex, 개인정보 칸이면 생략)만 준다. 화면에 보이지 않는 칸은 돌려주지 않는다. fill_form_fields를 호출하기 전에 반드시 먼저 호출해 필드 id를 확인한다.",
+      "현재 활성 탭의 보이는 입력 요소(input/textarea/select)를 탐색해 id, 라벨, placeholder, 타입을 반환한다. 사용자가 입력한 값은 돌려주지 않는다: 글자 칸은 값이 있는지(hasValue)만, checkbox·radio는 체크 여부(checked)만, select는 선택지의 보이는 글자(options)와 선택된 위치(selectedIndex, 개인정보 칸이면 생략)만 준다. 각 칸이 든 행·묶음의 화면 글자(context, 입력값 제외)를 함께 주므로 라벨 없는 칸(메일 목록의 행 체크박스 등)은 context로 구분한다. 화면에 보이지 않는 칸은 돌려주지 않는다. 다만 숨긴 checkbox·radio라도 연결된 보이는 label이 있으면 돌려준다(채우기는 다른 checkbox·radio와 같다). fill_form_fields를 호출하기 전에 반드시 먼저 호출해 필드 id를 확인한다.",
     parameters: {
       type: "object",
       properties: {},
@@ -234,7 +234,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "find_clickables",
     description:
-      "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link, 그리고 목록에서 고르는 위젯의 role=option·menuitem*·tab·combobox·aria-haspopup=listbox 트리거)를 문서 순서로 반환한다. 글자가 같아도 요소마다 따로 반환하며, context(대상이 든 묶음의 화면 글자)와 states(selected·checked·expanded 등)로 구분한다. 펼친 트리거가 여럿이라 어느 위젯의 것인지 정할 수 없는 선택지는 반환하지 않는다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다.",
+      "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link, 그리고 목록에서 고르는 위젯의 role=option·menuitem*·tab·combobox·aria-haspopup=listbox 트리거, input이 아닌 체크 위젯 role=checkbox·switch·radio)를 문서 순서로 반환한다. 글자가 같아도 요소마다 따로 반환하며, context(대상이 든 묶음의 화면 글자)와 states(selected·checked·expanded 등)로 구분한다. 펼친 트리거가 여럿이라 어느 위젯의 것인지 정할 수 없는 선택지는 반환하지 않는다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다.",
     parameters: {
       type: "object",
       properties: {

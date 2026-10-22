@@ -318,3 +318,11 @@ test("site boundary edge cases: public suffixes, shared hosting origins, unknown
   assert.ok(nav("https://www.naver.com/", "https://shopping.naver.com/r?url=https%3A%2F%2Fcollector.example%2F"));
   assert.equal(nav("https://www.naver.com/", "https://shopping.naver.com/r?url=https%3A%2F%2Fmail.naver.com%2F"), null);
 });
+
+test("숨긴 체크박스를 보이는 label로 바꾸는 칸은 늘 묻는다(#56)", () => {
+  const box = t({ tag: "input", role: "checkbox", fieldType: "checkbox", name: "선택" });
+  assert.equal(autoApproveBlock("fill_form_fields", [box]), null);
+  assert.match(autoApproveBlock("fill_form_fields", [box, { ...box, proxy: true }]), /보이지 않는 칸\(보이는 라벨로 표시\)/);
+  // 결제 문구·위험 신호가 없어도(보이는 label의 이름을 다 모으지 못한 경우) 묻는다.
+  assert.notEqual(autoApproveBlock("fill_form_fields", [{ ...box, proxy: true, outerText: "" }]), null);
+});

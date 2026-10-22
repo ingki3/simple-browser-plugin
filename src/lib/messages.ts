@@ -86,6 +86,9 @@ export interface FormField {
   placeholder: string;
   type: string;
   role: string;
+  // 칸이 든 행·묶음의 화면 글자(입력값·편집 영역·숨은 글자 제외, 표제가 있으면 앞에, 200자). 라벨 없는 행 체크박스를
+  // 보낸 사람·제목 같은 행 글자로 구분한다(#56).
+  context?: string;
   // 글자 칸(input·textarea): 값이 있는지만.
   hasValue?: boolean;
   // checkbox·radio: 체크 여부만(value 속성은 담지 않는다).

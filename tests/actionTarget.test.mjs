@@ -7,7 +7,10 @@ import {
   describeEffect,
   fillCard,
   navKind,
+  onlyAdded,
+  parseCheckedRequest,
   sameApproved,
+  sameApprovedInFlight,
   sameBase,
 } from "../src/lib/actionTarget.ts";
 
@@ -176,4 +179,108 @@ test("describeEffect", () => {
     /^누르기 직전에 대상이 바뀌어 클릭하지 않았습니다\(링크 주소가 바뀜\)/,
   );
   assert.equal(describeEffect({ ...base, navigation: "error", sameDocument: false }), "이동했지만 오류 페이지입니다.");
+});
+
+// #56: 목록 행 체크박스(숨긴 칸 + 보이는 label, 행 문맥).
+const rowBox = {
+  tag: "input",
+  role: "checkbox",
+  name: "",
+  modelName: "",
+  href: "",
+  region: "main",
+  inFrame: false,
+  fieldType: "checkbox",
+  sensitive: null,
+  context: "카닥 이용약관 개정 안내 10:21",
+  modelContext: "카닥 이용약관 개정 안내 10:21",
+  proxy: true,
+};
+
+test("sameBase: 입력 칸의 행 문맥과 보이는 label로 바꾸는지도 비교한다(#56)", () => {
+  assert.equal(sameBase(rowBox, { ...rowBox }), true);
+  // 행이 바뀌면(목록 갱신으로 같은 칸 노드가 다른 메일 행에 쓰임) 다른 대상.
+  assert.equal(sameBase(rowBox, { ...rowBox, modelContext: "보안 안내 09:00" }), false);
+  // 보이는 label이 사라지거나 칸이 보이게 되면 다른 대상.
+  assert.equal(sameBase(rowBox, { ...rowBox, proxy: undefined }), false);
+  assert.match(describeDifference(rowBox, { ...rowBox, proxy: false }), /보이는 라벨이 바뀜/);
+});
+
+test("sameApprovedInFlight: 원문 행 글자가 그대로면 모델용 행 문맥만 바뀐 것은 허용한다(#56, #43 C)", () => {
+  const field = { ...rowBox, tag: "input", fieldType: "email", proxy: undefined, context: "이메일 형식이 아닙니다", modelContext: "이메일" };
+  // 입력 처리기가 행 안의 숨은 안내 글을 보이게 함 → 원문은 같고 모델용 글자만 늘어남.
+  assert.equal(sameApprovedInFlight({ ...field, modelContext: "이메일 형식이 아닙니다" }, field), true);
+  // 승인 카드·실행 직전 비교(sameApproved)는 그대로 엄격하다.
+  assert.equal(sameApproved({ ...field, modelContext: "이메일 형식이 아닙니다" }, field), false);
+  // 원문 행 글자가 바뀌면 입력 도중이어도 다른 대상.
+  assert.equal(sameApprovedInFlight({ ...field, context: "다른 행", modelContext: "다른 행" }, field), false);
+  // 그 밖의 항목은 그대로 비교한다.
+  assert.equal(sameApprovedInFlight({ ...field, name: "비밀번호" }, field), false);
+  assert.equal(sameApprovedInFlight({ ...field, list: { index: 2, count: 5, semantic: true } }, { ...field, list: { index: 3, count: 5, semantic: true } }), false);
+});
+
+test("parseCheckedRequest: 참·거짓 외의 값은 지정 오류", () => {
+  assert.equal(parseCheckedRequest("true"), true);
+  assert.equal(parseCheckedRequest(" 체크 "), true);
+  assert.equal(parseCheckedRequest("False"), false);
+  assert.equal(parseCheckedRequest("off"), null);
+});
+
+test("fillCard: 이름 없는 칸·이름이 겹치는 칸은 행 문맥을 보여 준다(#56)", () => {
+  const card = fillCard([
+    { info: rowBox, value: "true" },
+    { info: { ...rowBox, modelContext: "네이버 보안 안내 09:00", proxy: undefined, hidden: false }, value: "false" },
+  ]);
+  const lines = card.details.split("\n");
+  assert.match(lines[0], /^• \(이름 없는 칸\) — 행: '카닥 이용약관 개정 안내 10:21' \(checkbox, 본문\): ☑ 체크/);
+  assert.match(lines[1], /행: '네이버 보안 안내 09:00'.*: ☐ 해제$/);
+  // 숨긴 칸은 보이는 label로 표시된다는 경고.
+  assert.doesNotMatch(lines[0], /보이지 않는 칸/);
+  assert.match(fillCard([{ info: { ...rowBox, hidden: true }, value: "true" }]).details, /⚠ 화면에 보이지 않는 칸\(보이는 라벨로 표시\)/);
+  // checkbox·radio는 이름이 있고 한 칸만 채워도 행 문맥을 보여 준다(모든 행 체크박스가 '메일 선택'인 목록).
+  const named = { ...rowBox, name: "메일 선택" };
+  assert.match(fillCard([{ info: named, value: "true" }]).details, /메일 선택 — 행: '카닥 이용약관 개정 안내 10:21'/);
+  // 글자 칸은 이름이 겹칠 때만 행 문맥을 붙인다.
+  const qty = { ...rowBox, name: "수량", fieldType: "number", proxy: undefined, modelContext: "상품 A" };
+  assert.doesNotMatch(fillCard([{ info: qty, value: "2" }]).details, /행:/);
+  assert.match(fillCard([{ info: qty, value: "2" }, { info: { ...qty, modelContext: "상품 B" }, value: "1" }]).details, /수량 — 행: '상품 B'/);
+  // 원문 행 글자(context)는 카드에 쓰지 않는다(모델용 글자만).
+  assert.doesNotMatch(fillCard([{ info: { ...rowBox, context: "RAW_ONLY", modelContext: "" }, value: "true" }]).details, /RAW_ONLY/);
+});
+
+test("clickCard: 체크 위젯은 지금 상태를 보여 준다(#56)", () => {
+  const box = { ...link, tag: "div", role: "checkbox", name: "", href: "", states: { checked: "false" } };
+  assert.match(clickCard(box).details, /대상: 체크박스 .*\n[\s\S]*지금 상태: 체크 안 됨/);
+  assert.match(clickCard({ ...box, states: { checked: "true" } }).details, /지금 상태: 체크됨/);
+  assert.doesNotMatch(clickCard(link).details, /지금 상태/);
+});
+
+test("onlyAdded: 글자가 더해지기만 했을 때만 참(#56 4차)", () => {
+  // 숨은 안내 글이 나타남 = 추가만.
+  assert.equal(onlyAdded("상품 A 수량", "상품 A 수량 재고 확인 필요"), true);
+  assert.equal(onlyAdded("상품 A 수량", "안내 상품 A 수량"), true);
+  assert.equal(onlyAdded("", "무엇이든"), true);
+  // A 문구를 숨기고 B 문구를 보임(같은 노드를 다른 항목에 재사용) = 거부.
+  assert.equal(onlyAdded("상품 A 수량", "상품 B 수량"), false);
+  // 순서가 바뀌면 거부.
+  assert.equal(onlyAdded("상품 A 수량", "수량 상품 A"), false);
+  // 상한(200자)으로 뒤가 잘려 낱말이 사라지면 거부.
+  const before = "가 ".repeat(98) + "끝말";
+  const after = ("안내 " + before).slice(0, 200);
+  assert.equal(onlyAdded(before, after), false);
+});
+
+test("sameApprovedInFlight: 모델용 행 문맥이 바뀌어도 추가만 허용(#56 4차)", () => {
+  const f = { ...rowBox, proxy: undefined, context: "상품 A 상품 B 수량", modelContext: "상품 A 수량" };
+  assert.equal(sameApprovedInFlight({ ...f, modelContext: "상품 A 수량 재고 확인 필요" }, f), true);
+  assert.equal(sameApprovedInFlight({ ...f, modelContext: "상품 B 수량" }, f), false);
+});
+
+test("fillCard·sameBase: 대리 label 칸은 보이는 라벨을 보여 주고 비교한다(#56 4차)", () => {
+  const box = { ...rowBox, name: "선택", proxyLabel: "유료 구독 시작", hidden: true };
+  assert.match(fillCard([{ info: box, value: "true" }]).details, /보이는 라벨: '유료 구독 시작'/);
+  assert.match(fillCard([{ info: { ...box, proxyLabel: "" }, value: "true" }]).details, /보이는 라벨: '\(글자 없음\)'/);
+  assert.doesNotMatch(fillCard([{ info: { ...box, proxy: undefined, proxyLabel: undefined }, value: "true" }]).details, /보이는 라벨/);
+  assert.equal(sameBase(box, { ...box, proxyLabel: "보관함으로 이동" }), false);
+  assert.match(describeDifference(box, { ...box, proxyLabel: "보관함으로 이동" }), /보이는 라벨이 바뀜/);
 });

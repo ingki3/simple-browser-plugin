@@ -9,8 +9,8 @@ import {
   sensitiveUrlReason,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
-import type { TargetInfo } from "@/lib/actionTarget";
+import { closestAcross, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
+import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
@@ -19,23 +19,13 @@ import {
   peekApproved,
   recheckApproved,
   registerTarget,
+  registeredInfo,
   scanTargets,
   takeApproved,
   type TargetKind,
 } from "./targets";
 
 const SKIP_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image", "file"]);
-const TRUTHY_VALUES = /^(true|1|on|yes|y|checked|check|예|네|체크|선택)$/i;
-
-// checkbox·radio에 넣을 값의 해석(실행·기대 상태·최종 확인이 함께 쓴다). 참 = 기존 참 값, 거짓 = "false",
-// 그 밖은 null(지정 오류). 칸의 value 속성과는 비교하지 않는다(#43 — 모델은 value를 모르고, value가 "false"인
-// 칸에 거짓 요청이 체크로 처리되지 않게).
-export function parseCheckedRequest(value: string): boolean | null {
-  const v = value.trim();
-  if (TRUTHY_VALUES.test(v)) return true;
-  if (/^false$/i.test(v)) return false;
-  return null;
-}
 
 type FieldElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
@@ -51,6 +41,38 @@ function isVisible(el: HTMLElement): boolean {
   if (style.display === "none" || style.visibility === "hidden") return false;
   if (style.opacity === "0") return false;
   return true;
+}
+
+// label을 눌렀을 때 다른 컨트롤(링크·버튼)이 작동할 수 있는 자리. 그런 label은 대리 요소로 쓰지 않는다.
+const PROXY_BLOCKERS = 'a[href], area[href], button, summary, [role="button"], [role="link"]';
+
+// 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label(#56). 구조로만 정한다: 그 칸에 연결된 label(for 또는 감싼 label)
+// 중 누르면 그 칸이 작동하고(label.control이 그 칸), 화면에 보이며, 편집·숨은 영역 안이 아니고, 링크·버튼 같은 다른
+// 컨트롤 안에 있지 않은 첫 label. 메일 목록처럼 진짜 체크박스를 숨기고 꾸민 label을 보여 주는 화면을 다룬다.
+function proxyLabel(el: Element): HTMLLabelElement | null {
+  if (!isTag(el, "input") || (el.type !== "checkbox" && el.type !== "radio")) return null;
+  for (const label of Array.from(el.labels ?? [])) {
+    if (label.control !== el) continue;
+    if (!isVisible(label) || inProtectedArea(label)) continue;
+    if (closestAcross(label, PROXY_BLOCKERS)) continue;
+    return label;
+  }
+  return null;
+}
+
+// 숨긴 칸을 보이는 label로 바꾸는 칸인지(보이는 칸은 지금처럼 칸 자신에 쓴다).
+function proxied(el: HTMLElement): boolean {
+  return !isVisible(el) && proxyLabel(el) !== null;
+}
+
+// 모델에 돌려주는 칸 이름. 숨긴 칸 자신에서 이름을 얻지 못하면(display:none·aria-hidden인 칸은 modelName이 비운다)
+// 대신 보여 주는 label의 이름(aria-labelledby·aria-label·화면 글자 — 아이콘 label이면 참조한 이름)을 쓴다
+// (입력값·편집 영역·숨은 글자는 modelName이 뺀다).
+function fieldModelName(el: HTMLElement): string {
+  const name = modelName(el);
+  if (name) return name;
+  const label = proxied(el) ? proxyLabel(el) : null;
+  return label ? modelName(label, 200) : "";
 }
 
 // label 안에 든 입력 요소의 글자(select의 선택지 등)는 빼고 label 자신의 글자만 읽는다.
@@ -619,86 +641,140 @@ const FIELD_KIND: TargetKind = {
   visible: isVisible,
   requireVisible: false,
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
-  modelName: (el) => modelName(el),
+  modelName: fieldModelName,
+  // 모델용 행 문맥(라벨 없는 행 체크박스를 보낸 사람·제목 같은 행 글자로 구분, #56).
+  rowContext: true,
+  // 칸을 대신 보여 주는 label의 표시 이름(aria-labelledby·aria-label·화면 글자·title 순, 입력값·편집·숨은 글자 제외).
+  proxyLabelName: (el) => {
+    const label = proxied(el) ? proxyLabel(el) : null;
+    return label ? modelName(label, 200) : null;
+  },
   fieldType: (el) => (isFieldElement(el) ? describeType(el) : ""),
   sensitive: sensitivityOf,
   personalElements: (el) => {
     const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
     // 양식 안 칸도 change 처리기가 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있어 주변 범위를 함께 본다.
     const around = personalValuedInScopes(fieldFormlessScopes(el));
-    return form ? [...new Set([...personalValuedElements(form), ...around])] : around;
+    // 보이는 label로 표시되는 숨긴 칸은 그 label 주변 범위도 본다(사용자가 보는 자리 — 더 묻는 쪽).
+    const label = proxied(el) ? proxyLabel(el) : null;
+    const nearLabel = label ? personalValuedInScopes(fieldFormlessScopes(label)) : [];
+    return [...new Set([...(form ? personalValuedElements(form) : []), ...around, ...nearLabel])];
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
-  // (change 처리기로 바로 제출하는 칸이 있다).
-  risk: (el) => {
-    const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
-    const submitTo = formDestination(el, form);
-    // 기존 칸 값까지 합친 제출 주소(change 처리기로 바로 제출되면 숨은 next=https://… 도 함께 간다).
-    const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
-    // 선택 칸은 표시 문구로 고르면 실제 option.value가, checkbox·radio는 자기 value가 들어가므로 주소처럼 보이는
-    // 값을 미리 풀어 둔다(change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지). 한도를 넘으면 묻는다.
-    const choiceUrls = choiceUrlsOf(el);
-    return {
-      // checkbox·radio는 체크하면 자기 value가 실리므로, 그 값이 개인정보 모양이어도 개인정보 칸으로 본다.
-      // 선택 칸은 표시 문구로 골라도 실제 option.value가 들어가므로, 개인정보 모양의 선택지가 있으면 개인정보 칸으로 본다.
-      personal:
-        isPersonalField(el) ||
-        (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)) ||
-        (isTag(el, "select") && Array.from(el.options).some((o) => looksPersonalValue(o.value))),
-      // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
-      // 양식 안 칸도 주변 범위(대화상자, 없으면 화면)의 다른 양식을 본다(change 처리기가 그 양식을 제출할 수 있다).
-      submitsPersonal:
-        (!!form && formHasPersonalValues(form)) ||
-        personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
-      // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
-      ...(() => {
-        const full = isFieldElement(el)
-          ? `${resolveLabel(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
-          : "";
-        return full ? { outerText: full } : {};
-      })(),
-      // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
-      paymentContext:
-        inPaymentContext(el, form) ||
-        // 체크하면 실리는 checkbox·radio의 name=value에 결제 문구가 있으면(value="purchase", name="confirm_order").
-        (isTag(el, "input") &&
-          (el.type === "checkbox" || el.type === "radio") &&
-          [el.value, el.name].some((v) => PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v)))) ||
-        (isTag(el, "select") &&
-          Array.from(el.options).some((o) => {
-            const text = `${o.textContent ?? ""} ${o.value}`;
-            return PAYMENT_TEXT_RE.test(text) || PAYMENT_TEXT_RE.test(splitIdentifier(text));
-          })),
-      ...(submitTo ? { submitTo } : {}),
-      ...(submitUrl ? { submitUrl } : {}),
-      // 양식 밖 칸이면 범위 안 다른 양식들의 제출 주소도 본다.
-      ...(() => {
-        if (form) {
-          // 양식 안 칸: 제출 버튼들의 formaction(기본 action과 다른 것)과 지금 값을 합친 주소도 본다
-          // (change 처리기가 form.requestSubmit(button)으로 그 주소에 제출할 수 있다).
-          const own = otherDestinations(form, submitTo);
-          // 주변 범위의 다른 양식: 값이 바뀐 양식의 제출 주소와, 모든 양식의 action(change 처리기가 입력값을 옮겨
-          // 제출할 수 있다 — 승인 판정에서 사이트 경계와 결제·개인정보 주소를 본다).
-          const around = scopeSubmitUrls(fieldFormlessScopes(el).filter((s) => s.node !== form));
-          const urls = [...(own.scopeSubmitUrls ?? []), ...around.changed.filter((u) => !(own.scopeSubmitUrls ?? []).includes(u))];
-          return {
-            ...(own.scopeFormActions ? { scopeFormActions: own.scopeFormActions } : {}),
-            ...(urls.length ? { scopeSubmitUrls: urls } : {}),
-            ...(around.actions.length ? { aroundFormActions: around.actions } : {}),
-          };
-        }
-        const { changed, actions } = scopeSubmitUrls(fieldFormlessScopes(el));
-        return {
-          ...(changed.length ? { scopeSubmitUrls: changed } : {}),
-          ...(actions.length ? { scopeFormActions: actions } : {}),
-        };
-      })(),
-      ...(choiceUrls.length ? { choiceUrls } : {}),
-      ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
-      baseUri: el.baseURI,
-    };
-  },
+  // (change 처리기로 바로 제출하는 칸이 있다). 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
+  risk: (el) => labelRisk(el, fieldRisk(el)),
 };
+
+type FieldRisk = NonNullable<ReturnType<NonNullable<TargetKind["risk"]>>>;
+
+// 숨긴 칸은 사용자가 보는 것이 label이다. label이 칸과 다른 곳(결제 대화상자 안 등)에 있으면
+// 그 자리의 위험 신호(결제 화면, 개인정보가 채워진 주변 양식, 주변 양식의 제출 주소)도 칸의 위험에 더한다(더 묻는 쪽만).
+function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
+  const label = proxied(el) ? proxyLabel(el) : null;
+  if (!label) return risk;
+  const labelForm = closestAcross(label, "form") as HTMLFormElement | null;
+  const scopes = fieldFormlessScopes(label);
+  // 칸 자신의 양식은 fieldRisk가 이미 본다. 주변 양식의 action은 비교 목록(aroundFormActions)에, 지금 값을 합친 제출
+  // 주소는 판정용 목록(scopeSubmitUrls — 입력 칸은 묶음 입력이 값을 바꾸므로 값까지는 비교하지 않는다)에 더한다.
+  const ownForm = isFieldElement(el) ? el.form : null;
+  const around = scopeSubmitUrls(scopes.filter((sc) => sc.node !== ownForm));
+  // 칸을 대신 보여 주는 label의 글자(원문 전체와 접근성 이름 — aria-label·title·aria-labelledby가 가리키는 글자)를 감싼
+  // 글자로 더한다. 칸의 이름은 첫 label(숨긴 것일 수 있다)에서 오므로 보이는 label의 결제 문구도 판정에 넣고, 그 글자가
+  // 승인 뒤 바뀌면 재확인이 멈춘다. (이런 칸은 자동 실행하지 않는다 — autoApproveBlock의 proxy.)
+  const pressed = [labelText(label), accessibleHint(label)]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const outerText = [risk.outerText ?? "", pressed].filter(Boolean).join(" ");
+  const merge = (base: string[] | undefined, extra: string[]) => {
+    const out = [...(base ?? [])];
+    for (const u of extra) if (!out.includes(u)) out.push(u);
+    return out;
+  };
+  const actions = merge(risk.aroundFormActions, around.actions);
+  const urls = merge(risk.scopeSubmitUrls, around.changed);
+  return {
+    ...risk,
+    paymentContext: !!risk.paymentContext || inPaymentContext(label, labelForm),
+    submitsPersonal:
+      !!risk.submitsPersonal ||
+      (!!labelForm && labelForm !== ownForm && formHasPersonalValues(labelForm)) ||
+      personalValuedInScopes(scopes).some((p) => p !== el),
+    ...(actions.length ? { aroundFormActions: actions } : {}),
+    ...(urls.length ? { scopeSubmitUrls: urls } : {}),
+    ...(outerText ? { outerText } : {}),
+  };
+}
+
+// 칸 자신의 위험 신호.
+function fieldRisk(el: HTMLElement): FieldRisk {
+  const form = isFieldElement(el) ? el.form ?? el.closest("form") : null;
+  const submitTo = formDestination(el, form);
+  // 기존 칸 값까지 합친 제출 주소(change 처리기로 바로 제출되면 숨은 next=https://… 도 함께 간다).
+  const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo) : "";
+  // 선택 칸은 표시 문구로 고르면 실제 option.value가, checkbox·radio는 자기 value가 들어가므로 주소처럼 보이는
+  // 값을 미리 풀어 둔다(change 처리기가 그 값으로 이동하거나 양식을 제출하는 페이지). 한도를 넘으면 묻는다.
+  const choiceUrls = choiceUrlsOf(el);
+  return {
+    // checkbox·radio는 체크하면 자기 value가 실리므로, 그 값이 개인정보 모양이어도 개인정보 칸으로 본다.
+    // 선택 칸은 표시 문구로 골라도 실제 option.value가 들어가므로, 개인정보 모양의 선택지가 있으면 개인정보 칸으로 본다.
+    personal:
+      isPersonalField(el) ||
+      (isTag(el, "input") && (el.type === "checkbox" || el.type === "radio") && controlHasPersonalValue(el)) ||
+      (isTag(el, "select") && Array.from(el.options).some((o) => looksPersonalValue(o.value))),
+    // 양식 없는 화면은 주변 입력 칸 묶음을 본다(change 처리기가 화면 전체 값을 저장하는 SPA 설정 화면).
+    // 양식 안 칸도 주변 범위(대화상자, 없으면 화면)의 다른 양식을 본다(change 처리기가 그 양식을 제출할 수 있다).
+    submitsPersonal:
+      (!!form && formHasPersonalValues(form)) ||
+      personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
+    // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
+    ...(() => {
+      const full = isFieldElement(el)
+        ? `${resolveLabel(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
+        : "";
+      return full ? { outerText: full } : {};
+    })(),
+    // 결제 화면의 칸(체크하면 change 처리기가 결제하는 '구매 확정' 체크박스 등), 결제 문구가 달린 선택지가 있는 선택 칸.
+    paymentContext:
+      inPaymentContext(el, form) ||
+      // 체크하면 실리는 checkbox·radio의 name=value에 결제 문구가 있으면(value="purchase", name="confirm_order").
+      (isTag(el, "input") &&
+        (el.type === "checkbox" || el.type === "radio") &&
+        [el.value, el.name].some((v) => PAYMENT_TEXT_RE.test(v) || PAYMENT_TEXT_RE.test(splitIdentifier(v)))) ||
+      (isTag(el, "select") &&
+        Array.from(el.options).some((o) => {
+          const text = `${o.textContent ?? ""} ${o.value}`;
+          return PAYMENT_TEXT_RE.test(text) || PAYMENT_TEXT_RE.test(splitIdentifier(text));
+        })),
+    ...(submitTo ? { submitTo } : {}),
+    ...(submitUrl ? { submitUrl } : {}),
+    // 양식 밖 칸이면 범위 안 다른 양식들의 제출 주소도 본다.
+    ...(() => {
+      if (form) {
+        // 양식 안 칸: 제출 버튼들의 formaction(기본 action과 다른 것)과 지금 값을 합친 주소도 본다
+        // (change 처리기가 form.requestSubmit(button)으로 그 주소에 제출할 수 있다).
+        const own = otherDestinations(form, submitTo);
+        // 주변 범위의 다른 양식: 값이 바뀐 양식의 제출 주소와, 모든 양식의 action(change 처리기가 입력값을 옮겨
+        // 제출할 수 있다 — 승인 판정에서 사이트 경계와 결제·개인정보 주소를 본다).
+        const around = scopeSubmitUrls(fieldFormlessScopes(el).filter((s) => s.node !== form));
+        const urls = [...(own.scopeSubmitUrls ?? []), ...around.changed.filter((u) => !(own.scopeSubmitUrls ?? []).includes(u))];
+        return {
+          ...(own.scopeFormActions ? { scopeFormActions: own.scopeFormActions } : {}),
+          ...(urls.length ? { scopeSubmitUrls: urls } : {}),
+          ...(around.actions.length ? { aroundFormActions: around.actions } : {}),
+        };
+      }
+      const { changed, actions } = scopeSubmitUrls(fieldFormlessScopes(el));
+      return {
+        ...(changed.length ? { scopeSubmitUrls: changed } : {}),
+        ...(actions.length ? { scopeFormActions: actions } : {}),
+      };
+    })(),
+    ...(choiceUrls.length ? { choiceUrls } : {}),
+    ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
+    baseUri: el.baseURI,
+  };
+}
 
 // select 선택지의 보이는 글자(공백 정리). 고르기·최종 확인이 같은 글자를 쓴다. label 속성이 있으면 그것,
 // 없으면 선택지 안의 글자에서 숨긴·편집 하위 내용을 뺀 것(커스텀 select의 <option>공개<span hidden>…</span>).
@@ -774,13 +850,16 @@ function requestProblem(el: FieldElement, value: string): string | null {
 function fieldForModel(el: FieldElement, id: string): FormField {
   // 칸 자신이 편집 영역·숨은 영역 안이면 이름·선택지도 돌려주지 않는다.
   const area = inProtectedArea(el, true);
+  // 행 문맥은 등록한 기술의 것(비교에 고정된 글자)을 그대로 돌려준다.
+  const context = registeredInfo(id)?.modelContext;
   const field: FormField = {
     id,
-    label: modelName(el),
+    label: fieldModelName(el),
     placeholder:
       !area && !isTag(el, "select") ? (el.getAttribute("placeholder") ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "",
     type: describeType(el),
     role: el.getAttribute("role") ?? "",
+    ...(context ? { context } : {}),
   };
   if (isTag(el, "select")) {
     if (el.multiple) field.multiple = true;
@@ -821,6 +900,8 @@ export function findFormFields(_args: { onlyVisible?: boolean }): FormField[] {
 }
 
 // 보이는 칸만 돌려준다. 화면에 보이지 않는 칸(onlyVisible:false로 찾던 숨은 칸)은 이제 돌려주지 않는다(#43).
+// 다만 숨긴 checkbox·radio라도 구조로 연결된 보이는 label이 있으면 돌려준다(#56 — 채우기는 다른 checkbox·radio와
+// 같은 경로로 체크 상태를 쓰고 input·change를 보낸다. label에 click을 보내지 않는다).
 function collectFormFields(): FormField[] {
   const fields: FormField[] = [];
 
@@ -828,7 +909,7 @@ function collectFormFields(): FormField[] {
     root.querySelectorAll("input, textarea, select").forEach((el) => {
       if (!isFieldElement(el)) return;
       if (isTag(el, "input") && SKIP_INPUT_TYPES.has(el.type)) return;
-      if (!isVisible(el)) return;
+      if (!isVisible(el) && !proxyLabel(el)) return;
       if (el.disabled) return;
       if (!isTag(el, "select") && el.readOnly) return;
 
@@ -962,6 +1043,8 @@ export async function fillFormFields(
   // 한 칸이 승인 뒤 위험 변화(제출 주소·이름·개인정보)로 막히면 남은 칸도 채우지 않는다
   // (앞 칸의 처리기가 뒤 칸을 바꿔 둔 것일 수 있다).
   let halted = false;
+  // 이 묶음에서 칸에 쓰기를 시작했는지(그 뒤의 칸은 입력 도중의 비교로 확인한다).
+  let touched = false;
   for (const f of args.fills) {
     if (halted) {
       results.push({ id: f.id, label: "", applied: false, note: "앞 칸에서 위험 변화가 보여 채우지 않았습니다. 다시 찾으세요." });
@@ -971,7 +1054,9 @@ export async function fillFormFields(
     let info: TargetInfo;
     try {
       // 앞 칸을 채우면서 페이지가 행을 바꿨을 수 있어 칸마다 행 글자까지 다시 확인한다. 바뀐 칸만 건너뛴다.
-      ({ el, info } = takeApproved(f.id, callId, FIELD_KIND.prefix));
+      // 이 묶음에서 앞 칸에 이미 입력 이벤트를 보냈으면 입력 도중의 비교(원문 행 글자가 그대로면 모델용 행 문맥만
+      // 바뀐 것 허용)를 쓴다 — 같은 행의 앞 칸 입력 처리기가 행 안의 숨은 안내 글을 보이게 하는 경우.
+      ({ el, info } = takeApproved(f.id, callId, FIELD_KIND.prefix, touched));
     } catch (err) {
       results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
       // 대상이 사라진 것이 아니라 위험이 생긴 것(riskAdded)이면 남은 칸도 멈춘다.
@@ -1087,11 +1172,12 @@ export async function fillFormFields(
     noteWritten(callId, el, expectedSig ?? intended);
     // input 처리기가 action·숨은 값·대상을 바꿨으면 change(제출로 이어질 수 있다)를 보내지 않는다.
     const guard = (): string | null => {
-      const changed = recheckApproved(FIELD_KIND, el, info);
+      const changed = recheckApproved(FIELD_KIND, el, info, null, true);
       if (changed) return `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${changed}). 다시 찾으세요.`;
       return driftReason();
     };
     let filled: boolean;
+    touched = true;
     try {
       filled = fillOne(
         el,
@@ -1140,7 +1226,7 @@ export async function fillFormFields(
       continue;
     }
     // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다.
-    const changed = recheckApproved(FIELD_KIND, el, info);
+    const changed = recheckApproved(FIELD_KIND, el, info, null, true);
     if (changed) {
       result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
     } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual && sameIgnoringSpace(actual, value))) {
