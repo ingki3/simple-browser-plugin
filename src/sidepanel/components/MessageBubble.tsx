@@ -7,6 +7,7 @@ import { KO } from "../i18n/ko";
 import { ToolPreviewCard } from "./ToolPreviewCard";
 import { ToolResultCard } from "./ToolResultCard";
 import { PageOfferCard } from "./PageOfferCard";
+import { HopLimitCard } from "./HopLimitCard";
 
 interface Props {
   message: ChatMessage;
@@ -45,6 +46,12 @@ export function MessageBubble({ message, onApprove, onCancel, showThinking }: Pr
       return (
         <div className="msg msg-tool">
           <ToolPreviewCard {...message} onApprove={onApprove} onCancel={onCancel} />
+        </div>
+      );
+    case "hop_limit":
+      return (
+        <div className="msg msg-tool">
+          <HopLimitCard {...message} onApprove={onApprove} onCancel={onCancel} />
         </div>
       );
     case "tool_result":

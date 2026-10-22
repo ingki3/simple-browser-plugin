@@ -32,7 +32,7 @@ export function MessageList({ onApprove, onCancel }: Props) {
     lastMsg.streaming &&
     (lastMsg.text.length > 0 || lastMsg.thoughtText.length > 0);
   const lastIsPendingApproval =
-    lastMsg?.type === "tool_pending" && lastMsg.resolved === null;
+    (lastMsg?.type === "tool_pending" || lastMsg?.type === "hop_limit") && lastMsg.resolved === null;
   const showThinking =
     streaming && !lastIsStreamingAssistant && !lastIsPendingApproval;
 

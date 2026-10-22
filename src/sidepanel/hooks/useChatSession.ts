@@ -43,6 +43,20 @@ export function useChatSession() {
         case "status":
           s.setStatus(msg.text);
           return;
+        case "hop_progress":
+          s.setHopProgress({ used: msg.used, limit: msg.limit });
+          return;
+        case "hop_limit":
+          s.addHopLimit({
+            id: `h${msg.callId}`,
+            type: "hop_limit",
+            callId: msg.callId,
+            used: msg.used,
+            extra: msg.extra,
+            summary: msg.summary,
+            resolved: null,
+          });
+          return;
         case "tool_pending":
           s.addToolPending({
             id: `t${msg.callId}`,
