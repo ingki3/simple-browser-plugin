@@ -7,7 +7,7 @@ import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
 import { describeDifference, sameApproved, sameBase, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
-import { fieldValueSignature, linkHrefOf } from "./context";
+import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { cleanModelText } from "@/lib/modelText";
 import { groupLabel, modelText } from "./modelText";
 
@@ -294,6 +294,8 @@ export interface Relation {
   via: "controls" | "owns" | null;
   trigger: WeakRef<HTMLElement> | null;
   triggerBase: TargetInfo | null;
+  // 트리거 자신이 다른 목록 안의 항목인지(중첩 메뉴). 실행 직전에도 같아야 한다.
+  nested: boolean;
   popup: WeakRef<Element>;
 }
 
@@ -307,13 +309,33 @@ function isTrigger(el: Element): boolean {
   return popup !== null && popup.trim().toLowerCase() !== "false";
 }
 
-function popupOf(el: HTMLElement): Element {
-  let cur: Element | null = parentAcross(el);
-  for (let depth = 0; cur && depth < 40; depth++) {
+// 합성 트리 부모: 슬롯에 배치된 노드는 슬롯, shadow root 맨 위는 host, 같은 출처 iframe 문서 맨 위는 frame 요소.
+function composedParent(el: Element): Element | null {
+  const parent = eventParent(el);
+  if (parent) return parent;
+  try {
+    return el.ownerDocument.defaultView?.frameElement ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// 가장 가까운 listbox·menu 조상(합성 트리 경로). 없으면 자신. 끝까지 보지 못하면 null(소속을 정할 수 없음).
+function popupOf(el: HTMLElement): Element | null {
+  let cur: Element | null = composedParent(el);
+  for (let depth = 0; cur; depth++) {
+    if (depth >= 200) return null;
     if (POPUP_ROLES.has((cur.getAttribute("role") ?? "").trim().toLowerCase())) return cur;
-    cur = parentAcross(cur);
+    cur = composedParent(cur);
   }
   return el;
+}
+
+// 트리거가 다른 목록 안의 항목(중첩 메뉴)인지. 소속을 끝까지 확인하지 못해도 중첩으로 본다(더 묻는 쪽).
+function nestedTrigger(trigger: HTMLElement): boolean {
+  if (isChoice(trigger)) return true;
+  const popup = popupOf(trigger);
+  return popup === null || popup !== trigger;
 }
 
 // 펼쳐진 트리거들(접근 가능한 모든 문서·열린 shadow root).
@@ -342,6 +364,7 @@ function linkVia(trigger: Element, targets: Element[]): "controls" | "owns" | nu
 // 선택지의 관계. 정할 수 없으면 null.
 export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = expandedTriggers()): Relation | null {
   const popup = popupOf(el);
+  if (!popup) return null;
   const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
   for (const t of expanded) {
     const via = linkVia(t, [popup, el]);
@@ -352,6 +375,7 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     via,
     trigger: trigger ? new WeakRef(trigger) : null,
     triggerBase: trigger ? baseInfo(kind, trigger) : null,
+    nested: trigger ? nestedTrigger(trigger) : false,
     popup: new WeakRef(popup),
   });
   if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via);
@@ -366,6 +390,7 @@ function relationDifference(before: Relation, now: Relation | null): string | nu
   if (before.mode !== now.mode || before.via !== now.via) return "선택지와 트리거의 연결이 바뀜";
   if (before.popup.deref() !== now.popup.deref()) return "선택지 목록이 바뀜";
   if ((before.trigger?.deref() ?? null) !== (now.trigger?.deref() ?? null)) return "펼쳐진 트리거가 바뀜";
+  if (before.nested !== now.nested) return "펼쳐진 트리거가 다른 목록 안으로 옮겨짐";
   if (before.triggerBase && now.triggerBase && !sameBase(before.triggerBase, now.triggerBase)) {
     return `펼쳐진 트리거의 ${describeDifference(before.triggerBase, now.triggerBase)}`;
   }
@@ -388,7 +413,7 @@ function withTrigger(kind: TargetKind, info: TargetInfo, relation: Relation | nu
     popup: relation.mode,
     ...(trigger ? { trigger: { ...fullInfo(kind, trigger), ...kind.risk?.(trigger) } } : {}),
     // 트리거가 선택지이거나 다른 목록(listbox·menu) 안에 있으면 중첩 메뉴다.
-    ...(trigger && (isChoice(trigger) || popupOf(trigger) !== trigger) ? { nestedPopup: true } : {}),
+    ...(relation.nested ? { nestedPopup: true } : {}),
   };
 }
 
