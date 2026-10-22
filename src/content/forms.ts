@@ -12,7 +12,7 @@ import {
 import { closestAcross, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
-import { inProtectedArea, modelName, modelText, optionHidden, subtreeTextInfo } from "./modelText";
+import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
   noteWritten,
@@ -66,12 +66,13 @@ function proxied(el: HTMLElement): boolean {
 }
 
 // 모델에 돌려주는 칸 이름. 숨긴 칸 자신에서 이름을 얻지 못하면(display:none·aria-hidden인 칸은 modelName이 비운다)
-// 대신 보여 주는 label의 화면 글자를 쓴다(입력값·편집 영역·숨은 글자는 modelText가 뺀다).
+// 대신 보여 주는 label의 이름(aria-labelledby·aria-label·화면 글자 — 아이콘 label이면 참조한 이름)을 쓴다
+// (입력값·편집 영역·숨은 글자는 modelName이 뺀다).
 function fieldModelName(el: HTMLElement): string {
   const name = modelName(el);
   if (name) return name;
   const label = proxied(el) ? proxyLabel(el) : null;
-  return label ? modelText(label, 200) : "";
+  return label ? modelName(label, 200) : "";
 }
 
 // label 안에 든 입력 요소의 글자(select의 선택지 등)는 빼고 label 자신의 글자만 읽는다.
@@ -673,9 +674,10 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   // 주소는 판정용 목록(scopeSubmitUrls — 입력 칸은 묶음 입력이 값을 바꾸므로 값까지는 비교하지 않는다)에 더한다.
   const ownForm = isFieldElement(el) ? el.form : null;
   const around = scopeSubmitUrls(scopes.filter((sc) => sc.node !== ownForm));
-  // 실제로 누르는 label의 글자(원문 전체와 접근성 이름)를 감싼 글자로 더한다. 칸의 이름은 첫 label(숨긴 것일 수 있다)에서
-  // 오므로, 누르는 label의 결제 문구('구매 확정')가 자동 실행 판정에서 빠지지 않게 하고 그 글자 변화도 재확인에 고정한다.
-  const pressed = [labelText(label), label.getAttribute("aria-label") ?? "", label.getAttribute("title") ?? ""]
+  // 실제로 누르는 label의 글자(원문 전체와 접근성 이름 — aria-label·title·aria-labelledby가 가리키는 글자)를 감싼 글자로
+  // 더한다. 칸의 이름은 첫 label(숨긴 것일 수 있다)에서 오므로 누르는 label의 글자를 카드·판정에 보이게 하고, 그 글자가
+  // 승인 뒤 바뀌면 재확인이 멈춘다. (이런 칸은 자동 실행하지 않는다 — autoApproveBlock의 proxy.)
+  const pressed = [labelText(label), accessibleHint(label)]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -1091,6 +1093,8 @@ export async function fillFormFields(
   // 한 칸이 승인 뒤 위험 변화(제출 주소·이름·개인정보)로 막히면 남은 칸도 채우지 않는다
   // (앞 칸의 처리기가 뒤 칸을 바꿔 둔 것일 수 있다).
   let halted = false;
+  // 이 묶음에서 칸에 쓰기를 시작했는지(그 뒤의 칸은 입력 도중의 비교로 확인한다).
+  let touched = false;
   for (const f of args.fills) {
     if (halted) {
       results.push({ id: f.id, label: "", applied: false, note: "앞 칸에서 위험 변화가 보여 채우지 않았습니다. 다시 찾으세요." });
@@ -1100,7 +1104,9 @@ export async function fillFormFields(
     let info: TargetInfo;
     try {
       // 앞 칸을 채우면서 페이지가 행을 바꿨을 수 있어 칸마다 행 글자까지 다시 확인한다. 바뀐 칸만 건너뛴다.
-      ({ el, info } = takeApproved(f.id, callId, FIELD_KIND.prefix));
+      // 이 묶음에서 앞 칸에 이미 입력 이벤트를 보냈으면 입력 도중의 비교(원문 행 글자가 그대로면 모델용 행 문맥만
+      // 바뀐 것 허용)를 쓴다 — 같은 행의 앞 칸 입력 처리기가 행 안의 숨은 안내 글을 보이게 하는 경우.
+      ({ el, info } = takeApproved(f.id, callId, FIELD_KIND.prefix, touched));
     } catch (err) {
       results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
       // 대상이 사라진 것이 아니라 위험이 생긴 것(riskAdded)이면 남은 칸도 멈춘다.
@@ -1227,6 +1233,7 @@ export async function fillFormFields(
       return driftReason();
     };
     let filled: boolean;
+    touched = true;
     try {
       filled = fillOne(
         el,

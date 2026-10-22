@@ -633,10 +633,12 @@ function stampConsent(info: TargetInfo, callId: string): TargetInfo {
 export class RiskAddedError extends Error {}
 
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
+// inFlight: 같은 승인 묶음의 앞 칸에 이미 입력 이벤트를 보낸 뒤면 입력 도중의 비교(sameApprovedInFlight)를 쓴다.
 export function takeApproved(
   id: string,
   callId: string,
   prefix: string,
+  inFlight = false,
 ): { el: HTMLElement; info: TargetInfo; relation: Relation | null } {
   const known = entryOf(id, prefix);
   const approved = known.approved;
@@ -646,7 +648,7 @@ export function takeApproved(
   const { entry, el } = resolve(id);
   entry.approved = null;
   const now = fullInfo(entry.kind, el);
-  if (!sameApproved(now, approved.info)) {
+  if (!(inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info))) {
     const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
     // (묶음 입력의 남은 칸도 멈춘다).
