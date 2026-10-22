@@ -2,10 +2,13 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <!-- 문서 변환(Worker·wasm·pdf.js)과 기사 HTML 파싱만 한다. 자원 요청은 확장 내부로 제한한다. -->
+    <!-- 문서 변환(Worker·wasm·pdf.js)과 기사 HTML 파싱만 한다. 자원 요청은 확장 내부로 제한한다.
+         style-src의 'unsafe-inline': 받아 온 기사 HTML을 DOMParser로 파싱하면 그 문서가 이 CSP를 물려받아
+         style 속성·<style>마다 위반 기록이 확장 오류 목록에 쌓인다(파싱 방식을 바꿔도 같음). 이 문서는 아무것도
+         그리지 않고 파싱한 노드를 넣지 않으며, 이미지·글꼴·연결은 'self'로 막혀 CSS로 밖에 요청할 수 없다. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self'; media-src 'none'; frame-src 'none'; font-src 'self'; connect-src 'self'; worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'"
+      content="default-src 'self'; img-src 'self'; media-src 'none'; frame-src 'none'; font-src 'self'; connect-src 'self'; worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'"
     />
     <title>문서 변환</title>
   </head>
