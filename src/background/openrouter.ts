@@ -1009,7 +1009,15 @@ export class ChatAgent {
           // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
           // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
           if (chatGrant.covered && toolName === "download_images") {
-            const why = await prepareGrantImages(callId, (parsedArgs as { urls: string[] }).urls);
+            // 받는 동안 중단·새 대화·패널 닫힘이면(cancelInFlight가 activeTool을 끊는다) 남은 주소로 요청하지 않는다.
+            const prefetchAbort = new AbortController();
+            this.activeTool = prefetchAbort;
+            let why: string | null;
+            try {
+              why = await prepareGrantImages(callId, (parsedArgs as { urls: string[] }).urls, prefetchAbort.signal);
+            } finally {
+              if (this.activeTool === prefetchAbort) this.activeTool = null;
+            }
             if (this.isStale(turn)) {
               discardGrantImages(callId);
               return false;

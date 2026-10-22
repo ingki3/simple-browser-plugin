@@ -7,7 +7,7 @@
 
 import type { ToolName } from "./messages.ts";
 import { sensitiveUrlReason } from "./autoApprove.ts";
-import { sanitizeFilenameSegment } from "./sanitize.ts";
+import { DEFAULT_DOWNLOAD_FOLDER, sanitizeFilenameSegment } from "./sanitize.ts";
 
 export type ChatGrantTool = "read_linked_pages" | "translate_page" | "download_images";
 
@@ -106,7 +106,7 @@ export function imageSaveGrantBlock(urls: readonly string[], pageImages: Readonl
 
 // 저장 폴더 범위: 실제로 저장하는 폴더 이름(startImageDownloads와 같은 정리). 이름이 달라도 같은 폴더로 정리되면 같다.
 export function downloadScope(folder: string): string {
-  return sanitizeFilenameSegment(folder || "downloads");
+  return sanitizeFilenameSegment(folder || DEFAULT_DOWNLOAD_FOLDER);
 }
 
 // 허락으로 카드 없이 저장할 때는 브라우저 다운로드(그 호스트의 쿠키를 싣고 리다이렉트를 따라간다)를 쓰지 않고,

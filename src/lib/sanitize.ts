@@ -40,6 +40,9 @@ export function sanitizeDownloadUrls(urls: string[]): string[] {
   return out;
 }
 
+// 설정에도 호출에도 저장 폴더가 없을 때 쓰는 폴더.
+export const DEFAULT_DOWNLOAD_FOLDER = "downloads";
+
 export function sanitizeFilenameSegment(raw: string): string {
   return raw
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")

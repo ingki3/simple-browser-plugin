@@ -75,6 +75,8 @@ export async function prepareGrantImages(callId: string, urls: string[], signal?
   const out = new Map<string, string>();
   let total = 0;
   for (const url of unique) {
+    // 중단되면 남은 주소로 요청을 보내지 않는다.
+    if (signal?.aborted) return "중단됨";
     let got: Awaited<ReturnType<typeof fetchImage>>;
     try {
       got = await fetchImage(url, signal);

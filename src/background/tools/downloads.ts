@@ -1,4 +1,4 @@
-import { deriveFilenameFromUrl, sanitizeDownloadUrls, sanitizeFilenameSegment } from "@/lib/sanitize";
+import { DEFAULT_DOWNLOAD_FOLDER, deriveFilenameFromUrl, sanitizeDownloadUrls, sanitizeFilenameSegment } from "@/lib/sanitize";
 
 export interface StartDownloadsResult {
   startedCount: number;
@@ -13,7 +13,7 @@ export async function startImageDownloads(
   prepared?: ReadonlyMap<string, string>,
 ): Promise<StartDownloadsResult> {
   const safe = sanitizeDownloadUrls(urls);
-  const folder = sanitizeFilenameSegment(folderPrefix || "downloads");
+  const folder = sanitizeFilenameSegment(folderPrefix || DEFAULT_DOWNLOAD_FOLDER);
   let started = 0;
 
   for (let i = 0; i < safe.length; i += 1) {

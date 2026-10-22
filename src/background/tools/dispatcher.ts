@@ -13,7 +13,7 @@ import type {
   YoutubeTranscript,
 } from "@/lib/messages";
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
-import { normalizeNavigationUrl } from "@/lib/sanitize";
+import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
 import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
 import { startImageDownloads } from "./downloads";
@@ -199,7 +199,8 @@ export async function buildToolPreview(
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
       const { downloadFolderPrefix } = await getSettings();
-      const folder = args.folderPrefix || downloadFolderPrefix;
+      // 빈 값도 실제로 저장할 기본 폴더로 확정한다(카드·허락 판정·실행이 같은 폴더를 보게).
+      const folder = args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER;
       const sample = args.urls.slice(0, 5).map((u) => `• ${truncate(u, 100)}`);
       const extra = args.urls.length > 5 ? `\n… 그 외 ${args.urls.length - 5}개` : "";
       return {
@@ -628,8 +629,9 @@ async function runTool(
     }
     case "download_images": {
       const args = parsedArgs as ToolArgs["download_images"];
-      // 승인을 거친 호출은 미리보기가 폴더를 고정한 인자(execArgs)로 온다. 설정은 그 폴더가 비었을 때만 본다.
-      const folder = args.folderPrefix || (await getSettings()).downloadFolderPrefix;
+      // download_images는 늘 미리보기(카드·허락 판정)를 거치고, 미리보기가 확정한 폴더(execArgs)로 온다.
+      // 실행부는 설정을 다시 읽지 않는다(그 사이 설정이 바뀌어도 확인한 폴더에 저장).
+      const folder = args.folderPrefix || DEFAULT_DOWNLOAD_FOLDER;
       // 이번 대화 허락으로 실행하는 호출이면 쿠키 없이 미리 받은 이미지만 저장한다(grantImages.ts).
       const prepared = takeGrantImages(callId);
       const res = await startImageDownloads(args.urls, folder, prepared ?? undefined);
