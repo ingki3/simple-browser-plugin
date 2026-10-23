@@ -200,10 +200,20 @@ function isSubmitter(c: Element): boolean {
 const HX_URL_ATTRS = ["get", "post", "put", "patch", "delete"].flatMap((v) => [`hx-${v}`, `data-hx-${v}`]);
 
 // 대상·조상(shadow 경계 너머 포함)·양식에 달린 htmx 요청 주소(절대 주소로). 조상의 요청은 대상에서 올라온 이벤트로 일어날 수 있다.
-function requestUrlsOf(el: Element, form: HTMLFormElement | null): string[] {
-  const nodes: Element[] = [];
-  for (let cur: Element | null = el, n = 0; cur && n < 60; cur = eventParent(cur), n++) nodes.push(cur);
-  if (form) nodes.push(form);
+// label이 작동시키는 컨트롤 등 실제로 이벤트를 받는 컨트롤(starts)의 경로도 따로 본다. 이벤트 경로는 끝(문서)까지 본다.
+// 비정상적으로 깊어 끝까지 못 보면 null(모름 — 호출한 쪽이 묻는 쪽으로 다룬다).
+const MAX_EVENT_PATH = 10_000;
+function requestUrlsOf(starts: Array<Element | null>, form: HTMLFormElement | null): string[] | null {
+  const nodes = new Set<Element>();
+  for (const start of starts) {
+    let n = 0;
+    for (let cur: Element | null = start; cur; cur = eventParent(cur)) {
+      if (++n > MAX_EVENT_PATH) return null;
+      if (nodes.has(cur)) break;
+      nodes.add(cur);
+    }
+  }
+  if (form) nodes.add(form);
   const out: string[] = [];
   for (const node of nodes) {
     for (const attr of HX_URL_ATTRS) {
@@ -244,7 +254,8 @@ export function deleteParamOf(
   if (form && formElements(form).some((c) => isTag(c, "input") && (c as HTMLInputElement).type === "hidden" && hit(c))) {
     return true;
   }
-  return requestUrlsOf(el, form).some(destructiveRoute);
+  const urls = requestUrlsOf([el, ...controls], form);
+  return urls === null || urls.some(destructiveRoute);
 }
 
 // select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자, optionByLabel과 같은 글자).
