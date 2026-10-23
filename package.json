@@ -1,6 +1,6 @@
 {
   "name": "simple-browser-plugin",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "description": "OpenRouter 기반 Chrome Side Panel LLM 채팅 에이전트",
   "type": "module",
