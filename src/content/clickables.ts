@@ -7,6 +7,9 @@ import {
   choiceUrlsOf,
   controlHasPersonalValue,
   formDestination,
+  declaresDelete,
+  deleteParamOf,
+  opaqueRequestOf,
   formHasPersonalValues,
   formSubmissionUrl,
   isPersonalField,
@@ -278,6 +281,11 @@ const CLICK_KIND: TargetKind = {
       // 20개를 넘으면 끝까지 보지 못했다는 표시를 넣는다(늘 묻게 된다).
       ...(pingUrls.length ? { pingUrls: pingUrls.length > 20 ? [...pingUrls.slice(0, 20), "about:too-many-pings"] : pingUrls } : {}),
       ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
+      ...(declaresDelete(el, [control, linked], form) ? { deleteMethod: true } : {}),
+      // 누른 제출 버튼·클릭으로 바뀌는 checkbox·radio의 name=value, 양식의 숨은 칸, htmx 요청 주소의 삭제 단서(#62).
+      ...(deleteParamOf(el, control, [control, linked], form) ? { deleteParam: true } : {}),
+      // 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·요청 변형 속성 — #62 fail-closed).
+      ...(opaqueRequestOf(el, control, [control, linked], form) ? { opaqueRequest: true } : {}),
     };
   },
 };

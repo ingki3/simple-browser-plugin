@@ -1,20 +1,24 @@
 import type { FormField } from "@/lib/messages";
 import {
+  DESTRUCTIVE_TEXT_RE,
   FIELD_PAYMENT_HINT_RE as PAYMENT_RE,
   PAYMENT_TEXT_RE,
   PERSONAL_HINT_RE,
   SECRET_HINT_RE,
   decodeDeepText,
+  destructiveRoute,
   looksPersonalValue,
   sensitiveUrlReason,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { closestAcross, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
+import { choiceState, sameChoiceState, type ChoiceState } from "./choiceState";
+import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
+  noteChoiceWritten,
   noteWritten,
   peekApproved,
   recheckApproved,
@@ -158,9 +162,326 @@ function nativeGetter<T>(proto: object, prop: string, obj: object): T | undefine
   return get ? (get.call(obj) as T) : undefined;
 }
 
-function formElements(form: HTMLFormElement): Element[] {
+export function formElements(form: HTMLFormElement): Element[] {
   const list = nativeGetter<HTMLFormControlsCollection>(HTMLFormElement.prototype, "elements", form);
   return list ? Array.from(list) : [];
+}
+
+// ---------------------------------------------------------------------------
+// 삭제 신호(#62 — 되돌리기 어려운 동작은 자동 실행해도 늘 묻는다). 클릭(clickables.ts)과 입력(FIELD_KIND)이 함께 쓴다.
+// 구조 선언 밖의 신호는 낱말·경로 단서라 더 묻는 쪽의 최선일 뿐 완전할 수 없다.
+// ---------------------------------------------------------------------------
+
+// HTML 양식의 method는 get·post뿐이라, 프레임워크가 쓰는 선언을 본다: rails-ujs·Turbo의 data-method·data-turbo-method,
+// htmx의 hx-delete, 양식의 숨은 _method 칸이나 제출 버튼의 name=_method(Rails·Laravel의 메서드 덮어쓰기).
+export const DELETE_DECL_SELECTOR =
+  '[data-method="delete" i], [data-turbo-method="delete" i], [hx-delete], [data-hx-delete]';
+
+// 누르거나 값을 바꾸면 삭제 요청을 보낸다고 구조로 선언했는지. controls: 실제로 작동할 컨트롤(누른 제출 버튼,
+// label이 작동시키는 checkbox, 입력 칸 자신).
+// skip: 판정에서 뺄 칸들(입력 묶음이 쓴 상태 그대로인 선택 칸 — FIELD_KIND.deleteMethodExplained). 그 칸의 _method 값만 뺀다.
+export function declaresDelete(
+  el: Element,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+  skip: ReadonlySet<Element> = new Set(),
+): boolean {
+  if (closestAcross(el, DELETE_DECL_SELECTOR)) return true;
+  if (form && closestAcross(form, DELETE_DECL_SELECTOR)) return true;
+  // label이 작동시키는 컨트롤 등 실제로 눌릴 컨트롤의 선언도 본다(label만 보면 연결된 input의 hx-delete를 놓친다).
+  if (controls.some((c) => !!c && !!closestAcross(c, DELETE_DECL_SELECTOR))) return true;
+  const isDelete = (c: Element | null | undefined) =>
+    !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
+  if (controls.some((c) => !!c && !skip.has(c) && isDelete(c))) return true;
+  // 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 본다(자손만 보면 놓친다). name="elements"
+  // 칸이 form.elements를 가리지 못하게 플랫폼 접근자로 읽는다. 제출 버튼은 누른 것(controls)만 값이 실리므로 다른
+  // 제출 버튼(같은 양식의 '삭제' 버튼)의 _method는 보지 않는다.
+  return !!form && formElements(form).some((c) => !skip.has(c) && !isSubmitter(c) && isDelete(c));
+}
+
+// 눌렀을 때만 이름·값이 제출에 실리는 컨트롤(제출 버튼).
+function isSubmitter(c: Element): boolean {
+  if (isTag(c, "button")) return (c as HTMLButtonElement).type === "submit";
+  return isTag(c, "input") && ["submit", "image"].includes((c as HTMLInputElement).type);
+}
+
+// htmx 요청(#62) — 허용 목록 방식. htmx가 관여하면 기본은 "확인할 수 없음 → 묻기"이고, 카드 없이 자동 실행되는 것은
+// 이번 클릭·입력이 일으킬 수 있는 htmx 요청 요소(경로의 요소, 페이지의 모든 from: 리스너 — 선택자를 해석하지 않는다,
+// hx-boost 적용 요소)와 그 조상들에 달린 htmx 속성(hx-*·data-hx-*)이 모두 HX_ALLOWED에 들고 요청 메서드가 GET(hx-get, 또는
+// hx-boost의 링크·GET 양식)일 때뿐이다. 통과한 GET 요청에는 삭제 단서 검사(주소·요청 요소 자신의 name=value·양식이면 실릴 값)를
+// 그대로 적용한다. 허용 목록 밖의 속성(값·헤더를 더하거나 처리기·확장으로 요청을 고치는 것 등)은 하나만 있어도 묻는다.
+const HX_ALLOWED = new Set([
+  "get", "target", "swap", "select", "select-oob", "push-url", "replace-url", "indicator", "disabled-elt", "sync", "trigger", "boost",
+]);
+const HX_NON_GET = ["post", "put", "patch", "delete"];
+// 요청에 값을 더하는 rails-ujs 속성. 글자에 삭제 단서가 있으면 묻는다.
+const EXTRA_VALUE_ATTRS = ["data-params"];
+// 다른 요소의 이벤트로 요청하는 htmx 요소(hx-trigger="click from:#btn").
+// htmx가 포커스로 추적해 요청에 덮어쓰기·name=value를 쓸 수 있는 버튼.
+const TRACKABLE_BUTTON_SELECTOR = 'button, input[type="submit" i], input[type="button" i], input[type="image" i]';
+const MAX_TRACKABLE_BUTTONS = 2000;
+const HX_FROM_SELECTOR = '[hx-trigger*="from:" i], [data-hx-trigger*="from:" i]';
+const MAX_HX_FROM = 200;
+const MAX_EVENT_PATH = 10_000;
+
+// 요소에 달린 htmx 속성(이름은 data- 접두를 뗀 hx- 뒤 부분, 소문자)과 값.
+function hxAttrs(node: Element): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (const attr of Array.from(node.attributes)) {
+    const name = attr.name.toLowerCase().replace(/^data-/, "");
+    if (name.startsWith("hx-")) out.push([name.slice(3), attr.value]);
+  }
+  return out;
+}
+
+// 허용 목록 밖의 htmx 속성이 있는지. hx-trigger는 이벤트 필터([…] — 스크립트를 실행한다)와 js:·javascript:가 없어야 한다.
+function hxDisallowed(node: Element): boolean {
+  for (const [name, value] of hxAttrs(node)) {
+    if (!HX_ALLOWED.has(name)) return true;
+    if (name === "trigger" && (value.includes("[") || /(^|[\s,])(js|javascript)\s*:/i.test(value))) return true;
+  }
+  return false;
+}
+
+const hasHx = (node: Element, verb: string) => node.hasAttribute(`hx-${verb}`) || node.hasAttribute(`data-hx-${verb}`);
+
+// 요소에서 문서 끝까지(조상 전체, shadow 경계 너머). 깊이를 넘으면 null.
+function chainOf(start: Element): Element[] | null {
+  const out: Element[] = [];
+  for (let cur: Element | null = start; cur; cur = eventParent(cur)) {
+    if (out.length >= MAX_EVENT_PATH) return null;
+    out.push(cur);
+  }
+  return out;
+}
+
+// 이 클릭·입력이 일으킬 수 있는 htmx·rails-ujs 요청 판정(위 규칙).
+// opaque: htmx 요청을 확인할 수 없음(허용 목록 밖 속성·GET 아님·모름). del: 삭제 단서(GET 요청의 주소·값, data-params).
+// skip: 삭제 단서 판정에서 뺄 칸들(입력 묶음이 승인받은 삭제 선택지를 쓴 칸 — deleteParamOf와 같은 뜻).
+function requestSignals(
+  starts: Array<Element | null>,
+  form: HTMLFormElement | null,
+  words: (text: string) => boolean,
+  skip: ReadonlySet<Element> = new Set(),
+): { opaque: boolean; del: boolean } {
+  const out = { opaque: false, del: false };
+  const nodes = new Set<Element>();
+  for (const start of starts) {
+    if (!start) continue;
+    const chain = chainOf(start);
+    if (!chain) return { opaque: true, del: false };
+    for (const n of chain) nodes.add(n);
+  }
+  // GET 요청 요소 하나의 삭제 단서: hx-get 주소, 요청 요소 자신의 name=value, 양식이면 실릴 값. 주소로 풀리지 않으면 모름.
+  const checkGet = (node: Element): void => {
+    for (const attr of ["hx-get", "data-hx-get"]) {
+      const v = node.getAttribute(attr);
+      if (v === null) continue;
+      try {
+        if (destructiveRoute(new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href)) out.del = true;
+      } catch {
+        out.opaque = true;
+      }
+    }
+    if (!skip.has(node) && words(ownRequestText(node))) out.del = true;
+    if (isTag(node, "form")) {
+      const texts = submittedChoiceTexts(node as HTMLFormElement, skip);
+      if (texts === null) out.opaque = true;
+      else if (texts.some(words)) out.del = true;
+    }
+  };
+  // 양식 제출의 메서드·주소에 영향을 주는 속성(htmx가 관여할 때): 양식의 method와 누른 제출자의 formmethod는 있으면
+  // 'get'이어야 하고(빈 값 포함 그 밖은 묻는다), formaction은 주소의 삭제 단서를 본다(풀리지 않으면 모름).
+  // formenctype·formtarget은 요청 방식·결과 위치를 바꾸므로 해석하지 않고 묻는다.
+  const nonGet = (v: string | null) => v !== null && v.trim().toLowerCase() !== "get";
+  const checkFormMethod = (f: HTMLFormElement | null): void => {
+    if (f && nonGet(f.getAttribute("method"))) out.opaque = true;
+  };
+  // 제출자 덮어쓰기(form* 속성)와 name=value: htmx는 네이티브 제출 버튼이 아닌 버튼(type=button)도 포커스로 추적해 그 버튼의
+  // formmethod·formaction과 name=value를 요청에 쓴다. 그래서 type과 관계없이 경로의 모든 button·input을 본다.
+  // formmethod=get과 formaction(주소의 삭제 단서를 본다)·formnovalidate 밖의 form* 속성은 해석하지 않고 묻는다.
+  const checkOverrides = (c: Element): void => {
+    if (!isTag(c, "button") && !isTag(c, "input")) return;
+    for (const attr of Array.from(c.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (!name.startsWith("form") || name === "form") continue;
+      if (name === "formmethod") {
+        if (nonGet(attr.value)) out.opaque = true;
+      } else if (name === "formaction") {
+        try {
+          if (destructiveRoute(new URL(attr.value.trim() || c.ownerDocument.URL, c.baseURI).href)) out.del = true;
+        } catch {
+          out.opaque = true;
+        }
+      } else if (name !== "formnovalidate") out.opaque = true;
+    }
+    if (!skip.has(c) && words(ownRequestText(c))) out.del = true;
+  };
+  let htmxOnPath = false;
+  // 경로: 모든 노드의 htmx 속성이 허용 목록 안이어야 하고, 요청 메서드는 GET이어야 한다.
+  for (const node of nodes) {
+    if (hxAttrs(node).length) htmxOnPath = true;
+    if (hxDisallowed(node)) out.opaque = true;
+    if (HX_NON_GET.some((v) => hasHx(node, v))) out.opaque = true;
+    if (hasHx(node, "get")) checkGet(node);
+    const boost = node.getAttribute("hx-boost") ?? node.getAttribute("data-hx-boost");
+    // 부스트된 양식은 양식의 method(제출자의 formmethod 우선)로 요청한다 — 아래 checkFormMethod가 본다(링크는 GET).
+    if (boost !== null && boost.trim().toLowerCase() !== "false" && form) checkGet(form);
+    for (const attr of EXTRA_VALUE_ATTRS) {
+      const v = node.getAttribute(attr);
+      if (v && words(v)) out.del = true;
+    }
+  }
+  // 페이지의 모든 from: 리스너(어느 이벤트를 듣는지 해석하지 않는다): hx-get 요청 요소이고, 그 요소와 조상의 htmx 속성이
+  // 모두 허용 목록 안이어야 한다(hx-boost 양식처럼 hx-get이 없는 리스너는 메서드를 확인할 수 없어 묻는다).
+  // 접근 가능한 모든 루트(문서·열린 shadow root·같은 출처 iframe 문서 — getAccessibleRoots)에서 찾는다. 닫힌 shadow root와
+  // 다른 출처 iframe 안은 볼 수 없다(한계 — 그 안의 리스너가 이 이벤트를 듣는지는 알 수 없다).
+  let seenListeners = 0;
+  for (const root of getAccessibleRoots()) {
+    const listeners = root.querySelectorAll(HX_FROM_SELECTOR);
+    seenListeners += listeners.length;
+    if (seenListeners > MAX_HX_FROM) {
+      out.opaque = true;
+      break;
+    }
+    for (const r of Array.from(listeners)) {
+      const chain = chainOf(r);
+      if (!chain || chain.some(hxDisallowed) || !hasHx(r, "get") || HX_NON_GET.some((v) => hasHx(r, v))) {
+        out.opaque = true;
+        continue;
+      }
+      checkGet(r);
+      if (isTag(r, "form")) checkFormMethod(r as HTMLFormElement);
+    }
+  }
+  // 경로에 htmx가 있거나 페이지에 from: 리스너가 있으면(경로 밖 요청도 htmx가 포커스로 추적한 이 버튼의 formmethod·
+  // name=value를 쓸 수 있다 — form 속성이 양식 아닌 요소를 가리키는 연결 포함) 경로의 제출 덮어쓰기를 본다.
+  // htmx는 이전에 클릭·포커스로 추적한 버튼의 formmethod·formaction·name=value를 나중 요청(입력 칸의 change 등)에도 쓴다.
+  // 어느 버튼이 추적돼 있는지는 알 수 없으므로, htmx가 관여하면 접근 가능한 모든 루트의 버튼 전체를 같은 규칙으로 본다
+  // (하나라도 덮어쓰기·삭제 값이 있으면 묻는다 — fail-closed). 너무 많으면 모름.
+  if (htmxOnPath || seenListeners > 0) {
+    checkFormMethod(form);
+    for (const node of nodes) checkOverrides(node);
+    let seenButtons = 0;
+    for (const root of getAccessibleRoots()) {
+      const buttons = root.querySelectorAll(TRACKABLE_BUTTON_SELECTOR);
+      seenButtons += buttons.length;
+      if (seenButtons > MAX_TRACKABLE_BUTTONS) {
+        out.opaque = true;
+        break;
+      }
+      for (const b of Array.from(buttons)) checkOverrides(b);
+    }
+  }
+  return out;
+}
+
+// htmx GET 요청 요소 자신이 싣는 name=value 글자. 사용자가 치는 글자 칸·textarea의 값은 보지 않고 이름만 본다(입력값 보호,
+// 승인한 검색어 'delete' 입력 뒤 재검사에서 멈추지 않게). select·checkbox·radio·숨은 칸은 submittedText와 같은 규칙,
+// 그 밖의 요소(버튼 등)는 페이지가 정한 name·value 속성.
+function ownRequestText(node: Element): string {
+  const name = node.getAttribute("name") ?? "";
+  if (isTag(node, "textarea")) return name;
+  if (isTag(node, "select")) return submittedText(node) ?? name;
+  if (isTag(node, "input")) {
+    const type = (node as HTMLInputElement).type;
+    if (type === "checkbox" || type === "radio") return `${name} ${(node as HTMLInputElement).value}`;
+    if (type === "hidden" || ["button", "submit", "image", "reset"].includes(type)) return `${name} ${(node as HTMLInputElement).value}`;
+    return name;
+  }
+  return `${name} ${(node as HTMLButtonElement).value ?? node.getAttribute("value") ?? ""}`;
+}
+
+// 클릭·입력이 확인할 수 없는 htmx 요청(허용 목록 밖 속성·GET 아님 — 위 규칙)을 일으킬 수 있는지(#62, fail-closed).
+export function opaqueRequestOf(
+  el: Element,
+  submitter: Element | null,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+): boolean {
+  return requestSignals([el, ...controls, submitter, form], form, destructiveWords).opaque;
+}
+
+const destructiveWords = (text: string) => DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text));
+
+// 사용자가 글자를 쳐 넣는 칸(값을 보지 않는다 — 검색어 오탐·입력값 보호). 그 밖의 칸은 페이지가 정한 선택지 값이 실린다.
+const TYPED_INPUT_TYPES = new Set([
+  "text", "search", "email", "url", "tel", "password", "number", "date", "datetime-local", "month", "week", "time", "color", "range", "file",
+]);
+const MAX_FORM_CONTROLS = 5000;
+
+// 양식을 제출하면 실제로 실릴 선택 컨트롤의 name=value 글자. 누른 제출 버튼은 submitter로만 넣는다(다른 제출 버튼 값은
+// 실리지 않는다). 숨은 칸, 체크된 checkbox·radio, select의 선택된 option(value와 보이는 글자)을 넣고, 사용자가 치는
+// 글자 칸·textarea의 값은 넣지 않는다. 비활성 칸은 실리지 않는다. 칸이 너무 많으면 null(모름 — 묻는다).
+// skip: 판정에서 뺄 칸들(입력 묶음이 승인받은 삭제 선택지를 쓴 칸 — 재검사의 예상된 변화, targets.ts riskAdded).
+function submittedChoiceTexts(form: HTMLFormElement, skip: ReadonlySet<Element> = new Set()): string[] | null {
+  const controls = formElements(form);
+  if (controls.length > MAX_FORM_CONTROLS) return null;
+  const out: string[] = [];
+  for (const c of controls) {
+    if (skip.has(c) || isSubmitter(c)) continue;
+    const text = submittedText(c);
+    if (text !== null) out.push(text);
+  }
+  return out;
+}
+
+// 칸 하나가 요청에 싣는 name=value 글자. 실리지 않거나 보지 않는 칸은 null.
+// 숨은 칸, 체크된 checkbox·radio, select의 선택된 option(value와 보이는 글자). 사용자가 치는 글자 칸·textarea의 값은
+// 보지 않는다. 알 수 없는 type은 글자 칸으로 동작하지만 사용자가 친 값일 수 있어 이름만 본다. 비활성 칸은 실리지 않는다.
+function submittedText(c: Element): string | null {
+  if ((c as HTMLInputElement).disabled) return null;
+  const name = c.getAttribute("name") ?? "";
+  if (isTag(c, "select")) {
+    return Array.from((c as HTMLSelectElement).selectedOptions, (o) => `${name} ${o.value} ${optionLabel(o)}`).join(" ");
+  }
+  if (!isTag(c, "input")) return null;
+  const input = c as HTMLInputElement;
+  if (input.type === "hidden") return `${name} ${input.value}`;
+  if (input.type === "checkbox" || input.type === "radio") return input.checked ? `${name} ${input.value}` : null;
+  if (TYPED_INPUT_TYPES.has(input.type) || ["button", "reset", "submit", "image"].includes(input.type)) return null;
+  return name;
+}
+
+// 실제 요청에 실릴 값·요청 주소에 삭제 단서가 있는지.
+// - 누른 제출 버튼(submitter)의 name=value: <button name="action" value="delete">확인</button> → ?action=delete.
+// - 클릭·입력으로 바뀌는 checkbox·radio 자신의 name=value(name="delete[]", value="trash" — 체크를 풀어도 묻는다).
+// - 양식을 제출하면 실릴 선택 컨트롤(숨은 칸, 체크된 checkbox·radio, select의 선택된 option)의 name=value
+//   (<select name="action"><option value="delete" selected>정리</option></select> + 평범한 '확인' 버튼).
+//   사용자가 입력하는 글자 칸의 값은 보지 않는다(검색어 '스팸'으로 검색 버튼이 걸리지 않게). 결과는 참·거짓만 남기고
+//   값 자체는 어디에도 보내지 않는다.
+// - htmx GET 요청의 주소·요청 요소 자신의 name=value·양식이면 실릴 값, rails-ujs data-params의 삭제 단서(skip 적용).
+//   확인할 수 없는 htmx 요청은 따로 opaqueRequestOf가 본다(htmx는 허용 목록 방식 — requestSignals 위 주석).
+// skip: 양식에 실릴 값 판정에서 뺄 칸들(FIELD_KIND.deleteParamExplained). htmx 신호는 skip과 관계없이 그대로 본다.
+export function deleteParamOf(
+  el: Element,
+  submitter: Element | null,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+  skip: ReadonlySet<Element> = new Set(),
+): boolean {
+  const words = (text: string) => DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text));
+  const pair = (c: Element) => `${c.getAttribute("name") ?? ""} ${(c as HTMLInputElement).value ?? c.getAttribute("value") ?? ""}`;
+  if (submitter && isSubmitter(submitter) && words(pair(submitter))) return true;
+  const toggles = (c: Element | null): c is HTMLInputElement =>
+    !!c && isTag(c, "input") && ((c as HTMLInputElement).type === "checkbox" || (c as HTMLInputElement).type === "radio");
+  if (controls.some((c) => toggles(c) && words(pair(c)))) return true;
+  if (form) {
+    const texts = submittedChoiceTexts(form, skip);
+    if (texts === null || texts.some(words)) return true;
+  }
+  return requestSignals([el, ...controls, submitter, form], form, words, skip).del;
+}
+
+// select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자, optionByLabel과 같은 글자).
+function deleteChoicesOf(el: Element): string[] {
+  if (!isTag(el, "select")) return [];
+  const out: string[] = [];
+  for (const o of Array.from((el as HTMLSelectElement).options)) {
+    const text = `${optionLabel(o)} ${o.value}`;
+    if (DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text))) out.push(optionLabel(o));
+  }
+  return out;
 }
 
 function formAction(form: HTMLFormElement): string {
@@ -663,7 +984,42 @@ const FIELD_KIND: TargetKind = {
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다). 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
   risk: (el) => labelRisk(el, fieldRisk(el)),
+  // 이 칸의 deleteParam이 입력 묶음이 쓴 선택 칸들(writes: 칸 → 쓴 직전·처리기가 돌기 전의 상태 기록)만으로 설명되는지(#62).
+  // 지금 상태가 쓴 상태와 그대로 같은 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
+  // 비교는 글자가 아니라 실제 상태다: select는 선택된 option 요소·그 value·선택 상태·select의 name, checkbox·radio는
+  // name·value·checked. 처리기가 글자는 두고 value만 delete로 바꾸면 예외가 아니다.
+  deleteParamExplained: (el, writes) => {
+    const skip = unchangedWrites(writes);
+    if (!skip.size) return false;
+    const form = isFieldElement(el) ? (el.form ?? (el.closest("form") as HTMLFormElement | null)) : null;
+    if (deleteParamOf(el, null, [el], form, skip)) return false;
+    // 보이는 label로 바꾸는 칸은 그 label 쪽 신호도 같은 기준으로 본다(labelRisk).
+    const label = proxied(el) ? proxyLabel(el) : null;
+    return !label || !deleteParamOf(label, null, [], closestAcross(label, "form") as HTMLFormElement | null, skip);
+  },
+  // deleteMethod(구조 선언 — 양식의 _method=DELETE 등)에도 같은 예외를 적용한다(#62): 쓴 상태 그대로인 선택 칸
+  // (<select name="_method">에서 승인한 DELETE)을 빼고 다시 봐서 선언이 없을 때만 예상된 변화.
+  // 칸 자신이 name=_method이면 늘 deleteMethod라(fieldRisk) 승인 때 이미 물었다.
+  deleteMethodExplained: (el, writes) => {
+    const skip = unchangedWrites(writes);
+    if (!skip.size) return false;
+    const form = isFieldElement(el) ? (el.form ?? (el.closest("form") as HTMLFormElement | null)) : null;
+    if (el.getAttribute("name") === "_method" && !skip.has(el)) return false;
+    if (declaresDelete(el, [el], form, skip)) return false;
+    const label = proxied(el) ? proxyLabel(el) : null;
+    return !label || !declaresDelete(label, [], closestAcross(label, "form") as HTMLFormElement | null, skip);
+  },
 };
+
+// 입력 묶음이 쓴 선택 칸 중 지금 상태가 쓴 상태와 그대로 같은 칸들(재검사에서 예상된 변화로 뺄 칸).
+function unchangedWrites(writes: ReadonlyMap<Element, ChoiceState>): Set<Element> {
+  const skip = new Set<Element>();
+  for (const [c, was] of writes) {
+    const now = choiceState(c);
+    if (c.isConnected && now && sameChoiceState(now, was)) skip.add(c);
+  }
+  return skip;
+}
 
 type FieldRisk = NonNullable<ReturnType<NonNullable<TargetKind["risk"]>>>;
 
@@ -693,8 +1049,15 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   };
   const actions = merge(risk.aroundFormActions, around.actions);
   const urls = merge(risk.scopeSubmitUrls, around.changed);
+  // 사용자가 보는 label 쪽의 삭제 선언·요청 주소도 더한다(#62).
+  const labelDelete = declaresDelete(label, [], labelForm);
+  const labelParam = deleteParamOf(label, null, [], labelForm);
+  const labelOpaque = opaqueRequestOf(label, null, [], labelForm);
   return {
     ...risk,
+    ...(labelDelete ? { deleteMethod: true } : {}),
+    ...(labelParam ? { deleteParam: true } : {}),
+    ...(labelOpaque ? { opaqueRequest: true } : {}),
     paymentContext: !!risk.paymentContext || inPaymentContext(label, labelForm),
     submitsPersonal:
       !!risk.submitsPersonal ||
@@ -771,6 +1134,17 @@ function fieldRisk(el: HTMLElement): FieldRisk {
       };
     })(),
     ...(choiceUrls.length ? { choiceUrls } : {}),
+    // 값을 바꾸면 삭제 요청을 보낸다고 선언한 칸(hx-delete hx-trigger="change" 등), 실릴 값·요청 주소의 삭제 단서,
+    // 삭제 단서가 있는 선택지(#62 — 클릭과 같은 판정, 입력으로 우회하지 못하게).
+    // 메서드 덮어쓰기 칸(name=_method) 자체에 쓰는 입력은 값과 관계없이 묻는다. 쓰자마자 input 처리기가 요청을 보낼 수
+    // 있어, 지금 값만 보는 declaresDelete로는 새로 쓸 DELETE를 쓰기 전에 알 수 없다.
+    ...(declaresDelete(el, [el], form) || el.getAttribute("name") === "_method" ? { deleteMethod: true } : {}),
+    ...(deleteParamOf(el, null, [el], form) ? { deleteParam: true } : {}),
+    ...(opaqueRequestOf(el, null, [el], form) ? { opaqueRequest: true } : {}),
+    ...(() => {
+      const deleteChoices = deleteChoicesOf(el);
+      return deleteChoices.length ? { deleteChoices } : {};
+    })(),
     ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
     baseUri: el.baseURI,
   };
@@ -950,11 +1324,13 @@ function intendedValue(el: FieldElement, value: string): string {
 
 // onSet: 글자 칸에 브라우저가 정리한 실제 값(앞뒤 공백 제거 등)을 페이지 처리기가 돌기 전에 알려 준다.
 // guard: input 처리기가 돈 뒤 change를 보내기 전에 부른다. 이유를 돌려주면 change를 보내지 않는다(ChangeBlocked).
+// onWritten: 선택 칸(select·checkbox·radio)에 상태를 쓴 직후, 이벤트(페이지 처리기)를 보내기 전에 부른다(#62 쓴 상태 기록).
 function fillOne(
   el: FieldElement,
   value: string,
   onSet?: (actual: string) => void,
   guard?: () => string | null,
+  onWritten?: () => void,
 ): boolean {
   if (isTag(el, "select")) {
     const match = optionByLabel(el, value);
@@ -963,6 +1339,7 @@ function fillOne(
     setNativeProperty(el, "selectedIndex", match.index);
     // 이벤트를 보내기 전에 그 선택지 하나만 골라졌는지 본다. 아니면 이벤트 없이 실패.
     if (el.selectedOptions.length !== 1 || el.selectedOptions[0] !== match) return false;
+    onWritten?.();
     dispatchChange(el, guard);
     return true;
   }
@@ -972,8 +1349,9 @@ function fillOne(
     if (want === null) return false;
     if (el.checked !== want) {
       setNativeProperty(el, "checked", want);
+      onWritten?.();
       dispatchChange(el, guard);
-    }
+    } else onWritten?.();
     return true;
   }
   if (isTag(el, "input") && el.type === "radio") {
@@ -983,8 +1361,9 @@ function fillOne(
     if (!want) return !el.checked;
     if (!el.checked) {
       setNativeProperty(el, "checked", true);
+      onWritten?.();
       dispatchChange(el, guard);
-    }
+    } else onWritten?.();
     return true;
   }
   // 브라우저가 정리할 값(줄바꿈 제거, range의 숫자 정규화 등)을 페이지에 붙지 않은 복제본에서 먼저 구해 검사한다.
@@ -1192,6 +1571,7 @@ export async function fillFormFields(
           if (!expectedSig) noteWritten(callId, el, v);
         },
         guard,
+        () => noteChoiceWritten(callId, el),
       );
     } catch (err) {
       if (!(err instanceof ChangeBlocked)) throw err;

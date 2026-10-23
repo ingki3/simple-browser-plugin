@@ -1,7 +1,14 @@
 // 자동 실행의 사이트 경계(백그라운드 전용). 공개 접미사 목록(tldts)을 쓰므로 content script에서 import하지 않는다
 // (content에서 쓰는 결제·개인정보 신호는 autoApprove.ts에 있다).
 import { parse } from "tldts";
-import { decodeDeepText, expandUrls, looksPersonalValue, sensitiveUrlReason } from "./autoApprove.ts";
+import {
+  DESTRUCTIVE_REASON,
+  decodeDeepText,
+  destructiveRoute,
+  expandUrls,
+  looksPersonalValue,
+  sensitiveUrlReason,
+} from "./autoApprove.ts";
 
 // 남에게 하위 도메인이나 경로를 나눠 주는 공유 호스팅(github.io, s3.amazonaws.com 등)의 주소는
 // 같은 호스트라도 다른 사용자의 것일 수 있어 신뢰 범위로 보지 않는다(늘 묻는다).
@@ -104,7 +111,7 @@ export function navigateAutoBlock(trustedSites: ReadonlySet<string>, targetUrl: 
   const inside = withinTrusted(trustedSites, targetUrl);
   if (inside === null) return "웹 주소가 아님";
   if (!inside) return "요청을 시작한 사이트 밖으로 이동";
-  return sensitiveUrlReason(targetUrl);
+  return navigateUrlReason(targetUrl);
 }
 
 // 아무것도 하지 않는 javascript: 링크. 스킴만 대소문자를 가리지 않고, 식은 그대로 본다
@@ -235,5 +242,10 @@ export function internalNavigateAutoBlock(
   const inside = withinTrusted(new Set([...approvedSites, ...namedSites]), targetUrl);
   if (inside === null) return "웹 주소가 아님";
   if (!inside) return "요청 글에 적지 않은 사이트로 이동";
-  return sensitiveUrlReason(targetUrl);
+  return navigateUrlReason(targetUrl);
+}
+
+// 신뢰 사이트 안의 이동이어도 묻는 주소: 결제·개인정보 신호, 삭제·스팸 경로(#62 — 더 묻는 쪽으로만).
+function navigateUrlReason(targetUrl: string): string | null {
+  return sensitiveUrlReason(targetUrl) ?? (destructiveRoute(targetUrl) ? DESTRUCTIVE_REASON : null);
 }

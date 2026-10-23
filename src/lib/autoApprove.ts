@@ -1,4 +1,5 @@
-// 자동 실행(승인 없이 진행) 옵션의 예외 판정. 자동 실행을 켜도 결제와 개인정보 제출은 승인 카드를 띄운다.
+// 자동 실행(승인 없이 진행) 옵션의 예외 판정. 자동 실행을 켜도 결제·개인정보 제출·되돌리기 어려운 동작(삭제·스팸)은
+// 승인 카드를 띄운다.
 // 여기에는 DOM 없이 계산하는 부분만 둔다. 칸·버튼의 성격(개인정보 칸인지, 개인정보가 든 양식을 제출하는지)은
 // content script가 대상 확인 때 TargetInfo에 담아 준다(src/content/forms.ts, src/content/clickables.ts).
 
@@ -19,11 +20,89 @@ export const PAYMENT_TEXT_RE =
 const SUBMIT_TEXT_RE =
   /(가입|신청|제출|접수|본인\s*인증|인증\s*(번호|요청|하기)|예약\s*하기|문의\s*(하기|등록)|sign\s*up|register|submit|verify)/i;
 
+// 되돌리기 어려운 동작(#62): 삭제·휴지통·스팸·차단 등. 결제 문구처럼 더 묻는 쪽으로만 쓴다(잘못 걸려도 카드가 한 번 더 뜰 뿐).
+// 영문은 낱말 앞을 끊어 본다(undelete·Restore는 아님, deleted·Removes는 걸림).
+export const DESTRUCTIVE_TEXT_RE =
+  /(삭제|지우기|지워|지움|제거|휴지통|스팸|차단|영구|비우기|버리기|폐기|탈퇴|\bdelete|\bremove|\btrash|\bspam|\bjunk\b|\bdiscard|\berase|\bpurge|\bblock\b|\bbin\b|\bdel\b)/i;
+export const DESTRUCTIVE_REASON = "되돌리기 어려운 동작(삭제·스팸)";
+// htmx 요청을 확인할 수 없음(#62 — htmx는 허용 목록 방식: 허용 목록 속성만 쓰는 GET 요청만 자동 실행, 그 밖은 늘 묻는다).
+export const OPAQUE_REQUEST_REASON = "htmx 요청(GET 아님·확인할 수 없음)";
+
+// 클릭·입력이 되돌리기 어려운 동작인지(#62). 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않는다
+// (src/background/openrouter.ts가 ToolPreview.alwaysAsk로 받아 늘 카드를 띄운다).
+// 구조 선언 밖의 신호는 낱말·경로 단서라 더 묻는 쪽의 최선일 뿐 완전할 수 없다(글자·주소에 단서가 없는 삭제는 놓친다).
+// - 구조: 삭제 요청을 선언한 대상(deleteMethod — data-method="delete", hx-delete, 양식의 _method=DELETE).
+// - 실릴 값: 누른 제출 버튼·체크·라디오 자신의 name=value, 양식의 숨은 칸, htmx 요청 주소(deleteParam — content script가 본다).
+//   사용자가 입력한 칸의 값은 보지 않는다.
+// - 글자: 버튼 자신과 실제로 작동하는 바깥 버튼·링크의 글자·aria-label·title·alt(name·outerText)만 본다. 행 문맥
+//   (context·modelContext)은 보지 않는다 — 제목에 '삭제'가 든 메일 행의 체크박스·열기 버튼까지 묻지 않게.
+// - 주소: 누르면 가는 링크·양식 제출 주소(action·formaction)·ping·선택지 주소의 경로 낱말(/cart/remove/3, delete.php, ?action=trash).
+export function destructiveClickBlock(targets: TargetInfo[]): string | null {
+  for (const t of targets) {
+    if (t.deleteMethod || t.deleteParam) return DESTRUCTIVE_REASON;
+    const raw = `${t.name} ${t.outerText ?? ""}`;
+    if (DESTRUCTIVE_TEXT_RE.test(`${raw} ${splitIdentifier(raw)}`)) return DESTRUCTIVE_REASON;
+    // 양식 제출은 action(submitTo)만 본다. 칸 값까지 합친 주소(submitUrl)는 검색어 '스팸 차단'으로도 걸려 보지 않는다
+    // (누른 제출 버튼이 더하는 name=value는 deleteParam이 따로 본다).
+    // 링크의 ping 주소(쿠키를 실은 POST)와 선택지가 가리키는 주소도 본다. 범위 안 다른 양식·다른 제출 버튼의 주소
+    // (scopeFormActions 등 — 누르지 않은 제출 버튼의 name=value가 붙어 있다)는 보지 않는다: 목록 양식에 '삭제' 제출 버튼이
+    // 하나만 있어도 그 화면의 모든 체크·열기가 걸린다. 처리기가 다른 양식을 대신 제출하는 삭제는 놓친다(한계).
+    for (const url of [
+      t.href,
+      t.ancestorHref ?? "",
+      t.submitTo ?? "",
+      ...(t.pingUrls ?? []),
+      ...(t.choiceUrls ?? []),
+    ]) {
+      if (url && destructiveRoute(url)) return DESTRUCTIVE_REASON;
+    }
+    // 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·요청 변형 속성 — content script가 구조로 본다). 삭제 단서가 있으면 위의
+    // 이유가 먼저다.
+    if (t.opaqueRequest) return OPAQUE_REQUEST_REASON;
+  }
+  return null;
+}
+
+// 입력이 되돌리기 어려운 동작인지(#62): 칸에 대한 판정(destructiveClickBlock)에 더해, 고를 선택지의 글자·value를 본다.
+// select는 모델이 선택지의 보이는 글자로 고르므로(optionByLabel), 그 글자가 삭제 단서가 있는 선택지(deleteChoices —
+// content script가 글자·value로 고른 것)이거나 그 글자 자체에 단서가 있으면 묻는다(change 처리기가 '동작: 삭제'를 바로 실행).
+// 글자 칸에 넣을 값(입력값)은 보지 않는다(검색어 '스팸'으로 묻지 않게).
+export function destructiveFillBlock(targets: TargetInfo[], values: ReadonlyArray<string | undefined> = []): string | null {
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i];
+    const why = destructiveClickBlock([t]);
+    if (why) return why;
+    const v = values[i];
+    if (t.fieldType !== "select" || v === undefined) continue;
+    const want = v.replace(/\s+/g, " ").trim();
+    if ((t.deleteChoices ?? []).includes(want)) return DESTRUCTIVE_REASON;
+    if (DESTRUCTIVE_TEXT_RE.test(`${want} ${splitIdentifier(want)}`)) return DESTRUCTIVE_REASON;
+  }
+  return null;
+}
+
+// 주소의 경로·쿼리·해시 낱말에 삭제·스팸 단서가 있는지(결제 경로 판정과 같은 방식으로 나눠 본다).
+// navigate_to_url도 같은 판정을 쓴다(GET으로 지우는 사이트에서 클릭 대신 주소로 이동해 카드를 건너뛰지 못하게).
+export function destructiveRoute(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(normalizeUrlText(url));
+  } catch {
+    // 주소로 풀리지 않으면 글자 그대로 낱말을 본다(모르는 값을 통과시키지 않게).
+    const raw = decodeDeepText(url);
+    return DESTRUCTIVE_TEXT_RE.test(raw) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(raw).replace(/[/?#&=+]+/g, " "));
+  }
+  const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join(" ");
+  return DESTRUCTIVE_TEXT_RE.test(route) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(route).replace(/[/?#&=+]+/g, " "));
+}
+
 // 자동 실행하면 안 되는 이유. 없으면 null(자동 실행 가능).
-export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | null {
+// values: fill_form_fields에서 칸마다 넣을 값(select 선택지 판정용, destructiveFillBlock).
+export function autoApproveBlock(tool: string, targets: TargetInfo[], values: ReadonlyArray<string | undefined> = []): string | null {
   if (!AUTO_APPROVE_TOOLS.has(tool)) return "자동 실행 대상이 아닌 도구";
   if (tool === "fill_form_fields") {
-    for (const t of targets) {
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
       // 숨긴 checkbox·radio를 보이는 label로 표시하는 칸(#56)은 늘 묻는다. 사용자가 보는 label과 그 주변의 위험 신호를
       // 그 위험 신호를 칸 쪽에서 빠짐없이 모으기 어렵다(구조 판정 — 더 묻는 쪽).
       if (t.proxy) return "보이지 않는 칸(보이는 라벨로 표시) 입력";
@@ -34,6 +113,9 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const label = `${t.name} ${t.outerText ?? ""}`;
       if (PAYMENT_TEXT_RE.test(`${label} ${splitIdentifier(label)}`)) return "결제 문구가 붙은 칸 입력";
       if (t.paymentContext) return "결제 화면의 칸 입력";
+      // 체크·선택의 change 처리기가 삭제를 실행하는 페이지가 있어 칸에도 같은 판정을 쓴다(#62 — 클릭 대신 입력으로 우회 방지).
+      const fillDestructive = destructiveFillBlock([t], [values[i]]);
+      if (fillDestructive) return fillDestructive;
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
@@ -60,6 +142,9 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[]): string | 
       const text = `${raw} ${splitIdentifier(raw)}`;
       if (PAYMENT_TEXT_RE.test(text)) return "결제·주문 버튼";
       if (t.paymentContext) return "결제 화면의 버튼";
+      // 삭제·휴지통·스팸 같은 되돌리기 어려운 동작(#62). 선택지의 트리거도 같은 목록(targets)으로 들어온다.
+      const clickDestructive = destructiveClickBlock([t]);
+      if (clickDestructive) return clickDestructive;
       // 중첩 메뉴의 항목은 바로 위 트리거의 위험만 보고 그 위 트리거들은 보지 않는다(구조로 따라가지 않음).
       if (t.nestedPopup) return "중첩 메뉴의 항목";
       // 파일을 내려받는 링크(download 속성)는 이미지 저장처럼 묻는다.

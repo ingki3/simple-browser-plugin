@@ -106,3 +106,7 @@ test("hosts that do not pass as written are not trimmed into another site", () =
   assert.deepEqual(userNamedSites("https://attacker.com한국 열어"), []);
   assert.notEqual(internalNavigateAutoBlock([], userNamedSites("https://attacker.com☃"), "https://attacker.com/x"), null);
 });
+
+test("#62: 내부 페이지에서의 이동도 삭제 경로면 묻는다", () => {
+  assert.equal(internalNavigateAutoBlock([], userNamedSites("naver.com 메일"), "https://mail.naver.com/delete?id=3"), "되돌리기 어려운 동작(삭제·스팸)");
+});
