@@ -1,5 +1,6 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
+import { popupWhere } from "@/lib/actionTarget";
 import type { ModelId } from "@/lib/models";
 import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
 import {
@@ -31,7 +32,14 @@ import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
-import { captureTurnTab, turnTabIsInternal, type TurnTab } from "./tools/handlers";
+import {
+  captureTurnTab,
+  currentToolTab,
+  inheritPopups,
+  takeTabNote,
+  turnTabIsInternal,
+  type TurnTab,
+} from "./tools/handlers";
 import { commitReads } from "./readRecipes";
 import { isGoogleConfigured } from "./google/auth";
 import { youtubeVideoId } from "@/lib/youtubeUrl";
@@ -103,6 +111,7 @@ describe_page 결과를 읽는 법:
   - 지우기·옮기기·보내기처럼 되돌리기 어려운 동작의 버튼을 누르기 전에는, 고른 항목 목록(보낸 사람·제목 등)을 사용자에게 보여 주고 확인을 받은 뒤에 누른다. 사용자가 이미 같은 목록을 확인했으면 다시 묻지 않는다.
   - 화면에 없는 항목(다음 페이지)은 페이지 이동 링크(다음·2 같은 페이지 번호)가 있으면 그것으로 넘겨 같은 방법으로 고른다. 스크롤로만 더 불러오는 목록은 지원하지 않으므로 지금 화면에서 처리한 범위와 한계를 알린다.
 - click_element(id): 민감. id는 반드시 find_clickables에서 얻은 값. 결과의 effect가 클릭 뒤 일어난 일을 알려 준다(navigation: none/fragment(같은 페이지 안 위치)/same_origin/cross_origin/error, sameDocument, newTab, dom.mutations·dialogOpened). 이것으로 이동 여부를 판단하고, 이동했거나 화면이 바뀐 뒤 내용을 말하려면 다시 관측한다. "화면 변화가 감지되지 않았습니다"면 성공했다고 말하지 않는다.
+  팝업 창: 버튼이 달력·주소 찾기 같은 팝업 창을 열면 결과에 "팝업 창이 열렸습니다 … 이제 도구는 팝업 창에서 동작합니다"가 온다. 그 뒤 도구는 팝업 창에서 동작하므로 find_clickables로 팝업 안을 다시 찾아 고른다(원래 탭에서 찾은 id는 쓸 수 없다). 팝업이 닫히면 결과(또는 다음 도구 결과의 tab)에 원래 탭으로 돌아왔다고 오니, 원래 탭을 다시 관측해 값이 들어갔는지 확인한다. "브라우저가 팝업을 막았습니다"면 같은 버튼을 다시 누르거나 query_dom으로 달력을 찾지 말고, 사용자에게 주소창의 팝업 차단 표시에서 이 사이트의 팝업을 허용하거나 직접 골라 달라고 안내한다. 읽기 전용(readonly) 날짜 칸은 보통 이런 달력 버튼으로만 채울 수 있다.
 - find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감). 결과의 results[].applied가 false인 칸은 값이 반영되지 않은 것이니 사용자에게 알린다.
   find_form_fields는 사용자가 입력한 값을 돌려주지 않는다: 글자 칸은 hasValue(값이 있는지)만, checkbox·radio는 checked만, select는 options(보이는 글자)와 selectedIndex만. 칸에 무엇이 들어 있는지 알아야 하면 사용자에게 묻는다.
   각 칸의 context는 칸이 든 행·묶음의 화면 글자다. 라벨이 없거나 같은 칸(메일·게시글 목록의 행 체크박스)은 context(보낸 사람·제목 등)로 어느 행의 칸인지 구분한다. 화면에서 숨긴 체크박스도 연결된 보이는 label이 있으면 나온다(채우기는 다른 체크박스와 같고, 늘 승인 카드로 묻는다).
@@ -372,6 +381,25 @@ export class ChatAgent {
     this.savedNavTarget = null;
   }
 
+  // 도구 결과 메시지 내용. 팝업 창이 닫혀 원래 탭으로 돌아간 것처럼 도구가 동작하는 탭이 바뀌었으면 그 안내(tab)를
+  // 함께 싣는다(한 번만).
+  private toolContent(turnTab: TurnTab, payload: Record<string, unknown>): string {
+    const note = takeTabNote(turnTab);
+    if (note) debugLog("popup:note", note);
+    return JSON.stringify(note ? { ...payload, tab: note } : payload);
+  }
+
+  // 지금 도구가 동작하는 탭(따라가는 팝업 창이 있으면 그 창)의 주소.
+  private async toolTabUrl(turnTab: TurnTab): Promise<string | undefined> {
+    const current = await currentToolTab(turnTab);
+    if (!current) return undefined;
+    try {
+      return (await chrome.tabs.get(current.tabId)).url;
+    } catch {
+      return undefined;
+    }
+  }
+
   private send(msg: BgToPanel): void {
     try {
       this.port.postMessage(msg);
@@ -406,10 +434,16 @@ export class ChatAgent {
     };
   }
 
+  // 이번 요청의 도구가 동작할 탭(앞 턴에서 이어 따라가는 팝업 창이 있으면 그 창).
+  private async requestTabId(): Promise<number | null> {
+    return (await currentToolTab(this.turnTab))?.tabId ?? null;
+  }
+
   private async fetchTabHeader(): Promise<string> {
-    if ("error" in this.turnTab) return "";
+    const tabId = await this.requestTabId();
+    if (tabId === null) return "";
     try {
-      const tab = await chrome.tabs.get(this.turnTab.tabId);
+      const tab = await chrome.tabs.get(tabId);
       const url = tab.url ?? "";
       const title = tab.title ?? "";
       if (!url && !title) return "";
@@ -419,10 +453,24 @@ export class ChatAgent {
         : youtubeVideoId(url)
           ? "YouTube 영상 페이지 — 영상 내용(요약·질문 등)은 describe_page·get_page_content 대신 get_youtube_transcript로 먼저 확인하세요"
           : "상세 내용은 describe_page로 관측하세요";
-      return `[탭 메타데이터 — ${guide}]\nURL: ${url}\n제목: ${title}`;
+      const popup = await this.popupHeader();
+      return `[탭 메타데이터 — ${guide}]\nURL: ${url}\n제목: ${title}${popup}`;
     } catch {
       return "";
     }
+  }
+
+  // 앞 턴에서 따라가던 팝업 창을 이어 따라가면 머리말에 알린다(주소는 줄인 꼴만).
+  private async popupHeader(): Promise<string> {
+    const current = await currentToolTab(this.turnTab);
+    if (!current?.popup) return "";
+    let where = "";
+    try {
+      where = popupWhere((await chrome.tabs.get(current.tabId)).url ?? "");
+    } catch {
+      return "";
+    }
+    return `\n[팝업 창을 따라가는 중 — 위 URL·제목은 앞에서 누른 버튼이 연 팝업 창(${where})입니다. 아직 열려 있어 도구는 그 창에서 동작합니다. 창이 닫히면 원래 탭으로 돌아갑니다.]`;
   }
 
   private async maybeShowPdfGuidance(): Promise<void> {
@@ -448,7 +496,7 @@ export class ChatAgent {
   }
 
   // 저장한 페이지 사용 집계: 저장 주소로 이동한 뒤 같은 주소(해시 포함)에서 관측이 성공했을 때만 uses+1.
-  private async trackSavedPageUse(toolName: ToolName, parsedArgs: unknown, ok: boolean): Promise<void> {
+  private async trackSavedPageUse(turnTab: TurnTab, toolName: ToolName, parsedArgs: unknown, ok: boolean): Promise<void> {
     try {
       if (toolName === "navigate_to_url") {
         const url = String((parsedArgs as { url?: unknown })?.url ?? "");
@@ -458,7 +506,7 @@ export class ChatAgent {
       if ((toolName === "describe_page" || toolName === "get_page_content") && this.savedNavTarget && ok) {
         const target = this.savedNavTarget;
         this.savedNavTarget = null;
-        const url = "tabId" in this.turnTab ? (await chrome.tabs.get(this.turnTab.tabId)).url ?? "" : "";
+        const url = (await this.toolTabUrl(turnTab)) ?? "";
         await noteObservedAt(url, target);
       }
     } catch {
@@ -481,7 +529,8 @@ export class ChatAgent {
   private async buildUserContent(
     userText: string,
   ): Promise<string | OpenRouterContentPart[]> {
-    const pdfInfo = "tabId" in this.turnTab ? await detectPdfAtTab(this.turnTab.tabId) : null;
+    const pdfTabId = await this.requestTabId();
+    const pdfInfo = pdfTabId !== null ? await detectPdfAtTab(pdfTabId) : null;
 
     if (pdfInfo?.isPdf) {
       // PDF 본문(또는 주소·파일 이름이 실릴 수 있는 자동 로드 실패 안내)이 문맥에 들어간다.
@@ -532,9 +581,12 @@ export class ChatAgent {
     const turn = ++this.currentTurn;
     beginKeepalive();
     const endTurn = timeSpan("turn");
+    const prevTurnTab = this.turnTab;
     this.turnTab = await captureTurnTab();
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
+    // 앞 턴에서 우리 클릭으로 열려 따라가던 팝업 창이 아직 열려 있으면 같은 탭에서 시작한 이번 턴도 그 창에서 이어 간다.
+    if (await inheritPopups(prevTurnTab, turnTab)) debugLog("turn:popup", "앞 턴의 팝업 창을 이어 따라감");
     if ("tabId" in this.turnTab) {
       debugLog("turn:tab", `tab ${this.turnTab.tabId}${this.turnTab.internal ? " (내부 페이지)" : ""}`);
     } else {
@@ -801,6 +853,8 @@ export class ChatAgent {
     systemPrompt: string,
     turn: number,
   ): Promise<boolean> {
+    // 이 요청의 탭. 도구가 기다리는 사이 새 요청이 this.turnTab을 바꿔도 이 요청의 실행·결과·정리는 이 탭(과 그 팝업)에만 한다.
+    const turnTab = this.turnTab;
     const { maxToolHops } = await getSettings();
     // 이번 요청의 한도. 닿으면 이어 가기 카드로 묻고, 사용자가 허락하면 설정한 한도만큼 늘린다(#55).
     let limit = maxToolHops;
@@ -897,7 +951,7 @@ export class ChatAgent {
             role: "tool",
             tool_call_id: callId,
             name: toolName,
-            content: JSON.stringify({ error: msg }),
+            content: this.toolContent(turnTab, { error: msg }),
           });
           record(toolName, fc.function.arguments, false, `error:${msg}`, msg);
           continue;
@@ -907,7 +961,7 @@ export class ChatAgent {
         if (toolName === "read_other_tabs" && ++otherTabReads > MAX_OTHER_TAB_READS_PER_TURN) {
           const msg = `한 요청에서 다른 탭 읽기는 최대 ${MAX_OTHER_TAB_READS_PER_TURN}번입니다. 지금까지 읽은 내용으로 답하세요.`;
           this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-          this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: JSON.stringify({ error: msg }) });
+          this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
           record(toolName, argsKey, false, `error:${msg}`, msg);
           continue;
         }
@@ -919,7 +973,7 @@ export class ChatAgent {
             role: "tool",
             tool_call_id: callId,
             name: toolName,
-            content: JSON.stringify({ error: msg }),
+            content: this.toolContent(turnTab, { error: msg }),
           });
           record(toolName, argsKey, false, `error:${msg}`, msg);
           continue;
@@ -940,7 +994,7 @@ export class ChatAgent {
         if (SENSITIVE_TOOLS.has(toolName) || guarded) {
           let preview: Awaited<ReturnType<typeof buildToolPreview>>;
           try {
-            preview = await buildToolPreview(toolName, parsedArgs, callId, this.turnTab);
+            preview = await buildToolPreview(toolName, parsedArgs, callId, turnTab);
           } catch (err) {
             // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
             if (this.isStale(turn)) return false;
@@ -951,7 +1005,7 @@ export class ChatAgent {
               role: "tool",
               tool_call_id: callId,
               name: toolName,
-              content: JSON.stringify({ error: msg }),
+              content: this.toolContent(turnTab, { error: msg }),
             });
             record(toolName, argsKey, false, `error:${msg}`, msg);
             continue;
@@ -967,7 +1021,8 @@ export class ChatAgent {
           let pageUrl: string | undefined;
           if (toolName === "click_element" || toolName === "fill_form_fields") {
             try {
-              pageUrl = "tabId" in this.turnTab ? (await chrome.tabs.get(this.turnTab.tabId)).url : undefined;
+              // 팝업 창을 따라가는 중이면 그 창의 주소로 사이트 경계를 본다(다른 사이트의 팝업은 이동과 같게 묻는다).
+              pageUrl = await this.toolTabUrl(turnTab);
             } catch {
               pageUrl = undefined;
             }
@@ -1004,7 +1059,7 @@ export class ChatAgent {
           const autoMode = !guarded && (autoApprove || linkGranted);
           // 턴 탭이 지금 내부 페이지(새 탭·설정)면 이동은 요청 글에 사용자가 적은 사이트·카드로 허락한 사이트 안에서만
           // 자동 실행한다(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이 끼어들 수 없다.
-          const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(this.turnTab));
+          const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(turnTab));
           if (this.isStale(turn)) return false;
           // 되돌리기 어려운 동작(#62)은 링크 이동 허락이 있어도 늘 묻는다.
           let block = preview.alwaysAsk
@@ -1125,7 +1180,7 @@ export class ChatAgent {
           }
 
           if (!approved) {
-            recordCancelledAction(callId, this.turnTab);
+            recordCancelledAction(callId, turnTab);
             discardTabChoices(callId);
             discardLinkCall(callId);
             discardDownloadCall(callId);
@@ -1140,7 +1195,7 @@ export class ChatAgent {
               role: "tool",
               tool_call_id: callId,
               name: toolName,
-              content: JSON.stringify({ error: "user_cancelled" }),
+              content: this.toolContent(turnTab, { error: "user_cancelled" }),
             });
             record(toolName, argsKey, false, "user_cancelled", "사용자가 취소했습니다.", { cancelled: true });
             continue;
@@ -1148,8 +1203,13 @@ export class ChatAgent {
         }
 
         // 실행 전에 등록해야 번역 도중 중단해도 translate_stop이 이 탭에 간다.
-        if (toolName === "translate_page" && "tabId" in this.turnTab) {
-          this.translatedTabs.add(this.turnTab.tabId);
+        // 팝업 창을 기다리는 사이 중단·새 요청이 오면 실행하지 않는다. 번역 중 팝업이 닫히면 도구는 원래 탭으로 돌아가므로
+        // 지금 탭과 원래 탭을 함께 등록한다(멈춤 요청은 번역하지 않은 탭에는 아무 일도 하지 않는다).
+        if (toolName === "translate_page") {
+          const current = await currentToolTab(turnTab);
+          if (this.isStale(turn)) return false;
+          if (current) this.translatedTabs.add(current.tabId);
+          if ("tabId" in turnTab) this.translatedTabs.add(turnTab.tabId);
         }
         const toolAbort = new AbortController();
         this.activeTool = toolAbort;
@@ -1159,7 +1219,7 @@ export class ChatAgent {
           this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
         }
         try {
-          const result = await executeTool(toolName, execArgs, callId, this.turnTab, toolAbort.signal, {
+          const result = await executeTool(toolName, execArgs, callId, turnTab, toolAbort.signal, {
             viaGrant: grantRan,
             ...(grantRan && grantImages ? { grantImages } : {}),
           });
@@ -1183,7 +1243,7 @@ export class ChatAgent {
             role: "tool",
             tool_call_id: callId,
             name: toolName,
-            content: JSON.stringify({ result: result.data }),
+            content: this.toolContent(turnTab, { result: result.data }),
           });
           // 클릭은 뒤따른 이동·화면 변화가 관측되면 같은 id를 다시 누르는 것('다음 달' 등)이 반복이 아니다.
           const changed =
@@ -1194,7 +1254,7 @@ export class ChatAgent {
             this.turnSite = internalNavSite;
             debugLog("turn:site", `${internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);
           }
-          await this.trackSavedPageUse(toolName, parsedArgs, result.ok);
+          await this.trackSavedPageUse(turnTab, toolName, parsedArgs, result.ok);
         } catch (err) {
           if (this.isStale(turn)) return false;
           const msg = err instanceof Error ? err.message : String(err);
@@ -1205,7 +1265,7 @@ export class ChatAgent {
             role: "tool",
             tool_call_id: callId,
             name: toolName,
-            content: JSON.stringify({ error: msg }),
+            content: this.toolContent(turnTab, { error: msg }),
           });
           record(toolName, argsKey, false, `error:${msg}`, msg);
         } finally {

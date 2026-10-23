@@ -92,6 +92,7 @@ export interface ClickEffectLike {
   newTab?: boolean;
   sameDocument?: boolean | null;
   dom?: { mutations?: number; dialogOpened?: boolean; frameNavigated?: boolean; aborted?: string | null } | null;
+  popup?: { opened?: unknown; closed?: string };
 }
 
 // 클릭 뒤 페이지가 바뀐 것이 관측됐는지(이동·다시 불러옴·화면 변경·대화상자·프레임 이동·새 탭).
@@ -100,6 +101,8 @@ export function clickObservedChange(effect: ClickEffectLike | null | undefined):
   if (!effect || effect.dom?.aborted) return false;
   if (effect.navigation && effect.navigation !== "none") return true;
   if (effect.newTab || effect.sameDocument === false) return true;
+  // 팝업 창이 열리거나(새 탭과 같음) 클릭한 팝업 창이 닫혔다(도구가 원래 탭으로 돌아감).
+  if (effect.popup?.opened || effect.popup?.closed) return true;
   const dom = effect.dom;
   return !!dom && (!!dom.dialogOpened || !!dom.frameNavigated || (dom.mutations ?? 0) > 0);
 }

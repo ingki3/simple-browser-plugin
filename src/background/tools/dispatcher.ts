@@ -17,7 +17,19 @@ import type {
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
 import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
-import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
+import {
+  callContentTool,
+  currentToolTab,
+  followingPopup,
+  isMissingReceiver,
+  pruneClosedPopups,
+  queryContent,
+  resolveTurnTab,
+  stopFollowingPopups,
+  takeTabNote,
+  type TurnTab,
+} from "./handlers";
+import { ClickAbortedError, settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
 import { CAPTURE_LIMITS } from "@/lib/pageCapture";
@@ -110,6 +122,10 @@ async function inspectTargets(
   } catch (err) {
     if (isMissingReceiver(err)) {
       throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
+    }
+    // 원래 탭에서 찾은 id를 팝업 창에 쓰면(또는 반대) 그 문서에는 없는 id라 실패한다. 어느 창인지 덧붙인다.
+    if (followingPopup(turnTab) && err instanceof Error) {
+      throw new Error(`${err.message} (지금 도구는 팝업 창에서 동작합니다. 원래 탭에서 찾은 id는 팝업 창에서 쓸 수 없습니다.)`);
     }
     throw err;
   }
@@ -259,7 +275,8 @@ export async function buildToolPreview(
       } catch {
         host = "";
       }
-      const where = host ? `지금 탭(${host})` : "지금 탭";
+      const tabLabel = followingPopup(turnTab) ? "따라가는 팝업 창" : "지금 탭";
+      const where = host ? `${tabLabel}(${host})` : tabLabel;
       return {
         summary: args.fullPage
           ? `${where}의 페이지 전체를 맨 위부터 스크롤하며 캡처해(높이 최대 ${CAPTURE_LIMITS.maxPageHeight.toLocaleString("en-US")}px) PNG로 '${folder}/' 폴더에 저장합니다. 캡처하는 동안 페이지가 스크롤되고 고정 머리글 등이 잠시 숨겨지며, 끝나면 원래 위치와 모습으로 되돌립니다.`
@@ -349,7 +366,9 @@ export async function buildToolPreview(
       const url = normalizeNavigationUrl(args.url);
       const destination = new URL(url);
       return {
-        summary: `현재 탭을 ${destination.hostname}(으)로 이동합니다.`,
+        summary: followingPopup(turnTab)
+          ? `팝업 창 따라가기를 멈추고 원래 탭을 ${destination.hostname}(으)로 이동합니다.`
+          : `현재 탭을 ${destination.hostname}(으)로 이동합니다.`,
         details: url,
       };
     }
@@ -404,19 +423,6 @@ async function tabUrl(tabId: number): Promise<string> {
   }
 }
 
-// 이 탭이 연 새 탭(target=_blank, window.open)을 센다. 돌려준 함수를 부르면 관찰을 끝내고 결과를 준다.
-function watchNewTabs(tabId: number): () => boolean {
-  let opened = false;
-  const onCreated = (tab: chrome.tabs.Tab) => {
-    if (tab.openerTabId === tabId) opened = true;
-  };
-  chrome.tabs.onCreated.addListener(onCreated);
-  return () => {
-    chrome.tabs.onCreated.removeListener(onCreated);
-    return opened;
-  };
-}
-
 async function observeClickEffect(
   tabId: number,
   before: string,
@@ -438,6 +444,9 @@ async function observeClickEffect(
   }
   return { navigation: navKind(before, url), url, sameDocument, newTab: newTabs(), dom };
 }
+
+const POPUP_WINDOW_NOTE =
+  "팝업 창 — 원래 탭에서 누른 버튼이 연 창입니다. 도구는 이 창에서 동작하고, 창이 닫히면 원래 탭으로 돌아갑니다.";
 
 // 결과 요약: 시작·저장·실패 수와 저장한 이름(앞 몇 개), 실패 이유.
 function downloadSummary(res: DownloadRunResult): string {
@@ -591,12 +600,15 @@ async function runTool(
 ): Promise<ToolExecResult> {
   switch (toolName) {
     case "describe_page": {
-      const data = await callContentTool<PageDescription>(toolName, parsedArgs, callId, turnTab);
+      const raw = await callContentTool<PageDescription>(toolName, parsedArgs, callId, turnTab);
+      // 관측한 창이 따라가는 팝업 창이면 모델이 어느 창을 보고 있는지 알 수 있게 적는다.
+      const inPopup = (await currentToolTab(turnTab))?.popup === true;
+      const data: PageDescription = inPopup ? { ...raw, window: POPUP_WINDOW_NOTE } : raw;
       const regionList =
         data.landmarks.map((l) => `${l.region}(${l.clickableCount})`).join(", ") || "없음";
       return {
         ok: true,
-        summary: `페이지 관측: ${truncate(data.title, 40)} / 랜드마크: ${regionList}`,
+        summary: `${inPopup ? "팝업 창 " : ""}페이지 관측: ${truncate(data.title, 40)} / 랜드마크: ${regionList}`,
         data,
       };
     }
@@ -779,13 +791,15 @@ async function runTool(
       const args = parsedArgs as ToolArgs["navigate_to_url"];
       const url = normalizeNavigationUrl(args.url);
       // 새 탭·설정 같은 내부 페이지에서도 웹 주소로는 이동할 수 있다(normalizeNavigationUrl이 http(s)만 통과시킨다).
-      const tabId = await resolveTurnTab(turnTab, { allowInternal: true });
+      // 이동은 늘 원래 탭에서 한다. 팝업 창을 따라가던 중이면 따라가기를 끝낸다(팝업 창은 열린 채로 둔다).
+      const tabId = await resolveTurnTab(turnTab, { allowInternal: true, originalTab: true });
+      const leftPopup = stopFollowingPopups(turnTab);
       markOptimisticNavigation(tabId);
       await chrome.tabs.update(tabId, { url });
       return {
         ok: true,
-        summary: `현재 탭 이동 시작: ${truncate(url, 100)}`,
-        data: { url },
+        summary: `${leftPopup ? "팝업 창 따라가기를 멈추고 원래 탭 " : "현재 탭 "}이동 시작: ${truncate(url, 100)}`,
+        data: leftPopup ? { url, note: "팝업 창 따라가기를 멈추고 원래 탭을 이동했습니다. 이제 도구는 원래 탭에서 동작합니다." } : { url },
       };
     }
     case "find_clickables": {
@@ -798,21 +812,73 @@ async function runTool(
     }
     case "click_element": {
       const tabId = await resolveTurnTab(turnTab);
+      const clickedPopup = followingPopup(turnTab);
       const before = await tabUrl(tabId);
       const newTabs = watchNewTabs(tabId);
+      // 클릭하는 동안만 페이지의 window.open을 지켜본다(팝업 차단·주소). 읽을 때 원래 함수로 되돌린다.
+      let readOpens: Awaited<ReturnType<typeof watchWindowOpen>>;
+      try {
+        readOpens = await watchWindowOpen(tabId, signal);
+      } catch (err) {
+        newTabs.stop();
+        throw err;
+      }
       let data: { clicked: boolean; text: string; href: string; effectToken: string };
       try {
+        // 관찰을 넣는 사이 사용자가 중단했거나 새 요청을 보냈으면 승인한 클릭이라도 누르지 않는다.
+        if (signal?.aborted) throw new ClickAbortedError();
         data = await callContentTool(toolName, parsedArgs, callId, turnTab);
       } catch (err) {
-        newTabs();
+        const createdEarly = newTabs.stop();
+        void readOpens();
+        // 누른 팝업 창이 응답하기 전에 닫혔으면(고르자마자 닫히는 달력) 실패가 아니라 창이 닫힌 결과로 알린다.
+        // 중단해서 누르지 않은 경우는 그대로 중단으로 알린다.
+        if (clickedPopup && !(err instanceof ClickAbortedError)) {
+          const back = await pruneClosedPopups(turnTab);
+          if (back) {
+            takeTabNote(turnTab);
+            // 닫히기 전에 새 팝업 창을 열었으면(다음 단계 창) 남은 창 위에 이어 따라간다.
+            const opened = await settlePopups(turnTab, before, createdEarly, [], tabId);
+            const effect: ClickEffect = {
+              navigation: "none",
+              url: before,
+              sameDocument: null,
+              newTab: createdEarly.some((t) => !t.reused),
+              dom: null,
+              popup: { ...(opened ?? {}), closed: back },
+            };
+            return {
+              ok: true,
+              summary: `팝업 창 클릭: ${describeEffect(effect)}`,
+              data: { text: "", href: "", effect, note: describeEffect(effect) },
+            };
+          }
+        }
         throw err;
       }
       markOptimisticNavigation(tabId);
-      const effect = await observeClickEffect(tabId, before, data.effectToken, newTabs);
+      let created: ReturnType<typeof newTabs.stop> = [];
+      const effect = await observeClickEffect(tabId, before, data.effectToken, () => {
+        created = newTabs.stop();
+        return created.some((t) => !t.reused);
+      });
+      const opens = await readOpens();
+      // 클릭한 팝업 창이 클릭 뒤 닫혔으면(고른 값을 원래 페이지에 써 넣고 닫히는 달력 등) 아래 창으로 돌아간다.
+      // 결과 문구가 돌아간 것을 알리므로 다음 도구 결과에는 따로 붙이지 않는다.
+      let closed: "original" | "popup" | null = null;
+      if (clickedPopup) {
+        closed = await pruneClosedPopups(turnTab);
+        if (closed) takeTabNote(turnTab);
+      }
+      // 닫힘 정리 뒤에 새 창을 등록한다: 닫히면서 다음 창을 연 팝업(A가 B를 열고 닫힘)이면 B를 남은 창(원래 탭이나
+      // 그 아래 팝업) 위에 쌓아 따라간다.
+      const popup = await settlePopups(turnTab, before, created, opens, tabId);
+      if (popup || closed) effect.popup = { ...(popup ?? {}), ...(closed ? { closed } : {}) };
       return {
         ok: data.clicked && !effect.dom?.aborted,
         summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}`,
-        data: { text: data.text, href: data.href, effect },
+        // 팝업 창이 열리거나 막히거나 닫혔으면 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
+        data: { text: data.text, href: data.href, effect, ...(effect.popup ? { note: describeEffect(effect) } : {}) },
       };
     }
     case "google_sheets_list": {

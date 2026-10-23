@@ -104,6 +104,14 @@ function withinTrusted(trustedSites: ReadonlySet<string>, url: string): boolean 
   return urls.every((u) => hostTrusted(trustedSites, u));
 }
 
+// url이 base 페이지와 같은 사이트(자동 실행의 신뢰 경계와 같은 기준)인지. 둘 중 하나라도 웹 주소가 아니면 false.
+// 팝업 창이 클릭한 페이지와 다른 사이트인지 알리는 데 쓴다(실제 승인 판정은 pageActionSiteBlock이 지금 창 주소로 한다).
+export function sameSiteAs(baseUrl: string, url: string): boolean {
+  const site = siteOf(baseUrl);
+  if (!site) return false;
+  return withinTrusted(new Set([site]), url) === true;
+}
+
 // 이동은 모델이 만든 주소라 대화 내용(개인정보)을 주소·호스트 이름에 실어 밖으로 보낼 수 있다.
 // 사용자가 고른 사이트(요청을 시작한 탭의 사이트, 승인 카드로 이동을 허락한 사이트) 안에서만 자동 실행한다.
 // 자동 이동·클릭으로 들어간 사이트는 신뢰 사이트가 되지 않는다(두 단계로 나눠 보내는 우회를 막음).

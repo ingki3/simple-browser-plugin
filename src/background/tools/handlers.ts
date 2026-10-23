@@ -18,7 +18,19 @@ export const INTERNAL_PAGE_ERROR =
 // 턴을 시작한 순간의 탭. 모델이 생각하는 동안 사용자가 다른 탭(예: 메일)으로 옮겨도
 // 도구가 그 탭을 건드리지 않도록 턴 내내 이 탭에만 작업한다.
 // 새 탭·설정 같은 내부 페이지여도 탭을 잡아 두고(internal), 그 탭에서 웹 주소로의 이동만 허용한다(#54).
-export type TurnTab = { tabId: number; internal: boolean } | { error: string };
+// popups: 우리 클릭으로 이 탭(또는 따라간 팝업)이 연 팝업 창(창 종류 popup)을 연 순서대로 쌓은 것. 비어 있지 않으면
+// 도구는 맨 위 팝업 창에서 동작하고, 그 창이 닫히면 아래(결국 원래 탭)로 돌아간다. tabId는 늘 원래 탭이다.
+// tabNote: 팝업이 닫혀 돌아간 것처럼 다음 도구 결과에 붙여 모델에 알릴 문구(한 번 읽으면 지운다).
+export interface FollowedPopup {
+  tabId: number;
+  windowId: number;
+}
+export type TurnTab =
+  | { tabId: number; internal: boolean; popups?: FollowedPopup[]; tabNote?: string }
+  | { error: string };
+
+// 따라가는 팝업 창 깊이 한도(팝업이 또 팝업을 여는 경우).
+export const MAX_FOLLOWED_POPUPS = 3;
 
 export async function captureTurnTab(): Promise<TurnTab> {
   try {
@@ -30,27 +42,138 @@ export async function captureTurnTab(): Promise<TurnTab> {
   }
 }
 
-// 턴 탭의 id. 지금 내부 페이지면 allowInternal(웹 주소로의 이동)일 때만 돌려주고, 그 밖의 도구는 안내 오류를 낸다.
-export async function resolveTurnTab(turnTab: TurnTab, opts: { allowInternal?: boolean } = {}): Promise<number> {
+async function tabExists(tabId: number): Promise<boolean> {
+  try {
+    await chrome.tabs.get(tabId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 닫힌 팝업 창을 맨 위부터 걷어 낸다. 걷어 냈으면 돌아간 곳을 다음 도구 결과에 붙일 문구로 남기고 그 곳을 돌려준다.
+export async function pruneClosedPopups(turnTab: TurnTab): Promise<"original" | "popup" | null> {
+  if ("error" in turnTab || !turnTab.popups?.length) return null;
+  let closed = false;
+  while (turnTab.popups.length && !(await tabExists(turnTab.popups[turnTab.popups.length - 1].tabId))) {
+    turnTab.popups.pop();
+    closed = true;
+  }
+  if (!closed) return null;
+  const back = turnTab.popups.length ? "popup" : "original";
+  turnTab.tabNote =
+    back === "original"
+      ? "팝업 창이 닫혀 원래 탭으로 돌아왔습니다. 이제 도구는 원래 탭에서 동작합니다(팝업에서 찾은 id는 쓸 수 없으니 다시 찾으세요)."
+      : "팝업 창이 닫혀 그 창을 연 팝업 창으로 돌아왔습니다(닫힌 창에서 찾은 id는 쓸 수 없으니 다시 찾으세요).";
+  return back;
+}
+
+// 지금 도구가 동작할 탭. 따라가는 팝업 창이 살아 있으면 그 창, 아니면 원래 탭.
+export async function currentToolTab(turnTab: TurnTab): Promise<{ tabId: number; popup: boolean } | null> {
+  if ("error" in turnTab) return null;
+  await pruneClosedPopups(turnTab);
+  const top = turnTab.popups?.[turnTab.popups.length - 1];
+  return top ? { tabId: top.tabId, popup: true } : { tabId: turnTab.tabId, popup: false };
+}
+
+// 지금 팝업 창을 따라가는 중인지(동기, 상태만 본다 — 닫혔는지는 currentToolTab이 확인한다).
+export function followingPopup(turnTab: TurnTab): boolean {
+  return "tabId" in turnTab && !!turnTab.popups?.length;
+}
+
+// 원래 탭마다 우리 클릭으로 열려 따라간 적 있는 팝업 창(탭 id). 따라가기를 끝낸 뒤(navigate_to_url 등)에도 열린 채
+// 남은 창을 페이지가 같은 이름으로 다시 쓰면(window.open(url, "calendar")) 새 탭 없이 그 창이 이동하므로, 그 창을
+// 이 탭의 팝업으로 알아보는 데 쓴다. 닫힌 탭은 알아볼 때 지운다.
+const knownPopupTabs = new Map<number, Set<number>>();
+
+export function isKnownPopup(turnTab: TurnTab, tabId: number): boolean {
+  if ("error" in turnTab) return false;
+  return knownPopupTabs.get(turnTab.tabId)?.has(tabId) ?? false;
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  knownPopupTabs.delete(tabId);
+  for (const set of knownPopupTabs.values()) set.delete(tabId);
+});
+
+// 우리 클릭으로 열린 팝업 창을 따라간다. 따라갔으면 true(한도를 넘으면 false).
+export function followPopup(turnTab: TurnTab, popup: FollowedPopup): boolean {
+  if ("error" in turnTab) return false;
+  const stack = (turnTab.popups ??= []);
+  if (stack.length >= MAX_FOLLOWED_POPUPS || stack.some((p) => p.tabId === popup.tabId)) return false;
+  stack.push(popup);
+  let known = knownPopupTabs.get(turnTab.tabId);
+  if (!known) knownPopupTabs.set(turnTab.tabId, (known = new Set()));
+  known.add(popup.tabId);
+  return true;
+}
+
+// 팝업 따라가기를 끝내고 원래 탭으로 돌아간다(원래 탭을 이동할 때). 따라가던 창이 있었으면 true.
+export function stopFollowingPopups(turnTab: TurnTab): boolean {
+  if ("error" in turnTab || !turnTab.popups?.length) return false;
+  turnTab.popups = [];
+  return true;
+}
+
+// 다음 도구 결과에 붙일 문구를 꺼낸다(한 번만).
+export function takeTabNote(turnTab: TurnTab): string | null {
+  if ("error" in turnTab || !turnTab.tabNote) return null;
+  const note = turnTab.tabNote;
+  turnTab.tabNote = undefined;
+  return note;
+}
+
+// 같은 원래 탭으로 시작한 다음 턴이 앞 턴에서 따라가던(아직 열린) 팝업 창을 이어 따라간다. 사용자가 팝업을 보며
+// "15일로 골라 줘"처럼 이어 요청하는 경우. 우리 클릭으로 열린 창만 목록에 있으므로 그 밖의 창으로 넓어지지 않는다.
+export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boolean> {
+  if ("error" in prev || "error" in next || prev.tabId !== next.tabId || !prev.popups?.length) return false;
+  // 닫힌 창은 건너뛰고 살아 있는 창을 순서대로 남긴다(원래 탭 → A → B에서 A만 닫혀도 지금 턴처럼 B에서 이어 간다 —
+  // pruneClosedPopups도 맨 위가 살아 있으면 그 창을 쓴다).
+  const alive: FollowedPopup[] = [];
+  for (const p of prev.popups) {
+    if (await tabExists(p.tabId)) alive.push(p);
+  }
+  if (!alive.length) return false;
+  next.popups = alive;
+  return true;
+}
+
+const POPUP_BLANK_ERROR =
+  "팝업 창이 아직 페이지를 불러오지 않았거나(빈 창) 브라우저 내부 페이지라 읽거나 조작할 수 없습니다. 잠시 뒤 다시 관측하세요.";
+
+// 도구가 동작할 탭의 id(팝업 창을 따라가는 중이면 그 창). 지금 내부 페이지면 allowInternal(웹 주소로의 이동)일 때만
+// 돌려주고, 그 밖의 도구는 안내 오류를 낸다. originalTab이면 팝업과 관계없이 원래 탭(이동은 원래 탭에서만 한다).
+export async function resolveTurnTab(
+  turnTab: TurnTab,
+  opts: { allowInternal?: boolean; originalTab?: boolean } = {},
+): Promise<number> {
   if ("error" in turnTab) throw new Error(turnTab.error);
+  const current = opts.originalTab ? { tabId: turnTab.tabId, popup: false } : await currentToolTab(turnTab);
+  const tabId = current?.tabId ?? turnTab.tabId;
+  const isPopup = !!current?.popup;
+  const closedMsg = isPopup
+    ? "따라가던 팝업 창이 방금 닫혔습니다. 다시 관측하세요."
+    : "요청을 시작한 탭이 닫혀서 작업을 계속할 수 없습니다.";
   let tab: chrome.tabs.Tab;
   try {
-    tab = await chrome.tabs.get(turnTab.tabId);
+    tab = await chrome.tabs.get(tabId);
   } catch {
-    throw new Error("요청을 시작한 탭이 닫혀서 작업을 계속할 수 없습니다.");
+    if (isPopup) await pruneClosedPopups(turnTab);
+    throw new Error(closedMsg);
   }
   if (!opts.allowInternal && isBrowserInternalUrl(tab.url)) {
     // 방금 내부 페이지에서 웹 주소로 이동을 시작했으면 탭 주소는 이동이 확정될 때까지 내부 페이지로 남는다.
-    // 진행 중인 이동을 기다린 뒤 다시 본다.
-    await waitForNavigationSettle(turnTab.tabId, 10_000);
+    // 진행 중인 이동을 기다린 뒤 다시 본다. 막 열린 팝업 창(about:blank에서 시작)도 같다.
+    await waitForNavigationSettle(tabId, 10_000);
     try {
-      tab = await chrome.tabs.get(turnTab.tabId);
+      tab = await chrome.tabs.get(tabId);
     } catch {
-      throw new Error("요청을 시작한 탭이 닫혀서 작업을 계속할 수 없습니다.");
+      if (isPopup) await pruneClosedPopups(turnTab);
+      throw new Error(closedMsg);
     }
-    if (isBrowserInternalUrl(tab.url)) throw new Error(INTERNAL_PAGE_ERROR);
+    if (isBrowserInternalUrl(tab.url)) throw new Error(isPopup ? POPUP_BLANK_ERROR : INTERNAL_PAGE_ERROR);
   }
-  return turnTab.tabId;
+  return tabId;
 }
 
 // 턴 탭이 지금 내부 페이지인지(턴 도중 이동했을 수 있어 매번 탭 주소를 본다). 탭을 못 읽으면 false.
