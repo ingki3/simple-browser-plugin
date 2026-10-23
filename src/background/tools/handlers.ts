@@ -23,9 +23,15 @@ export const INTERNAL_PAGE_ERROR =
 // originDocumentId: 첫 팝업을 따라가기 시작할 때 원래 탭의 최상위 문서. 다음 턴은 원래 탭이 아직 이 문서일 때만
 // 팝업을 이어 따라간다(사용자가 원래 탭을 다른 페이지로 옮겼으면 새 페이지에서 시작한다, #72).
 // tabNote: 팝업이 닫혀 돌아간 것처럼 다음 도구 결과에 붙여 모델에 알릴 문구(한 번 읽으면 지운다).
+// kind "tab": 팝업을 요청한 window.open이 브라우저 사정(macOS 전체 화면 등)으로 일반 창의 탭으로 열린 것. 브라우저가
+// 그 탭을 앞에 띄웠을 때만 따라가고, 도구를 실행할 때마다 그 탭이 아직 그 창의 앞에 보이는지 확인한다(아니면 멈춘다).
+// documentId는 따라가기 시작할 때의 문서 — 첫 도구 전에 문서가 바뀌었으면 쓰지 않는다(checked가 되면 그 뒤로는 탭 안 이동 허용).
 export interface FollowedPopup {
   tabId: number;
   windowId: number;
+  kind?: "tab";
+  documentId?: string;
+  checked?: boolean;
 }
 export type TurnTab =
   | { tabId: number; internal: boolean; popups?: FollowedPopup[]; originDocumentId?: string; tabNote?: string }
@@ -81,12 +87,42 @@ export async function pruneClosedPopups(turnTab: TurnTab): Promise<"original" | 
   return back;
 }
 
-// 지금 도구가 동작할 탭. 따라가는 팝업 창이 살아 있으면 그 창, 아니면 원래 탭.
-export async function currentToolTab(turnTab: TurnTab): Promise<{ tabId: number; popup: boolean } | null> {
+// 지금 도구가 동작할 탭. 따라가는 팝업 창이 살아 있으면 그 창, 아니면 원래 탭. asTab: 탭으로 열린 팝업.
+export async function currentToolTab(
+  turnTab: TurnTab,
+): Promise<{ tabId: number; popup: boolean; asTab?: boolean } | null> {
   if ("error" in turnTab) return null;
   await pruneClosedPopups(turnTab);
   const top = turnTab.popups?.[turnTab.popups.length - 1];
-  return top ? { tabId: top.tabId, popup: true } : { tabId: turnTab.tabId, popup: false };
+  return top ? { tabId: top.tabId, popup: true, ...(top.kind === "tab" ? { asTab: true } : {}) } : { tabId: turnTab.tabId, popup: false };
+}
+
+// 지금 따라가는 맨 위가 탭으로 열린 팝업인지(동기, 상태만 본다).
+export function followingTabPopup(turnTab: TurnTab): boolean {
+  return "tabId" in turnTab && turnTab.popups?.[turnTab.popups.length - 1]?.kind === "tab";
+}
+
+export const TAB_POPUP_HIDDEN_ERROR =
+  "팝업으로 열린 탭이 지금 화면 앞에 있지 않아(사용자가 다른 탭·창으로 옮겼거나 창을 내림) 작업하지 않았습니다. 사용자에게 그 탭을 다시 앞에 띄워 달라고 하거나, 그 탭을 닫으면 원래 탭에서 이어 간다고 안내하세요.";
+const TAB_POPUP_CHANGED_ERROR =
+  "팝업으로 열린 탭이 따라가기 시작한 뒤 다른 문서로 바뀌어 작업하지 않았습니다. 사용자에게 그 탭을 닫고 다시 시도해 달라고 안내하세요.";
+
+// 탭으로 열린 팝업에서 도구를 실행해도 되는지: 그 탭이 따라가기 시작한 창에 있고 그 창의 활성 탭이며 창이 내려가
+// 있지 않아야 한다. 첫 도구 전에는 문서도 따라가기 시작할 때와 같아야 한다. 아니면 오류(따라가기는 그대로 둔다 —
+// 사용자가 다시 앞에 띄우면 이어 간다).
+async function assertTabPopupVisible(top: FollowedPopup, tab: chrome.tabs.Tab): Promise<void> {
+  if (!tab.active || tab.windowId !== top.windowId) throw new Error(TAB_POPUP_HIDDEN_ERROR);
+  let win: chrome.windows.Window;
+  try {
+    win = await chrome.windows.get(tab.windowId);
+  } catch {
+    throw new Error(TAB_POPUP_HIDDEN_ERROR);
+  }
+  if (win.state === "minimized") throw new Error(TAB_POPUP_HIDDEN_ERROR);
+  if (!top.checked) {
+    if (!top.documentId || (await topDocumentId(tab.id as number)) !== top.documentId) throw new Error(TAB_POPUP_CHANGED_ERROR);
+    top.checked = true;
+  }
 }
 
 // 지금 팝업 창을 따라가는 중인지(동기, 상태만 본다 — 닫혔는지는 currentToolTab이 확인한다).
@@ -149,10 +185,15 @@ export function takeTabNote(turnTab: TurnTab): string | null {
 // "15일로 골라 줘"처럼 이어 요청하는 경우. 우리 클릭으로 열린 창만 목록에 있으므로 그 밖의 창으로 넓어지지 않는다.
 // 원래 탭이 따라가기를 시작할 때의 문서가 아니면(사용자가 다른 페이지로 옮겼거나 새로 고침) 잇지 않는다 — 팝업 창은
 // 그대로 두고 이번 턴은 원래 탭에서 시작한다(#72).
+// 탭으로 열린 팝업이 스택에 있으면 사용자가 보고 있는 활성 탭이 그 탭(스택의 마지막 탭 팝업)일 때만 잇고, 원래 탭을
+// 이 대화가 기록한 원래 탭으로 되돌린다(다음 턴은 활성 탭을 잡으므로). 원래 탭이나 다른 탭이 활성이면 잇지 않는다
+// (보이지 않는 탭 팝업으로 조용히 따라가지 않음). 복원은 기록한 상태로만 하고 주소·opener로 추측하지 않는다.
 export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boolean> {
-  if ("error" in prev || "error" in next || prev.tabId !== next.tabId || !prev.popups?.length) return false;
+  if ("error" in prev || "error" in next || !prev.popups?.length) return false;
+  const lastTabPopup = [...prev.popups].reverse().find((p) => p.kind === "tab");
+  if (lastTabPopup ? next.tabId !== lastTabPopup.tabId : next.tabId !== prev.tabId) return false;
   const origin = prev.originDocumentId;
-  if (!origin || (await topDocumentId(next.tabId)) !== origin) return false;
+  if (!origin || (await topDocumentId(prev.tabId)) !== origin) return false;
   // 닫힌 창은 건너뛰고 살아 있는 창을 순서대로 남긴다(원래 탭 → A → B에서 A만 닫혀도 지금 턴처럼 B에서 이어 간다 —
   // pruneClosedPopups도 맨 위가 살아 있으면 그 창을 쓴다).
   const alive: FollowedPopup[] = [];
@@ -160,6 +201,17 @@ export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boole
     if (await tabExists(p.tabId)) alive.push(p);
   }
   if (!alive.length) return false;
+  if (lastTabPopup) {
+    if (!alive.includes(lastTabPopup)) return false;
+    let internal = false;
+    try {
+      internal = isBrowserInternalUrl((await chrome.tabs.get(prev.tabId)).url);
+    } catch {
+      return false;
+    }
+    next.tabId = prev.tabId;
+    next.internal = internal;
+  }
   next.popups = alive;
   next.originDocumentId = origin;
   return true;
@@ -199,6 +251,10 @@ export async function resolveTurnTab(
       throw new Error(closedMsg);
     }
     if (isBrowserInternalUrl(tab.url)) throw new Error(isPopup ? POPUP_BLANK_ERROR : INTERNAL_PAGE_ERROR);
+  }
+  if (isPopup) {
+    const top = turnTab.popups?.[turnTab.popups.length - 1];
+    if (top?.tabId === tabId && top.kind === "tab") await assertTabPopupVisible(top, tab);
   }
   return tabId;
 }

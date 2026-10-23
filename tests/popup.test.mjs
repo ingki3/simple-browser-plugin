@@ -143,3 +143,84 @@ test("sameSiteAs follows the trust boundary (registrable domain)", () => {
   assert.equal(sameSiteAs("about:blank", "https://ex.test/"), false);
   assert.equal(sameSiteAs("https://ex.test/", "about:blank"), false);
 });
+
+// ── 창 옵션 해석(HTML 표준)과 탭으로 열린 팝업 판정 ──
+import { popupRequested, tokenizeFeatures, parseBooleanFeature, popupTabIneligible } from "../src/lib/popupMatch.ts";
+
+test("tokenizeFeatures: 구분자·소문자화·별칭·중복 키", () => {
+  const t = tokenizeFeatures(" Width = 600 ,HEIGHT=390,, screenX=5 ,resizable , popup=0,popup=1");
+  assert.equal(t.get("width"), "600");
+  assert.equal(t.get("height"), "390");
+  assert.equal(t.get("left"), "5");
+  assert.equal(t.get("resizable"), "");
+  assert.equal(t.get("popup"), "1");
+  // 표준: "=" 없이 공백으로 이어진 낱말은 각각 값 없는 키다.
+  assert.deepEqual([...tokenizeFeatures("a b")], [["a", ""], ["b", ""]]);
+  assert.equal(tokenizeFeatures("a = b").get("a"), "b");
+  assert.equal(tokenizeFeatures("a,b").get("a"), "");
+});
+
+test("parseBooleanFeature: 빈 값·yes·true·정수", () => {
+  for (const v of ["", "yes", "true", "1", "-2", " 3x"]) assert.equal(parseBooleanFeature(v), true, v);
+  for (const v of ["no", "false", "0", "abc", "0x1"]) assert.equal(parseBooleanFeature(v), false, v);
+});
+
+test("popupRequested: 표준 판정", () => {
+  // SRT Common.openWin
+  assert.equal(popupRequested("left=100, top=50, scrollbars=yes, status=no, resizable=no, width=600, height=390"), true);
+  assert.equal(popupRequested("width=600,height=390"), true);
+  assert.equal(popupRequested(""), false);
+  assert.equal(popupRequested("   ,, "), false);
+  assert.equal(popupRequested("popup"), true);
+  assert.equal(popupRequested("popup=0,width=300"), false);
+  assert.equal(popupRequested("popup=no"), false);
+  assert.equal(popupRequested("location,toolbar,menubar,resizable,scrollbars,status"), false);
+  // resizable은 기본 참이라 빠져도 팝업 요청이 아니다.
+  assert.equal(popupRequested("location,toolbar,menubar,scrollbars,status"), false);
+  assert.equal(popupRequested("location,toolbar,menubar,resizable=0,scrollbars,status"), true);
+  assert.equal(popupRequested("toolbar,menubar,scrollbars,status"), false);
+  assert.equal(popupRequested("toolbar,menubar,scrollbars"), true);
+  // noopener·noreferrer는 빼고 판정(빼면 토큰이 없어 false)
+  assert.equal(popupRequested("noopener=0"), false);
+  assert.equal(popupRequested("noopener"), false);
+  assert.equal(popupRequested("noreferrer,width=300"), false);
+  assert.equal(popupRequested("noopener=0,width=300"), true);
+});
+
+const baseInput = (over = {}) => ({
+  opensComplete: true,
+  opens: [{ url: "https://a.test/cal?x=1", blocked: false, urlClipped: false, features: "width=600,height=390" }],
+  freshCount: 1,
+  sourceWindowId: 7,
+  tab: { windowId: 7, windowType: "normal", active: true, committedUrl: "https://a.test/cal?x=1", pending: false },
+  ...over,
+});
+
+test("popupTabIneligible: 모든 조건을 만족하면 null", () => {
+  assert.equal(popupTabIneligible(baseInput()), null);
+});
+
+test("popupTabIneligible: 하나라도 어긋나면 이유", () => {
+  const tab = baseInput().tab;
+  const cases = [
+    { opensComplete: false },
+    { freshCount: 2 },
+    { freshCount: 0 },
+    { opens: [] },
+    { opens: [...baseInput().opens, { url: "https://a.test/b", blocked: false, features: "" }] },
+    { opens: [{ ...baseInput().opens[0], urlClipped: true }] },
+    { opens: [{ ...baseInput().opens[0], features: null }] },
+    { opens: [{ ...baseInput().opens[0], features: "" }] },
+    { opens: [{ ...baseInput().opens[0], features: "popup=0" }] },
+    { tab: { ...tab, windowType: "popup" } },
+    { tab: { ...tab, windowId: 8 } },
+    { tab: { ...tab, active: false } },
+    { tab: { ...tab, pending: true } },
+    { tab: { ...tab, committedUrl: null } },
+    { tab: { ...tab, committedUrl: "https://a.test/cal?x=1#h" } },
+    { tab: { ...tab, committedUrl: "https://a.test/other" } },
+  ];
+  for (const c of cases) assert.notEqual(popupTabIneligible(baseInput(c)), null, JSON.stringify(c));
+  // 막힌 호출은 성공 수에 들지 않는다.
+  assert.equal(popupTabIneligible(baseInput({ opens: [...baseInput().opens, { url: "https://a.test/z", blocked: true, features: "" }] })), null);
+});

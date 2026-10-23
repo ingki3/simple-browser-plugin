@@ -21,6 +21,7 @@ import {
   callContentTool,
   currentToolTab,
   followingPopup,
+  followingTabPopup,
   isMissingReceiver,
   pruneClosedPopups,
   queryContent,
@@ -447,6 +448,8 @@ async function observeClickEffect(
 
 const POPUP_WINDOW_NOTE =
   "팝업 창 — 원래 탭에서 누른 버튼이 연 창입니다. 도구는 이 창에서 동작하고, 창이 닫히면 원래 탭으로 돌아갑니다.";
+const POPUP_TAB_NOTE =
+  "팝업 탭 — 원래 탭에서 누른 버튼이 연 팝업을 브라우저가 같은 창의 탭으로 연 것입니다. 도구는 이 탭이 앞에 보이는 동안 이 탭에서 동작하고, 탭이 닫히면 원래 탭으로 돌아갑니다.";
 
 // 결과 요약: 시작·저장·실패 수와 저장한 이름(앞 몇 개), 실패 이유.
 function downloadSummary(res: DownloadRunResult): string {
@@ -602,8 +605,9 @@ async function runTool(
     case "describe_page": {
       const raw = await callContentTool<PageDescription>(toolName, parsedArgs, callId, turnTab);
       // 관측한 창이 따라가는 팝업 창이면 모델이 어느 창을 보고 있는지 알 수 있게 적는다.
-      const inPopup = (await currentToolTab(turnTab))?.popup === true;
-      const data: PageDescription = inPopup ? { ...raw, window: POPUP_WINDOW_NOTE } : raw;
+      const current = await currentToolTab(turnTab);
+      const inPopup = current?.popup === true;
+      const data: PageDescription = inPopup ? { ...raw, window: current?.asTab ? POPUP_TAB_NOTE : POPUP_WINDOW_NOTE } : raw;
       const regionList =
         data.landmarks.map((l) => `${l.region}(${l.clickableCount})`).join(", ") || "없음";
       return {
@@ -793,13 +797,18 @@ async function runTool(
       // 새 탭·설정 같은 내부 페이지에서도 웹 주소로는 이동할 수 있다(normalizeNavigationUrl이 http(s)만 통과시킨다).
       // 이동은 늘 원래 탭에서 한다. 팝업 창을 따라가던 중이면 따라가기를 끝낸다(팝업 창은 열린 채로 둔다).
       const tabId = await resolveTurnTab(turnTab, { allowInternal: true, originalTab: true });
+      // 탭으로 열린 팝업을 따라가던 중이면 원래 탭은 그 탭 뒤에 가려 있다. 이동하는 원래 탭을 앞으로 띄워 사용자가 보게 한다.
+      const fromTabPopup = followingTabPopup(turnTab);
       const leftPopup = stopFollowingPopups(turnTab);
       markOptimisticNavigation(tabId);
-      await chrome.tabs.update(tabId, { url });
+      await chrome.tabs.update(tabId, fromTabPopup ? { url, active: true } : { url });
+      const note = fromTabPopup
+        ? "팝업으로 열린 탭 따라가기를 멈추고 원래 탭을 앞으로 띄워 이동했습니다(팝업 탭은 열린 채로 둡니다). 이제 도구는 원래 탭에서 동작합니다."
+        : "팝업 창 따라가기를 멈추고 원래 탭을 이동했습니다. 이제 도구는 원래 탭에서 동작합니다.";
       return {
         ok: true,
         summary: `${leftPopup ? "팝업 창 따라가기를 멈추고 원래 탭 " : "현재 탭 "}이동 시작: ${truncate(url, 100)}`,
-        data: leftPopup ? { url, note: "팝업 창 따라가기를 멈추고 원래 탭을 이동했습니다. 이제 도구는 원래 탭에서 동작합니다." } : { url },
+        data: leftPopup ? { url, note } : { url },
       };
     }
     case "find_clickables": {
@@ -814,6 +823,8 @@ async function runTool(
       const tabId = await resolveTurnTab(turnTab);
       const clickedPopup = followingPopup(turnTab);
       const before = await tabUrl(tabId);
+      // 클릭 직전 이 탭이 있던 창(팝업이 탭으로 열렸을 때 같은 창의 앞에 떴는지 보는 기준).
+      const sourceWindowId = await chrome.tabs.get(tabId).then((t) => t.windowId, () => null);
       const newTabs = watchNewTabs(tabId);
       // 클릭하는 동안만 페이지의 window.open을 지켜본다(팝업 차단·주소). 읽을 때 원래 함수로 되돌린다.
       let readOpens: Awaited<ReturnType<typeof watchWindowOpen>>;
@@ -838,7 +849,7 @@ async function runTool(
           if (back) {
             takeTabNote(turnTab);
             // 닫히기 전에 새 팝업 창을 열었으면(다음 단계 창) 남은 창 위에 이어 따라간다.
-            const opened = await settlePopups(turnTab, before, createdEarly, [], tabId);
+            const opened = await settlePopups(turnTab, before, createdEarly, { calls: [], complete: false }, tabId, sourceWindowId);
             const effect: ClickEffect = {
               navigation: "none",
               url: before,
@@ -872,7 +883,7 @@ async function runTool(
       }
       // 닫힘 정리 뒤에 새 창을 등록한다: 닫히면서 다음 창을 연 팝업(A가 B를 열고 닫힘)이면 B를 남은 창(원래 탭이나
       // 그 아래 팝업) 위에 쌓아 따라간다.
-      const popup = await settlePopups(turnTab, before, created, opens, tabId);
+      const popup = await settlePopups(turnTab, before, created, opens, tabId, sourceWindowId);
       if (popup || closed) effect.popup = { ...(popup ?? {}), ...(closed ? { closed } : {}) };
       return {
         ok: data.clicked && !effect.dom?.aborted,
