@@ -1,15 +1,17 @@
 import type { FormField } from "@/lib/messages";
 import {
+  DESTRUCTIVE_TEXT_RE,
   FIELD_PAYMENT_HINT_RE as PAYMENT_RE,
   PAYMENT_TEXT_RE,
   PERSONAL_HINT_RE,
   SECRET_HINT_RE,
   decodeDeepText,
+  destructiveRoute,
   looksPersonalValue,
   sensitiveUrlReason,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { closestAcross, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
+import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
@@ -161,6 +163,99 @@ function nativeGetter<T>(proto: object, prop: string, obj: object): T | undefine
 export function formElements(form: HTMLFormElement): Element[] {
   const list = nativeGetter<HTMLFormControlsCollection>(HTMLFormElement.prototype, "elements", form);
   return list ? Array.from(list) : [];
+}
+
+// ---------------------------------------------------------------------------
+// 삭제 신호(#62 — 되돌리기 어려운 동작은 자동 실행해도 늘 묻는다). 클릭(clickables.ts)과 입력(FIELD_KIND)이 함께 쓴다.
+// 구조 선언 밖의 신호는 낱말·경로 단서라 더 묻는 쪽의 최선일 뿐 완전할 수 없다.
+// ---------------------------------------------------------------------------
+
+// HTML 양식의 method는 get·post뿐이라, 프레임워크가 쓰는 선언을 본다: rails-ujs·Turbo의 data-method·data-turbo-method,
+// htmx의 hx-delete, 양식의 숨은 _method 칸이나 제출 버튼의 name=_method(Rails·Laravel의 메서드 덮어쓰기).
+export const DELETE_DECL_SELECTOR =
+  '[data-method="delete" i], [data-turbo-method="delete" i], [hx-delete], [data-hx-delete]';
+
+// 누르거나 값을 바꾸면 삭제 요청을 보낸다고 구조로 선언했는지. controls: 실제로 작동할 컨트롤(누른 제출 버튼,
+// label이 작동시키는 checkbox, 입력 칸 자신).
+export function declaresDelete(el: Element, controls: Array<Element | null>, form: HTMLFormElement | null): boolean {
+  if (closestAcross(el, DELETE_DECL_SELECTOR)) return true;
+  if (form && closestAcross(form, DELETE_DECL_SELECTOR)) return true;
+  // label이 작동시키는 컨트롤 등 실제로 눌릴 컨트롤의 선언도 본다(label만 보면 연결된 input의 hx-delete를 놓친다).
+  if (controls.some((c) => !!c && !!closestAcross(c, DELETE_DECL_SELECTOR))) return true;
+  const isDelete = (c: Element | null | undefined) =>
+    !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
+  if (controls.some(isDelete)) return true;
+  // 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 본다(자손만 보면 놓친다). name="elements"
+  // 칸이 form.elements를 가리지 못하게 플랫폼 접근자로 읽는다. 제출 버튼은 누른 것(controls)만 값이 실리므로 다른
+  // 제출 버튼(같은 양식의 '삭제' 버튼)의 _method는 보지 않는다.
+  return !!form && formElements(form).some((c) => !isSubmitter(c) && isDelete(c));
+}
+
+// 눌렀을 때만 이름·값이 제출에 실리는 컨트롤(제출 버튼).
+function isSubmitter(c: Element): boolean {
+  if (isTag(c, "button")) return (c as HTMLButtonElement).type === "submit";
+  return isTag(c, "input") && ["submit", "image"].includes((c as HTMLInputElement).type);
+}
+
+const HX_URL_ATTRS = ["get", "post", "put", "patch", "delete"].flatMap((v) => [`hx-${v}`, `data-hx-${v}`]);
+
+// 대상·조상(shadow 경계 너머 포함)·양식에 달린 htmx 요청 주소(절대 주소로). 조상의 요청은 대상에서 올라온 이벤트로 일어날 수 있다.
+function requestUrlsOf(el: Element, form: HTMLFormElement | null): string[] {
+  const nodes: Element[] = [];
+  for (let cur: Element | null = el, n = 0; cur && n < 60; cur = eventParent(cur), n++) nodes.push(cur);
+  if (form) nodes.push(form);
+  const out: string[] = [];
+  for (const node of nodes) {
+    for (const attr of HX_URL_ATTRS) {
+      const v = node.getAttribute(attr);
+      if (!v) continue;
+      try {
+        out.push(new URL(v, node.baseURI).href);
+      } catch {
+        /* 주소가 아님 */
+      }
+    }
+  }
+  return out;
+}
+
+// 실제 요청에 실릴 값·요청 주소에 삭제 단서가 있는지.
+// - 누른 제출 버튼(submitter)의 name=value: <button name="action" value="delete">확인</button> → ?action=delete.
+//   다른 제출 버튼의 값은 실리지 않으므로 보지 않는다.
+// - 클릭·입력으로 바뀌는 checkbox·radio 자신의 name=value(name="delete[]", value="trash").
+// - 양식의 숨은 칸(type=hidden, 페이지가 정한 값)의 name=value(<input type=hidden name=op value=trash>).
+//   사용자가 입력하는 칸의 값은 보지 않는다(검색어 '스팸'으로 검색 버튼이 걸리지 않게). 결과는 참·거짓만 남기고
+//   값 자체는 어디에도 보내지 않는다.
+// - htmx 요청 주소(hx-get·hx-post·hx-put·hx-patch, data-hx-*)의 경로 낱말.
+export function deleteParamOf(
+  el: Element,
+  submitter: Element | null,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+): boolean {
+  const hit = (c: Element) => {
+    const text = `${c.getAttribute("name") ?? ""} ${(c as HTMLInputElement).value ?? c.getAttribute("value") ?? ""}`;
+    return DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text));
+  };
+  if (submitter && isSubmitter(submitter) && hit(submitter)) return true;
+  const toggles = (c: Element | null): c is HTMLInputElement =>
+    !!c && isTag(c, "input") && ((c as HTMLInputElement).type === "checkbox" || (c as HTMLInputElement).type === "radio");
+  if (controls.some((c) => toggles(c) && hit(c))) return true;
+  if (form && formElements(form).some((c) => isTag(c, "input") && (c as HTMLInputElement).type === "hidden" && hit(c))) {
+    return true;
+  }
+  return requestUrlsOf(el, form).some(destructiveRoute);
+}
+
+// select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자, optionByLabel과 같은 글자).
+function deleteChoicesOf(el: Element): string[] {
+  if (!isTag(el, "select")) return [];
+  const out: string[] = [];
+  for (const o of Array.from((el as HTMLSelectElement).options)) {
+    const text = `${optionLabel(o)} ${o.value}`;
+    if (DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text))) out.push(optionLabel(o));
+  }
+  return out;
 }
 
 function formAction(form: HTMLFormElement): string {
@@ -693,8 +788,13 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   };
   const actions = merge(risk.aroundFormActions, around.actions);
   const urls = merge(risk.scopeSubmitUrls, around.changed);
+  // 사용자가 보는 label 쪽의 삭제 선언·요청 주소도 더한다(#62).
+  const labelDelete = declaresDelete(label, [], labelForm);
+  const labelParam = deleteParamOf(label, null, [], labelForm);
   return {
     ...risk,
+    ...(labelDelete ? { deleteMethod: true } : {}),
+    ...(labelParam ? { deleteParam: true } : {}),
     paymentContext: !!risk.paymentContext || inPaymentContext(label, labelForm),
     submitsPersonal:
       !!risk.submitsPersonal ||
@@ -771,6 +871,14 @@ function fieldRisk(el: HTMLElement): FieldRisk {
       };
     })(),
     ...(choiceUrls.length ? { choiceUrls } : {}),
+    // 값을 바꾸면 삭제 요청을 보낸다고 선언한 칸(hx-delete hx-trigger="change" 등), 실릴 값·요청 주소의 삭제 단서,
+    // 삭제 단서가 있는 선택지(#62 — 클릭과 같은 판정, 입력으로 우회하지 못하게).
+    ...(declaresDelete(el, [el], form) ? { deleteMethod: true } : {}),
+    ...(deleteParamOf(el, null, [el], form) ? { deleteParam: true } : {}),
+    ...(() => {
+      const deleteChoices = deleteChoicesOf(el);
+      return deleteChoices.length ? { deleteChoices } : {};
+    })(),
     ...(isFieldElement(el) && el.name ? { fieldName: el.name } : {}),
     baseUri: el.baseURI,
   };

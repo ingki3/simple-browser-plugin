@@ -7,7 +7,8 @@ import {
   choiceUrlsOf,
   controlHasPersonalValue,
   formDestination,
-  formElements,
+  declaresDelete,
+  deleteParamOf,
   formHasPersonalValues,
   formSubmissionUrl,
   isPersonalField,
@@ -172,31 +173,6 @@ function activatedControl(el: HTMLElement): HTMLButtonElement | HTMLInputElement
   return null;
 }
 
-// 누르면 삭제 요청을 보낸다고 구조로 선언했는지(#62 — 되돌리기 어려운 동작은 자동 실행해도 늘 묻는다).
-// HTML 양식의 method는 get·post뿐이라, 프레임워크가 쓰는 선언을 본다: rails-ujs·Turbo의 data-method·data-turbo-method,
-// htmx의 hx-delete, 양식의 숨은 _method 칸이나 제출 버튼의 name=_method(Rails·Laravel의 메서드 덮어쓰기).
-const DELETE_DECL_SELECTOR =
-  '[data-method="delete" i], [data-turbo-method="delete" i], [hx-delete], [data-hx-delete]';
-function declaresDelete(el: HTMLElement, controls: Array<HTMLElement | null>, form: HTMLFormElement | null): boolean {
-  if (closestAcross(el, DELETE_DECL_SELECTOR)) return true;
-  if (form && closestAcross(form, DELETE_DECL_SELECTOR)) return true;
-  // label이 작동시키는 컨트롤 등 실제로 눌릴 컨트롤의 선언도 본다(label만 보면 연결된 input의 hx-delete를 놓친다).
-  if (controls.some((c) => !!c && !!closestAcross(c, DELETE_DECL_SELECTOR))) return true;
-  const isDelete = (c: Element | null | undefined) =>
-    !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
-  if (controls.some(isDelete)) return true;
-  // 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 본다(자손만 보면 놓친다). name="elements"
-  // 칸이 form.elements를 가리지 못하게 플랫폼 접근자로 읽는다. 제출 버튼은 누른 것(controls)만 값이 실리므로 다른
-  // 제출 버튼(같은 양식의 '삭제' 버튼)의 _method는 보지 않는다.
-  return !!form && formElements(form).some((c) => !isSubmitter(c) && isDelete(c));
-}
-
-// 눌렀을 때만 이름·값이 제출에 실리는 컨트롤(제출 버튼).
-function isSubmitter(c: Element): boolean {
-  if (isTag(c, "button")) return (c as HTMLButtonElement).type === "submit";
-  return isTag(c, "input") && ["submit", "image"].includes((c as HTMLInputElement).type);
-}
-
 function labelControl(el: HTMLElement): HTMLElement | null {
   const label = closestAcross(el, "label") as HTMLLabelElement | null;
   return (label?.control as HTMLElement | null | undefined) ?? null;
@@ -305,6 +281,8 @@ const CLICK_KIND: TargetKind = {
       ...(pingUrls.length ? { pingUrls: pingUrls.length > 20 ? [...pingUrls.slice(0, 20), "about:too-many-pings"] : pingUrls } : {}),
       ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
       ...(declaresDelete(el, [control, linked], form) ? { deleteMethod: true } : {}),
+      // 누른 제출 버튼·클릭으로 바뀌는 checkbox·radio의 name=value, 양식의 숨은 칸, htmx 요청 주소의 삭제 단서(#62).
+      ...(deleteParamOf(el, control, [control, linked], form) ? { deleteParam: true } : {}),
     };
   },
 };

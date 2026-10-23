@@ -406,3 +406,42 @@ test("#62: 삭제 신호가 있는 칸 입력과 ping 삭제 주소도 묻는다
     R,
   );
 });
+
+test("#62: 실릴 값(누른 제출 버튼·숨은 칸·htmx 주소)의 삭제 단서와 범위 안 양식 action도 묻는다", () => {
+  const R = "되돌리기 어려운 동작(삭제·스팸)";
+  // content script가 deleteParam으로 담는다(<button name="action" value="delete">확인</button> → ?action=delete).
+  assert.equal(autoApproveBlock("click_element", [t({ name: "확인", submitTo: "https://mail.example/messages", deleteParam: true })]), R);
+  const box = { tag: "input", fieldType: "checkbox", name: "선택" };
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ ...box, deleteParam: true })]), R);
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ ...box, deleteMethod: true })]), R);
+  // 범위 안 다른 양식·누르지 않은 제출 버튼의 주소는 보지 않는다(목록 양식의 '삭제' 버튼 하나로 행 체크까지 묻지 않게).
+  assert.equal(autoApproveBlock("click_element", [t({ name: "확인", scopeFormActions: ["https://mail.example/messages?action=delete"] })]), null);
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ ...box, aroundFormActions: ["https://mail.example/messages?action=delete"] })]), null);
+  // 칸 값까지 합친 주소(submitUrl)만 삭제 단서면 묻지 않는다(검색어).
+  assert.equal(
+    autoApproveBlock("click_element", [
+      t({ name: "검색", submitTo: "https://mail.example/search", submitUrl: "https://mail.example/search?q=delete" }),
+    ]),
+    null,
+  );
+});
+
+test("#62: select에서 삭제 선택지를 고르면 묻고, 다른 선택지·글자 칸 값은 묻지 않는다", async () => {
+  const { destructiveFillBlock } = await import("../src/lib/autoApprove.ts");
+  const R = "되돌리기 어려운 동작(삭제·스팸)";
+  // <option value="trash">정리</option>처럼 value에만 단서가 있는 선택지는 content script가 글자로 deleteChoices에 담는다.
+  const sel = t({ tag: "select", fieldType: "select", name: "동작", deleteChoices: ["선택 지우기", "정리"] });
+  assert.equal(autoApproveBlock("fill_form_fields", [sel], ["정리"]), R);
+  assert.equal(autoApproveBlock("fill_form_fields", [sel], [" 선택  지우기 "]), R);
+  assert.equal(autoApproveBlock("fill_form_fields", [sel], ["읽음 표시"]), null);
+  assert.equal(destructiveFillBlock([sel], ["읽음 표시"]), null);
+  // deleteChoices가 없어도 고른 선택지 글자 자체에 단서가 있으면 묻는다.
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ tag: "select", fieldType: "select", name: "동작" })], ["삭제"]), R);
+  // 글자 칸에 넣을 값(검색어)은 보지 않는다.
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", name: "검색어" })], ["스팸 삭제 방법"]), null);
+  // 묶음의 두 번째 칸이 삭제 선택지면 묻는다(값은 칸 순서대로 짝지어진다).
+  assert.equal(
+    autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", name: "메모" }), sel], ["안녕", "정리"]),
+    R,
+  );
+});

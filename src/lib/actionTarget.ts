@@ -81,6 +81,11 @@ export interface TargetInfo {
   // 누르면 삭제 요청을 보낸다고 페이지가 구조로 선언한 대상(#62): data-method·data-turbo-method="delete",
   // hx-delete, 작동할 컨트롤이나 그 양식의 _method=DELETE(Rails·Laravel의 메서드 덮어쓰기).
   deleteMethod?: boolean;
+  // 실제 요청에 실릴 값·요청 주소에 삭제 단서가 있는 대상(#62): 누른 제출 버튼·클릭·입력으로 바뀌는 checkbox·radio 자신의
+  // name=value, 양식의 숨은 칸(type=hidden)의 name=value, htmx 요청 주소(hx-get·hx-post 등)의 경로 낱말.
+  deleteParam?: boolean;
+  // select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자 그대로, #62). 판정 전용.
+  deleteChoices?: string[];
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
   // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
   consentPersonal?: boolean;
