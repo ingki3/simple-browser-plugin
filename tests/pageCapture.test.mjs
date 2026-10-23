@@ -8,6 +8,7 @@ import {
   planStitch,
   pngSize,
   scrollMoved,
+  tileLeavesGap,
   tileSizeMatches,
   viewportChanged,
 } from "../src/lib/pageCapture.ts";
@@ -146,4 +147,15 @@ test("찍는 사이 스크롤 위치 변화 감지", () => {
   assert.equal(scrollMoved({ x: 0, y: 800.33 }, { x: 0, y: 800 }), false);
   assert.equal(scrollMoved({ x: 0, y: 800 }, { x: 0, y: 900 }), true);
   assert.equal(scrollMoved({ x: 0, y: 800 }, { x: 40, y: 800 }), true);
+});
+
+test("화면들이 빈 구간 없이 이어지는지: 첫 화면은 맨 위, 그 뒤는 담은 아래 끝 이하에서 시작", () => {
+  assert.equal(tileLeavesGap({ y: 0, first: true, coveredBottom: 0 }), false);
+  assert.equal(tileLeavesGap({ y: 0.33, first: true, coveredBottom: 0 }), false);
+  // 이미지 로딩을 기다리는 사이 첫 위치가 800으로 바뀌면 위쪽이 빈다.
+  assert.equal(tileLeavesGap({ y: 800, first: true, coveredBottom: 0 }), true);
+  assert.equal(tileLeavesGap({ y: 713, first: false, coveredBottom: 713 }), false);
+  // 마지막 화면은 끝에 맞춰 겹친다.
+  assert.equal(tileLeavesGap({ y: 500, first: false, coveredBottom: 713 }), false);
+  assert.equal(tileLeavesGap({ y: 900, first: false, coveredBottom: 713 }), true);
 });

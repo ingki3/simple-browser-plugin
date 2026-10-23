@@ -147,12 +147,13 @@ function restore(): void {
 }
 
 // 시작: 문서를 재고, 전체 캡처면 세션을 연다(sticky → relative, 스크롤 스냅 끔).
-export function captureBegin(fullPage: boolean): CaptureMetrics {
+// token은 백그라운드가 만든 세션 값이다. 페이지가 비보안 컨텍스트(http·LAN 주소)면 crypto.randomUUID가 없어
+// 여기서 만들지 않는다(백그라운드가 시작 응답을 받지 못해도 그 값으로 복원을 보낼 수 있다).
+export function captureBegin(fullPage: boolean, token: string): CaptureMetrics {
   // 이전 세션이 남아 있으면 먼저 되돌린다.
   restore();
   const pdf = document.contentType === "application/pdf";
   const doc = document.documentElement;
-  const token = crypto.randomUUID();
   const els = fullPage && !pdf ? allElements() : [];
   const vp = viewport();
   const metrics: CaptureMetrics = {

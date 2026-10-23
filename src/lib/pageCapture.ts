@@ -198,6 +198,13 @@ export interface CaptureScrolled extends CaptureMeasured {
   pageHeight: number;
 }
 
+// 찍으려는 화면(실제 스크롤 위치 y)이 앞 화면들과 빈 구간 없이 이어지는지. 첫 화면은 맨 위(0)에서 시작해야 하고,
+// 그 뒤 화면은 지금까지 담은 아래 끝(coveredBottom) 이하에서 시작해야 한다. 기다리는 사이 페이지가 스스로 스크롤해
+// 아래로 건너뛰면 그 사이가 빈(투명한) 이미지를 정상으로 저장하게 된다.
+export function tileLeavesGap(o: { y: number; first: boolean; coveredBottom: number }): boolean {
+  return o.first ? o.y > 0.5 : o.y > o.coveredBottom + 0.5;
+}
+
 // 스크롤해 둔 위치(scrolled)에서 찍은 뒤 잰 위치(after)가 달라졌는지. 사용자 스크롤·페이지 스크립트가 그 사이 위치를
 // 바꾸면 그 장은 다른 위치를 찍은 것이라 이어 붙일 자리가 틀린다.
 export function scrollMoved(scrolled: { x: number; y: number }, after: { x: number; y: number }): boolean {

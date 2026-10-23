@@ -41,7 +41,11 @@ async function execTool(toolName: ToolName, args: unknown, callId: string): Prom
       return clickElement(args as { id: string }, callId);
     case "capture_page":
       // 캡처 자체는 백그라운드가 하고, 여기서는 문서를 재고 전체 캡처의 세션을 연다(#49).
-      return captureBegin(!!(args as { fullPage?: boolean } | null)?.fullPage);
+      {
+        const a = (args ?? {}) as { fullPage?: boolean; token?: unknown };
+        if (typeof a.token !== "string" || !a.token) throw new Error("캡처 세션 값이 없습니다.");
+        return captureBegin(!!a.fullPage, a.token);
+      }
     case "download_images":
     case "download_files":
       throw new Error(`${toolName}는 백그라운드에서 실행해야 합니다.`);
