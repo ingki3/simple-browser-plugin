@@ -11,6 +11,8 @@ export interface DownloadRequest {
   label?: string;
   // 실제로 내려받을 출처. 일반 경로는 원래 주소, 이번 대화 허락 경로의 이미지는 쿠키 없이 미리 받은 바이트(data: 주소).
   source: string;
+  // 확장이 정한 저장 이름(이미지만, 페이지 캡처 #49 — 사이트·시각). 없으면 주소의 이름으로 정한다.
+  name?: string;
 }
 
 export interface DownloadItemResult {
@@ -183,7 +185,7 @@ export async function runDownloads(
       // 이미지는 주소의 이름으로 저장한다(허락 경로의 data: 주소는 받은 형식으로 확장자를 붙인다).
       const name =
         kind === "image"
-          ? saveFileName({ kind, suggested: urlFileName(req.url), url: req.url, mime: dataMime(req.source), index: i })
+          ? req.name ?? saveFileName({ kind, suggested: urlFileName(req.url), url: req.url, mime: dataMime(req.source), index: i })
           : undefined;
       let id: StartOutcome;
       try {

@@ -19,6 +19,8 @@ import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize"
 import { getSettings } from "../storage";
 import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
 import { runDownloads, type DownloadRunResult } from "./downloads";
+import { captureFullPage, captureTarget, captureVisible, type CaptureResult } from "./capture";
+import { CAPTURE_LIMITS } from "@/lib/pageCapture";
 import { markOptimisticNavigation, waitForNavigationSettle } from "../navigation";
 import {
   clickCard,
@@ -229,6 +231,29 @@ export async function buildToolPreview(
         execArgs: { ...args, folderPrefix: folder },
       };
     }
+    case "capture_page": {
+      const args = parsedArgs as ToolArgs["capture_page"];
+      // 캡처할 수 없는 탭(내부 페이지·웹 스토어 등)이거나 앞에 보이는 탭이 아니면 카드 없이 이유를 알린다.
+      const target = await captureTarget(turnTab);
+      const { downloadFolderPrefix } = await getSettings();
+      const folder = args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER;
+      let host = "";
+      try {
+        host = new URL(target.url).host;
+      } catch {
+        host = "";
+      }
+      const where = host ? `지금 탭(${host})` : "지금 탭";
+      return {
+        summary: args.fullPage
+          ? `${where}의 페이지 전체를 맨 위부터 스크롤하며 캡처해(높이 최대 ${CAPTURE_LIMITS.maxPageHeight.toLocaleString("en-US")}px) PNG로 '${folder}/' 폴더에 저장합니다. 캡처하는 동안 페이지가 스크롤되고 고정 머리글 등이 잠시 숨겨지며, 끝나면 원래 위치와 모습으로 되돌립니다.`
+          : `${where}의 보이는 화면을 캡처해 PNG로 '${folder}/' 폴더에 저장합니다.`,
+        details:
+          "화면에 보이는 내용(입력한 값·개인정보 포함)이 그대로 이미지에 담깁니다. 이미지는 이 기기에만 저장하고 모델 제공자로 보내지 않습니다.",
+        // 폴더를 생략한 호출은 실행 때 설정을 다시 읽지 않고, 카드에 보인 이 폴더에 저장한다.
+        execArgs: { ...args, folderPrefix: folder },
+      };
+    }
     case "click_element": {
       const args = parsedArgs as ToolArgs["click_element"];
       const [info] = await inspectTargets([args.id], "c", callId, turnTab);
@@ -403,6 +428,21 @@ function downloadSummary(res: DownloadRunResult): string {
     : "";
   const notes = res.results.filter((r) => r.note).length;
   return `${res.startedCount}개 다운로드 시작, ${res.savedCount}개 저장 완료${names}.${fails}${notes ? ` 확인 필요 ${notes}개.` : ""}`;
+}
+
+// 캡처 결과 요약: 저장한 이름(앞 몇 개)·크기, 실패 이유, 잘림.
+function captureSummary(res: CaptureResult): string {
+  const what = res.mode === "fullPage" ? `페이지 전체 캡처(화면 ${res.screens ?? 0}장 이어 붙임)` : "보이는 화면 캡처";
+  const saved = res.images
+    .filter((i) => i.ok && i.savedAs)
+    .slice(0, 3)
+    .map((i) => `${truncate(i.savedAs as string, 80)} ${i.width}×${i.height}px`);
+  const failed = res.images.filter((i) => !i.ok).map((i) => i.reason ?? "");
+  return (
+    `${what}: ${res.savedCount}개 저장${saved.length ? ` (${saved.join(", ")})` : ""}.` +
+    (failed.length ? ` 실패 ${failed.length}개(${failed.slice(0, 2).join(", ")}).` : "") +
+    (res.truncated ? " 페이지 아래쪽은 잘림." : "")
+  );
 }
 
 function truncate(s: string, max: number): string {
@@ -686,6 +726,15 @@ async function runTool(
         summary: downloadSummary(res),
         data: { ...res, location: `브라우저 다운로드 폴더 아래 '${res.folder}/'` },
       };
+    }
+    case "capture_page": {
+      const args = parsedArgs as ToolArgs["capture_page"];
+      // 늘 미리보기(카드)를 거치고, 미리보기가 확정한 폴더(execArgs)로 온다.
+      const folder = args.folderPrefix || DEFAULT_DOWNLOAD_FOLDER;
+      const data = args.fullPage
+        ? await captureFullPage(turnTab, callId, folder, signal)
+        : await captureVisible(turnTab, folder, signal);
+      return { ok: data.savedCount > 0, summary: captureSummary(data), data };
     }
     case "query_dom": {
       const data = await callContentTool<Array<{ text: string; attrs: Record<string, string> }>>(

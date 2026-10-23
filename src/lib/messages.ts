@@ -14,6 +14,7 @@ export type ToolName =
   | "list_page_images"
   | "download_images"
   | "download_files"
+  | "capture_page"
   | "query_dom"
   | "navigate_to_url"
   | "find_clickables"
@@ -34,6 +35,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "download_images",
   // 지금 페이지의 첨부·다운로드 링크를 로그인 쿠키와 함께 내려받는다(#48). 늘 사용자가 카드에서 고른다.
   "download_files",
+  // 보고 있는 페이지를 캡처해 저장한다(#49). 전체 캡처는 스크롤·스타일을 잠시 바꾸므로 늘 묻는다.
+  "capture_page",
   "navigate_to_url",
   "click_element",
   // 모델이 고른 URL로 쿠키를 실어 GET을 보낸다. 프롬프트 주입이 쿼리에 대화 내용을 담아 외부로 보낼 수 있다.
@@ -255,7 +258,11 @@ export type BgToContent =
   | { kind: "link_lookup"; urls: string[] }
   // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크(후보 고정용).
   // urls(모델이 넘긴 주소)는 돌려주는 수의 한도와 관계없이 끝까지 찾는다.
-  | { kind: "download_links"; urls: string[] };
+  | { kind: "download_links"; urls: string[] }
+  // capture_page(#49) 전체 캡처의 단계. begin은 도구 실행(tool_exec)으로 받고(주입 포함), 그 뒤 단계는 같은 문서에만
+  // 보낸다(문서가 바뀌었으면 받는 쪽이 없어 실패). token은 begin이 돌려준 세션 값.
+  | { kind: "capture_step"; token: string; step: "scroll"; y: number }
+  | { kind: "capture_step"; token: string; step: "hide_fixed" | "end" };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;
