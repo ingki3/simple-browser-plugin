@@ -3,7 +3,7 @@
 // - window.open 관찰: 클릭하는 동안만 페이지(MAIN world)의 window.open을 감싸, 불린 주소와 브라우저가 막았는지
 //   (null을 돌려줌)를 센다. 클릭이 끝나면 원래 함수로 되돌린다. 페이지가 이 기록을 꾸밀 수는 있지만, 결과에는
 //   고정 문구와 줄인 주소(popupWhere)만 실으므로 페이지 글이 모델 지시문으로 들어가지 않는다.
-// - 열린 팝업 창: 클릭하는 동안 이 탭을 opener로 만들어진 탭 중 창 종류가 popup인 것. 사용자가 따로 연 창이나
+// - 열린 팝업 창: 클릭하는 동안 이 탭의 문서가 연 탐색 대상(onCreatedNavigationTarget, 보조로 openerTabId) 중 창 종류가 popup인 것. 사용자가 따로 연 창이나
 //   일반 새 탭(target=_blank)은 따라가지 않는다.
 
 import { popupWhere, type PopupEffect } from "@/lib/actionTarget";
@@ -106,23 +106,31 @@ export async function watchWindowOpen(tabId: number): Promise<() => Promise<Open
 
 interface CreatedTab {
   tabId: number;
-  windowId: number;
   url: string;
 }
 
-// 이 탭이 연 새 탭(target=_blank, window.open)을 지켜본다. stop()을 부르면 관찰을 끝내고 만들어진 탭들을 준다.
+// 이 탭이 연 새 탭·창(target=_blank, window.open)을 지켜본다. stop()을 부르면 관찰을 끝내고 만들어진 탭들을 준다.
+// 주된 관계는 webNavigation.onCreatedNavigationTarget(이 탭의 문서가 연 새 탐색 대상 — 따로 뜬 팝업 창이나
+// noopener 창처럼 탭 줄의 opener가 없는 경우도 잡힌다)이고, tabs.onCreated의 openerTabId는 보조 신호다.
 export function watchNewTabs(tabId: number): { stop(): CreatedTab[] } {
-  const created: CreatedTab[] = [];
+  const created = new Map<number, CreatedTab>();
+  const add = (id: number, url: string) => {
+    const prev = created.get(id);
+    created.set(id, { tabId: id, url: url || prev?.url || "" });
+  };
   const onCreated = (tab: chrome.tabs.Tab) => {
-    if (tab.openerTabId === tabId && tab.id !== undefined) {
-      created.push({ tabId: tab.id, windowId: tab.windowId, url: tab.pendingUrl || tab.url || "" });
-    }
+    if (tab.openerTabId === tabId && tab.id !== undefined) add(tab.id, tab.pendingUrl || tab.url || "");
+  };
+  const onTarget = (d: chrome.webNavigation.WebNavigationSourceCallbackDetails) => {
+    if (d.sourceTabId === tabId) add(d.tabId, d.url);
   };
   chrome.tabs.onCreated.addListener(onCreated);
+  chrome.webNavigation.onCreatedNavigationTarget.addListener(onTarget);
   return {
     stop: () => {
       chrome.tabs.onCreated.removeListener(onCreated);
-      return created;
+      chrome.webNavigation.onCreatedNavigationTarget.removeListener(onTarget);
+      return [...created.values()];
     },
   };
 }
@@ -136,16 +144,16 @@ export async function settlePopups(
   opens: OpenCall[],
 ): Promise<PopupEffect | null> {
   const effect: PopupEffect = {};
-  const blocked = opens.filter((c) => c.blocked);
-  if (blocked.length) effect.blocked = { count: blocked.length, where: popupWhere(blocked[0].url) };
+  // window.open은 noopener면 창이 열려도 null을 돌려준다. 그래서 null만으로 막혔다고 보지 않고, null을 돌려준 호출 수가
+  // 이 클릭 동안 실제로 만들어진 탭·창 수보다 많을 때만 그 차이를 막힌 것으로 본다.
+  const nulls = opens.filter((c) => c.blocked);
+  const blockedCount = nulls.length - created.length;
+  if (blockedCount > 0) {
+    // 어느 호출이 막혔는지는 알 수 없다. 만들어진 탭이 없으면 첫 null 호출의 주소를, 있으면 마지막 것을 보인다.
+    const shown = created.length ? nulls[nulls.length - 1] : nulls[0];
+    effect.blocked = { count: blockedCount, where: popupWhere(shown.url) };
+  }
   for (const t of created) {
-    let win: chrome.windows.Window | null = null;
-    try {
-      win = await chrome.windows.get(t.windowId);
-    } catch {
-      win = null;
-    }
-    if (win?.type !== "popup") continue;
     let tab: chrome.tabs.Tab | null = null;
     try {
       tab = await chrome.tabs.get(t.tabId);
@@ -153,9 +161,16 @@ export async function settlePopups(
       // 열렸다가 바로 닫힌 창
       continue;
     }
+    let win: chrome.windows.Window | null = null;
+    try {
+      win = await chrome.windows.get(tab.windowId);
+    } catch {
+      win = null;
+    }
+    if (win?.type !== "popup") continue;
     // 열린 직후는 about:blank에서 시작해 이동 중일 수 있다. 가려는 주소(pendingUrl)를 먼저 본다.
     const url = tab.pendingUrl || tab.url || t.url;
-    const followed = followPopup(turnTab, { tabId: t.tabId, windowId: t.windowId });
+    const followed = followPopup(turnTab, { tabId: t.tabId, windowId: tab.windowId });
     effect.opened = { where: popupWhere(url), followed, otherSite: /^https?:/i.test(url) && !sameSiteAs(pageUrl, url) };
     debugLog("popup:opened", `tab ${t.tabId}${followed ? " (따라감)" : ""}`);
     break;
