@@ -93,7 +93,7 @@ describe_page 결과를 읽는 법:
 - get_page_content: 본문 텍스트 전체 추출 (요약·질의응답 근거 보강).
 - navigate_to_url(url): 민감. 현재 탭을 신뢰할 수 있는 전체 http/https URL로 직접 이동. 현재 페이지 관측 불필요.
 - find_clickables(query?, region?, onlyViewport?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
-  링크·버튼에 더해 목록에서 고르는 위젯(role=option·menuitem·menuitemradio·menuitemcheckbox·tab, 선택 팝업 트리거 role=combobox·aria-haspopup=listbox)과 input이 아닌 체크 위젯(role=checkbox·switch·radio)도 돌려준다. 글자가 같은 대상도 요소마다 따로 나온다. context(대상이 든 묶음 — 행·패널·달력의 한 달 — 의 화면 글자, 표제가 있으면 앞에)로 어느 묶음의 대상인지 구분하고, states(selected·checked·pressed·expanded·current·disabled)로 지금 상태를 본다. 글자·context·states로 고를 대상을 구분할 수 없으면 임의로 누르지 않고 다시 관측하거나 사용자에게 묻는다.
+  링크·버튼에 더해 목록에서 고르는 위젯(role=option·menuitem·menuitemradio·menuitemcheckbox·tab, 선택 팝업 트리거 role=combobox·aria-haspopup=listbox)과 체크 위젯(role=checkbox·switch·radio, 진짜 checkbox·radio — 화면에서 숨긴 칸은 대신 보여 주는 label이 tag=label·role=checkbox/radio로 나온다)도 돌려준다. 필터 대화상자(경유·항공사·가격대 같은 선택지)의 선택지도 이것으로 찾아 click_element로 누른다. states.checked가 "true"인 checkbox를 누르면 해제된다. 글자가 같은 대상도 요소마다 따로 나온다. context(대상이 든 묶음 — 행·패널·달력의 한 달 — 의 화면 글자, 표제가 있으면 앞에)로 어느 묶음의 대상인지 구분하고, states(selected·checked·pressed·expanded·current·disabled)로 지금 상태를 본다. 글자·context·states로 고를 대상을 구분할 수 없으면 임의로 누르지 않고 다시 관측하거나 사용자에게 묻는다.
   같은 버튼(다음 달·더 보기 등)을 여러 번 눌러야 하면 다시 찾지 말고 같은 id로 다시 누른다. "다시 찾으세요"로 실패했을 때만 다시 찾는다.
   클릭 결과에 "화면이 바뀌었습니다"가 있어도 그 버튼이 다시 그려졌다는 뜻은 아니다. 클릭할 때마다 find_clickables를 다시 부르지 말고 앞선 찾기 결과의 id를 그대로 쓴다. 다시 찾는 것은 클릭으로 새로 나타난 대상(펼친 목록의 선택지, 새 페이지의 링크 등)이 필요하거나 "다시 찾으세요"로 실패했을 때뿐이다. 도구 호출 단계는 한 요청에 한도가 있다.
 - 목록에서 고르는 칸(상품 옵션, 자동완성, 날짜 고르기)이 find_form_fields에 없으면: find_clickables로 트리거(role=combobox·aria-haspopup=listbox, 또는 입력 칸에 글자를 채운 뒤 뜨는 목록)를 열고 → find_clickables로 다시 찾아 그 결과의 role=option 항목을 누른다(트리거를 누른 뒤 예전 결과의 선택지 id를 쓰지 않는다). 펼쳐진 목록이 여러 개라 어느 위젯의 선택지인지 정할 수 없으면 선택지가 결과에 나오지 않는다. 그때는 다른 목록을 닫거나 사용자에게 알린다.
@@ -106,7 +106,7 @@ describe_page 결과를 읽는 법:
 - find_form_fields / fill_form_fields: 입력 필드 탐색 → 채우기(민감). 결과의 results[].applied가 false인 칸은 값이 반영되지 않은 것이니 사용자에게 알린다.
   find_form_fields는 사용자가 입력한 값을 돌려주지 않는다: 글자 칸은 hasValue(값이 있는지)만, checkbox·radio는 checked만, select는 options(보이는 글자)와 selectedIndex만. 칸에 무엇이 들어 있는지 알아야 하면 사용자에게 묻는다.
   각 칸의 context는 칸이 든 행·묶음의 화면 글자다. 라벨이 없거나 같은 칸(메일·게시글 목록의 행 체크박스)은 context(보낸 사람·제목 등)로 어느 행의 칸인지 구분한다. 화면에서 숨긴 체크박스도 연결된 보이는 label이 있으면 나온다(채우기는 다른 체크박스와 같고, 늘 승인 카드로 묻는다).
-  select는 options의 글자를 그대로 value로 넘긴다(같은 글자가 여럿이거나 비활성·숨김·잘린(truncated) 선택지면 실패한다). 다중 선택 칸(multiple)은 채울 수 없다. checkbox·radio는 "true"(체크) 또는 "false"(해제)로 넘긴다.
+  select는 options의 글자를 그대로 value로 넘긴다(같은 글자가 여럿이거나 비활성·숨김·잘린(truncated) 선택지면 실패한다). 다중 선택 칸(multiple)은 채울 수 없다. checkbox·radio는 "true"(체크) 또는 "false"(해제)로 넘긴다. checkbox·radio 채우기는 사용자처럼 그 칸을 누른다(페이지의 클릭 처리기가 돈다). applied가 false면 페이지가 클릭을 받아들이지 않은 것이니 같은 채우기를 반복하지 않는다.
   채우기만으로는 검색·필터가 적용되지 않는 페이지가 많다. 값을 채운 뒤 결과가 바뀌어야 하는 경우(검색어, 가격 범위 같은 필터)에는 find_clickables로 그 칸 근처의 적용·검색·확인 버튼을 찾아 누른 뒤에 결과를 읽는다. 버튼을 누르기 전에 get_page_content로 결과를 다시 읽지 않는다.
 - list_page_images / download_images(urls): 이미지 목록 → 저장(민감). 아래 이미지·첨부 파일 저장 모드.
 - translate_page: 페이지 전체 번역.

@@ -116,6 +116,13 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
       // 체크·선택의 change 처리기가 삭제를 실행하는 페이지가 있어 칸에도 같은 판정을 쓴다(#62 — 클릭 대신 입력으로 우회 방지).
       const fillDestructive = destructiveFillBlock([t], [values[i]]);
       if (fillDestructive) return fillDestructive;
+      // checkbox·radio 채우기는 그 칸을 실제로 누른다(페이지의 click 처리기가 돈다). 그 칸을 click_element로 누를 때
+      // 자동 실행하지 않는 경우(감싼 링크의 결제·개인정보 주소, 내려받기 링크, 가입·제출 문구 등)는 채우기로도 자동 실행하지
+      // 않는다. 칸의 위험 신호에는 클릭 신호가 합쳐져 있다(content script forms.ts toggleClickRisk).
+      if (t.fieldType === "checkbox" || t.fieldType === "radio") {
+        const clickWhy = autoApproveBlock("click_element", [t]);
+        if (clickWhy) return `체크·선택은 칸을 누르는 동작이라 클릭과 같이 묻습니다(${clickWhy})`;
+      }
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,

@@ -220,6 +220,7 @@ export function roleLabel(info: TargetInfo): string {
   if (ROLE_LABELS[info.role]) return ROLE_LABELS[info.role];
   if (info.tag === "a") return "링크";
   if (info.tag === "button" || info.tag === "input") return "버튼";
+  if (info.tag === "label") return "라벨";
   return "요소";
 }
 

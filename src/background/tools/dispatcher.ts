@@ -207,6 +207,9 @@ export async function buildToolPreview(
             ...(info.scopeFormActions ?? []),
             // 양식 안 칸도 change 처리기가 값을 주변 양식에 옮겨 제출할 수 있어 그 action의 사이트 경계를 본다.
             ...(info.aroundFormActions ?? []),
+            // checkbox·radio 채우기는 칸을 실제로 누르므로 클릭처럼 감싼 링크와 ping 주소의 사이트 경계도 본다.
+            info.ancestorHref ?? "",
+            ...(info.pingUrls ?? []),
           ])
           .filter(Boolean),
         fillValues: args.fills.map((f) => f.value),

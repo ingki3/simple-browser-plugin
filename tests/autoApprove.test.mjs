@@ -466,3 +466,23 @@ test("#62: 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·변형 
   assert.equal(autoApproveBlock("click_element", [t({ name: "삭제", opaqueRequest: true })]), "되돌리기 어려운 동작(삭제·스팸)");
   assert.equal(autoApproveBlock("click_element", [t({ name: "확인" })]), null);
 });
+
+test("checkbox·radio fills click the field, so the click rules also apply", () => {
+  const box = (over = {}) => t({ tag: "input", role: "checkbox", fieldType: "checkbox", name: "직항만", ...over });
+  // 평범한 체크는 자동 실행한다.
+  assert.equal(autoApproveBlock("fill_form_fields", [box()]), null);
+  assert.equal(autoApproveBlock("fill_form_fields", [box({ fieldType: "radio", role: "radio" })]), null);
+  // 감싼 링크가 결제·개인정보 주소면 클릭처럼 묻는다.
+  assert.match(
+    autoApproveBlock("fill_form_fields", [box({ ancestorHref: "https://shop.example/checkout" })]) ?? "",
+    /클릭과 같이/,
+  );
+  // 내려받기 링크 안, 가입·제출 문구가 붙은 바깥 컨트롤, ping 주소.
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ download: true })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ outerText: "회원 가입" })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ pingUrls: ["https://track.example/p?email=a%40b.co"] })]));
+  // 글자 칸에는 클릭 규칙을 쓰지 않는다.
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", name: "검색어", outerText: "가입" })]), null);
+  // 클릭 쪽 htmx 요청 신호도 묻는다.
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ opaqueRequest: true })]));
+});

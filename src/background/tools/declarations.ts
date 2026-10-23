@@ -140,7 +140,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "fill_form_fields",
     description:
-      "사용자 승인 후 지정된 id의 폼 필드에 값을 채운다. id는 반드시 find_form_fields에서 받은 값을 사용해야 한다. 민감 작업이라 실행 전 사용자 승인 카드가 표시된다. 승인 카드를 띄울 때와 채우기 직전에 각 칸이 find_form_fields 때와 같은지 확인하며, 바뀐 칸은 채우지 않는다. 결과의 results에 칸마다 값이 실제로 반영됐는지(applied)가 담긴다.",
+      "사용자 승인 후 지정된 id의 폼 필드에 값을 채운다. id는 반드시 find_form_fields에서 받은 값을 사용해야 한다. 민감 작업이라 실행 전 사용자 승인 카드가 표시된다. 승인 카드를 띄울 때와 채우기 직전에 각 칸이 find_form_fields 때와 같은지 확인하며, 바뀐 칸은 채우지 않는다. 결과의 results에 칸마다 값이 실제로 반영됐는지(applied)가 담긴다. checkbox·radio는 사용자처럼 그 칸을 눌러(click) 바꾼다(페이지가 클릭을 취소하면 applied가 false).",
     parameters: {
       type: "object",
       properties: {
@@ -272,7 +272,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "find_clickables",
     description:
-      "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link, 그리고 목록에서 고르는 위젯의 role=option·menuitem*·tab·combobox·aria-haspopup=listbox 트리거, input이 아닌 체크 위젯 role=checkbox·switch·radio)를 문서 순서로 반환한다. 글자가 같아도 요소마다 따로 반환하며, context(대상이 든 묶음의 화면 글자)와 states(selected·checked·expanded 등)로 구분한다. 펼친 트리거가 여럿이라 어느 위젯의 것인지 정할 수 없는 선택지는 반환하지 않는다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다.",
+      "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link, 그리고 목록에서 고르는 위젯의 role=option·menuitem*·tab·combobox·aria-haspopup=listbox 트리거, 체크 위젯 role=checkbox·switch·radio, 진짜 checkbox·radio — 화면에서 숨긴 칸은 연결된 보이는 label을 tag=label로 — 와 그 role)를 문서 순서로 반환한다. 필터 대화상자의 선택지(경유·항공사 등)도 여기서 찾아 click_element로 누른다. 글자가 같아도 요소마다 따로 반환하며, context(대상이 든 묶음의 화면 글자)와 states(selected·checked·expanded 등)로 구분한다. 펼친 트리거가 여럿이라 어느 위젯의 것인지 정할 수 없는 선택지는 반환하지 않는다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다.",
     parameters: {
       type: "object",
       properties: {
