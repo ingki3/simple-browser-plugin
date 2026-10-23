@@ -6,7 +6,10 @@
 import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
 import {
+  clip,
   describeDifference,
+  onlyRowDiffers,
+  rowDriftDiag,
   sameApproved,
   sameApprovedInFlight,
   sameBase,
@@ -492,6 +495,16 @@ export function registeredInfo(id: string): TargetInfo | undefined {
   return registry.get(id)?.base;
 }
 
+// 모델에 보내는 오류 문구와 따로, 백그라운드 디버그 로그에만 남길 진단(diag)을 싣는 오류.
+export class TargetDriftError extends Error {
+  constructor(
+    message: string,
+    readonly diag: string,
+  ) {
+    super(message);
+  }
+}
+
 function staleError(id: string): Error {
   return new Error(
     `id '${id}'는 지금 페이지에서 찾은 대상이 아닙니다(페이지가 바뀌었거나 다시 불러옴). find_clickables·find_form_fields로 다시 찾으세요.`,
@@ -537,6 +550,18 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
   const { entry, el } = resolve(id);
   const now = baseInfo(entry.kind, el);
   if (!sameBase(now, entry.base)) {
+    if (onlyRowDiffers(entry.base, now)) {
+      // 같은 요소인데 든 행의 글자만 바뀌었다(운임·남은 시간이 계속 갱신되는 목록 등). 다시 찾기와 같이 지금 기술로
+      // 바꿔 두고, 지금 행 글자(모델용)를 돌려준다. 모델이 그 행이 맞는지 보고 같은 id로 다시 부르면 지금 기술과 비교한다.
+      const diag = rowDriftDiag(entry.base, now);
+      entry.base = now;
+      entry.approved = null;
+      const row = now.modelContext ? ` 지금 행: '${clip(now.modelContext, 200)}'.` : "";
+      throw new TargetDriftError(
+        `대상 '${id}'이(가) 든 행의 내용이 찾은 뒤 바뀌었습니다.${row} 이 행이 고르려던 것이 맞으면 같은 id로 다시 호출하고, 아니면 다시 찾으세요.`,
+        `row_drift ${diag}`,
+      );
+    }
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
   checkVisible(entry, el, entry.base.modelName || id, false);

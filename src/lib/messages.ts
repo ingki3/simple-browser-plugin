@@ -268,6 +268,8 @@ export interface ContentResponse<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
+  // 실패 진단(디버그 로그 전용, 모델에 보내지 않는다 — 글자 내용 없이 종류·길이만).
+  diag?: string;
 }
 
 export type RuntimeMsg =

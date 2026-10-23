@@ -8,7 +8,9 @@ import {
   fillCard,
   navKind,
   onlyAdded,
+  onlyRowDiffers,
   parseCheckedRequest,
+  rowDriftDiag,
   sameApproved,
   sameApprovedInFlight,
   sameBase,
@@ -283,4 +285,21 @@ test("fillCard·sameBase: 대리 label 칸은 보이는 라벨을 보여 주고 
   assert.doesNotMatch(fillCard([{ info: { ...box, proxy: undefined, proxyLabel: undefined }, value: "true" }]).details, /보이는 라벨/);
   assert.equal(sameBase(box, { ...box, proxyLabel: "보관함으로 이동" }), false);
   assert.match(describeDifference(box, { ...box, proxyLabel: "보관함으로 이동" }), /보이는 라벨이 바뀜/);
+});
+
+test("onlyRowDiffers: 행 문맥만 바뀐 같은 요소를 가린다", () => {
+  const fare = { ...link, tag: "button", role: "button", name: "선택", href: "", context: "KE 0905 352,000원 잔여 4석", modelContext: "KE 0905 352,000원 잔여 4석" };
+  assert.equal(onlyRowDiffers(fare, { ...fare }), false);
+  assert.equal(onlyRowDiffers(fare, { ...fare, context: "KE 0905 349,000원 잔여 3석", modelContext: "KE 0905 349,000원 잔여 3석" }), true);
+  assert.equal(onlyRowDiffers(fare, { ...fare, context: "숨은 글자 포함" }), true);
+  // 행 말고 다른 항목도 바뀌면 행 갱신으로 보지 않는다.
+  assert.equal(onlyRowDiffers(fare, { ...fare, name: "취소", context: "x" }), false);
+  assert.equal(onlyRowDiffers(fare, { ...fare, states: { pressed: "true" }, context: "x" }), false);
+});
+
+test("rowDriftDiag: 글자 없이 종류·길이만 남긴다", () => {
+  const row = { ...link, context: "남은 시간 04:59 운임", modelContext: "운임 352,000원" };
+  assert.equal(rowDriftDiag(row, { ...row, modelContext: "운임 349,000원" }), "visible len 11→11 digits-only");
+  assert.equal(rowDriftDiag(row, { ...row, context: "남은 시간 04:58 운임" }), "hidden-only len 14→14 digits-only");
+  assert.equal(rowDriftDiag(row, { ...row, modelContext: "매진" }), "visible len 11→2");
 });

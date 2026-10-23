@@ -151,6 +151,25 @@ export function onlyAdded(before: string, after: string): boolean {
   return i === want.length;
 }
 
+// 행 문맥(context·modelContext)만 다르고 나머지 기본 항목은 같은지. 운임·남은 시간처럼 행 글자가 계속 바뀌는 목록에서
+// 같은 요소의 행만 달라진 경우를 가린다.
+export function onlyRowDiffers(before: TargetInfo, after: TargetInfo): boolean {
+  if (sameBase(before, after)) return false;
+  return sameBase(before, { ...after, context: before.context, modelContext: before.modelContext });
+}
+
+// 행 문맥이 어떻게 바뀌었는지의 진단 한 줄(디버그 로그 전용 — 글자 내용은 담지 않는다).
+// visible: 모델용 행 문맥(보이는 화면 글자)이 바뀌었는지, hidden만이면 원문 행 글자(숨은 글자 포함)만 바뀐 것.
+// digitsOnly: 숫자만 바뀌었는지(운임·남은 시간·남은 좌석 같은 갱신).
+export function rowDriftDiag(before: TargetInfo, after: TargetInfo): string {
+  const vb = before.modelContext ?? "";
+  const va = after.modelContext ?? "";
+  const visible = vb !== va;
+  const [b, a] = visible ? [vb, va] : [before.context, after.context];
+  const digitsOnly = b.replace(/\d/g, "0") === a.replace(/\d/g, "0");
+  return `${visible ? "visible" : "hidden-only"} len ${b.length}→${a.length}${digitsOnly ? " digits-only" : ""}`;
+}
+
 // 서로 다른 항목을 사람이 읽을 수 있게 하나 고른다(실패 메시지용 — 모델에도 간다).
 // 글자는 모델에 돌려준 이름(modelName)만 인용한다. 원문 이름에는 입력 칸·편집 영역의 글자가 섞일 수 있다.
 export function describeDifference(before: TargetInfo, after: TargetInfo): string {

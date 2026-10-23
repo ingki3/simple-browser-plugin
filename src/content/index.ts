@@ -9,7 +9,7 @@ import { findClickables, clickElement } from "./clickables";
 import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
-import { inspectTargets, readEffect } from "./targets";
+import { inspectTargets, readEffect, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
 import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
 
@@ -67,7 +67,11 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
       const data = inspectTargets(msg.ids, msg.callId, msg.prefix, msg.values);
       sendResponse({ ok: true, data } satisfies ContentResponse);
     } catch (err) {
-      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+      sendResponse({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        ...(err instanceof TargetDriftError ? { diag: err.diag } : {}),
+      } satisfies ContentResponse);
     }
     return false;
   }
