@@ -344,6 +344,55 @@ export interface ClickEffect {
   sameDocument: boolean | null;
   newTab: boolean;
   dom: DomEffect | null;
+  // 클릭 동안 페이지가 연(열려 한) 팝업 창. 없으면 생략.
+  popup?: PopupEffect;
+}
+
+// 클릭이 팝업 창과 얽힌 결과. 주소는 모두 popupWhere로 줄인 꼴(호스트·경로, 쿼리 생략)만 싣는다 —
+// 페이지가 만든 주소라 그대로 모델에 보내지 않는다.
+export interface PopupEffect {
+  // 페이지가 window.open을 불렀지만 브라우저가 막은(null을 돌려준) 횟수와 첫 주소.
+  blocked?: { count: number; where: string };
+  // 이 클릭 동안 이 탭이 연 팝업 창(창 종류 popup). followed: 이후 도구가 그 창에서 동작한다.
+  // otherSite: 클릭한 페이지와 다른 사이트의 창.
+  opened?: { where: string; followed: boolean; otherSite: boolean };
+  // 클릭한 팝업 창이 클릭 뒤 닫혀 돌아간 곳(원래 탭, 또는 그 팝업을 연 팝업 창).
+  closed?: "original" | "popup";
+}
+
+// 팝업 주소를 결과 문구에 실을 꼴: 웹 주소는 호스트와 경로(쿼리는 "?…"로 줄임, 계정 정보는 호스트에 들지 않는다),
+// 빈 창은 "빈 창", 그 밖의 주소는 스킴만.
+export function popupWhere(url: string): string {
+  if (!url || url === "about:blank") return "빈 창";
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return `${u.protocol} 주소`;
+    return clip(u.host + pathOf(u.href), 100);
+  } catch {
+    return "알 수 없는 주소";
+  }
+}
+
+// 팝업 관련 결과 문장(고정 문구 + 줄인 주소).
+export function describePopup(p: PopupEffect): string[] {
+  const out: string[] = [];
+  if (p.opened) {
+    if (p.opened.followed) {
+      out.push(
+        `팝업 창이 열렸습니다(${p.opened.where}). 이제 도구는 팝업 창에서 동작합니다. 창이 닫히면 원래 탭으로 돌아갑니다.` +
+          (p.opened.otherSite ? " 클릭한 페이지와 다른 사이트의 창이라 그 창에서의 클릭·입력은 승인을 받습니다." : "") +
+          " 팝업 창의 내용은 describe_page·find_clickables로 다시 찾으세요(원래 탭에서 찾은 id는 팝업에서 쓸 수 없습니다).",
+      );
+    } else {
+      out.push(`팝업 창이 열렸습니다(${p.opened.where}). 도구는 지금 탭에 그대로 있습니다.`);
+    }
+  }
+  if (p.blocked) {
+    out.push(
+      `새 창(팝업)을 열려 했지만 브라우저가 팝업을 막았습니다(${p.blocked.where}). 사용자에게 이 사이트의 팝업 허용을 요청하거나 직접 선택해 달라고 안내하세요.`,
+    );
+  }
+  return out;
 }
 
 function pathOf(url: string): string {
@@ -366,8 +415,16 @@ function hostOf(url: string): string {
 // 모델과 사람이 읽을 클릭 결과 한 줄.
 export function describeEffect(e: ClickEffect): string {
   if (e.dom?.aborted) return `누르기 직전에 대상이 바뀌어 클릭하지 않았습니다(${e.dom.aborted}). 다시 찾으세요.`;
+  // 클릭한 팝업 창이 닫혔다(달력처럼 고르면 원래 탭에 값을 써 넣고 닫히는 창). 닫힌 창의 주소·화면 변화는 볼 수 없다.
+  if (e.popup?.closed) {
+    return e.popup.closed === "original"
+      ? "클릭 뒤 팝업 창이 닫혀 원래 탭으로 돌아왔습니다. 이제 도구는 원래 탭에서 동작합니다. 팝업이 원래 탭의 내용을 바꿨을 수 있으니 다시 관측하세요."
+      : "클릭 뒤 팝업 창이 닫혀 그 창을 연 팝업 창으로 돌아왔습니다. 이제 도구는 그 팝업 창에서 동작합니다. 다시 관측하세요.";
+  }
+  const popupLines = e.popup ? describePopup(e.popup) : [];
   const parts: string[] = [];
-  if (e.newTab) parts.push("새 탭이 열렸습니다(이 탭은 그대로)");
+  // 팝업 창은 아래 문장으로 따로 알린다.
+  if (e.newTab && !e.popup?.opened) parts.push("새 탭이 열렸습니다(이 탭은 그대로)");
   if (e.dom?.frameNavigated) parts.push("페이지 안 프레임이 다른 문서로 이동했습니다");
   if (e.navigation === "fragment") {
     const hash = e.url.includes("#") ? e.url.slice(e.url.indexOf("#")) : "#";
@@ -389,6 +446,8 @@ export function describeEffect(e: ClickEffect): string {
     if (e.dom && e.dom.mutations > 0) parts.push(`화면이 바뀌었습니다(변경 ${e.dom.mutations}건)`);
   }
   if (e.sameDocument === null) parts.push("페이지가 응답하지 않습니다(알림창 등이 떠 있을 수 있음)");
-  if (!parts.length) return "화면 변화가 감지되지 않았습니다. 클릭이 반영되지 않았을 수 있습니다.";
-  return parts.join(", ") + ".";
+  const head = parts.length ? parts.join(", ") + "." : "";
+  if (popupLines.length) return [head, ...popupLines].filter(Boolean).join(" ");
+  if (!head) return "화면 변화가 감지되지 않았습니다. 클릭이 반영되지 않았을 수 있습니다.";
+  return head;
 }

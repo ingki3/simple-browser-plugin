@@ -10,7 +10,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "describe_page",
     description:
-      "현재 활성 탭을 '관측'한다. URL과 제목, 주요 랜드마크(main/article/nav/aside/header/footer)별로 텍스트 미리보기·클릭 가능 요소 개수·샘플 링크 8개까지, 그리고 h1~h3 표제 목록을 반환한다. 어떤 페이지인지, 사용자의 요청이 이 페이지 맥락에서 무엇을 의미하는지 판단하는 근거로 쓴다. 페이지 상호작용이 필요한 요청의 첫 번째 툴 호출은 거의 항상 이것이다. 입력 없음.",
+      "현재 활성 탭을 '관측'한다. URL과 제목, 주요 랜드마크(main/article/nav/aside/header/footer)별로 텍스트 미리보기·클릭 가능 요소 개수·샘플 링크 8개까지, 그리고 h1~h3 표제 목록을 반환한다. 클릭이 연 팝업 창을 따라가는 중이면 그 팝업 창을 관측하고 window에 그 안내가 붙는다. 어떤 페이지인지, 사용자의 요청이 이 페이지 맥락에서 무엇을 의미하는지 판단하는 근거로 쓴다. 페이지 상호작용이 필요한 요청의 첫 번째 툴 호출은 거의 항상 이것이다. 입력 없음.",
     parameters: {
       type: "object",
       properties: {},
@@ -419,7 +419,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "click_element",
     description:
-      "사용자 승인 후 find_clickables가 반환한 id의 요소를 클릭한다. 링크면 해당 링크로 이동, 버튼이면 동작 실행. 민감 작업이라 실행 전 승인 카드가 표시된다. id는 반드시 find_clickables에서 얻은 값이어야 한다. 승인 카드를 띄울 때와 클릭 직전에 그 요소가 find_clickables 때와 같은지 확인하며, 바뀌었으면 누르지 않고 실패한다. 결과의 effect에 클릭 뒤 이동(navigation)·새 탭(newTab)·화면 변화(dom)가 담긴다.",
+      "사용자 승인 후 find_clickables가 반환한 id의 요소를 클릭한다. 링크면 해당 링크로 이동, 버튼이면 동작 실행. 민감 작업이라 실행 전 승인 카드가 표시된다. id는 반드시 find_clickables에서 얻은 값이어야 한다. 승인 카드를 띄울 때와 클릭 직전에 그 요소가 find_clickables 때와 같은지 확인하며, 바뀌었으면 누르지 않고 실패한다. 결과의 effect에 클릭 뒤 이동(navigation)·새 탭(newTab)·화면 변화(dom)·팝업 창(popup: 열림·막힘·닫힘)이 담긴다. 클릭이 연 팝업 창(달력 등)은 이후 도구가 그 창에서 동작하고, 창이 닫히면 원래 탭으로 돌아간다.",
     parameters: {
       type: "object",
       properties: {

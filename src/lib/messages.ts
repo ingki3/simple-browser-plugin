@@ -83,6 +83,8 @@ export interface PageDescription {
   fallbackExcerpt: string;
   // 같은 구조의 페이지에서 전에 쓸모 있었던 읽기 도구 호출(읽기 레시피). 백그라운드가 붙인다.
   readHints?: ReadHint[];
+  // 관측한 창이 따라가는 팝업 창이면 그 안내(백그라운드가 붙인다).
+  window?: string;
 }
 
 // 모델에 돌려주는 입력 칸(#43). 사용자가 입력한 값은 담지 않는다.
