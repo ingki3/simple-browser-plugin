@@ -217,10 +217,11 @@ function requestUrlsOf(starts: Array<Element | null>, form: HTMLFormElement | nu
   const out: string[] = [];
   for (const node of nodes) {
     for (const attr of HX_URL_ATTRS) {
+      // 속성이 없을 때만 건너뛴다. 빈 값(hx-post="")은 htmx가 지금 문서 주소로 요청하므로 그 주소로 본다.
       const v = node.getAttribute(attr);
-      if (!v) continue;
+      if (v === null) continue;
       try {
-        out.push(new URL(v, node.baseURI).href);
+        out.push(new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href);
       } catch {
         /* 주소가 아님 */
       }
@@ -884,7 +885,9 @@ function fieldRisk(el: HTMLElement): FieldRisk {
     ...(choiceUrls.length ? { choiceUrls } : {}),
     // 값을 바꾸면 삭제 요청을 보낸다고 선언한 칸(hx-delete hx-trigger="change" 등), 실릴 값·요청 주소의 삭제 단서,
     // 삭제 단서가 있는 선택지(#62 — 클릭과 같은 판정, 입력으로 우회하지 못하게).
-    ...(declaresDelete(el, [el], form) ? { deleteMethod: true } : {}),
+    // 메서드 덮어쓰기 칸(name=_method) 자체에 쓰는 입력은 값과 관계없이 묻는다. 쓰자마자 input 처리기가 요청을 보낼 수
+    // 있어, 지금 값만 보는 declaresDelete로는 새로 쓸 DELETE를 쓰기 전에 알 수 없다.
+    ...(declaresDelete(el, [el], form) || el.getAttribute("name") === "_method" ? { deleteMethod: true } : {}),
     ...(deleteParamOf(el, null, [el], form) ? { deleteParam: true } : {}),
     ...(() => {
       const deleteChoices = deleteChoicesOf(el);
