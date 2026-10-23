@@ -593,8 +593,10 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
   );
   entry.approved = { callId, info, relation };
   const row = rowElement(el)?.row;
-  if (row) approvedRows.set(el, { row: new WeakRef(row), path: ancestorsUpTo(el, row).map((a) => new WeakRef(a)) });
-  else approvedRows.delete(el);
+  const texts = row ? rowTextNodes(row) : null;
+  if (row && texts) {
+    approvedRows.set(el, { row: new WeakRef(row), path: ancestorsUpTo(el, row).map((a) => new WeakRef(a)), texts });
+  } else approvedRows.delete(el);
   return info;
 }
 
@@ -818,7 +820,26 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
 // 행 요소를 그대로 보고, 그 행 글자에 더해지기만 했는지 비교한다(sameApprovedInFlight).
 // 대상이 그 행 안에서 다른 자리(새로 생긴 하위 행 등)로 옮겨졌으면 쓰지 않는다 — 대상에서 행까지의 조상 사슬이
 // 승인 때와 같아야 한다(pinnedRowOf). 다르면 지금처럼 행을 다시 찾아 비교한다.
-const approvedRows = new WeakMap<HTMLElement, { row: WeakRef<Element>; path: WeakRef<Element>[] }>();
+// 승인 때 행 안에 있던 글자 노드와 그 글자도 함께 둔다. 입력 도중에는 그 노드들이 모두 그대로(같은 행 안, 같은 글자)이고
+// 새 노드가 더해지기만 했을 때만 행 글자의 추가를 허용한다 — 기존 제목을 '문서 A' → '문서 A 사본'으로 고치는 것(행을 다른
+// 항목에 재사용)은 낱말이 남아 있어도 다른 대상이다.
+const approvedRows = new WeakMap<
+  HTMLElement,
+  { row: WeakRef<Element>; path: WeakRef<Element>[]; texts: Array<{ node: WeakRef<Text>; value: string }> }
+>();
+
+// 행 안의 비어 있지 않은 글자 노드(최대 ROW_TEXT_NODES_MAX개). 넘으면 null — 행을 고정하지 않고 이전처럼 엄격히 비교한다.
+const ROW_TEXT_NODES_MAX = 500;
+function rowTextNodes(row: Element): Array<{ node: WeakRef<Text>; value: string }> | null {
+  const walker = row.ownerDocument.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+  const out: Array<{ node: WeakRef<Text>; value: string }> = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node.nodeValue ?? "").trim()) continue;
+    if (out.length >= ROW_TEXT_NODES_MAX) return null;
+    out.push({ node: new WeakRef(node as Text), value: node.nodeValue ?? "" });
+  }
+  return out;
+}
 
 // 대상의 부모부터 행까지의 조상(행 포함, shadow root는 host로 넘어감). 행에 닿지 못하면 빈 배열.
 function ancestorsUpTo(el: Element, row: Element): Element[] {
@@ -836,7 +857,13 @@ function pinnedRowOf(el: HTMLElement): Element | null {
   if (!pinned || !row || !row.isConnected) return null;
   const now = ancestorsUpTo(el, row);
   if (now.length === 0 || now.length !== pinned.path.length) return null;
-  return now.every((a, i) => pinned.path[i].deref() === a) ? row : null;
+  if (!now.every((a, i) => pinned.path[i].deref() === a)) return null;
+  // 승인 때의 글자 노드가 모두 그 행 안에 같은 글자로 남아 있어야 한다(더해지기만 함).
+  for (const t of pinned.texts) {
+    const node = t.node.deref();
+    if (!node || !node.isConnected || !row.contains(node) || node.nodeValue !== t.value) return null;
+  }
+  return row;
 }
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
