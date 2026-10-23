@@ -15,6 +15,7 @@ import { choiceState, sameChoiceState, type ChoiceState } from "./choiceState";
 import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
+import { clickRiskOf } from "./clickables";
 import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
@@ -53,7 +54,7 @@ const PROXY_BLOCKERS = 'a[href], area[href], button, summary, [role="button"], [
 // 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label(#56). 구조로만 정한다: 그 칸에 연결된 label(for 또는 감싼 label)
 // 중 누르면 그 칸이 작동하고(label.control이 그 칸), 화면에 보이며, 편집·숨은 영역 안이 아니고, 링크·버튼 같은 다른
 // 컨트롤 안에 있지 않은 첫 label. 메일 목록처럼 진짜 체크박스를 숨기고 꾸민 label을 보여 주는 화면을 다룬다.
-function proxyLabel(el: Element): HTMLLabelElement | null {
+export function proxyLabel(el: Element): HTMLLabelElement | null {
   if (!isTag(el, "input") || (el.type !== "checkbox" && el.type !== "radio")) return null;
   for (const label of Array.from(el.labels ?? [])) {
     if (label.control !== el) continue;
@@ -84,6 +85,17 @@ function labelText(label: HTMLLabelElement): string {
   const copy = label.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("select, textarea, input, button").forEach((n) => n.remove());
   return (copy.textContent ?? "").trim();
+}
+
+// 칸에 연결된 모든 label(for·감싼 label)의 전체 글자(안에 든 입력 요소의 글자는 뺀다). 승인 판정용 — 잘라 쓰지 않는다
+// (보여 주는 이름은 200자로 자르지만, 그 뒤의 '구매 확정' 같은 문구도 판정에는 넣어야 한다). 모델에는 보내지 않는다.
+export function connectedLabelsText(el: Element): string {
+  const labels = (el as HTMLInputElement).labels;
+  if (!labels) return "";
+  return Array.from(labels, (l) => labelText(l))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function resolveLabel(el: FieldElement): string {
@@ -257,19 +269,30 @@ function chainOf(start: Element): Element[] | null {
 
 // 이 클릭·입력이 일으킬 수 있는 htmx·rails-ujs 요청 판정(위 규칙).
 // opaque: htmx 요청을 확인할 수 없음(허용 목록 밖 속성·GET 아님·모름). del: 삭제 단서(GET 요청의 주소·값, data-params).
+// urls: 이 클릭·입력이 일으킬 수 있는 htmx GET 요청의 목적지(hx-get 주소, 요청하는 양식의 action, htmx가 쓸 수 있는 버튼의
+// formaction — 절대 주소). 승인 판정이 사이트 경계·결제·개인정보 주소를 본다(목적지를 확인하지 못한 요청은 opaque로 묻는다).
 // skip: 삭제 단서 판정에서 뺄 칸들(입력 묶음이 승인받은 삭제 선택지를 쓴 칸 — deleteParamOf와 같은 뜻).
 function requestSignals(
   starts: Array<Element | null>,
   form: HTMLFormElement | null,
   words: (text: string) => boolean,
   skip: ReadonlySet<Element> = new Set(),
-): { opaque: boolean; del: boolean } {
-  const out = { opaque: false, del: false };
+): { opaque: boolean; del: boolean; urls: string[] } {
+  const out = { opaque: false, del: false, urls: [] as string[] };
+  // 목적지는 50개까지. 넘으면 끝까지 보지 못했다는 표시(늘 묻는다).
+  const addUrl = (u: string) => {
+    if (out.urls.includes(u)) return;
+    if (out.urls.length >= MAX_REQUEST_URLS) {
+      if (!out.urls.includes(TOO_MANY_REQUESTS)) out.urls.push(TOO_MANY_REQUESTS);
+      return;
+    }
+    out.urls.push(u);
+  };
   const nodes = new Set<Element>();
   for (const start of starts) {
     if (!start) continue;
     const chain = chainOf(start);
-    if (!chain) return { opaque: true, del: false };
+    if (!chain) return { opaque: true, del: false, urls: [] };
     for (const n of chain) nodes.add(n);
   }
   // GET 요청 요소 하나의 삭제 단서: hx-get 주소, 요청 요소 자신의 name=value, 양식이면 실릴 값. 주소로 풀리지 않으면 모름.
@@ -278,13 +301,17 @@ function requestSignals(
       const v = node.getAttribute(attr);
       if (v === null) continue;
       try {
-        if (destructiveRoute(new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href)) out.del = true;
+        const url = new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href;
+        addUrl(url);
+        if (destructiveRoute(url)) out.del = true;
       } catch {
         out.opaque = true;
       }
     }
     if (!skip.has(node) && words(ownRequestText(node))) out.del = true;
     if (isTag(node, "form")) {
+      // hx-boost 양식·from: 리스너 양식은 그 양식의 action으로 요청한다.
+      addUrl(formAction(node as HTMLFormElement));
       const texts = submittedChoiceTexts(node as HTMLFormElement, skip);
       if (texts === null) out.opaque = true;
       else if (texts.some(words)) out.del = true;
@@ -309,7 +336,9 @@ function requestSignals(
         if (nonGet(attr.value)) out.opaque = true;
       } else if (name === "formaction") {
         try {
-          if (destructiveRoute(new URL(attr.value.trim() || c.ownerDocument.URL, c.baseURI).href)) out.del = true;
+          const url = new URL(attr.value.trim() || c.ownerDocument.URL, c.baseURI).href;
+          addUrl(url);
+          if (destructiveRoute(url)) out.del = true;
         } catch {
           out.opaque = true;
         }
@@ -390,6 +419,19 @@ function ownRequestText(node: Element): string {
     return name;
   }
   return `${name} ${(node as HTMLButtonElement).value ?? node.getAttribute("value") ?? ""}`;
+}
+
+const MAX_REQUEST_URLS = 50;
+const TOO_MANY_REQUESTS = "about:too-many-requests";
+
+// 클릭·입력이 일으킬 수 있는 htmx GET 요청의 목적지(requestSignals의 urls). 승인 판정의 목적지 검사용.
+export function requestUrlsOf(
+  el: Element,
+  submitter: Element | null,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+): string[] {
+  return requestSignals([el, ...controls, submitter, form], form, destructiveWords).urls;
 }
 
 // 클릭·입력이 확인할 수 없는 htmx 요청(허용 목록 밖 속성·GET 아님 — 위 규칙)을 일으킬 수 있는지(#62, fail-closed).
@@ -982,8 +1024,9 @@ const FIELD_KIND: TargetKind = {
     return [...new Set([...(form ? personalValuedElements(form) : []), ...around, ...nearLabel])];
   },
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
-  // (change 처리기로 바로 제출하는 칸이 있다). 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
-  risk: (el) => labelRisk(el, fieldRisk(el)),
+  // (change 처리기로 바로 제출하는 칸이 있다). checkbox·radio는 채우기가 실제 클릭이라 그 칸을 직접 누를 때의 위험도
+  // 더하고(toggleClickRisk), 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
+  risk: (el) => labelRisk(el, toggleClickRisk(el, fieldRisk(el))),
   // 이 칸의 deleteParam이 입력 묶음이 쓴 선택 칸들(writes: 칸 → 쓴 직전·처리기가 돌기 전의 상태 기록)만으로 설명되는지(#62).
   // 지금 상태가 쓴 상태와 그대로 같은 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
   // 비교는 글자가 아니라 실제 상태다: select는 선택된 option 요소·그 value·선택 상태·select의 name, checkbox·radio는
@@ -1023,6 +1066,55 @@ function unchangedWrites(writes: ReadonlyMap<Element, ChoiceState>): Set<Element
 
 type FieldRisk = NonNullable<ReturnType<NonNullable<TargetKind["risk"]>>>;
 
+// 채우기에서 이 checkbox·radio 칸을 볼 때의 위험 신호 전체(칸 자신·클릭·대신 보여 주는 label 쪽). 다른 요소(label 등)를
+// 눌러 이 칸이 작동하는 클릭도 칸 쪽 신호를 함께 보도록 clickables.ts가 쓴다.
+export function toggleFieldRisk(el: HTMLInputElement): FieldRisk & { sensitive: TargetInfo["sensitive"] } {
+  return { ...FIELD_KIND.risk!(el), sensitive: sensitivityOf(el) };
+}
+
+function isToggleInput(el: Element): el is HTMLInputElement {
+  return isTag(el, "input") && (el.type === "checkbox" || el.type === "radio");
+}
+
+// 목록 두 개를 순서대로 합친다(같은 값은 한 번만).
+function mergeList(base: string[] | undefined, extra: string[] | undefined): string[] {
+  const out = [...(base ?? [])];
+  for (const u of extra ?? []) if (!out.includes(u)) out.push(u);
+  return out;
+}
+
+// checkbox·radio 채우기는 그 칸을 실제로 누른다(fillOne의 clickToggle — 페이지의 click 처리기가 돈다). 그래서 같은 칸을
+// click_element로 누를 때 보는 위험 신호(clickables.ts clickRiskOf: 감싼 링크 주소·버튼 안·감싼 컨트롤 글자·ping·내려받기·
+// 결제·개인정보 제출·삭제 선언·실릴 값·htmx 클릭 요청 등)를 칸의 위험에 더한다(더 묻는 쪽만). 승인 판정(autoApproveBlock은
+// 이런 칸에 클릭 규칙도 적용한다)과 실행 직전·입력 도중 재검사(riskAdded)가 이 합친 신호를 본다.
+// 제출 주소(submitTo·submitUrl)는 칸 쪽 것을 그대로 쓴다(같은 양식의 같은 action이다).
+function toggleClickRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
+  if (!isToggleInput(el)) return risk;
+  const click = clickRiskOf(el);
+  const outerText = [risk.outerText ?? "", click.outerText ?? ""].filter(Boolean).join(" ");
+  const scopeSubmitUrls = mergeList(risk.scopeSubmitUrls, click.scopeSubmitUrls);
+  const scopeFormActions = mergeList(risk.scopeFormActions, click.scopeFormActions);
+  const choiceUrls = mergeList(risk.choiceUrls, click.choiceUrls);
+  const requestUrls = mergeList(risk.requestUrls, click.requestUrls);
+  return {
+    ...risk,
+    submitsPersonal: !!risk.submitsPersonal || !!click.submitsPersonal,
+    paymentContext: !!risk.paymentContext || !!click.paymentContext,
+    ...(outerText ? { outerText } : {}),
+    ...(click.ancestorHref ? { ancestorHref: click.ancestorHref } : {}),
+    ...(click.insideControl ? { insideControl: true } : {}),
+    ...(click.pingUrls?.length ? { pingUrls: click.pingUrls } : {}),
+    ...(click.download ? { download: true } : {}),
+    ...(risk.deleteMethod || click.deleteMethod ? { deleteMethod: true } : {}),
+    ...(risk.deleteParam || click.deleteParam ? { deleteParam: true } : {}),
+    ...(risk.opaqueRequest || click.opaqueRequest ? { opaqueRequest: true } : {}),
+    ...(scopeSubmitUrls.length ? { scopeSubmitUrls } : {}),
+    ...(scopeFormActions.length ? { scopeFormActions } : {}),
+    ...(choiceUrls.length ? { choiceUrls } : {}),
+    ...(requestUrls.length ? { requestUrls } : {}),
+  };
+}
+
 // 숨긴 칸은 사용자가 보는 것이 label이다. label이 칸과 다른 곳(결제 대화상자 안 등)에 있으면
 // 그 자리의 위험 신호(결제 화면, 개인정보가 채워진 주변 양식, 주변 양식의 제출 주소)도 칸의 위험에 더한다(더 묻는 쪽만).
 function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
@@ -1053,11 +1145,13 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   const labelDelete = declaresDelete(label, [], labelForm);
   const labelParam = deleteParamOf(label, null, [], labelForm);
   const labelOpaque = opaqueRequestOf(label, null, [], labelForm);
+  const requestUrls = merge(risk.requestUrls, requestUrlsOf(label, null, [], labelForm));
   return {
     ...risk,
     ...(labelDelete ? { deleteMethod: true } : {}),
     ...(labelParam ? { deleteParam: true } : {}),
     ...(labelOpaque ? { opaqueRequest: true } : {}),
+    ...(requestUrls.length ? { requestUrls } : {}),
     paymentContext: !!risk.paymentContext || inPaymentContext(label, labelForm),
     submitsPersonal:
       !!risk.submitsPersonal ||
@@ -1092,8 +1186,9 @@ function fieldRisk(el: HTMLElement): FieldRisk {
       personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
     // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
     ...(() => {
+      // 연결된 모든 label(첫 label만이 아니라)의 전체 글자도 넣는다.
       const full = isFieldElement(el)
-        ? `${resolveLabel(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
+        ? `${resolveLabel(el)} ${connectedLabelsText(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
         : "";
       return full ? { outerText: full } : {};
     })(),
@@ -1141,6 +1236,11 @@ function fieldRisk(el: HTMLElement): FieldRisk {
     ...(declaresDelete(el, [el], form) || el.getAttribute("name") === "_method" ? { deleteMethod: true } : {}),
     ...(deleteParamOf(el, null, [el], form) ? { deleteParam: true } : {}),
     ...(opaqueRequestOf(el, null, [el], form) ? { opaqueRequest: true } : {}),
+    // 값을 바꾸면(또는 checkbox·radio는 누르면) 일으킬 수 있는 htmx GET 요청의 목적지.
+    ...(() => {
+      const requestUrls = requestUrlsOf(el, null, [el], form);
+      return requestUrls.length ? { requestUrls } : {};
+    })(),
     ...(() => {
       const deleteChoices = deleteChoicesOf(el);
       return deleteChoices.length ? { deleteChoices } : {};
@@ -1275,7 +1375,7 @@ export function findFormFields(_args: { onlyVisible?: boolean }): FormField[] {
 
 // 보이는 칸만 돌려준다. 화면에 보이지 않는 칸(onlyVisible:false로 찾던 숨은 칸)은 이제 돌려주지 않는다(#43).
 // 다만 숨긴 checkbox·radio라도 구조로 연결된 보이는 label이 있으면 돌려준다(#56 — 채우기는 다른 checkbox·radio와
-// 같은 경로로 체크 상태를 쓰고 input·change를 보낸다. label에 click을 보내지 않는다).
+// 같은 경로로 칸 자신을 누른다(clickToggle). label에 click을 보내지 않는다).
 function collectFormFields(): FormField[] {
   const fields: FormField[] = [];
 
@@ -1312,6 +1412,57 @@ function dispatchChange(el: Element, guard?: () => string | null): void {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+// checkbox·radio를 사용자가 누를 때처럼 바꾼다: 상태를 쓰고 → click → input → change. 체크 상태만 쓰고 input·change를
+// 보내면 click에만 반응하는 페이지(Google 항공편의 필터 대화상자 등)는 바뀐 것을 모른다.
+// el.click()(브라우저의 활성화 동작)은 쓰지 않는다. 활성화 동작은 click이 끝나면 브라우저가 input·change를 직접 보내므로,
+// click 처리기 뒤의 재검사가 막아도 그 이벤트를 취소할 수 없고(페이지가 먼저 창 캡처 단계에 건 리스너는 우리보다 먼저
+// 본다), 리스너 순서로는 보장할 수 없다. 대신 MouseEvent가 아닌 click 이벤트(Event)를 보낸다 — 이 이벤트는 활성화 동작을
+// 일으키지 않아(DOM 명세: 활성화는 MouseEvent인 click만) 브라우저가 상태를 바꾸거나 input·change를 보내지 않고, 감싼
+// label·링크도 작동하지 않는다. 그래서 input·change는 늘 우리가 보내며, 보장:
+// - onWritten: 상태를 쓴 직후, 페이지 처리기(click 포함)가 돌기 전에 부른다(#62 쓴 상태 기록).
+// - guard: click 처리기가 돈 뒤 input을 보내기 전, input 처리기가 돈 뒤 change를 보내기 전에 부른다. 막히면 그 이벤트를
+//   보내지 않으므로 어떤 페이지 리스너도 input·change를 보지 못한다(예전 경로와 같은 성질).
+// - click 처리기가 preventDefault하면 브라우저처럼 상태를 되돌리고(radio는 그 묶음에서 전에 체크된 칸도) input·change를
+//   보내지 않는다 — 최종 확인이 반영 안 됨으로 알린다.
+// click 처리기가 한 일(요청·이동)은 막을 수 없어, 승인 판정에 같은 칸을 누를 때의 위험 신호를 넣는다(toggleClickRisk).
+// 한계: MouseEvent가 아니라 좌표·button 값이 없다. 그런 값을 요구하는 처리기는 반응하지 않을 수 있다(그때는 예전처럼
+// 상태와 input·change만 반영된다).
+function clickToggle(el: HTMLInputElement, want: boolean, guard?: () => string | null, onWritten?: () => void): void {
+  const was = el.checked;
+  // radio를 체크하면 같은 묶음의 다른 칸이 풀리므로, 취소되면 되살릴 칸을 먼저 기억한다.
+  const prevRadio = el.type === "radio" && !was ? checkedInGroup(el) : null;
+  setNativeProperty(el, "checked", want);
+  onWritten?.();
+  const click = new Event("click", { bubbles: true, cancelable: true, composed: true });
+  el.dispatchEvent(click);
+  if (click.defaultPrevented) {
+    setNativeProperty(el, "checked", was);
+    if (prevRadio) setNativeProperty(prevRadio, "checked", true);
+    return;
+  }
+  const blocked = guard?.();
+  if (blocked) throw new ChangeBlocked(blocked);
+  dispatchChange(el, guard);
+}
+
+// 같은 radio 묶음(같은 name·같은 양식, 양식 밖이면 같은 문서·shadow root)에서 체크된 다른 칸.
+function checkedInGroup(el: HTMLInputElement): HTMLInputElement | null {
+  if (!el.name) return null;
+  const scope: ParentNode = el.form ?? (el.getRootNode() as Document | ShadowRoot);
+  for (const r of Array.from(scope.querySelectorAll<HTMLInputElement>('input[type="radio" i]'))) {
+    if (r !== el && r.checked && r.name === el.name && r.form === el.form) return r;
+  }
+  // 양식에 form 속성으로 연결된 바깥 칸.
+  if (el.form) {
+    for (const r of formElements(el.form)) {
+      if (r !== el && isTag(r, "input") && (r as HTMLInputElement).type === "radio" && (r as HTMLInputElement).checked && (r as HTMLInputElement).name === el.name) {
+        return r as HTMLInputElement;
+      }
+    }
+  }
+  return null;
+}
+
 // 이 입력이 실제로 넣을 값(페이지 처리기가 돌기 전에 정한 것): 선택 칸은 고를 option.value, checkbox·radio는 자기 value.
 function intendedValue(el: FieldElement, value: string): string {
   if (isTag(el, "select")) {
@@ -1344,14 +1495,11 @@ function fillOne(
     return true;
   }
   if (isTag(el, "input") && el.type === "checkbox") {
-    // value 속성이 아니라 체크 상태를 바꾼다.
+    // value 속성이 아니라 체크 상태를 바꾼다. 바꿀 때는 사용자처럼 누른다(clickToggle).
     const want = parseCheckedRequest(value);
     if (want === null) return false;
-    if (el.checked !== want) {
-      setNativeProperty(el, "checked", want);
-      onWritten?.();
-      dispatchChange(el, guard);
-    } else onWritten?.();
+    if (el.checked !== want) clickToggle(el, want, guard, onWritten);
+    else onWritten?.();
     return true;
   }
   if (isTag(el, "input") && el.type === "radio") {
@@ -1359,11 +1507,8 @@ function fillOne(
     const want = parseCheckedRequest(value);
     if (want === null) return false;
     if (!want) return !el.checked;
-    if (!el.checked) {
-      setNativeProperty(el, "checked", true);
-      onWritten?.();
-      dispatchChange(el, guard);
-    } else onWritten?.();
+    if (!el.checked) clickToggle(el, true, guard, onWritten);
+    else onWritten?.();
     return true;
   }
   // 브라우저가 정리할 값(줄바꿈 제거, range의 숫자 정규화 등)을 페이지에 붙지 않은 복제본에서 먼저 구해 검사한다.
@@ -1611,6 +1756,8 @@ export async function fillFormFields(
       result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
     } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual && sameIgnoringSpace(actual, value))) {
       result.applied = true;
+    } else if (isToggleInput(el)) {
+      result.note = "눌렀지만 체크 상태가 요청과 다릅니다(페이지가 클릭을 취소했거나 되돌림)";
     } else {
       result.note = "페이지가 값을 바꾸거나 받아들이지 않았습니다(최대 길이·서식 등)";
     }

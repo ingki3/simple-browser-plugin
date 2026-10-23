@@ -47,7 +47,7 @@ export interface TargetKind {
   deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
   // deleteMethod(구조 선언)에 대한 같은 예외(#62).
   deleteMethodExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
 interface Entry {
@@ -223,12 +223,28 @@ function groupHeading(row: Element): string {
 // 대상의 ARIA·HTML 상태. class 이름으로 상태를 추측하지 않는다.
 const STATE_ATTRS = ["selected", "checked", "pressed", "expanded", "current"] as const;
 
+// 요소 자신이 checkbox·radio이거나, label이고 연결된 컨트롤(label.control)이 checkbox·radio면 그 칸.
+function toggleOf(el: HTMLElement): HTMLInputElement | null {
+  const isToggle = (c: Element | null | undefined): c is HTMLInputElement =>
+    !!c && c.localName === "input" && ["checkbox", "radio"].includes((c as HTMLInputElement).type);
+  if (isToggle(el)) return el;
+  if (el.localName === "label") {
+    const control = (el as HTMLLabelElement).control;
+    if (isToggle(control)) return control;
+  }
+  return null;
+}
+
 function statesOf(el: HTMLElement): Record<string, string> | undefined {
   const out: Record<string, string> = {};
   for (const name of STATE_ATTRS) {
     const v = el.getAttribute(`aria-${name}`);
     if (v !== null) out[name] = v.trim().toLowerCase().slice(0, 20);
   }
+  // 진짜 checkbox·radio(또는 누르면 그것을 작동시키는 label)는 체크 상태를 속성값(checked·indeterminate)으로 넣는다.
+  // 승인 뒤 이미 바뀌었으면 누르면 반대가 되므로 대상 비교에 고정한다.
+  const toggle = toggleOf(el);
+  if (toggle) out.checked = toggle.indeterminate && toggle.type === "checkbox" ? "mixed" : String(toggle.checked);
   const ariaDisabled = (el.getAttribute("aria-disabled") ?? "").trim().toLowerCase() === "true";
   if (ariaDisabled || el.hasAttribute("disabled")) out.disabled = "true";
   return Object.keys(out).length ? out : undefined;
@@ -802,6 +818,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
     return "삭제 요청으로 바뀜";
   }
   if (now.opaqueRequest && !info.opaqueRequest) return "확인할 수 없는 htmx 요청으로 바뀜";
+  if ((now.requestUrls ?? []).join(" ") !== (info.requestUrls ?? []).join(" ")) return "htmx 요청 주소가 바뀜";
   if (now.deleteParam && !info.deleteParam && !(writes && kind.deleteParamExplained?.(el, writes))) {
     return "삭제 요청으로 바뀜";
   }
@@ -816,7 +833,11 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   if ((now.scopeFormActions ?? []).join(" ") !== (info.scopeFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
   if ((now.aroundFormActions ?? []).join(" ") !== (info.aroundFormActions ?? []).join(" ")) return "주변 양식의 제출 주소가 바뀜";
   if ((now.fieldName ?? "") !== (info.fieldName ?? "")) return "칸 이름이 바뀜";
-  if ((now.baseUri ?? "") !== (info.baseUri ?? "")) return "문서 기준 주소가 바뀜";
+  // 기준 주소는 입력값(상대 주소)을 푸는 기준이라 비교한다. checkbox·radio는 넣는 값이 참·거짓뿐이라 기준 주소가 바뀌어도
+  // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
+  // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
+  const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
+  if (!toggleField && (now.baseUri ?? "") !== (info.baseUri ?? "")) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
 }
