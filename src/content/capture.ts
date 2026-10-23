@@ -1,4 +1,4 @@
-import type { CaptureMetrics, CaptureScrolled, CaptureViewport } from "@/lib/pageCapture";
+import type { CaptureMeasured, CaptureMetrics, CaptureScrolled } from "@/lib/pageCapture";
 
 // 페이지 전체 캡처(capture_page, #49)의 문서 쪽 단계. 백그라운드가 화면을 찍고, 여기서는 스크롤·잠시 바꾼 스타일과
 // 그 복원만 맡는다. 판정은 계산 스타일(position·overflow)과 크기로만 한다.
@@ -212,6 +212,7 @@ export async function captureScroll(token: string, y: number): Promise<CaptureSc
   armIdleRestore(s);
   const vp = viewport();
   return {
+    x: window.scrollX,
     y: window.scrollY,
     pageHeight: pageHeight(),
     viewportWidth: vp.width,
@@ -240,10 +241,18 @@ export async function captureHideFixed(token: string): Promise<number> {
 }
 
 // 찍은 뒤 다시 잰다(찍는 사이 창 크기·배율이 바뀌었는지).
-export function captureMeasure(token: string): CaptureViewport {
+export function captureMeasure(token: string): CaptureMeasured {
   current(token);
   const vp = viewport();
-  return { viewportWidth: vp.width, viewportHeight: vp.height, windowWidth: innerWidth, windowHeight: innerHeight, scale: devicePixelRatio || 1 };
+  return {
+    viewportWidth: vp.width,
+    viewportHeight: vp.height,
+    windowWidth: innerWidth,
+    windowHeight: innerHeight,
+    scale: devicePixelRatio || 1,
+    x: window.scrollX,
+    y: window.scrollY,
+  };
 }
 
 export function captureEnd(token: string): boolean {

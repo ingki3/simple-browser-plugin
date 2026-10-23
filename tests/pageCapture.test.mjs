@@ -7,6 +7,7 @@ import {
   nextTileY,
   planStitch,
   pngSize,
+  scrollMoved,
   tileSizeMatches,
   viewportChanged,
 } from "../src/lib/pageCapture.ts";
@@ -137,4 +138,12 @@ test("찍은 화면 크기: 첫 장 포함 모든 장의 폭·높이가 창 안�
   const s15 = { ...start, scale: 1.5 };
   assert.equal(tileSizeMatches({ width: 1500, height: 1070 }, s15), true);
   assert.equal(tileSizeMatches({ width: 1500, height: 1060 }, s15), false);
+});
+
+test("찍는 사이 스크롤 위치 변화 감지", () => {
+  assert.equal(scrollMoved({ x: 0, y: 800 }, { x: 0, y: 800 }), false);
+  // 배율이 소수면 장치 px에 맞춘 0.33px 차이는 같은 위치.
+  assert.equal(scrollMoved({ x: 0, y: 800.33 }, { x: 0, y: 800 }), false);
+  assert.equal(scrollMoved({ x: 0, y: 800 }, { x: 0, y: 900 }), true);
+  assert.equal(scrollMoved({ x: 0, y: 800 }, { x: 40, y: 800 }), true);
 });

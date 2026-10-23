@@ -187,10 +187,21 @@ export interface CaptureViewport {
   scale: number;
 }
 
-export interface CaptureScrolled extends CaptureViewport {
-  // 실제로 간 스크롤 위치(페이지가 덜 갈 수 있다)와 그때의 문서 높이.
+// 찍은 뒤 다시 잰 값: 창 크기·배율과 스크롤 위치.
+export interface CaptureMeasured extends CaptureViewport {
+  x: number;
   y: number;
+}
+
+export interface CaptureScrolled extends CaptureMeasured {
+  // 실제로 간 스크롤 위치(페이지가 덜 갈 수 있다)와 그때의 문서 높이.
   pageHeight: number;
+}
+
+// 스크롤해 둔 위치(scrolled)에서 찍은 뒤 잰 위치(after)가 달라졌는지. 사용자 스크롤·페이지 스크립트가 그 사이 위치를
+// 바꾸면 그 장은 다른 위치를 찍은 것이라 이어 붙일 자리가 틀린다.
+export function scrollMoved(scrolled: { x: number; y: number }, after: { x: number; y: number }): boolean {
+  return Math.abs(scrolled.x - after.x) > 0.5 || Math.abs(scrolled.y - after.y) > 0.5;
 }
 
 // 캡처하는 동안 창 크기·배율이 바뀌었는지. 바뀌면 화면마다 크기가 달라 이어 붙인 이미지에 빈 곳·어긋남이 생긴다.

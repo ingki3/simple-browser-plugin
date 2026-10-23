@@ -5,11 +5,12 @@ import {
   nextTileY,
   planStitch,
   pngSize,
+  scrollMoved,
   tileSizeMatches,
   viewportChanged,
   type CaptureMetrics,
   type CaptureScrolled,
-  type CaptureViewport,
+  type CaptureMeasured,
   type StitchJob,
   type StitchReleaseJob,
   type StitchResult,
@@ -272,6 +273,7 @@ async function step<T>(t: CaptureTarget, msg: BgToContent, timeoutMs: number): P
   }
 }
 
+const SCROLLED = "캡처하는 동안 페이지의 스크롤 위치가 바뀌어 멈췄습니다(저장하지 않음). 캡처가 끝날 때까지 스크롤하지 말고 다시 요청하세요.";
 const RESIZED = "캡처하는 동안 창 크기나 화면 배율이 바뀌어 멈췄습니다(저장하지 않음). 창 크기를 그대로 둔 채 다시 요청하세요.";
 
 export async function captureFullPage(
@@ -289,11 +291,6 @@ export async function captureFullPage(
     console.warn("[capture_page] begin failed", err);
     throw new Error("이 페이지에는 확장 스크립트를 넣을 수 없어 페이지 전체를 캡처할 수 없습니다(보이는 화면 캡처는 될 수 있음).");
   }
-  // 시작 단계가 승인한 그 문서에서 열렸는지(그 사이 이동했으면 새 문서의 세션은 그쪽이 스스로 되돌린다).
-  await assertVisible(t);
-  if (m.pdf) {
-    throw new Error("PDF 뷰어는 스크롤해 전체를 캡처할 수 없습니다. 보이는 화면 캡처(fullPage 없이)만 할 수 있습니다.");
-  }
   const notes: string[] = [];
   const tiles: Array<{ y: number; blob: Blob }> = [];
   const vh = m.viewportHeight;
@@ -302,7 +299,13 @@ export async function captureFullPage(
   let stalled = false;
   let tooMany = false;
   let hidden = 0;
+  // 시작 단계가 세션을 열고 스타일을 바꾼 직후부터 복원 범위에 넣는다(아래 확인이 실패해도 바로 되돌린다).
   try {
+    // 시작 단계가 승인한 그 문서에서 열렸는지.
+    await assertVisible(t);
+    if (m.pdf) {
+      throw new Error("PDF 뷰어는 스크롤해 전체를 캡처할 수 없습니다. 보이는 화면 캡처(fullPage 없이)만 할 수 있습니다.");
+    }
     for (;;) {
       checkAbort(signal);
       const target = tiles.length === 0 ? 0 : nextTileY({ coveredBottom: covered, pageHeight, viewportHeight: vh });
@@ -326,16 +329,24 @@ export async function captureFullPage(
       const dataUrl = await grab(t, signal);
       const size = dataUrlPngSize(dataUrl);
       if (!size || !tileSizeMatches(size, m)) throw new Error(RESIZED);
-      // 찍은 뒤에도 다시 재어 찍기 전(시작) 값과 같은지 본다.
-      const after = await step<CaptureViewport>(t, { kind: "capture_step", token: m.token, step: "measure" }, 3_000);
+      // 찍은 뒤에도 다시 재어 찍기 전(시작) 값과 같은지, 스크롤해 둔 위치 그대로인지 본다.
+      const after = await step<CaptureMeasured>(t, { kind: "capture_step", token: m.token, step: "measure" }, 3_000);
       if (viewportChanged(m, after)) throw new Error(RESIZED);
+      // 고정 요소 숨김·호출 간격 대기 사이 사용자 스크롤·페이지 스크립트가 위치를 바꿨으면 그 장은 다른 자리를 찍은 것이다.
+      // 다시 찍기보다 단순하게 멈추고 저장하지 않는다(같은 페이지가 계속 움직이면 다시 찍어도 같다).
+      if (scrollMoved(at, after)) throw new Error(SCROLLED);
       const blob = await (await fetch(dataUrl)).blob();
       tiles.push({ y: at.y, blob });
       covered = Math.max(covered, at.y + vh);
     }
   } finally {
-    // 오류·중단에도 원래 스크롤 위치와 스타일로 되돌린다(문서가 바뀌었으면 되돌릴 것이 없다).
-    await sendToDoc(t, { kind: "capture_step", token: m.token, step: "end" }, 3_000).catch(() => undefined);
+    // 오류·중단에도 원래 스크롤 위치와 스타일로 되돌린다. 승인한 문서에 보내고, 시작 단계가 그 사이 바뀐 다른 문서에서
+    // 열렸을 수도 있어 지금 최상위 문서에도 보낸다(같은 세션 값을 가진 쪽만 되돌린다).
+    const end: BgToContent = { kind: "capture_step", token: m.token, step: "end" };
+    await Promise.all([
+      sendToDoc(t, end, 3_000).catch(() => undefined),
+      chrome.tabs.sendMessage(t.tabId, end, { frameId: 0 }).catch(() => undefined),
+    ]);
   }
   checkAbort(signal);
   // 배율이 소수(1.5 등)면 스크롤 위치가 장치 px에 맞춰져 끝에서 1px 안쪽에 멈출 수 있다. 그만큼은 끝까지 담은 것으로 본다.
