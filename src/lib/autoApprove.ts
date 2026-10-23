@@ -53,6 +53,8 @@ export function destructiveClickBlock(targets: TargetInfo[]): string | null {
       t.submitTo ?? "",
       ...(t.pingUrls ?? []),
       ...(t.choiceUrls ?? []),
+      // 클릭·입력이 일으킬 htmx GET 요청의 목적지.
+      ...(t.requestUrls ?? []),
     ]) {
       if (url && destructiveRoute(url)) return DESTRUCTIVE_REASON;
     }
@@ -116,6 +118,13 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
       // 체크·선택의 change 처리기가 삭제를 실행하는 페이지가 있어 칸에도 같은 판정을 쓴다(#62 — 클릭 대신 입력으로 우회 방지).
       const fillDestructive = destructiveFillBlock([t], [values[i]]);
       if (fillDestructive) return fillDestructive;
+      // checkbox·radio 채우기는 그 칸을 실제로 누른다(페이지의 click 처리기가 돈다). 그 칸을 click_element로 누를 때
+      // 자동 실행하지 않는 경우(감싼 링크의 결제·개인정보 주소, 내려받기 링크, 가입·제출 문구 등)는 채우기로도 자동 실행하지
+      // 않는다. 칸의 위험 신호에는 클릭 신호가 합쳐져 있다(content script forms.ts toggleClickRisk).
+      if (t.fieldType === "checkbox" || t.fieldType === "radio") {
+        const clickWhy = autoApproveBlock("click_element", [t]);
+        if (clickWhy) return `체크·선택은 칸을 누르는 동작이라 클릭과 같이 묻습니다(${clickWhy})`;
+      }
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
@@ -127,6 +136,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
         ...(t.scopeSubmitUrls ?? []),
         ...(t.scopeFormActions ?? []),
         ...(t.aroundFormActions ?? []),
+        // 값을 바꾸거나 누르면 일으킬 htmx GET 요청의 목적지.
+        ...(t.requestUrls ?? []),
       ]) {
         const why = url ? sensitiveUrlReason(url) : null;
         if (why) return `${why}로 이어지는 칸 입력`;
@@ -136,6 +147,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
   }
   if (tool === "click_element") {
     for (const t of targets) {
+      // 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label을 누르는 클릭(#56)은 채우기의 대리 label 칸과 같이 늘 묻는다.
+      if (t.proxy) return "보이지 않는 칸을 대신 보여 주는 라벨 클릭";
       // 실제로 작동하는 바깥 버튼·링크의 글자도 본다(<button>구매 <span>확인</span></button>의 span).
       // 붙여 쓴 이름(PayNow, BuyNow, pay_now)도 낱말로 나눠 본다.
       const raw = `${t.name} ${t.outerText ?? ""}`;
@@ -161,6 +174,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
         ...(t.aroundFormActions ?? []),
         // 링크의 ping 주소(쿠키를 실은 POST)도 결제·개인정보 주소인지 본다.
         ...(t.pingUrls ?? []),
+        // 누르면 일으킬 htmx GET 요청의 목적지(hx-get hx-trigger="click").
+        ...(t.requestUrls ?? []),
       ]) {
         const why = href ? sensitiveUrlReason(href) : null;
         if (why) return `${why}로 가는 링크`;
@@ -456,6 +471,8 @@ export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boole
   // 버튼·버튼 역할·인라인 클릭 처리기 안의 링크는 바깥 처리기가 이동을 취소하고 다른 동작(결제)을 할 수 있다.
   if (t.insideControl) return false;
   if (t.choiceUrls?.length || t.scopeSubmitUrls?.length) return false;
+  // 누르면 htmx 요청도 보내는 링크는 이동만 하는 링크가 아니다.
+  if (t.requestUrls?.length) return false;
   // 같은 문서 안 위치만 바꾸는 링크(#…)는 이동하지 않고 페이지 처리기만 부르는 경우가 많다.
   if (pageUrl) {
     try {

@@ -466,3 +466,57 @@ test("#62: 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·변형 
   assert.equal(autoApproveBlock("click_element", [t({ name: "삭제", opaqueRequest: true })]), "되돌리기 어려운 동작(삭제·스팸)");
   assert.equal(autoApproveBlock("click_element", [t({ name: "확인" })]), null);
 });
+
+test("checkbox·radio fills click the field, so the click rules also apply", () => {
+  const box = (over = {}) => t({ tag: "input", role: "checkbox", fieldType: "checkbox", name: "직항만", ...over });
+  // 평범한 체크는 자동 실행한다.
+  assert.equal(autoApproveBlock("fill_form_fields", [box()]), null);
+  assert.equal(autoApproveBlock("fill_form_fields", [box({ fieldType: "radio", role: "radio" })]), null);
+  // 감싼 링크가 결제·개인정보 주소면 클릭처럼 묻는다.
+  assert.match(
+    autoApproveBlock("fill_form_fields", [box({ ancestorHref: "https://shop.example/checkout" })]) ?? "",
+    /클릭과 같이/,
+  );
+  // 내려받기 링크 안, 가입·제출 문구가 붙은 바깥 컨트롤, ping 주소.
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ download: true })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ outerText: "회원 가입" })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ pingUrls: ["https://track.example/p?email=a%40b.co"] })]));
+  // 글자 칸에는 클릭 규칙을 쓰지 않는다.
+  assert.equal(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", name: "검색어", outerText: "가입" })]), null);
+  // 클릭 쪽 htmx 요청 신호도 묻는다.
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ opaqueRequest: true })]));
+});
+
+test("htmx request destinations (requestUrls) are checked like other destinations", async () => {
+  const { destructiveClickBlock, grantableLink } = await import("../src/lib/autoApprove.ts");
+  const box = (over = {}) => t({ tag: "input", role: "checkbox", fieldType: "checkbox", name: "옵션", ...over });
+  // 같은 사이트의 평범한 GET 요청은 그대로 자동 실행.
+  assert.equal(autoApproveBlock("fill_form_fields", [box({ requestUrls: ["https://shop.example/list?page=2"] })]), null);
+  assert.equal(autoApproveBlock("click_element", [t({ name: "더 보기", requestUrls: ["https://shop.example/list?page=2"] })]), null);
+  // 결제·개인정보 주소로 가는 htmx 요청은 채우기·클릭 모두 묻는다.
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ requestUrls: ["https://shop.example/checkout/confirm"] })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", name: "검색어", requestUrls: ["https://shop.example/checkout/confirm"] })]));
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", requestUrls: ["https://shop.example/checkout/confirm"] })]));
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", requestUrls: ["https://shop.example/x?email=a%40b.co"] })]));
+  // 끝까지 보지 못한 표시도 묻는다.
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", requestUrls: ["about:too-many-requests"] })]));
+  // 삭제 경로는 늘 묻는 판정으로.
+  assert.ok(destructiveClickBlock([t({ name: "확인", requestUrls: ["https://shop.example/mail/trash?id=1"] })]));
+  // htmx 요청을 보내는 링크는 링크 이동 허락 대상이 아니다.
+  const link = t({ tag: "a", role: "link", name: "기사", href: "https://news.example/a/1" });
+  assert.equal(grantableLink(link, "https://news.example/"), true);
+  assert.equal(grantableLink({ ...link, requestUrls: ["https://news.example/track"] }, "https://news.example/"), false);
+  // 사이트 경계: 다른 사이트로 가는 요청 주소가 목록(linkHrefs)에 들어가면 묻는다.
+  const trusted = new Set([siteOf("https://shop.example/")]);
+  assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", ["https://collector.example/c"]));
+});
+
+test("clicking a label that stands in for a hidden checkbox·radio always asks, like the fill path", () => {
+  const label = (over = {}) => t({ tag: "label", role: "", name: "직항만", states: { checked: "false" }, ...over });
+  assert.equal(autoApproveBlock("click_element", [label()]), null);
+  assert.ok(autoApproveBlock("click_element", [label({ proxy: true, proxyLabel: "직항만" })]));
+  // 이름은 잘려도 판정 글자(outerText — 연결된 label 전체 글자)의 뒤쪽 결제 문구를 본다.
+  assert.ok(autoApproveBlock("click_element", [label({ outerText: `${"약관 ".repeat(60)}구매 확정` })]));
+  // 숨긴 칸 쪽 결제 화면 신호를 합친 클릭.
+  assert.ok(autoApproveBlock("click_element", [label({ paymentContext: true })]));
+});
