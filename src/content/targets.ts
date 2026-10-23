@@ -236,8 +236,7 @@ function statesOf(el: HTMLElement): Record<string, string> | undefined {
 // pinnedRow: 입력 도중 확인에서 승인 때 찾은 행 요소(아래 approvedRows). 그 행이 아직 대상을 담고 있으면 다시 찾지 않고
 // 그 행의 글자를 쓴다.
 function baseInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: Element | null): TargetInfo {
-  const row =
-    pinnedRow && pinnedRow.isConnected && pinnedRow.contains(el) ? { row: pinnedRow, text: textOf(pinnedRow) } : rowElement(el);
+  const row = pinnedRow ? { row: pinnedRow, text: textOf(pinnedRow) } : rowElement(el);
   const detail: Partial<TargetInfo> = {};
   if (kind.detail || kind.rowContext) {
     const modelContext = modelContextOf(row?.row ?? null);
@@ -594,7 +593,7 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
   );
   entry.approved = { callId, info, relation };
   const row = rowElement(el)?.row;
-  if (row) approvedRows.set(el, new WeakRef(row));
+  if (row) approvedRows.set(el, { row: new WeakRef(row), path: ancestorsUpTo(el, row).map((a) => new WeakRef(a)) });
   else approvedRows.delete(el);
   return info;
 }
@@ -814,7 +813,28 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
 // 승인 때 찾은 대상의 행 요소. 행은 같은 틀 형제(repeated)로도 정하는데, 입력하자 칸의 묶음에만 자동완성 목록이 붙으면
 // 그 묶음의 틀(자식 태그 모양)이 형제와 달라져 행이 다른 요소로 잡힌다(네이버 지도 길찾기). 입력 도중 확인은 승인 때의
 // 행 요소를 그대로 보고, 그 행 글자에 더해지기만 했는지 비교한다(sameApprovedInFlight).
-const approvedRows = new WeakMap<HTMLElement, WeakRef<Element>>();
+// 대상이 그 행 안에서 다른 자리(새로 생긴 하위 행 등)로 옮겨졌으면 쓰지 않는다 — 대상에서 행까지의 조상 사슬이
+// 승인 때와 같아야 한다(pinnedRowOf). 다르면 지금처럼 행을 다시 찾아 비교한다.
+const approvedRows = new WeakMap<HTMLElement, { row: WeakRef<Element>; path: WeakRef<Element>[] }>();
+
+// 대상의 부모부터 행까지의 조상(행 포함, shadow root는 host로 넘어감). 행에 닿지 못하면 빈 배열.
+function ancestorsUpTo(el: Element, row: Element): Element[] {
+  const out: Element[] = [];
+  for (let cur = parentAcross(el); cur; cur = parentAcross(cur)) {
+    out.push(cur);
+    if (cur === row) return out;
+  }
+  return [];
+}
+
+function pinnedRowOf(el: HTMLElement): Element | null {
+  const pinned = approvedRows.get(el);
+  const row = pinned?.row.deref();
+  if (!pinned || !row || !row.isConnected) return null;
+  const now = ancestorsUpTo(el, row);
+  if (now.length === 0 || now.length !== pinned.path.length) return null;
+  return now.every((a, i) => pinned.path[i].deref() === a) ? row : null;
+}
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
 // 같으면 null, 다르면 이유. inFlight: 입력 도중·직후의 확인이면 원문 행 글자가 그대로일 때 모델용 행 문맥만 바뀐 것은
@@ -827,7 +847,7 @@ export function recheckApproved(
   inFlight = false,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
-  const now = fullInfo(kind, el, inFlight ? approvedRows.get(el)?.deref() : null);
+  const now = fullInfo(kind, el, inFlight ? pinnedRowOf(el) : null);
   if (!(inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info))) return describeDifference(info, now);
   const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
