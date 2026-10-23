@@ -97,9 +97,10 @@ export async function currentToolTab(
   return top ? { tabId: top.tabId, popup: true, ...(top.kind === "tab" ? { asTab: true } : {}) } : { tabId: turnTab.tabId, popup: false };
 }
 
-// 지금 따라가는 맨 위가 탭으로 열린 팝업인지(동기, 상태만 본다).
+// 따라가는 팝업 중에 탭으로 열린 것이 있는지(동기, 상태만 본다). 있으면 원래 탭은 그 탭 뒤에 가려 있다
+// (O → 탭 팝업 A → 팝업 창 B처럼 맨 위가 창이어도 A가 원래 탭을 가린다).
 export function followingTabPopup(turnTab: TurnTab): boolean {
-  return "tabId" in turnTab && turnTab.popups?.[turnTab.popups.length - 1]?.kind === "tab";
+  return "tabId" in turnTab && !!turnTab.popups?.some((p) => p.kind === "tab");
 }
 
 export const TAB_POPUP_HIDDEN_ERROR =
