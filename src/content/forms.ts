@@ -197,9 +197,17 @@ function isSubmitter(c: Element): boolean {
   return isTag(c, "input") && ["submit", "image"].includes((c as HTMLInputElement).type);
 }
 
-const HX_URL_ATTRS = ["get", "post", "put", "patch", "delete"].flatMap((v) => [`hx-${v}`, `data-hx-${v}`]);
-// htmx 요청을 바꾸는 속성(다른 칸·값·헤더를 싣거나, 실을 칸을 거르거나, 확장·처리기로 요청을 고친다). 의미를 흉내 내
-// 해석하지 않고, 요청 요소와 그 조상 어디에든 하나라도 있으면 "요청 내용을 확인할 수 없음"으로 늘 묻는다(fail-closed).
+// htmx 요청(#62) — 의미를 흉내 내지 않는 fail-closed 구조 규칙. 자동 실행되는 htmx 요청은 "요청 변형 속성이 없는 hx-get
+// (주소·실릴 값에 삭제 단서 없음)"뿐이고, 그 밖은 모두 묻는다:
+// - 이벤트 경로(대상·연결 컨트롤·제출자·양식에서 문서 끝까지)에 GET이 아닌 요청 속성(hx-post·hx-put·hx-patch·hx-delete와
+//   data-hx-* 변형)이 있음.
+// - hx-boost가 적용된 경로에서 GET이 아닌 양식 제출.
+// - 페이지에 'from:'으로 다른 요소의 이벤트를 듣는 htmx 요청 요소가 GET이 아님(어느 이벤트를 듣는지 해석하지 않는다).
+// - htmx 요청(경로의 hx-get·hx-boost, from: 리스너)이 있는데 그 요청 요소나 조상에 요청 변형 속성이 있음.
+// - 비정상적으로 깊은 경로, 너무 많은 from: 요소, 주소로 풀리지 않는 hx-get 값(모름).
+const HX_NON_GET_ATTRS = ["post", "put", "patch", "delete"].flatMap((v) => [`hx-${v}`, `data-hx-${v}`]);
+const HX_GET_ATTRS = ["hx-get", "data-hx-get"];
+// htmx 요청을 바꾸는 속성(다른 칸·값·헤더를 싣거나, 실을 칸을 거르거나, 확장·처리기로 요청을 고친다).
 const HX_MODIFIER_NAMES = ["include", "headers", "vals", "vars", "params", "ext", "request"];
 function hasRequestModifier(node: Element): boolean {
   for (const attr of Array.from(node.attributes)) {
@@ -211,87 +219,120 @@ function hasRequestModifier(node: Element): boolean {
   }
   return false;
 }
+const hasAny = (node: Element, attrs: string[]) => attrs.some((a) => node.hasAttribute(a));
 // 요청에 값을 더하는 rails-ujs 속성. 글자에 삭제 단서가 있으면 묻는다.
 const EXTRA_VALUE_ATTRS = ["data-params"];
-// 다른 요소의 이벤트로 요청하는 htmx 요소(hx-trigger="click from:#btn"). 이벤트 경로 밖에 있어 문서에서 따로 찾는다.
+// 다른 요소의 이벤트로 요청하는 htmx 요소(hx-trigger="click from:#btn").
 const HX_FROM_SELECTOR = '[hx-trigger*="from:" i], [data-hx-trigger*="from:" i]';
 const MAX_HX_FROM = 200;
-
-// 이벤트가 지나가는 노드들과 from: 리스너(경로 밖 요청 요소)의 htmx 요청 주소(절대 주소로)와 요청에 더하는 값의 글자.
-// 시작점(starts): 대상, label이 작동시키는 컨트롤 등 실제로 이벤트를 받는 컨트롤, 제출자, 그 양식(외부 버튼이 form 속성으로
-// 제출해도 submit 이벤트는 양식에서 시작해 양식의 조상으로 올라간다). 시작점마다 경로를 문서 끝까지 본다.
-// from: 리스너는 그 요소와 조상 전체를 더한다(조상에서 상속되는 속성).
-// htmx로 자동 실행되는 것은 요청 요소와 조상 어디에도 요청 변형 속성(hasRequestModifier)이 없고, 요청 주소·메서드(hx-delete)·
-// 실릴 양식 값에 삭제 단서가 없는 경우뿐이다.
-// 모르면 null(호출한 쪽이 묻는 쪽으로 다룬다): 비정상적으로 깊은 경로, 너무 많은 from: 요소, 주소로 풀리지 않는 값,
-// htmx 요청이 있는데 요청 변형 속성이 있음.
 const MAX_EVENT_PATH = 10_000;
-function requestSignalsOf(starts: Array<Element | null>): { urls: string[]; values: string[] } | null {
-  const nodes = new Set<Element>();
-  // 시작점에서 문서 끝까지(조상 전체). 깊이를 넘으면 false.
-  const addChain = (start: Element | null): boolean => {
-    let n = 0;
-    for (let cur: Element | null = start; cur; cur = eventParent(cur)) {
-      if (++n > MAX_EVENT_PATH) return false;
-      if (nodes.has(cur)) break;
-      nodes.add(cur);
-    }
-    return true;
-  };
-  for (const start of starts) if (!addChain(start)) return null;
-  const path = [...nodes];
-  const docs = new Set<Document>();
-  for (const start of starts) if (start) docs.add(start.ownerDocument);
-  for (const doc of docs) {
-    const remote = doc.querySelectorAll(HX_FROM_SELECTOR);
-    if (remote.length > MAX_HX_FROM) return null;
-    for (const r of Array.from(remote)) if (listensOnPath(r, path) && !addChain(r)) return null;
+
+// 요소에서 문서 끝까지(조상 전체, shadow 경계 너머). 깊이를 넘으면 null.
+function chainOf(start: Element): Element[] | null {
+  const out: Element[] = [];
+  for (let cur: Element | null = start; cur; cur = eventParent(cur)) {
+    if (out.length >= MAX_EVENT_PATH) return null;
+    out.push(cur);
   }
-  const urls: string[] = [];
-  const values: string[] = [];
-  let modified = false;
-  for (const node of nodes) {
-    for (const attr of HX_URL_ATTRS) {
-      // 속성이 없을 때만 건너뛴다. 빈 값(hx-post="")은 htmx가 지금 문서 주소로 요청하므로 그 주소로 본다.
+  return out;
+}
+
+// 이 클릭·입력이 일으킬 수 있는 htmx·rails-ujs 요청 판정(위 규칙).
+// opaque: htmx 요청을 확인할 수 없음(GET 아님·from: 리스너·변형 속성·모름). del: 삭제 단서(hx-get 주소·값, data-params).
+// words: 삭제 단서 판정.
+function requestSignals(
+  starts: Array<Element | null>,
+  form: HTMLFormElement | null,
+  submitter: Element | null,
+  words: (text: string) => boolean,
+): { opaque: boolean; del: boolean } {
+  const out = { opaque: false, del: false };
+  const nodes = new Set<Element>();
+  for (const start of starts) {
+    if (!start) continue;
+    const chain = chainOf(start);
+    if (!chain) return { opaque: true, del: false };
+    for (const n of chain) nodes.add(n);
+  }
+  const path = [...nodes];
+  // GET 요청 요소 하나: 주소·자기 name=value·양식이면 실릴 값의 삭제 단서. 주소로 풀리지 않으면 모름.
+  const checkGet = (node: Element): void => {
+    for (const attr of HX_GET_ATTRS) {
       const v = node.getAttribute(attr);
       if (v === null) continue;
       try {
-        urls.push(new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href);
+        if (destructiveRoute(new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href)) out.del = true;
       } catch {
-        return null;
+        out.opaque = true;
       }
     }
-    // 'from:' 요소의 hx-delete는 경로 밖이라 declaresDelete가 보지 못한다. 선언 자체를 삭제 단서로 넣는다.
-    if (node.hasAttribute("hx-delete") || node.hasAttribute("data-hx-delete")) values.push("delete");
-    if (hasRequestModifier(node)) modified = true;
+    if (words(`${node.getAttribute("name") ?? ""} ${(node as HTMLInputElement).value ?? node.getAttribute("value") ?? ""}`)) {
+      out.del = true;
+    }
+    if (isTag(node, "form")) {
+      const texts = submittedChoiceTexts(node as HTMLFormElement);
+      if (texts === null) out.opaque = true;
+      else if (texts.some(words)) out.del = true;
+    }
+  };
+  let htmx = false;
+  for (const node of path) {
+    if (hasAny(node, HX_NON_GET_ATTRS)) out.opaque = true;
+    if (hasAny(node, HX_GET_ATTRS)) {
+      htmx = true;
+      checkGet(node);
+    }
+    const boost = node.getAttribute("hx-boost") ?? node.getAttribute("data-hx-boost");
+    if (boost !== null && boost.trim().toLowerCase() !== "false") {
+      htmx = true;
+      // 부스트된 양식 제출은 양식의 method(제출자의 formmethod 우선)로 요청한다. GET이 아니면 묻는다.
+      if (form) {
+        const method = (
+          (submitter && isSubmitter(submitter) && submitter.getAttribute("formmethod")) ||
+          form.getAttribute("method") ||
+          "get"
+        ).trim().toLowerCase();
+        if (method !== "get") out.opaque = true;
+      }
+    }
     for (const attr of EXTRA_VALUE_ATTRS) {
       const v = node.getAttribute(attr);
-      if (v) values.push(v);
+      if (v && words(v)) out.del = true;
     }
   }
-  // htmx 요청(요청 주소 속성, 또는 링크·양식을 htmx 요청으로 바꾸는 hx-boost)이 있는데 요청을 바꾸는 속성도 있으면 모른다.
-  const htmxRequest =
-    urls.length > 0 || Array.from(nodes).some((n) => n.hasAttribute("hx-boost") || n.hasAttribute("data-hx-boost"));
-  if (htmxRequest && modified) return null;
-  return { urls, values };
+  if (htmx && path.some(hasRequestModifier)) out.opaque = true;
+  // 경로 밖에서 'from:'으로 듣는 htmx 요청 요소: 어느 이벤트를 듣는지 해석하지 않는다. GET이 아니면 묻고, GET이면 그 요소와
+  // 조상에 변형 속성이 없고 주소·값에 삭제 단서가 없어야 한다.
+  const docs = new Set<Document>();
+  for (const start of starts) if (start) docs.add(start.ownerDocument);
+  for (const doc of docs) {
+    const listeners = doc.querySelectorAll(HX_FROM_SELECTOR);
+    if (listeners.length > MAX_HX_FROM) {
+      out.opaque = true;
+      continue;
+    }
+    for (const r of Array.from(listeners)) {
+      if (hasAny(r, HX_NON_GET_ATTRS)) out.opaque = true;
+      if (!hasAny(r, HX_GET_ATTRS)) continue;
+      const chain = chainOf(r);
+      if (!chain || chain.some(hasRequestModifier)) out.opaque = true;
+      checkGet(r);
+    }
+  }
+  return out;
 }
 
-// 'from:' 트리거가 이벤트 경로의 노드에서 듣는지. from:document·from:window, 확장 문법(closest·find·next·previous),
-// 풀 수 없는 선택자는 모르므로 듣는 것으로 본다(묻는 쪽). 이벤트는 경로를 따라 올라가므로 경로의 어느 노드든 맞으면 듣는다.
-function listensOnPath(r: Element, path: Element[]): boolean {
-  const trigger = `${r.getAttribute("hx-trigger") ?? ""},${r.getAttribute("data-hx-trigger") ?? ""}`;
-  for (const m of trigger.matchAll(/from:\s*(\([^)]*\)|[^\s,]+)/gi)) {
-    let target = m[1].trim();
-    if (target.startsWith("(")) target = target.slice(1, -1).trim();
-    if (!target || /^(document|window|closest|find|next|previous)\b/i.test(target)) return true;
-    try {
-      if (path.some((n) => n.matches(target))) return true;
-    } catch {
-      return true;
-    }
-  }
-  return false;
+// 클릭·입력이 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·요청 변형 속성)을 일으킬 수 있는지(#62, fail-closed).
+export function opaqueRequestOf(
+  el: Element,
+  submitter: Element | null,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+): boolean {
+  return requestSignals([el, ...controls, submitter, form], form, submitter, destructiveWords).opaque;
 }
+
+const destructiveWords = (text: string) => DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text));
 
 // 사용자가 글자를 쳐 넣는 칸(값을 보지 않는다 — 검색어 오탐·입력값 보호). 그 밖의 칸은 페이지가 정한 선택지 값이 실린다.
 const TYPED_INPUT_TYPES = new Set([
@@ -339,9 +380,8 @@ function submittedText(c: Element): string | null {
 //   (<select name="action"><option value="delete" selected>정리</option></select> + 평범한 '확인' 버튼).
 //   사용자가 입력하는 글자 칸의 값은 보지 않는다(검색어 '스팸'으로 검색 버튼이 걸리지 않게). 결과는 참·거짓만 남기고
 //   값 자체는 어디에도 보내지 않는다.
-// - 이벤트가 지나가는 노드와 from: 리스너의 htmx 요청 주소(hx-get·hx-post·hx-put·hx-patch, data-hx-*)의 경로 낱말,
-//   hx-delete, rails-ujs data-params의 글자. 요청 요소와 조상에 요청 변형 속성(hx-include·hx-headers·hx-vals 등)이 있으면
-//   해석하지 않고 묻는다(requestSignalsOf). 시작점은 대상·연결 컨트롤·제출자·양식.
+// - htmx hx-get 요청의 주소·값, rails-ujs data-params의 삭제 단서. 확인할 수 없는 htmx 요청(GET 아님 등)은 따로
+//   opaqueRequestOf가 본다(자동 실행되는 htmx 요청은 변형 속성 없는 hx-get뿐).
 // skip: 양식에 실릴 값 판정에서 뺄 칸들(FIELD_KIND.deleteParamExplained). htmx 신호는 skip과 관계없이 그대로 본다.
 export function deleteParamOf(
   el: Element,
@@ -360,8 +400,7 @@ export function deleteParamOf(
     const texts = submittedChoiceTexts(form, skip);
     if (texts === null || texts.some(words)) return true;
   }
-  const signals = requestSignalsOf([el, ...controls, submitter, form]);
-  return signals === null || signals.urls.some(destructiveRoute) || signals.values.some(words);
+  return requestSignals([el, ...controls, submitter, form], form, submitter, words).del;
 }
 
 // select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자, optionByLabel과 같은 글자).
@@ -924,10 +963,12 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   // 사용자가 보는 label 쪽의 삭제 선언·요청 주소도 더한다(#62).
   const labelDelete = declaresDelete(label, [], labelForm);
   const labelParam = deleteParamOf(label, null, [], labelForm);
+  const labelOpaque = opaqueRequestOf(label, null, [], labelForm);
   return {
     ...risk,
     ...(labelDelete ? { deleteMethod: true } : {}),
     ...(labelParam ? { deleteParam: true } : {}),
+    ...(labelOpaque ? { opaqueRequest: true } : {}),
     paymentContext: !!risk.paymentContext || inPaymentContext(label, labelForm),
     submitsPersonal:
       !!risk.submitsPersonal ||
@@ -1010,6 +1051,7 @@ function fieldRisk(el: HTMLElement): FieldRisk {
     // 있어, 지금 값만 보는 declaresDelete로는 새로 쓸 DELETE를 쓰기 전에 알 수 없다.
     ...(declaresDelete(el, [el], form) || el.getAttribute("name") === "_method" ? { deleteMethod: true } : {}),
     ...(deleteParamOf(el, null, [el], form) ? { deleteParam: true } : {}),
+    ...(opaqueRequestOf(el, null, [el], form) ? { opaqueRequest: true } : {}),
     ...(() => {
       const deleteChoices = deleteChoicesOf(el);
       return deleteChoices.length ? { deleteChoices } : {};

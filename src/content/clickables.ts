@@ -9,6 +9,7 @@ import {
   formDestination,
   declaresDelete,
   deleteParamOf,
+  opaqueRequestOf,
   formHasPersonalValues,
   formSubmissionUrl,
   isPersonalField,
@@ -283,6 +284,8 @@ const CLICK_KIND: TargetKind = {
       ...(declaresDelete(el, [control, linked], form) ? { deleteMethod: true } : {}),
       // 누른 제출 버튼·클릭으로 바뀌는 checkbox·radio의 name=value, 양식의 숨은 칸, htmx 요청 주소의 삭제 단서(#62).
       ...(deleteParamOf(el, control, [control, linked], form) ? { deleteParam: true } : {}),
+      // 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·요청 변형 속성 — #62 fail-closed).
+      ...(opaqueRequestOf(el, control, [control, linked], form) ? { opaqueRequest: true } : {}),
     };
   },
 };

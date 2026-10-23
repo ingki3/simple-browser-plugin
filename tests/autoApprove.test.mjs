@@ -452,3 +452,17 @@ test("#62: select에서 삭제 선택지를 고르면 묻고, 다른 선택지·
     R,
   );
 });
+
+test("#62: 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·변형 속성)은 클릭·입력 모두 늘 묻는다", async () => {
+  const { destructiveClickBlock, destructiveFillBlock, OPAQUE_REQUEST_REASON } = await import("../src/lib/autoApprove.ts");
+  const O = "htmx 요청(GET 아님·확인할 수 없음)";
+  assert.equal(OPAQUE_REQUEST_REASON, O);
+  assert.equal(autoApproveBlock("click_element", [t({ name: "확인", opaqueRequest: true })]), O);
+  assert.equal(destructiveClickBlock([t({ name: "확인", opaqueRequest: true })]), O);
+  const box = t({ tag: "input", fieldType: "checkbox", name: "선택", opaqueRequest: true });
+  assert.equal(autoApproveBlock("fill_form_fields", [box], ["true"]), O);
+  assert.equal(destructiveFillBlock([box], ["true"]), O);
+  // 삭제 신호가 함께 있으면 삭제 이유가 먼저다.
+  assert.equal(autoApproveBlock("click_element", [t({ name: "삭제", opaqueRequest: true })]), "되돌리기 어려운 동작(삭제·스팸)");
+  assert.equal(autoApproveBlock("click_element", [t({ name: "확인" })]), null);
+});

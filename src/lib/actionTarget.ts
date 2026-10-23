@@ -86,6 +86,9 @@ export interface TargetInfo {
   deleteParam?: boolean;
   // select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자 그대로, #62). 판정 전용.
   deleteChoices?: string[];
+  // 확인할 수 없는 htmx 요청을 일으킬 수 있는 대상(#62, fail-closed): 경로에 GET이 아닌 htmx 요청(hx-post 등)·GET이 아닌
+  // 부스트 양식 제출, 페이지의 GET 아닌 'from:' 리스너, htmx 요청과 함께 있는 요청 변형 속성(hx-include·hx-headers 등).
+  opaqueRequest?: boolean;
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
   // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
   consentPersonal?: boolean;
