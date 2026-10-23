@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CAPTURE_LIMITS, captureBlockReason, captureFileName, nextTileY, planStitch, pngSize } from "../src/lib/pageCapture.ts";
+import {
+  CAPTURE_LIMITS,
+  captureBlockReason,
+  captureFileName,
+  nextTileY,
+  planStitch,
+  pngSize,
+  tileSizeMatches,
+  viewportChanged,
+} from "../src/lib/pageCapture.ts";
 
 test("캡처할 수 없는 탭은 주소 형태로 이유를 알린다", () => {
   for (const u of ["chrome://settings", "about:blank", "edge://newtab", "chrome-search://local-ntp", "view-source:https://a.com", "devtools://x"]) {
@@ -107,4 +116,18 @@ test("PNG 크기 읽기", () => {
   assert.deepEqual(pngSize(b), { width: 2560, height: 1440 });
   assert.equal(pngSize(new Uint8Array(10)), null);
   assert.equal(pngSize(new Uint8Array(24)), null);
+});
+
+test("캡처 중 창 크기·배율 변경 감지", () => {
+  const start = { viewportWidth: 1000, viewportHeight: 713, windowWidth: 1000, scale: 2 };
+  assert.equal(viewportChanged(start, { ...start }), false);
+  assert.equal(viewportChanged(start, { ...start, viewportHeight: 600 }), true);
+  assert.equal(viewportChanged(start, { ...start, windowWidth: 900, viewportWidth: 900 }), true);
+  assert.equal(viewportChanged(start, { ...start, scale: 1.5 }), true);
+  // 첫 화면은 창 폭 × 배율(±2px), 그 뒤 화면은 첫 화면과 정확히 같은 크기.
+  assert.equal(tileSizeMatches({ width: 2000, height: 1426 }, 1000, 2), true);
+  assert.equal(tileSizeMatches({ width: 1501, height: 1070 }, 1000, 1.5), true);
+  assert.equal(tileSizeMatches({ width: 1800, height: 1426 }, 1000, 2), false);
+  assert.equal(tileSizeMatches({ width: 2000, height: 1426 }, 1000, 2, { width: 2000, height: 1426 }), true);
+  assert.equal(tileSizeMatches({ width: 2000, height: 1200 }, 1000, 2, { width: 2000, height: 1426 }), false);
 });

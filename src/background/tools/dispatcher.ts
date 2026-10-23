@@ -19,7 +19,7 @@ import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize"
 import { getSettings } from "../storage";
 import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
 import { runDownloads, type DownloadRunResult } from "./downloads";
-import { captureFullPage, captureTarget, captureVisible, type CaptureResult } from "./capture";
+import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
 import { CAPTURE_LIMITS } from "@/lib/pageCapture";
 import { markOptimisticNavigation, waitForNavigationSettle } from "../navigation";
 import {
@@ -250,8 +250,9 @@ export async function buildToolPreview(
           : `${where}의 보이는 화면을 캡처해 PNG로 '${folder}/' 폴더에 저장합니다.`,
         details:
           "화면에 보이는 내용(입력한 값·개인정보 포함)이 그대로 이미지에 담깁니다. 이미지는 이 기기에만 저장하고 모델 제공자로 보내지 않습니다.",
-        // 폴더를 생략한 호출은 실행 때 설정을 다시 읽지 않고, 카드에 보인 이 폴더에 저장한다.
-        execArgs: { ...args, folderPrefix: folder },
+        // 폴더를 생략한 호출은 실행 때 설정을 다시 읽지 않고, 카드에 보인 이 폴더에 저장한다. 카드에 보인 대상(탭·주소·
+        // 문서)도 이 호출에 고정해, 카드가 열린 사이 다른 페이지로 이동했으면 실행에서 찍지 않는다.
+        execArgs: { ...args, folderPrefix: folder, approvedTarget: target },
       };
     }
     case "click_element": {
@@ -728,12 +729,14 @@ async function runTool(
       };
     }
     case "capture_page": {
-      const args = parsedArgs as ToolArgs["capture_page"];
-      // 늘 미리보기(카드)를 거치고, 미리보기가 확정한 폴더(execArgs)로 온다.
+      const args = parsedArgs as ToolArgs["capture_page"] & { approvedTarget?: CaptureTarget };
+      // 늘 미리보기(카드)를 거치고, 미리보기가 확정한 폴더와 승인한 대상(execArgs)으로 온다. 대상이 없으면 찍지 않는다.
+      const approved = args.approvedTarget;
+      if (!approved) throw new Error("승인한 캡처 대상이 없어 캡처하지 않았습니다.");
       const folder = args.folderPrefix || DEFAULT_DOWNLOAD_FOLDER;
       const data = args.fullPage
-        ? await captureFullPage(turnTab, callId, folder, signal)
-        : await captureVisible(turnTab, folder, signal);
+        ? await captureFullPage(turnTab, callId, folder, approved, signal)
+        : await captureVisible(turnTab, folder, approved, signal);
       return { ok: data.savedCount > 0, summary: captureSummary(data), data };
     }
     case "query_dom": {

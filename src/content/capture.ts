@@ -76,16 +76,23 @@ function docScrollable(): boolean {
   return true;
 }
 
+// 보이는 영역(스크롤 막대 제외, CSS px). 표준 모드는 html의 client 크기, Quirks 모드(DOCTYPE 없음)는 body의 client
+// 크기가 보이는 영역이다(그때 html의 clientHeight는 문서 높이).
+function viewport(): { width: number; height: number } {
+  const el = document.compatMode === "BackCompat" && document.body ? document.body : document.documentElement;
+  return { width: el.clientWidth, height: el.clientHeight };
+}
+
 // 스크롤해 담을 문서 높이. 문서가 스크롤되지 않으면 보이는 높이.
 function pageHeight(): number {
   const doc = document.documentElement;
-  if (!docScrollable()) return doc.clientHeight;
+  if (!docScrollable()) return viewport().height;
   return Math.max(doc.scrollHeight, document.body?.scrollHeight ?? 0);
 }
 
 // 문서는 스크롤되지 않는데 화면의 큰 영역이 안쪽에서 스크롤되는 페이지인지(구조: 계산 스타일 overflow와 크기).
 function hasInnerScroll(els: HTMLElement[]): boolean {
-  if (pageHeight() > document.documentElement.clientHeight + 1) return false;
+  if (pageHeight() > viewport().height + 1) return false;
   const area = innerWidth * innerHeight;
   for (const el of els) {
     if (el.scrollHeight <= el.clientHeight + 1) continue;
@@ -147,13 +154,14 @@ export function captureBegin(fullPage: boolean): CaptureMetrics {
   const doc = document.documentElement;
   const token = crypto.randomUUID();
   const els = fullPage && !pdf ? allElements() : [];
+  const vp = viewport();
   const metrics: CaptureMetrics = {
     token,
     pdf,
     pageHeight: pageHeight(),
     pageWidth: Math.max(doc.scrollWidth, document.body?.scrollWidth ?? 0),
-    viewportWidth: doc.clientWidth,
-    viewportHeight: doc.clientHeight,
+    viewportWidth: vp.width,
+    viewportHeight: vp.height,
     windowWidth: innerWidth,
     scale: devicePixelRatio || 1,
     innerScroll: fullPage && !pdf ? hasInnerScroll(els) : false,
@@ -201,7 +209,15 @@ export async function captureScroll(token: string, y: number): Promise<CaptureSc
   while (Date.now() < until && pendingImages().length) await sleep(100);
   await frame();
   armIdleRestore(s);
-  return { y: window.scrollY, pageHeight: pageHeight() };
+  const vp = viewport();
+  return {
+    y: window.scrollY,
+    pageHeight: pageHeight(),
+    viewportWidth: vp.width,
+    viewportHeight: vp.height,
+    windowWidth: innerWidth,
+    scale: devicePixelRatio || 1,
+  };
 }
 
 // 첫 화면 뒤: 보이는 fixed 요소를 투명하게 숨긴다(스크롤하며 새로 fixed가 된 것도 매번 다시 찾는다).

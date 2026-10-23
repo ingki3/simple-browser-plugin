@@ -181,6 +181,30 @@ export interface CaptureScrolled {
   // 실제로 간 스크롤 위치(페이지가 덜 갈 수 있다)와 그때의 문서 높이.
   y: number;
   pageHeight: number;
+  // 그때의 보이는 영역·창 폭·배율(시작 때와 다르면 캡처를 멈춘다).
+  viewportWidth: number;
+  viewportHeight: number;
+  windowWidth: number;
+  scale: number;
+}
+
+// 캡처하는 동안 창 크기·배율이 바뀌었는지. 바뀌면 화면마다 크기가 달라 이어 붙인 이미지에 빈 곳·어긋남이 생긴다.
+export function viewportChanged(
+  start: { viewportWidth: number; viewportHeight: number; windowWidth: number; scale: number },
+  now: { viewportWidth: number; viewportHeight: number; windowWidth: number; scale: number },
+): boolean {
+  return (
+    Math.abs(start.viewportWidth - now.viewportWidth) > 0.5 ||
+    Math.abs(start.viewportHeight - now.viewportHeight) > 0.5 ||
+    Math.abs(start.windowWidth - now.windowWidth) > 0.5 ||
+    Math.abs(start.scale - now.scale) > 0.001
+  );
+}
+
+// 찍은 화면 이미지의 크기가 시작 때 잰 창(폭 × 배율)과 맞는지(±2px — 배율이 소수면 반올림 차이).
+export function tileSizeMatches(tile: { width: number; height: number }, windowWidth: number, scale: number, first?: { width: number; height: number }): boolean {
+  if (first) return tile.width === first.width && tile.height === first.height;
+  return Math.abs(tile.width - windowWidth * scale) <= 2;
 }
 
 // ── offscreen 문서의 이어 붙이기 작업 ──

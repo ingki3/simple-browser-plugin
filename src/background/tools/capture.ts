@@ -5,16 +5,18 @@ import {
   nextTileY,
   planStitch,
   pngSize,
+  tileSizeMatches,
+  viewportChanged,
   type CaptureMetrics,
   type CaptureScrolled,
   type StitchJob,
   type StitchReleaseJob,
   type StitchResult,
 } from "@/lib/pageCapture";
-import type { BgToContent } from "@/lib/messages";
+import type { BgToContent, ContentResponse } from "@/lib/messages";
 import { waitForNavigationSettle } from "../navigation";
 import { runOffscreenJob } from "../offscreen";
-import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
+import { callContentTool, isMissingReceiver, resolveTurnTab, type TurnTab } from "./handlers";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 
 // 보고 있는 페이지 캡처(capture_page, #49). 보이는 화면은 chrome.tabs.captureVisibleTab 한 번, 전체 페이지는
@@ -22,21 +24,38 @@ import { runDownloads, type DownloadRunResult } from "./downloads";
 // 결과는 chrome.downloads로 PNG 저장만 한다 — 이미지를 모델에 보내지 않는다. 모델로 가는 결과에는 고정 문구,
 // 확장이 정한 이름(사이트·시각), 크기 숫자만 싣는다.
 
+// 승인 카드에 보인 캡처 대상: 탭·주소·최상위 문서(documentId). 실행은 이것과 같은 문서일 때만 찍는다.
 export interface CaptureTarget {
   tabId: number;
   windowId: number;
   url: string;
+  documentId: string;
+}
+
+async function topDocumentId(tabId: number): Promise<string | null> {
+  try {
+    const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    return frame?.documentId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // 캡처할 수 있는 탭인지(주소 형태)와 지금 그 창에서 보이는 탭인지 확인한다. captureVisibleTab은 창의 활성 탭을
-// 찍으므로, 턴 탭이 앞에 있지 않으면 다른 탭을 찍지 않게 멈춘다.
-export async function captureTarget(turnTab: TurnTab): Promise<CaptureTarget> {
+// 찍으므로, 턴 탭이 앞에 있지 않으면 다른 탭을 찍지 않게 멈춘다. approved(카드에서 승인한 대상)가 있으면 지금 탭의
+// 문서가 그것과 같을 때만 돌려준다(카드가 열린 사이 다른 페이지로 이동했으면 찍지 않는다).
+export async function captureTarget(turnTab: TurnTab, approved?: CaptureTarget): Promise<CaptureTarget> {
   const tabId = await resolveTurnTab(turnTab, { allowInternal: true });
   await waitForNavigationSettle(tabId, 10_000);
   const tab = await chrome.tabs.get(tabId);
   const why = captureBlockReason(tab.url);
   if (why) throw new Error(`캡처하지 않았습니다: ${why}.`);
-  const target = { tabId, windowId: tab.windowId, url: tab.url ?? "" };
+  const documentId = await topDocumentId(tabId);
+  if (!documentId) throw new Error("캡처하지 않았습니다: 탭의 문서를 확인할 수 없음.");
+  const target = { tabId, windowId: tab.windowId, url: tab.url ?? "", documentId };
+  if (approved && (approved.tabId !== target.tabId || approved.url !== target.url || approved.documentId !== target.documentId)) {
+    throw new Error("승인한 뒤 탭의 페이지가 바뀌어 캡처하지 않았습니다. 다시 요청하세요.");
+  }
   await assertVisible(target);
   return target;
 }
@@ -48,7 +67,9 @@ async function assertVisible(t: CaptureTarget): Promise<void> {
   } catch {
     throw new Error("캡처할 탭이 닫혔습니다.");
   }
-  if (tab.url !== t.url) throw new Error("캡처하는 동안 탭의 주소가 바뀌어 멈췄습니다.");
+  if (tab.url !== t.url || (await topDocumentId(t.tabId)) !== t.documentId) {
+    throw new Error("캡처하는 동안 탭의 페이지가 바뀌어 멈췄습니다.");
+  }
   if (!tab.active) {
     throw new Error("캡처할 탭이 그 창의 앞에 보이는 탭이 아니라 캡처하지 않았습니다. 그 탭을 앞으로 띄운 뒤 다시 요청하세요.");
   }
@@ -154,9 +175,10 @@ function toImages(res: DownloadRunResult, sizes: Array<{ width: number; height: 
 export async function captureVisible(
   turnTab: TurnTab,
   folder: string,
+  approved: CaptureTarget,
   signal?: AbortSignal,
 ): Promise<CaptureResult> {
-  const t = await captureTarget(turnTab);
+  const t = await captureTarget(turnTab, approved);
   const dataUrl = await grab(t, signal);
   checkAbort(signal);
   const size = dataUrlPngSize(dataUrl) ?? { width: 0, height: 0 };
@@ -172,9 +194,27 @@ export async function captureVisible(
   };
 }
 
+// 승인한 그 문서(documentId)에만 보낸다. 문서가 바뀌었으면 받는 쪽이 없어 실패한다.
+async function sendToDoc<T>(t: CaptureTarget, msg: BgToContent, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+  });
+  try {
+    const res = (await Promise.race([
+      chrome.tabs.sendMessage(t.tabId, msg, { documentId: t.documentId }) as Promise<ContentResponse<T>>,
+      timeout,
+    ])) as ContentResponse<T>;
+    if (!res?.ok) throw new Error(res?.error ?? "failed");
+    return res.data as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function step<T>(t: CaptureTarget, msg: BgToContent, timeoutMs: number): Promise<T> {
   try {
-    return await queryContent<T>(t.tabId, msg, timeoutMs, "캡처 단계");
+    return await sendToDoc<T>(t, msg, timeoutMs);
   } catch (err) {
     console.warn("[capture_page] step failed", err);
     if (isMissingReceiver(err)) throw new Error("캡처하는 동안 페이지가 바뀌어 멈췄습니다.");
@@ -182,13 +222,16 @@ async function step<T>(t: CaptureTarget, msg: BgToContent, timeoutMs: number): P
   }
 }
 
+const RESIZED = "캡처하는 동안 창 크기나 화면 배율이 바뀌어 멈췄습니다(저장하지 않음). 창 크기를 그대로 둔 채 다시 요청하세요.";
+
 export async function captureFullPage(
   turnTab: TurnTab,
   callId: string,
   folder: string,
+  approved: CaptureTarget,
   signal?: AbortSignal,
 ): Promise<CaptureResult> {
-  const t = await captureTarget(turnTab);
+  const t = await captureTarget(turnTab, approved);
   let m: CaptureMetrics;
   try {
     m = await callContentTool<CaptureMetrics>("capture_page", { fullPage: true }, callId, turnTab);
@@ -196,11 +239,14 @@ export async function captureFullPage(
     console.warn("[capture_page] begin failed", err);
     throw new Error("이 페이지에는 확장 스크립트를 넣을 수 없어 페이지 전체를 캡처할 수 없습니다(보이는 화면 캡처는 될 수 있음).");
   }
+  // 시작 단계가 승인한 그 문서에서 열렸는지(그 사이 이동했으면 새 문서의 세션은 그쪽이 스스로 되돌린다).
+  await assertVisible(t);
   if (m.pdf) {
     throw new Error("PDF 뷰어는 스크롤해 전체를 캡처할 수 없습니다. 보이는 화면 캡처(fullPage 없이)만 할 수 있습니다.");
   }
   const notes: string[] = [];
   const tiles: Array<{ y: number; blob: Blob }> = [];
+  let firstSize: { width: number; height: number } | undefined;
   const vh = m.viewportHeight;
   let pageHeight = m.pageHeight;
   let covered = 0;
@@ -218,6 +264,9 @@ export async function captureFullPage(
       }
       const at = await step<CaptureScrolled>(t, { kind: "capture_step", token: m.token, step: "scroll", y: target }, 8_000);
       pageHeight = at.pageHeight;
+      // 창 크기·배율이 바뀌면 화면마다 크기가 달라 이어 붙인 이미지가 어긋난다. 그때까지만 저장하지 않고 멈춘다
+      // (잘린 이미지를 성공으로 남기기보다, 창을 그대로 두고 다시 요청하게 한다).
+      if (viewportChanged(m, at)) throw new Error(RESIZED);
       // 페이지가 더 내려가지 않으면(스크롤을 막거나 높이가 줄어듦) 여기까지 담는다.
       if (tiles.length > 0 && at.y + vh <= covered) {
         stalled = true;
@@ -226,13 +275,16 @@ export async function captureFullPage(
       // 고정 요소는 첫 화면에만 담는다(그 뒤 화면에서는 숨김 — 스크롤하며 새로 고정된 것도).
       if (tiles.length > 0) hidden += await step<number>(t, { kind: "capture_step", token: m.token, step: "hide_fixed" }, 5_000);
       const dataUrl = await grab(t, signal);
+      const size = dataUrlPngSize(dataUrl);
+      if (!size || !tileSizeMatches(size, m.windowWidth, m.scale, firstSize)) throw new Error(RESIZED);
+      firstSize ??= size;
       const blob = await (await fetch(dataUrl)).blob();
       tiles.push({ y: at.y, blob });
       covered = Math.max(covered, at.y + vh);
     }
   } finally {
     // 오류·중단에도 원래 스크롤 위치와 스타일로 되돌린다(문서가 바뀌었으면 되돌릴 것이 없다).
-    await queryContent(t.tabId, { kind: "capture_step", token: m.token, step: "end" }, 3_000, "캡처 복원").catch(() => undefined);
+    await sendToDoc(t, { kind: "capture_step", token: m.token, step: "end" }, 3_000).catch(() => undefined);
   }
   checkAbort(signal);
   // 배율이 소수(1.5 등)면 스크롤 위치가 장치 px에 맞춰져 끝에서 1px 안쪽에 멈출 수 있다. 그만큼은 끝까지 담은 것으로 본다.
