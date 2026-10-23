@@ -128,7 +128,8 @@ function textOf(el: Element, exclude: Element[] = []): string {
   else {
     const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     raw = "";
-    for (let node = walker.nextNode(); node && raw.length <= CONTEXT_MAX * 2; node = walker.nextNode()) {
+    // textContent와 같게 끝까지 모은다(중간에 끊으면 긴 공백 뒤에 덧붙인 글자를 놓친다). 자르기는 공백 정리 뒤에 한다.
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (exclude.some((x) => x.contains(node))) continue;
       raw += node.nodeValue ?? "";
     }
