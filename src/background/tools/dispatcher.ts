@@ -29,7 +29,7 @@ import {
   takeTabNote,
   type TurnTab,
 } from "./handlers";
-import { settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
+import { ClickAbortedError, settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
 import { CAPTURE_LIMITS } from "@/lib/pageCapture";
@@ -816,15 +816,24 @@ async function runTool(
       const before = await tabUrl(tabId);
       const newTabs = watchNewTabs(tabId);
       // 클릭하는 동안만 페이지의 window.open을 지켜본다(팝업 차단·주소). 읽을 때 원래 함수로 되돌린다.
-      const readOpens = await watchWindowOpen(tabId);
+      let readOpens: Awaited<ReturnType<typeof watchWindowOpen>>;
+      try {
+        readOpens = await watchWindowOpen(tabId, signal);
+      } catch (err) {
+        newTabs.stop();
+        throw err;
+      }
       let data: { clicked: boolean; text: string; href: string; effectToken: string };
       try {
+        // 관찰을 넣는 사이 사용자가 중단했거나 새 요청을 보냈으면 승인한 클릭이라도 누르지 않는다.
+        if (signal?.aborted) throw new ClickAbortedError();
         data = await callContentTool(toolName, parsedArgs, callId, turnTab);
       } catch (err) {
         newTabs.stop();
         void readOpens();
         // 누른 팝업 창이 응답하기 전에 닫혔으면(고르자마자 닫히는 달력) 실패가 아니라 창이 닫힌 결과로 알린다.
-        if (clickedPopup) {
+        // 중단해서 누르지 않은 경우는 그대로 중단으로 알린다.
+        if (clickedPopup && !(err instanceof ClickAbortedError)) {
           const back = await pruneClosedPopups(turnTab);
           if (back) {
             takeTabNote(turnTab);

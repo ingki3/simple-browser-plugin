@@ -109,10 +109,11 @@ export function takeTabNote(turnTab: TurnTab): string | null {
 // "15일로 골라 줘"처럼 이어 요청하는 경우. 우리 클릭으로 열린 창만 목록에 있으므로 그 밖의 창으로 넓어지지 않는다.
 export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boolean> {
   if ("error" in prev || "error" in next || prev.tabId !== next.tabId || !prev.popups?.length) return false;
+  // 닫힌 창은 건너뛰고 살아 있는 창을 순서대로 남긴다(원래 탭 → A → B에서 A만 닫혀도 지금 턴처럼 B에서 이어 간다 —
+  // pruneClosedPopups도 맨 위가 살아 있으면 그 창을 쓴다).
   const alive: FollowedPopup[] = [];
   for (const p of prev.popups) {
-    if (!(await tabExists(p.tabId))) break;
-    alive.push(p);
+    if (await tabExists(p.tabId)) alive.push(p);
   }
   if (!alive.length) return false;
   next.popups = alive;

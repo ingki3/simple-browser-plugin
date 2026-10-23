@@ -4,6 +4,32 @@ import assert from "node:assert/strict";
 import { describeEffect, describePopup, popupWhere } from "../src/lib/actionTarget.ts";
 import { clickObservedChange } from "../src/lib/hopGuard.ts";
 import { sameSiteAs } from "../src/lib/siteTrust.ts";
+import { blockedOpens, openTargetKey } from "../src/lib/popupMatch.ts";
+
+test("blockedOpens: noopener null with a created window is not blocked", () => {
+  const cal = "https://ex.test/cal";
+  assert.deepEqual(blockedOpens([{ url: cal, blocked: true }], [cal]), []);
+  assert.deepEqual(blockedOpens([{ url: cal, blocked: true }], []), [{ url: cal, blocked: true }]);
+});
+
+test("blockedOpens: a successful open does not hide a blocked one", () => {
+  const a = "https://ex.test/a";
+  const b = "https://ex.test/b";
+  // 성공(a) + 막힘(b), 만들어진 것은 a 하나 → b는 막힘.
+  assert.deepEqual(blockedOpens([{ url: a, blocked: false }, { url: b, blocked: true }], [a]), [{ url: b, blocked: true }]);
+  // 같은 주소로 성공 하나 + 막힘 하나, 만들어진 것은 하나 → 하나는 막힘.
+  assert.equal(blockedOpens([{ url: a, blocked: false }, { url: a, blocked: true }], [a]).length, 1);
+});
+
+test("blockedOpens: an unrelated new tab does not hide a block", () => {
+  assert.equal(blockedOpens([{ url: "https://ex.test/cal", blocked: true }], ["https://ex.test/other"]).length, 1);
+});
+
+test("openTargetKey normalizes hash and empty address", () => {
+  assert.equal(openTargetKey(""), "about:blank");
+  assert.equal(openTargetKey("https://ex.test/cal#x"), "https://ex.test/cal");
+  assert.deepEqual(blockedOpens([{ url: "about:blank", blocked: true }], [""]), []);
+});
 
 const base = { navigation: "none", url: "https://etk.srail.kr/main.do", sameDocument: true, newTab: false, dom: { mutations: 0, dialogOpened: false } };
 

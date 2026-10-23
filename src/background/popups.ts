@@ -7,6 +7,7 @@
 //   일반 새 탭(target=_blank)은 따라가지 않는다.
 
 import { popupWhere, type PopupEffect } from "@/lib/actionTarget";
+import { blockedOpens } from "@/lib/popupMatch";
 import { sameSiteAs } from "@/lib/siteTrust";
 import { debugLog } from "./debug";
 import { followPopup, type TurnTab } from "./tools/handlers";
@@ -27,7 +28,9 @@ function installOpenHook(key: string): void {
     try {
       let url = "";
       try {
-        url = args[0] == null ? "" : new URL(String(args[0]), document.baseURI).href;
+        // 주소 없이(또는 빈 주소로) 부르면 빈 창(about:blank)이 열린다.
+        const raw = args[0] == null ? "" : String(args[0]);
+        url = raw === "" ? "about:blank" : new URL(raw, document.baseURI).href;
       } catch {
         url = "";
       }
@@ -68,40 +71,84 @@ function readOpenHook(key: string): Array<{ url: string; blocked: boolean }> | n
   });
 }
 
-// 클릭 직전에 그 탭 모든 프레임의 window.open을 감싼다. 돌려준 함수를 부르면 기록을 읽고 되돌린다. 넣지 못하면
-// (권한 없는 페이지 등) 빈 기록 — 관찰은 부가 기능이라 클릭을 막지 않는다.
-export async function watchWindowOpen(tabId: number): Promise<() => Promise<OpenCall[]>> {
+// 관찰(부가 기능)을 기다리는 한도. 넣기·읽기가 이보다 오래 걸리면(알림창이 페이지 스크립트를 멈춘 경우 등) 관찰 없이 간다.
+const HOOK_TIMEOUT_MS = 1_500;
+
+export class ClickAbortedError extends Error {
+  constructor() {
+    super("사용자가 중단해 클릭하지 않았습니다.");
+  }
+}
+
+// p를 기다리되 ms가 지나거나 signal이 중단되면 fallback으로 끝낸다(중단은 onAbort가 정한 대로). p의 거부도 fallback.
+function bounded<T>(p: Promise<T>, ms: number, fallback: T, signal?: AbortSignal): Promise<T | typeof ABORTED> {
+  if (signal?.aborted) return Promise.resolve(ABORTED);
+  return new Promise((resolve) => {
+    const done = (v: T | typeof ABORTED) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(v);
+    };
+    const onAbort = () => done(ABORTED);
+    const timer = setTimeout(() => done(fallback), ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    p.then(done, () => done(fallback));
+  });
+}
+const ABORTED = Symbol("aborted");
+
+// 클릭 직전에 그 탭 모든 프레임의 window.open을 감싼다. 돌려준 함수를 부르면 기록을 읽고 되돌린다. 넣지 못하거나
+// 한도 안에 넣지 못하면(권한 없는 페이지·멈춘 페이지) 빈 기록 — 관찰은 부가 기능이라 클릭을 막지 않는다. 다만 기다리는
+// 동안 사용자가 중단했으면 ClickAbortedError를 던진다(승인한 클릭이 중단 뒤에 실행되지 않게).
+// 읽기도 한도와 중단 신호를 지켜, 클릭 처리기가 띄운 알림창이 페이지 스크립트를 멈춰도 클릭 결과를 막지 않는다
+// (그때 감싼 함수는 페이지가 다시 움직이면 스스로 되돌린다).
+export async function watchWindowOpen(
+  tabId: number,
+  signal?: AbortSignal,
+): Promise<() => Promise<OpenCall[]>> {
   const key = `__sbpOpen_${crypto.randomUUID().replace(/-/g, "")}`;
-  try {
-    await chrome.scripting.executeScript({
+  const read = async (): Promise<OpenCall[]> => {
+    const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       world: "MAIN",
-      func: installOpenHook,
+      func: readOpenHook,
       args: [key],
     });
-  } catch (err) {
-    debugLog("popup:hook_fail", err instanceof Error ? err.message : String(err), "warn");
+    const out: OpenCall[] = [];
+    for (const r of results) {
+      const calls = r.result as OpenCall[] | null | undefined;
+      if (Array.isArray(calls)) out.push(...calls);
+    }
+    return out;
+  };
+  const readBounded = async (): Promise<OpenCall[]> => {
+    // 클릭 결과는 중단돼도 정리 단계에서 부르므로, 중단이면 기다리지 않고 빈 기록(되돌리기는 페이지에 맡김).
+    const r = await bounded(read(), HOOK_TIMEOUT_MS, [] as OpenCall[], signal);
+    return r === ABORTED ? [] : r;
+  };
+  const installed = await bounded(
+    chrome.scripting
+      .executeScript({ target: { tabId, allFrames: true }, world: "MAIN", func: installOpenHook, args: [key] })
+      .then(() => true)
+      .catch((err) => {
+        debugLog("popup:hook_fail", err instanceof Error ? err.message : String(err), "warn");
+        return false;
+      }),
+    HOOK_TIMEOUT_MS,
+    false,
+    signal,
+  );
+  if (installed === ABORTED) {
+    // 늦게 들어간 감싸기도 되돌린다(못 읽으면 페이지에서 스스로 되돌린다).
+    void read().catch(() => []);
+    throw new ClickAbortedError();
+  }
+  if (!installed) {
+    debugLog("popup:hook_skip", "window.open 관찰 없이 클릭", "warn");
+    void read().catch(() => []);
     return async () => [];
   }
-  return async () => {
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId, allFrames: true },
-        world: "MAIN",
-        func: readOpenHook,
-        args: [key],
-      });
-      const out: OpenCall[] = [];
-      for (const r of results) {
-        const calls = r.result as OpenCall[] | null | undefined;
-        if (Array.isArray(calls)) out.push(...calls);
-      }
-      return out;
-    } catch {
-      // 클릭 뒤 페이지가 이동했거나 탭이 닫혔다(기록도 함께 사라졌다).
-      return [];
-    }
-  };
+  return readBounded;
 }
 
 interface CreatedTab {
@@ -144,15 +191,10 @@ export async function settlePopups(
   opens: OpenCall[],
 ): Promise<PopupEffect | null> {
   const effect: PopupEffect = {};
-  // window.open은 noopener면 창이 열려도 null을 돌려준다. 그래서 null만으로 막혔다고 보지 않고, null을 돌려준 호출 수가
-  // 이 클릭 동안 실제로 만들어진 탭·창 수보다 많을 때만 그 차이를 막힌 것으로 본다.
-  const nulls = opens.filter((c) => c.blocked);
-  const blockedCount = nulls.length - created.length;
-  if (blockedCount > 0) {
-    // 어느 호출이 막혔는지는 알 수 없다. 만들어진 탭이 없으면 첫 null 호출의 주소를, 있으면 마지막 것을 보인다.
-    const shown = created.length ? nulls[nulls.length - 1] : nulls[0];
-    effect.blocked = { count: blockedCount, where: popupWhere(shown.url) };
-  }
+  // window.open은 noopener면 창이 열려도 null을 돌려준다. null을 돌려준 호출 중 같은 주소로 만들어진 탭·창이 없는
+  // 것만 막힌 것으로 본다(성공한 호출·주소가 다른 새 탭은 막힌 호출을 가리지 않는다, src/lib/popupMatch.ts).
+  const blocked = blockedOpens(opens, created.map((t) => t.url));
+  if (blocked.length) effect.blocked = { count: blocked.length, where: popupWhere(blocked[0].url) };
   for (const t of created) {
     let tab: chrome.tabs.Tab | null = null;
     try {
