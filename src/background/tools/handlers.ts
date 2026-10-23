@@ -81,12 +81,30 @@ export function followingPopup(turnTab: TurnTab): boolean {
   return "tabId" in turnTab && !!turnTab.popups?.length;
 }
 
+// 원래 탭마다 우리 클릭으로 열려 따라간 적 있는 팝업 창(탭 id). 따라가기를 끝낸 뒤(navigate_to_url 등)에도 열린 채
+// 남은 창을 페이지가 같은 이름으로 다시 쓰면(window.open(url, "calendar")) 새 탭 없이 그 창이 이동하므로, 그 창을
+// 이 탭의 팝업으로 알아보는 데 쓴다. 닫힌 탭은 알아볼 때 지운다.
+const knownPopupTabs = new Map<number, Set<number>>();
+
+export function isKnownPopup(turnTab: TurnTab, tabId: number): boolean {
+  if ("error" in turnTab) return false;
+  return knownPopupTabs.get(turnTab.tabId)?.has(tabId) ?? false;
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  knownPopupTabs.delete(tabId);
+  for (const set of knownPopupTabs.values()) set.delete(tabId);
+});
+
 // 우리 클릭으로 열린 팝업 창을 따라간다. 따라갔으면 true(한도를 넘으면 false).
 export function followPopup(turnTab: TurnTab, popup: FollowedPopup): boolean {
   if ("error" in turnTab) return false;
   const stack = (turnTab.popups ??= []);
   if (stack.length >= MAX_FOLLOWED_POPUPS || stack.some((p) => p.tabId === popup.tabId)) return false;
   stack.push(popup);
+  let known = knownPopupTabs.get(turnTab.tabId);
+  if (!known) knownPopupTabs.set(turnTab.tabId, (known = new Set()));
+  known.add(popup.tabId);
   return true;
 }
 

@@ -44,6 +44,21 @@ export function openTargetKey(url: string): string {
   }
 }
 
+// 이미 열린 이름 있는 창을 다시 쓴 window.open(window.open(url, "calendar", …)이 같은 이름의 창을 찾아 그 창을
+// 이동시킨다 — 새 탭이 만들어지지 않는다). 클릭 동안 다른 탭에서 시작된 이동 중, 창을 돌려준(성공한) 호출과 주소가
+// 같은 것만 고른다(호출 하나에 이동 하나). navigations는 이동이 시작된 순서.
+export function reusedTargets<T extends { url: string }>(opens: readonly OpenCallRecord[], navigations: readonly T[]): T[] {
+  const wanted = opens.filter((c) => !c.blocked).map((c) => openTargetKey(c.url));
+  const out: T[] = [];
+  for (const n of navigations) {
+    const i = wanted.indexOf(openTargetKey(n.url));
+    if (i < 0) continue;
+    wanted.splice(i, 1);
+    out.push(n);
+  }
+  return out;
+}
+
 // 막힌 호출들(null을 돌려줬고 같은 주소로 만들어진 탭·창이 없는 것). createdUrls는 그 클릭 동안 만들어진 탭·창이
 // 처음 가려던 주소(탐색 대상 주소·pendingUrl).
 export function blockedOpens(opens: readonly OpenCallRecord[], createdUrls: readonly string[]): OpenCallRecord[] {

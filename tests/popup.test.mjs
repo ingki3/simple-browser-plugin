@@ -4,7 +4,20 @@ import assert from "node:assert/strict";
 import { describeEffect, describePopup, popupWhere } from "../src/lib/actionTarget.ts";
 import { clickObservedChange } from "../src/lib/hopGuard.ts";
 import { sameSiteAs } from "../src/lib/siteTrust.ts";
-import { ABORTED, blockedOpens, bounded, openTargetKey } from "../src/lib/popupMatch.ts";
+import { ABORTED, blockedOpens, bounded, openTargetKey, reusedTargets } from "../src/lib/popupMatch.ts";
+
+test("reusedTargets: a navigation in another tab matches a successful open by URL, one each", () => {
+  const cal = "https://ex.test/cal";
+  const navs = [
+    { tabId: 7, url: "https://ex.test/other" },
+    { tabId: 8, url: `${cal}#x` },
+    { tabId: 9, url: cal },
+  ];
+  assert.deepEqual(reusedTargets([{ url: cal, blocked: false }], navs).map((n) => n.tabId), [8]);
+  // 막힌(null) 호출이나 기록이 없으면 다시 쓴 창으로 보지 않는다.
+  assert.deepEqual(reusedTargets([{ url: cal, blocked: true }], navs), []);
+  assert.deepEqual(reusedTargets([], navs), []);
+});
 
 test("bounded: already aborted wait swallows a later rejection (no unhandledRejection)", async () => {
   const seen = [];

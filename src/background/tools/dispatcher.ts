@@ -838,12 +838,12 @@ async function runTool(
           if (back) {
             takeTabNote(turnTab);
             // 닫히기 전에 새 팝업 창을 열었으면(다음 단계 창) 남은 창 위에 이어 따라간다.
-            const opened = await settlePopups(turnTab, before, createdEarly, []);
+            const opened = await settlePopups(turnTab, before, createdEarly, [], tabId);
             const effect: ClickEffect = {
               navigation: "none",
               url: before,
               sameDocument: null,
-              newTab: createdEarly.length > 0,
+              newTab: createdEarly.some((t) => !t.reused),
               dom: null,
               popup: { ...(opened ?? {}), closed: back },
             };
@@ -860,7 +860,7 @@ async function runTool(
       let created: ReturnType<typeof newTabs.stop> = [];
       const effect = await observeClickEffect(tabId, before, data.effectToken, () => {
         created = newTabs.stop();
-        return created.length > 0;
+        return created.some((t) => !t.reused);
       });
       const opens = await readOpens();
       // 클릭한 팝업 창이 클릭 뒤 닫혔으면(고른 값을 원래 페이지에 써 넣고 닫히는 달력 등) 아래 창으로 돌아간다.
@@ -872,7 +872,7 @@ async function runTool(
       }
       // 닫힘 정리 뒤에 새 창을 등록한다: 닫히면서 다음 창을 연 팝업(A가 B를 열고 닫힘)이면 B를 남은 창(원래 탭이나
       // 그 아래 팝업) 위에 쌓아 따라간다.
-      const popup = await settlePopups(turnTab, before, created, opens);
+      const popup = await settlePopups(turnTab, before, created, opens, tabId);
       if (popup || closed) effect.popup = { ...(popup ?? {}), ...(closed ? { closed } : {}) };
       return {
         ok: data.clicked && !effect.dom?.aborted,

@@ -7,10 +7,10 @@
 //   일반 새 탭(target=_blank)은 따라가지 않는다.
 
 import { popupWhere, type PopupEffect } from "@/lib/actionTarget";
-import { ABORTED, blockedOpens, bounded } from "@/lib/popupMatch";
+import { ABORTED, blockedOpens, bounded, reusedTargets } from "@/lib/popupMatch";
 import { sameSiteAs } from "@/lib/siteTrust";
 import { debugLog } from "./debug";
-import { followPopup, type TurnTab } from "./tools/handlers";
+import { followPopup, isKnownPopup, type TurnTab } from "./tools/handlers";
 
 interface OpenCall {
   url: string;
@@ -138,6 +138,8 @@ export async function watchWindowOpen(
 interface CreatedTab {
   tabId: number;
   url: string;
+  // 새로 만들어지지 않고 이동만 시작된 다른 탭(이름 있는 창을 다시 쓴 window.open 후보). 새 탭이 아니다.
+  reused?: boolean;
 }
 
 // 이 탭이 연 새 탭·창(target=_blank, window.open)을 지켜본다. stop()을 부르면 관찰을 끝내고 만들어진 탭들을 준다.
@@ -155,13 +157,23 @@ export function watchNewTabs(tabId: number): { stop(): CreatedTab[] } {
   const onTarget = (d: chrome.webNavigation.WebNavigationSourceCallbackDetails) => {
     if (d.sourceTabId === tabId) add(d.tabId, d.url);
   };
+  // 이미 열린 이름 있는 창을 다시 쓰면 새 탭 없이 그 창의 최상위 문서만 이동한다. 클릭 동안 다른 탭에서 시작된 이동을
+  // 후보로 모으고, 어느 것을 따라갈지는 settlePopups가 window.open 기록·창 종류·관계로 정한다.
+  const navigated: CreatedTab[] = [];
+  const onBefore = (d: chrome.webNavigation.WebNavigationParentedCallbackDetails) => {
+    if (d.frameId !== 0 || d.tabId === tabId || navigated.length >= 10) return;
+    navigated.push({ tabId: d.tabId, url: d.url, reused: true });
+  };
   chrome.tabs.onCreated.addListener(onCreated);
   chrome.webNavigation.onCreatedNavigationTarget.addListener(onTarget);
+  chrome.webNavigation.onBeforeNavigate.addListener(onBefore);
   return {
     stop: () => {
       chrome.tabs.onCreated.removeListener(onCreated);
       chrome.webNavigation.onCreatedNavigationTarget.removeListener(onTarget);
-      return [...created.values()];
+      chrome.webNavigation.onBeforeNavigate.removeListener(onBefore);
+      // 새로 만들어진 탭의 첫 이동은 다시 쓴 창이 아니다.
+      return [...created.values(), ...navigated.filter((n) => !created.has(n.tabId))];
     },
   };
 }
@@ -173,13 +185,29 @@ export async function settlePopups(
   pageUrl: string,
   created: CreatedTab[],
   opens: OpenCall[],
+  clickedTabId: number,
 ): Promise<PopupEffect | null> {
   const effect: PopupEffect = {};
+  const fresh = created.filter((t) => !t.reused);
   // window.open은 noopener면 창이 열려도 null을 돌려준다. null을 돌려준 호출 중 같은 주소로 만들어진 탭·창이 없는
   // 것만 막힌 것으로 본다(성공한 호출·주소가 다른 새 탭은 막힌 호출을 가리지 않는다, src/lib/popupMatch.ts).
-  const blocked = blockedOpens(opens, created.map((t) => t.url));
+  const blocked = blockedOpens(opens, fresh.map((t) => t.url));
   if (blocked.length) effect.blocked = { count: blocked.length, where: popupWhere(blocked[0].url) };
-  for (const t of created) {
+  // 다시 쓴 이름 있는 창: 이 클릭의 window.open이 창을 돌려줬고 주소가 같으며, 우리 클릭으로 열린 적 있는 이 탭의
+  // 팝업이거나 opener가 클릭한 탭인 것만(사용자가 따로 연 창은 아니다). 창 종류 popup·깊이 한도는 아래에서 같게 본다.
+  const reused: CreatedTab[] = [];
+  for (const n of reusedTargets(opens, created.filter((t) => t.reused))) {
+    let openerOk = isKnownPopup(turnTab, n.tabId);
+    if (!openerOk) {
+      try {
+        openerOk = (await chrome.tabs.get(n.tabId)).openerTabId === clickedTabId;
+      } catch {
+        openerOk = false;
+      }
+    }
+    if (openerOk) reused.push(n);
+  }
+  for (const t of [...fresh, ...reused]) {
     let tab: chrome.tabs.Tab | null = null;
     try {
       tab = await chrome.tabs.get(t.tabId);
@@ -195,10 +223,10 @@ export async function settlePopups(
     }
     if (win?.type !== "popup") continue;
     // 열린 직후는 about:blank에서 시작해 이동 중일 수 있다. 가려는 주소(pendingUrl)를 먼저 본다.
-    const url = tab.pendingUrl || tab.url || t.url;
+    const url = t.reused ? t.url : tab.pendingUrl || tab.url || t.url;
     const followed = followPopup(turnTab, { tabId: t.tabId, windowId: tab.windowId });
     effect.opened = { where: popupWhere(url), followed, otherSite: /^https?:/i.test(url) && !sameSiteAs(pageUrl, url) };
-    debugLog("popup:opened", `tab ${t.tabId}${followed ? " (따라감)" : ""}`);
+    debugLog("popup:opened", `tab ${t.tabId}${t.reused ? " (다시 쓴 창)" : ""}${followed ? " (따라감)" : ""}`);
     break;
   }
   return effect.blocked || effect.opened ? effect : null;
