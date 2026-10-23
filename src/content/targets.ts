@@ -601,8 +601,6 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
       path: ancestorsUpTo(el, row).map((a) => new WeakRef(a)),
       texts,
       combo: comboboxField(el),
-      bySelector: row.matches(ROW_SELECTOR),
-      role: row.getAttribute("role"),
     });
   } else approvedRows.delete(el);
   return info;
@@ -823,9 +821,9 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   return null;
 }
 
-// 승인 때 찾은 대상의 행 요소. 행은 같은 틀 형제(repeated)로도 정하는데, 입력하자 칸의 묶음에만 자동완성 목록이 붙으면
-// 그 묶음의 틀(자식 태그 모양)이 형제와 달라져 행이 다른 요소로 잡힌다(네이버 지도 길찾기). 입력 도중 확인은 아래가 모두
-// 구조로 확인될 때만 승인 때의 행 요소를 그대로 쓴다(pinnedRowOf). 아니면 지금처럼 행을 다시 찾아 엄격히 비교한다.
+// 승인 때 찾은 대상의 행 요소. 입력 도중 확인은 아래가 모두 구조로 확인될 때만 승인 때의 행을 기준으로 삼는다
+// (pinnedRowOf). 아니면 지금처럼 행을 다시 찾아 엄격히 비교한다.
+// - 지금 다시 찾은 행이 승인 때 행과 같은 요소다.
 // - 대상에서 행까지의 조상 사슬이 승인 때와 같다(하위 행으로 옮겨지지 않음).
 // - 승인 때 행 안에 있던 글자 노드가 모두 같은 행 안에 같은 글자로 남아 있다.
 // 행 글자 비교(원문 context)는 여전히 승인 때와 같아야 한다. 다만 대상이 자동완성 입력 칸(combobox)이면, 승인 뒤 행 안에
@@ -838,9 +836,6 @@ const approvedRows = new WeakMap<
     path: WeakRef<Element>[];
     texts: Array<{ node: WeakRef<Text>; value: string }>;
     combo: boolean;
-    // 행이 목록 표시(li·tr·role=row 등, ROW_SELECTOR)로 정해졌는지와 그때의 role. 표시가 지워지면 다른 대상이다.
-    bySelector: boolean;
-    role: string | null;
   }
 >();
 
@@ -892,14 +887,9 @@ function pinnedRowOf(el: HTMLElement): PinnedRow | null {
     kept.push(node);
   }
   // 칸에서 행까지 사이에 새 행 경계가 생겼으면(기존 조상에 role=row를 붙이고 글자를 그 안으로 옮김) 다른 대상이다.
-  const fresh = rowElement(el)?.row;
-  // shadow root 경계를 넘는 경우도 잡도록 contains가 아니라 이미 구한 조상 사슬로 본다.
-  if (fresh && fresh !== row && now.includes(fresh)) return null;
-  // 승인 때 행을 목록 표시로 정했으면 그 표시(태그·role)가 그대로여야 한다(role=row를 지워 바깥 항목으로 재사용하는 것을 막는다).
-  if (pinned.bySelector && (!row.matches(ROW_SELECTOR) || row.getAttribute("role") !== pinned.role)) return null;
-  // 지금 찾은 행이 승인 때 행보다 바깥이면(같은 틀 형제였던 묶음의 틀이 달라짐) 자동완성 입력 칸이고 승인 때 행이
-  // 같은 틀 형제로만 정해졌을 때만 고정한다(네이버 지도 길찾기: 한 묶음에만 자동완성 목록이 붙음).
-  if (fresh !== row && !(pinned.combo && !pinned.bySelector)) return null;
+  // 지금 다시 찾은 행이 승인 때 행과 같아야 한다. 칸과 행 사이에 새 행 경계가 생겼거나(하위 행, shadow DOM 안 포함),
+  // 행 표시가 지워져 바깥 항목으로 넓어졌으면 다른 대상이다.
+  if (rowElement(el)?.row !== row) return null;
   return { row, exclude: pinned.combo ? newPopupLists(el, row, kept) : [] };
 }
 
