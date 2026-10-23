@@ -119,15 +119,22 @@ test("PNG 크기 읽기", () => {
 });
 
 test("캡처 중 창 크기·배율 변경 감지", () => {
-  const start = { viewportWidth: 1000, viewportHeight: 713, windowWidth: 1000, scale: 2 };
+  const start = { viewportWidth: 1000, viewportHeight: 713, windowWidth: 1000, windowHeight: 713, scale: 2 };
   assert.equal(viewportChanged(start, { ...start }), false);
   assert.equal(viewportChanged(start, { ...start, viewportHeight: 600 }), true);
+  assert.equal(viewportChanged(start, { ...start, windowHeight: 600 }), true);
   assert.equal(viewportChanged(start, { ...start, windowWidth: 900, viewportWidth: 900 }), true);
   assert.equal(viewportChanged(start, { ...start, scale: 1.5 }), true);
-  // 첫 화면은 창 폭 × 배율(±2px), 그 뒤 화면은 첫 화면과 정확히 같은 크기.
-  assert.equal(tileSizeMatches({ width: 2000, height: 1426 }, 1000, 2), true);
-  assert.equal(tileSizeMatches({ width: 1501, height: 1070 }, 1000, 1.5), true);
-  assert.equal(tileSizeMatches({ width: 1800, height: 1426 }, 1000, 2), false);
-  assert.equal(tileSizeMatches({ width: 2000, height: 1426 }, 1000, 2, { width: 2000, height: 1426 }), true);
-  assert.equal(tileSizeMatches({ width: 2000, height: 1200 }, 1000, 2, { width: 2000, height: 1426 }), false);
+});
+
+test("찍은 화면 크기: 첫 장 포함 모든 장의 폭·높이가 창 안쪽 크기 × 배율(±2px)", () => {
+  const start = { viewportWidth: 1000, viewportHeight: 713, windowWidth: 1000, windowHeight: 713, scale: 2 };
+  assert.equal(tileSizeMatches({ width: 2000, height: 1426 }, start), true);
+  assert.equal(tileSizeMatches({ width: 2001, height: 1425 }, start), true);
+  // 재고 나서 찍기 전에 창 높이·폭이 줄면 걸린다.
+  assert.equal(tileSizeMatches({ width: 2000, height: 1200 }, start), false);
+  assert.equal(tileSizeMatches({ width: 1800, height: 1426 }, start), false);
+  const s15 = { ...start, scale: 1.5 };
+  assert.equal(tileSizeMatches({ width: 1500, height: 1070 }, s15), true);
+  assert.equal(tileSizeMatches({ width: 1500, height: 1060 }, s15), false);
 });

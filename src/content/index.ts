@@ -11,7 +11,7 @@ import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect } from "./targets";
 import { pageSkeleton } from "./skeleton";
-import { captureBegin, captureEnd, captureHideFixed, captureScroll } from "./capture";
+import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
 
 async function execTool(toolName: ToolName, args: unknown, callId: string): Promise<unknown> {
   switch (toolName) {
@@ -112,7 +112,9 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
         ? captureScroll(msg.token, msg.y)
         : msg.step === "hide_fixed"
           ? captureHideFixed(msg.token)
-          : Promise.resolve(captureEnd(msg.token));
+          : msg.step === "measure"
+            ? Promise.resolve().then(() => captureMeasure(msg.token))
+            : Promise.resolve(captureEnd(msg.token));
     run.then(
       (data) => sendResponse({ ok: true, data } satisfies ContentResponse),
       (err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse),

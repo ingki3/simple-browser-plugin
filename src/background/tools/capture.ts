@@ -9,6 +9,7 @@ import {
   viewportChanged,
   type CaptureMetrics,
   type CaptureScrolled,
+  type CaptureViewport,
   type StitchJob,
   type StitchReleaseJob,
   type StitchResult,
@@ -56,6 +57,9 @@ export async function captureTarget(turnTab: TurnTab, approved?: CaptureTarget):
   if (approved && (approved.tabId !== target.tabId || approved.url !== target.url || approved.documentId !== target.documentId)) {
     throw new Error("승인한 뒤 탭의 페이지가 바뀌어 캡처하지 않았습니다. 다시 요청하세요.");
   }
+  if (approved && approved.windowId !== target.windowId) {
+    throw new Error("승인한 뒤 탭이 다른 창으로 옮겨져 캡처하지 않았습니다. 다시 요청하세요.");
+  }
   await assertVisible(target);
   return target;
 }
@@ -70,11 +74,49 @@ async function assertVisible(t: CaptureTarget): Promise<void> {
   if (tab.url !== t.url || (await topDocumentId(t.tabId)) !== t.documentId) {
     throw new Error("캡처하는 동안 탭의 페이지가 바뀌어 멈췄습니다.");
   }
-  if (!tab.active) {
+  // captureVisibleTab은 창 id로 그 창의 활성 탭을 찍는다. 탭이 고정한 창에 그대로 있고 그 창의 활성 탭일 때만 찍는다.
+  if (tab.windowId !== t.windowId) throw new Error(MOVED);
+  const [active] = await chrome.tabs.query({ windowId: t.windowId, active: true }).catch(() => []);
+  if (!tab.active || active?.id !== t.tabId) {
     throw new Error("캡처할 탭이 그 창의 앞에 보이는 탭이 아니라 캡처하지 않았습니다. 그 탭을 앞으로 띄운 뒤 다시 요청하세요.");
   }
-  const win = await chrome.windows.get(tab.windowId).catch(() => null);
-  if (win?.state === "minimized") throw new Error("창이 최소화되어 있어 캡처하지 않았습니다.");
+  const win = await chrome.windows.get(t.windowId).catch(() => null);
+  if (!win || win.state === "minimized") throw new Error("창이 최소화되어 있어 캡처하지 않았습니다.");
+}
+
+const MOVED = "캡처하는 동안 탭이 다른 창으로 옮겨져 멈췄습니다(저장하지 않음).";
+
+// 찍기 전 확인부터 찍은 뒤 확인까지 그 창의 활성 탭·탭의 창·탭의 문서가 한 번이라도 바뀌었는지 이벤트로 지켜본다.
+// 앞뒤 확인만으로는 찍는 순간 잠깐 다른 탭이 앞에 왔다가 돌아온 경우를 알 수 없다(창 포커스는 찍는 대상과 무관하다).
+function watchDisturbance(t: CaptureTarget): { disturbed(): boolean; stop(): void } {
+  let hit = false;
+  const onActivated = (info: chrome.tabs.TabActiveInfo) => {
+    if (info.windowId === t.windowId || info.tabId === t.tabId) hit = true;
+  };
+  const onTabMoved = (tabId: number) => {
+    if (tabId === t.tabId) hit = true;
+  };
+  const onRemoved = (tabId: number) => {
+    if (tabId === t.tabId) hit = true;
+  };
+  const onCommitted = (d: chrome.webNavigation.WebNavigationTransitionCallbackDetails) => {
+    if (d.tabId === t.tabId && d.frameId === 0) hit = true;
+  };
+  chrome.tabs.onActivated.addListener(onActivated);
+  chrome.tabs.onDetached.addListener(onTabMoved);
+  chrome.tabs.onAttached.addListener(onTabMoved);
+  chrome.tabs.onRemoved.addListener(onRemoved);
+  chrome.webNavigation.onCommitted.addListener(onCommitted);
+  return {
+    disturbed: () => hit,
+    stop: () => {
+      chrome.tabs.onActivated.removeListener(onActivated);
+      chrome.tabs.onDetached.removeListener(onTabMoved);
+      chrome.tabs.onAttached.removeListener(onTabMoved);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+      chrome.webNavigation.onCommitted.removeListener(onCommitted);
+    },
+  };
 }
 
 // captureVisibleTab 호출 한도(초당 2회)에 맞춰 호출 사이를 띄운다(대화·호출과 관계없이 서비스 워커 전체에서).
@@ -104,22 +146,30 @@ async function grab(t: CaptureTarget, signal?: AbortSignal): Promise<string> {
     const wait = lastCaptureAt + CAPTURE_LIMITS.captureGapMs - Date.now();
     if (wait > 0) await sleep(wait, signal);
     checkAbort(signal);
-    await assertVisible(t);
-    lastCaptureAt = Date.now();
-    let dataUrl: string;
+    const watch = watchDisturbance(t);
     try {
-      dataUrl = await chrome.tabs.captureVisibleTab(t.windowId, { format: "png" });
-    } catch (err) {
-      // 브라우저 오류 문구는 모델에 싣지 않고 디버그 콘솔에만 남긴다. 한 번 더 해 보고(호출 한도 등) 안 되면 알린다.
-      console.warn("[capture_page] captureVisibleTab failed", err);
-      if (attempt >= 1) {
-        throw new Error("브라우저가 이 탭의 화면 캡처를 허용하지 않았습니다(보호된 페이지이거나 파일 주소 접근이 꺼져 있을 수 있음).");
+      await assertVisible(t);
+      lastCaptureAt = Date.now();
+      let dataUrl: string | null = null;
+      try {
+        // 고정한 창 id로만 찍는다.
+        dataUrl = await chrome.tabs.captureVisibleTab(t.windowId, { format: "png" });
+      } catch (err) {
+        // 브라우저 오류 문구는 모델에 싣지 않고 디버그 콘솔에만 남긴다. 한 번 더 해 보고(호출 한도 등) 안 되면 알린다.
+        console.warn("[capture_page] captureVisibleTab failed", err);
+        if (attempt >= 1) {
+          throw new Error("브라우저가 이 탭의 화면 캡처를 허용하지 않았습니다(보호된 페이지이거나 파일 주소 접근이 꺼져 있을 수 있음).");
+        }
       }
-      await sleep(1_000, signal);
-      continue;
+      if (dataUrl !== null) {
+        await assertVisible(t);
+        if (watch.disturbed()) throw new Error("캡처하는 순간 그 창의 탭이 바뀌어 멈췄습니다(저장하지 않음).");
+        return dataUrl;
+      }
+    } finally {
+      watch.stop();
     }
-    await assertVisible(t);
-    return dataUrl;
+    await sleep(1_000, signal);
   }
 }
 
@@ -246,7 +296,6 @@ export async function captureFullPage(
   }
   const notes: string[] = [];
   const tiles: Array<{ y: number; blob: Blob }> = [];
-  let firstSize: { width: number; height: number } | undefined;
   const vh = m.viewportHeight;
   let pageHeight = m.pageHeight;
   let covered = 0;
@@ -276,8 +325,10 @@ export async function captureFullPage(
       if (tiles.length > 0) hidden += await step<number>(t, { kind: "capture_step", token: m.token, step: "hide_fixed" }, 5_000);
       const dataUrl = await grab(t, signal);
       const size = dataUrlPngSize(dataUrl);
-      if (!size || !tileSizeMatches(size, m.windowWidth, m.scale, firstSize)) throw new Error(RESIZED);
-      firstSize ??= size;
+      if (!size || !tileSizeMatches(size, m)) throw new Error(RESIZED);
+      // 찍은 뒤에도 다시 재어 찍기 전(시작) 값과 같은지 본다.
+      const after = await step<CaptureViewport>(t, { kind: "capture_step", token: m.token, step: "measure" }, 3_000);
+      if (viewportChanged(m, after)) throw new Error(RESIZED);
       const blob = await (await fetch(dataUrl)).blob();
       tiles.push({ y: at.y, blob });
       covered = Math.max(covered, at.y + vh);

@@ -262,7 +262,7 @@ export type BgToContent =
   // capture_page(#49) 전체 캡처의 단계. begin은 도구 실행(tool_exec)으로 받고(주입 포함), 그 뒤 단계는 같은 문서에만
   // 보낸다(문서가 바뀌었으면 받는 쪽이 없어 실패). token은 begin이 돌려준 세션 값.
   | { kind: "capture_step"; token: string; step: "scroll"; y: number }
-  | { kind: "capture_step"; token: string; step: "hide_fixed" | "end" };
+  | { kind: "capture_step"; token: string; step: "hide_fixed" | "measure" | "end" };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;

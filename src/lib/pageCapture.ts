@@ -161,8 +161,8 @@ export function pngSize(bytes: Uint8Array): { width: number; height: number } | 
 
 // ── content script와 주고받는 값 ──
 
-// 전체 캡처를 시작할 때 문서에서 잰 값(CSS px). viewport*는 스크롤 막대를 뺀 보이는 영역, windowWidth는 막대를 포함한
-// 창 폭(캡처 이미지의 폭에 해당 — 화면 이미지의 배율을 구할 때 쓴다).
+// 전체 캡처를 시작할 때 문서에서 잰 값(CSS px). viewport*는 스크롤 막대를 뺀 보이는 영역, window*는 막대를 포함한
+// 창 안쪽 크기(innerWidth·innerHeight — 캡처 이미지의 크기에 해당, 화면 이미지의 배율을 구할 때도 쓴다).
 export interface CaptureMetrics {
   token: string;
   // PDF 뷰어처럼 문서를 스크롤해 찍을 수 없는 페이지.
@@ -172,39 +172,42 @@ export interface CaptureMetrics {
   viewportWidth: number;
   viewportHeight: number;
   windowWidth: number;
+  windowHeight: number;
   scale: number;
   // 문서는 스크롤되지 않고 안쪽 영역(div)이 스크롤되는 앱형 페이지로 보이는지(구조: overflow·크기).
   innerScroll: boolean;
 }
 
-export interface CaptureScrolled {
-  // 실제로 간 스크롤 위치(페이지가 덜 갈 수 있다)와 그때의 문서 높이.
-  y: number;
-  pageHeight: number;
-  // 그때의 보이는 영역·창 폭·배율(시작 때와 다르면 캡처를 멈춘다).
+// 그때의 보이는 영역·창 안쪽 크기·배율(시작 때와 다르면 캡처를 멈춘다).
+export interface CaptureViewport {
   viewportWidth: number;
   viewportHeight: number;
   windowWidth: number;
+  windowHeight: number;
   scale: number;
 }
 
+export interface CaptureScrolled extends CaptureViewport {
+  // 실제로 간 스크롤 위치(페이지가 덜 갈 수 있다)와 그때의 문서 높이.
+  y: number;
+  pageHeight: number;
+}
+
 // 캡처하는 동안 창 크기·배율이 바뀌었는지. 바뀌면 화면마다 크기가 달라 이어 붙인 이미지에 빈 곳·어긋남이 생긴다.
-export function viewportChanged(
-  start: { viewportWidth: number; viewportHeight: number; windowWidth: number; scale: number },
-  now: { viewportWidth: number; viewportHeight: number; windowWidth: number; scale: number },
-): boolean {
+export function viewportChanged(start: CaptureViewport, now: CaptureViewport): boolean {
   return (
     Math.abs(start.viewportWidth - now.viewportWidth) > 0.5 ||
     Math.abs(start.viewportHeight - now.viewportHeight) > 0.5 ||
     Math.abs(start.windowWidth - now.windowWidth) > 0.5 ||
+    Math.abs(start.windowHeight - now.windowHeight) > 0.5 ||
     Math.abs(start.scale - now.scale) > 0.001
   );
 }
 
-// 찍은 화면 이미지의 크기가 시작 때 잰 창(폭 × 배율)과 맞는지(±2px — 배율이 소수면 반올림 차이).
-export function tileSizeMatches(tile: { width: number; height: number }, windowWidth: number, scale: number, first?: { width: number; height: number }): boolean {
-  if (first) return tile.width === first.width && tile.height === first.height;
-  return Math.abs(tile.width - windowWidth * scale) <= 2;
+// 찍은 화면 이미지(첫 장 포함 모든 장)의 폭·높이가 시작 때 잰 창 안쪽 크기 × 배율과 맞는지(±2px — 배율이 소수면
+// 반올림 차이). 재고 나서 찍기 전에 창 크기가 바뀌었으면 여기서 걸린다.
+export function tileSizeMatches(tile: { width: number; height: number }, start: CaptureViewport): boolean {
+  return Math.abs(tile.width - start.windowWidth * start.scale) <= 2 && Math.abs(tile.height - start.windowHeight * start.scale) <= 2;
 }
 
 // ── offscreen 문서의 이어 붙이기 작업 ──
