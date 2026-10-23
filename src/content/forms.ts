@@ -273,12 +273,7 @@ function requestSignals(
         out.opaque = true;
       }
     }
-    if (
-      !skip.has(node) &&
-      words(`${node.getAttribute("name") ?? ""} ${(node as HTMLInputElement).value ?? node.getAttribute("value") ?? ""}`)
-    ) {
-      out.del = true;
-    }
+    if (!skip.has(node) && words(ownRequestText(node))) out.del = true;
     if (isTag(node, "form")) {
       const texts = submittedChoiceTexts(node as HTMLFormElement, skip);
       if (texts === null) out.opaque = true;
@@ -308,13 +303,15 @@ function requestSignals(
   }
   // 페이지의 모든 from: 리스너(어느 이벤트를 듣는지 해석하지 않는다): hx-get 요청 요소이고, 그 요소와 조상의 htmx 속성이
   // 모두 허용 목록 안이어야 한다(hx-boost 양식처럼 hx-get이 없는 리스너는 메서드를 확인할 수 없어 묻는다).
-  const docs = new Set<Document>();
-  for (const start of starts) if (start) docs.add(start.ownerDocument);
-  for (const doc of docs) {
-    const listeners = doc.querySelectorAll(HX_FROM_SELECTOR);
-    if (listeners.length > MAX_HX_FROM) {
+  // 접근 가능한 모든 루트(문서·열린 shadow root·같은 출처 iframe 문서 — getAccessibleRoots)에서 찾는다. 닫힌 shadow root와
+  // 다른 출처 iframe 안은 볼 수 없다(한계 — 그 안의 리스너가 이 이벤트를 듣는지는 알 수 없다).
+  let seenListeners = 0;
+  for (const root of getAccessibleRoots()) {
+    const listeners = root.querySelectorAll(HX_FROM_SELECTOR);
+    seenListeners += listeners.length;
+    if (seenListeners > MAX_HX_FROM) {
       out.opaque = true;
-      continue;
+      break;
     }
     for (const r of Array.from(listeners)) {
       const chain = chainOf(r);
@@ -326,6 +323,22 @@ function requestSignals(
     }
   }
   return out;
+}
+
+// htmx GET 요청 요소 자신이 싣는 name=value 글자. 사용자가 치는 글자 칸·textarea의 값은 보지 않고 이름만 본다(입력값 보호,
+// 승인한 검색어 'delete' 입력 뒤 재검사에서 멈추지 않게). select·checkbox·radio·숨은 칸은 submittedText와 같은 규칙,
+// 그 밖의 요소(버튼 등)는 페이지가 정한 name·value 속성.
+function ownRequestText(node: Element): string {
+  const name = node.getAttribute("name") ?? "";
+  if (isTag(node, "textarea")) return name;
+  if (isTag(node, "select")) return submittedText(node) ?? name;
+  if (isTag(node, "input")) {
+    const type = (node as HTMLInputElement).type;
+    if (type === "checkbox" || type === "radio") return `${name} ${(node as HTMLInputElement).value}`;
+    if (type === "hidden" || ["button", "submit", "image", "reset"].includes(type)) return `${name} ${(node as HTMLInputElement).value}`;
+    return name;
+  }
+  return `${name} ${(node as HTMLButtonElement).value ?? node.getAttribute("value") ?? ""}`;
 }
 
 // 클릭·입력이 확인할 수 없는 htmx 요청(허용 목록 밖 속성·GET 아님 — 위 규칙)을 일으킬 수 있는지(#62, fail-closed).
@@ -920,14 +933,19 @@ const FIELD_KIND: TargetKind = {
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다). 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
   risk: (el) => labelRisk(el, fieldRisk(el)),
-  // 이 칸의 deleteParam이 입력 묶음이 승인받은 삭제 선택지들(choices: 칸 → 선택지 글자)만으로 설명되는지(#62).
-  // 지금 그 선택지가 그대로 선택된 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
-  deleteParamExplained: (el, choices) => {
+  // 이 칸의 deleteParam이 입력 묶음이 승인받은 쓰기들(writes: 칸 → select는 선택지 글자, checkbox·radio는 체크 여부)만으로
+  // 설명되는지(#62). 지금 승인한 상태 그대로인 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
+  deleteParamExplained: (el, writes) => {
     const skip = new Set<Element>();
-    for (const [c, label] of choices) {
-      if (!c.isConnected || !isTag(c, "select")) continue;
-      const picked = Array.from((c as HTMLSelectElement).selectedOptions);
-      if (picked.length === 1 && optionLabel(picked[0]).replace(/\s+/g, " ").trim() === label) skip.add(c);
+    for (const [c, want] of writes) {
+      if (!c.isConnected) continue;
+      if (isTag(c, "select") && typeof want === "string") {
+        const picked = Array.from((c as HTMLSelectElement).selectedOptions);
+        if (picked.length === 1 && optionLabel(picked[0]).replace(/\s+/g, " ").trim() === want) skip.add(c);
+      } else if (isTag(c, "input") && typeof want === "boolean") {
+        const input = c as HTMLInputElement;
+        if ((input.type === "checkbox" || input.type === "radio") && input.checked === want) skip.add(c);
+      }
     }
     if (!skip.size) return false;
     const form = isFieldElement(el) ? (el.form ?? (el.closest("form") as HTMLFormElement | null)) : null;
