@@ -278,6 +278,18 @@ test("sameApprovedInFlight: 모델용 행 문맥이 바뀌어도 추가만 허�
   assert.equal(sameApprovedInFlight({ ...f, modelContext: "상품 B 수량" }, f), false);
 });
 
+test("sameApprovedInFlight: 입력하자 칸의 묶음에 자동완성 목록이 붙은 것은 허용한다", () => {
+  const box = { ...rowBox, tag: "input", fieldType: "text", proxy: undefined, context: "출발지 입력 끌어서 이동", modelContext: "출발지 입력 끌어서 이동" };
+  const withList = "출발지 입력 끌어서 이동 자동완성 검색어 판교역 장소 지하철,전철 판교역 신분당선";
+  assert.equal(sameApprovedInFlight({ ...box, context: withList, modelContext: withList }, box), true);
+  // 묶음 앞에 끼어든 글자도 추가만이면 허용.
+  assert.equal(sameApprovedInFlight({ ...box, context: "최근 검색 " + box.context }, box), true);
+  // 원래 행 글자가 사라지면(다른 행에 재사용) 거부.
+  assert.equal(sameApprovedInFlight({ ...box, context: "도착지 입력 끌어서 이동 자동완성" }, box), false);
+  // 승인 카드·실행 직전 비교는 그대로 엄격하다.
+  assert.equal(sameApproved({ ...box, context: withList, modelContext: withList }, box), false);
+});
+
 test("fillCard·sameBase: 대리 label 칸은 보이는 라벨을 보여 주고 비교한다(#56 4차)", () => {
   const box = { ...rowBox, name: "선택", proxyLabel: "유료 구독 시작", hidden: true };
   assert.match(fillCard([{ info: box, value: "true" }]).details, /보이는 라벨: '유료 구독 시작'/);

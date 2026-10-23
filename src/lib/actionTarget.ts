@@ -130,13 +130,15 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
 }
 
 // 입력 도중(입력 처리기가 돈 뒤 change 전, 같은 묶음의 앞 칸을 채운 뒤, 채운 뒤 반영 확인)의 비교(#56).
-// 원문 행 글자(context)가 그대로이고 모델용 행 문맥(modelContext)에 글자가 더해지기만 했으면 같은 대상으로 본다 —
-// 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게).
-// 문구를 바꿔 보여 주는 것(A 문구를 숨기고 B 문구를 보임)은 다른 대상이다. 승인 카드·실행 직전 비교는 sameApproved.
+// 원문 행 글자(context)와 모델용 행 문맥(modelContext)에 글자가 더해지기만 했으면 같은 대상으로 본다 —
+// 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게),
+// 입력하자 칸이 든 묶음 안에 자동완성 목록이 붙은 경우(네이버 지도 길찾기의 출발지·도착지 칸).
+// 행 글자가 사라지거나 바뀌는 것(A 문구를 숨기고 B 문구를 보임, 같은 칸 노드를 다른 행에 재사용)은 다른 대상이다.
+// 승인 카드·실행 직전 비교는 sameApproved.
 export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
-  if (now.context !== approved.context) return false;
+  if (!onlyAdded(approved.context, now.context)) return false;
   if (!onlyAdded(approved.modelContext ?? "", now.modelContext ?? "")) return false;
-  return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
+  return sameApproved({ ...now, context: approved.context, modelContext: approved.modelContext }, approved);
 }
 
 // after가 before에 글자를 더하기만 한 것인지: before의 낱말(공백 기준)이 after 안에 같은 순서로 모두 남아 있어야 한다.
