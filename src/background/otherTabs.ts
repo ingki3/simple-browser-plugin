@@ -56,6 +56,13 @@ async function topDocumentId(tabId: number): Promise<string | null> {
   }
 }
 
+// 지금 도구가 동작하는 탭(다른 탭 후보에서 뺀다). 탭으로 열린 팝업을 따라가는 중이면 그 탭이고, 원래 탭은 같은 창의
+// 다른 탭으로 고를 수 있다. 팝업 창(별도 창)을 따라가는 중이면 원래 탭과 그 창을 기준으로 한다(기존과 같음).
+function selfTabId(turnTab: Extract<TurnTab, { tabId: number }>): number {
+  const top = turnTab.popups?.[turnTab.popups.length - 1];
+  return top?.kind === "tab" ? top.tabId : turnTab.tabId;
+}
+
 // 후보 조건: 턴 탭과 같은 창, 시크릿 아님, http(s), 턴 탭 아님, 메모리에서 내려가지 않음, 로딩 완료.
 function eligible(tab: chrome.tabs.Tab, turnTabId: number, windowId: number): boolean {
   return (
@@ -76,7 +83,7 @@ export async function snapshotCandidates(callId: string, turnTab: TurnTab): Prom
   const tabs = await chrome.tabs.query({ windowId: turn.windowId });
   const list: Snapshot[] = [];
   for (const tab of tabs) {
-    if (!eligible(tab, turnTab.tabId, turn.windowId) || tab.id === undefined || !tab.url) continue;
+    if (!eligible(tab, selfTabId(turnTab), turn.windowId) || tab.id === undefined || !tab.url) continue;
     const documentId = await topDocumentId(tab.id);
     if (!documentId) continue;
     list.push({
@@ -137,7 +144,7 @@ export async function readChosenTabs(callId: string, turnTab: TurnTab, signal?: 
     }
     const docId = await topDocumentId(snap.tabId);
     if (
-      !eligible(tab, turnTab.tabId, turn.windowId) ||
+      !eligible(tab, selfTabId(turnTab), turn.windowId) ||
       tab.windowId !== snap.windowId ||
       tab.url !== snap.url ||
       docId !== snap.documentId

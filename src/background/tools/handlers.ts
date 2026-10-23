@@ -120,6 +120,15 @@ async function assertTabPopupVisible(top: FollowedPopup, tab: chrome.tabs.Tab): 
     throw new Error(TAB_POPUP_HIDDEN_ERROR);
   }
   if (win.state === "minimized") throw new Error(TAB_POPUP_HIDDEN_ERROR);
+  // 사용자가 다른 Chrome 창으로 옮겼으면 그 창의 탭은 계속 활성이어도 보고 있지 않다. 마지막으로 포커스를 받은 Chrome
+  // 창이 이 창이어야 한다(Chrome 밖의 다른 앱으로 잠깐 옮긴 것은 막지 않는다 — 원래 탭 작업과 같게).
+  let lastFocused: chrome.windows.Window | null = null;
+  try {
+    lastFocused = await chrome.windows.getLastFocused();
+  } catch {
+    lastFocused = null;
+  }
+  if (!lastFocused || lastFocused.id !== tab.windowId) throw new Error(TAB_POPUP_HIDDEN_ERROR);
   const doc = await topDocumentId(tab.id as number);
   if (!doc) throw new Error(TAB_POPUP_HIDDEN_ERROR);
   if (!top.checked && doc !== top.documentId) throw new Error(TAB_POPUP_CHANGED_ERROR);
