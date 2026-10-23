@@ -10,6 +10,7 @@ import {
   declaresDelete,
   deleteParamOf,
   opaqueRequestOf,
+  requestUrlsOf,
   formHasPersonalValues,
   formSubmissionUrl,
   isPersonalField,
@@ -263,6 +264,7 @@ function withToggleRisk(el: HTMLElement, risk: ClickRisk): ClickRisk {
   const scopeFormActions = list(risk.scopeFormActions, f.scopeFormActions);
   const aroundFormActions = list(risk.aroundFormActions, f.aroundFormActions);
   const pingUrls = list(risk.pingUrls, f.pingUrls);
+  const requestUrls = list(risk.requestUrls, f.requestUrls);
   const outerText = [risk.outerText ?? "", f.outerText ?? ""].filter(Boolean).join(" ");
   return {
     ...risk,
@@ -280,6 +282,7 @@ function withToggleRisk(el: HTMLElement, risk: ClickRisk): ClickRisk {
     ...(scopeFormActions.length ? { scopeFormActions } : {}),
     ...(aroundFormActions.length ? { aroundFormActions } : {}),
     ...(pingUrls.length ? { pingUrls } : {}),
+    ...(requestUrls.length ? { requestUrls } : {}),
   };
 }
 
@@ -376,6 +379,11 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
     ...(deleteParamOf(el, control, [control, linked], form) ? { deleteParam: true } : {}),
     // 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·요청 변형 속성 — #62 fail-closed).
     ...(opaqueRequestOf(el, control, [control, linked], form) ? { opaqueRequest: true } : {}),
+    // 누르면 일으킬 수 있는 htmx GET 요청의 목적지(hx-get hx-trigger="click" 등 — 승인 판정이 목적지로 본다).
+    ...(() => {
+      const requestUrls = requestUrlsOf(el, control, [control, linked], form);
+      return requestUrls.length ? { requestUrls } : {};
+    })(),
   };
 }
 

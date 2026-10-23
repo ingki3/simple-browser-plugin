@@ -269,19 +269,30 @@ function chainOf(start: Element): Element[] | null {
 
 // 이 클릭·입력이 일으킬 수 있는 htmx·rails-ujs 요청 판정(위 규칙).
 // opaque: htmx 요청을 확인할 수 없음(허용 목록 밖 속성·GET 아님·모름). del: 삭제 단서(GET 요청의 주소·값, data-params).
+// urls: 이 클릭·입력이 일으킬 수 있는 htmx GET 요청의 목적지(hx-get 주소, 요청하는 양식의 action, htmx가 쓸 수 있는 버튼의
+// formaction — 절대 주소). 승인 판정이 사이트 경계·결제·개인정보 주소를 본다(목적지를 확인하지 못한 요청은 opaque로 묻는다).
 // skip: 삭제 단서 판정에서 뺄 칸들(입력 묶음이 승인받은 삭제 선택지를 쓴 칸 — deleteParamOf와 같은 뜻).
 function requestSignals(
   starts: Array<Element | null>,
   form: HTMLFormElement | null,
   words: (text: string) => boolean,
   skip: ReadonlySet<Element> = new Set(),
-): { opaque: boolean; del: boolean } {
-  const out = { opaque: false, del: false };
+): { opaque: boolean; del: boolean; urls: string[] } {
+  const out = { opaque: false, del: false, urls: [] as string[] };
+  // 목적지는 50개까지. 넘으면 끝까지 보지 못했다는 표시(늘 묻는다).
+  const addUrl = (u: string) => {
+    if (out.urls.includes(u)) return;
+    if (out.urls.length >= MAX_REQUEST_URLS) {
+      if (!out.urls.includes(TOO_MANY_REQUESTS)) out.urls.push(TOO_MANY_REQUESTS);
+      return;
+    }
+    out.urls.push(u);
+  };
   const nodes = new Set<Element>();
   for (const start of starts) {
     if (!start) continue;
     const chain = chainOf(start);
-    if (!chain) return { opaque: true, del: false };
+    if (!chain) return { opaque: true, del: false, urls: [] };
     for (const n of chain) nodes.add(n);
   }
   // GET 요청 요소 하나의 삭제 단서: hx-get 주소, 요청 요소 자신의 name=value, 양식이면 실릴 값. 주소로 풀리지 않으면 모름.
@@ -290,13 +301,17 @@ function requestSignals(
       const v = node.getAttribute(attr);
       if (v === null) continue;
       try {
-        if (destructiveRoute(new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href)) out.del = true;
+        const url = new URL(v.trim() || node.ownerDocument.URL, node.baseURI).href;
+        addUrl(url);
+        if (destructiveRoute(url)) out.del = true;
       } catch {
         out.opaque = true;
       }
     }
     if (!skip.has(node) && words(ownRequestText(node))) out.del = true;
     if (isTag(node, "form")) {
+      // hx-boost 양식·from: 리스너 양식은 그 양식의 action으로 요청한다.
+      addUrl(formAction(node as HTMLFormElement));
       const texts = submittedChoiceTexts(node as HTMLFormElement, skip);
       if (texts === null) out.opaque = true;
       else if (texts.some(words)) out.del = true;
@@ -321,7 +336,9 @@ function requestSignals(
         if (nonGet(attr.value)) out.opaque = true;
       } else if (name === "formaction") {
         try {
-          if (destructiveRoute(new URL(attr.value.trim() || c.ownerDocument.URL, c.baseURI).href)) out.del = true;
+          const url = new URL(attr.value.trim() || c.ownerDocument.URL, c.baseURI).href;
+          addUrl(url);
+          if (destructiveRoute(url)) out.del = true;
         } catch {
           out.opaque = true;
         }
@@ -402,6 +419,19 @@ function ownRequestText(node: Element): string {
     return name;
   }
   return `${name} ${(node as HTMLButtonElement).value ?? node.getAttribute("value") ?? ""}`;
+}
+
+const MAX_REQUEST_URLS = 50;
+const TOO_MANY_REQUESTS = "about:too-many-requests";
+
+// 클릭·입력이 일으킬 수 있는 htmx GET 요청의 목적지(requestSignals의 urls). 승인 판정의 목적지 검사용.
+export function requestUrlsOf(
+  el: Element,
+  submitter: Element | null,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+): string[] {
+  return requestSignals([el, ...controls, submitter, form], form, destructiveWords).urls;
 }
 
 // 클릭·입력이 확인할 수 없는 htmx 요청(허용 목록 밖 속성·GET 아님 — 위 규칙)을 일으킬 수 있는지(#62, fail-closed).
@@ -1065,6 +1095,7 @@ function toggleClickRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   const scopeSubmitUrls = mergeList(risk.scopeSubmitUrls, click.scopeSubmitUrls);
   const scopeFormActions = mergeList(risk.scopeFormActions, click.scopeFormActions);
   const choiceUrls = mergeList(risk.choiceUrls, click.choiceUrls);
+  const requestUrls = mergeList(risk.requestUrls, click.requestUrls);
   return {
     ...risk,
     submitsPersonal: !!risk.submitsPersonal || !!click.submitsPersonal,
@@ -1080,6 +1111,7 @@ function toggleClickRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
     ...(scopeSubmitUrls.length ? { scopeSubmitUrls } : {}),
     ...(scopeFormActions.length ? { scopeFormActions } : {}),
     ...(choiceUrls.length ? { choiceUrls } : {}),
+    ...(requestUrls.length ? { requestUrls } : {}),
   };
 }
 
@@ -1113,11 +1145,13 @@ function labelRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
   const labelDelete = declaresDelete(label, [], labelForm);
   const labelParam = deleteParamOf(label, null, [], labelForm);
   const labelOpaque = opaqueRequestOf(label, null, [], labelForm);
+  const requestUrls = merge(risk.requestUrls, requestUrlsOf(label, null, [], labelForm));
   return {
     ...risk,
     ...(labelDelete ? { deleteMethod: true } : {}),
     ...(labelParam ? { deleteParam: true } : {}),
     ...(labelOpaque ? { opaqueRequest: true } : {}),
+    ...(requestUrls.length ? { requestUrls } : {}),
     paymentContext: !!risk.paymentContext || inPaymentContext(label, labelForm),
     submitsPersonal:
       !!risk.submitsPersonal ||
@@ -1202,6 +1236,11 @@ function fieldRisk(el: HTMLElement): FieldRisk {
     ...(declaresDelete(el, [el], form) || el.getAttribute("name") === "_method" ? { deleteMethod: true } : {}),
     ...(deleteParamOf(el, null, [el], form) ? { deleteParam: true } : {}),
     ...(opaqueRequestOf(el, null, [el], form) ? { opaqueRequest: true } : {}),
+    // 값을 바꾸면(또는 checkbox·radio는 누르면) 일으킬 수 있는 htmx GET 요청의 목적지.
+    ...(() => {
+      const requestUrls = requestUrlsOf(el, null, [el], form);
+      return requestUrls.length ? { requestUrls } : {};
+    })(),
     ...(() => {
       const deleteChoices = deleteChoicesOf(el);
       return deleteChoices.length ? { deleteChoices } : {};

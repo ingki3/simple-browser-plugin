@@ -487,6 +487,30 @@ test("checkbox·radio fills click the field, so the click rules also apply", () 
   assert.ok(autoApproveBlock("fill_form_fields", [box({ opaqueRequest: true })]));
 });
 
+test("htmx request destinations (requestUrls) are checked like other destinations", async () => {
+  const { destructiveClickBlock, grantableLink } = await import("../src/lib/autoApprove.ts");
+  const box = (over = {}) => t({ tag: "input", role: "checkbox", fieldType: "checkbox", name: "옵션", ...over });
+  // 같은 사이트의 평범한 GET 요청은 그대로 자동 실행.
+  assert.equal(autoApproveBlock("fill_form_fields", [box({ requestUrls: ["https://shop.example/list?page=2"] })]), null);
+  assert.equal(autoApproveBlock("click_element", [t({ name: "더 보기", requestUrls: ["https://shop.example/list?page=2"] })]), null);
+  // 결제·개인정보 주소로 가는 htmx 요청은 채우기·클릭 모두 묻는다.
+  assert.ok(autoApproveBlock("fill_form_fields", [box({ requestUrls: ["https://shop.example/checkout/confirm"] })]));
+  assert.ok(autoApproveBlock("fill_form_fields", [t({ tag: "input", fieldType: "text", name: "검색어", requestUrls: ["https://shop.example/checkout/confirm"] })]));
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", requestUrls: ["https://shop.example/checkout/confirm"] })]));
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", requestUrls: ["https://shop.example/x?email=a%40b.co"] })]));
+  // 끝까지 보지 못한 표시도 묻는다.
+  assert.ok(autoApproveBlock("click_element", [t({ name: "확인", requestUrls: ["about:too-many-requests"] })]));
+  // 삭제 경로는 늘 묻는 판정으로.
+  assert.ok(destructiveClickBlock([t({ name: "확인", requestUrls: ["https://shop.example/mail/trash?id=1"] })]));
+  // htmx 요청을 보내는 링크는 링크 이동 허락 대상이 아니다.
+  const link = t({ tag: "a", role: "link", name: "기사", href: "https://news.example/a/1" });
+  assert.equal(grantableLink(link, "https://news.example/"), true);
+  assert.equal(grantableLink({ ...link, requestUrls: ["https://news.example/track"] }, "https://news.example/"), false);
+  // 사이트 경계: 다른 사이트로 가는 요청 주소가 목록(linkHrefs)에 들어가면 묻는다.
+  const trusted = new Set([siteOf("https://shop.example/")]);
+  assert.ok(pageActionSiteBlock(trusted, "https://shop.example/", ["https://collector.example/c"]));
+});
+
 test("clicking a label that stands in for a hidden checkbox·radio always asks, like the fill path", () => {
   const label = (over = {}) => t({ tag: "label", role: "", name: "직항만", states: { checked: "false" }, ...over });
   assert.equal(autoApproveBlock("click_element", [label()]), null);

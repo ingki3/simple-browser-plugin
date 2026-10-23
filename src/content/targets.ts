@@ -47,7 +47,7 @@ export interface TargetKind {
   deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
   // deleteMethod(구조 선언)에 대한 같은 예외(#62).
   deleteMethodExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
 interface Entry {
@@ -790,6 +790,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
     return "삭제 요청으로 바뀜";
   }
   if (now.opaqueRequest && !info.opaqueRequest) return "확인할 수 없는 htmx 요청으로 바뀜";
+  if ((now.requestUrls ?? []).join(" ") !== (info.requestUrls ?? []).join(" ")) return "htmx 요청 주소가 바뀜";
   if (now.deleteParam && !info.deleteParam && !(writes && kind.deleteParamExplained?.(el, writes))) {
     return "삭제 요청으로 바뀜";
   }

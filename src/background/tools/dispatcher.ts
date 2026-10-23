@@ -210,6 +210,8 @@ export async function buildToolPreview(
             // checkbox·radio 채우기는 칸을 실제로 누르므로 클릭처럼 감싼 링크와 ping 주소의 사이트 경계도 본다.
             info.ancestorHref ?? "",
             ...(info.pingUrls ?? []),
+            // 값을 바꾸거나 누르면 일으킬 htmx GET 요청의 목적지.
+            ...(info.requestUrls ?? []),
           ])
           .filter(Boolean),
         fillValues: args.fills.map((f) => f.value),
@@ -295,6 +297,8 @@ export async function buildToolPreview(
             ...(t.choiceUrls ?? []),
             ...(t.scopeSubmitUrls ?? []),
             ...(t.pingUrls ?? []),
+            // 누르면 일으킬 htmx GET 요청의 목적지.
+            ...(t.requestUrls ?? []),
           ])
           .filter(Boolean),
       };

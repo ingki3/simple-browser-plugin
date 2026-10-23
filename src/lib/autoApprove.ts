@@ -53,6 +53,8 @@ export function destructiveClickBlock(targets: TargetInfo[]): string | null {
       t.submitTo ?? "",
       ...(t.pingUrls ?? []),
       ...(t.choiceUrls ?? []),
+      // 클릭·입력이 일으킬 htmx GET 요청의 목적지.
+      ...(t.requestUrls ?? []),
     ]) {
       if (url && destructiveRoute(url)) return DESTRUCTIVE_REASON;
     }
@@ -134,6 +136,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
         ...(t.scopeSubmitUrls ?? []),
         ...(t.scopeFormActions ?? []),
         ...(t.aroundFormActions ?? []),
+        // 값을 바꾸거나 누르면 일으킬 htmx GET 요청의 목적지.
+        ...(t.requestUrls ?? []),
       ]) {
         const why = url ? sensitiveUrlReason(url) : null;
         if (why) return `${why}로 이어지는 칸 입력`;
@@ -170,6 +174,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
         ...(t.aroundFormActions ?? []),
         // 링크의 ping 주소(쿠키를 실은 POST)도 결제·개인정보 주소인지 본다.
         ...(t.pingUrls ?? []),
+        // 누르면 일으킬 htmx GET 요청의 목적지(hx-get hx-trigger="click").
+        ...(t.requestUrls ?? []),
       ]) {
         const why = href ? sensitiveUrlReason(href) : null;
         if (why) return `${why}로 가는 링크`;
@@ -465,6 +471,8 @@ export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boole
   // 버튼·버튼 역할·인라인 클릭 처리기 안의 링크는 바깥 처리기가 이동을 취소하고 다른 동작(결제)을 할 수 있다.
   if (t.insideControl) return false;
   if (t.choiceUrls?.length || t.scopeSubmitUrls?.length) return false;
+  // 누르면 htmx 요청도 보내는 링크는 이동만 하는 링크가 아니다.
+  if (t.requestUrls?.length) return false;
   // 같은 문서 안 위치만 바꾸는 링크(#…)는 이동하지 않고 페이지 처리기만 부르는 경우가 많다.
   if (pageUrl) {
     try {
