@@ -329,10 +329,6 @@ function requestSignals(
       if (v && words(v)) out.del = true;
     }
   }
-  if (htmxOnPath) {
-    checkFormMethod(form);
-    for (const node of nodes) checkOverrides(node);
-  }
   // 페이지의 모든 from: 리스너(어느 이벤트를 듣는지 해석하지 않는다): hx-get 요청 요소이고, 그 요소와 조상의 htmx 속성이
   // 모두 허용 목록 안이어야 한다(hx-boost 양식처럼 hx-get이 없는 리스너는 메서드를 확인할 수 없어 묻는다).
   // 접근 가능한 모든 루트(문서·열린 shadow root·같은 출처 iframe 문서 — getAccessibleRoots)에서 찾는다. 닫힌 shadow root와
@@ -354,6 +350,12 @@ function requestSignals(
       checkGet(r);
       if (isTag(r, "form")) checkFormMethod(r as HTMLFormElement);
     }
+  }
+  // 경로에 htmx가 있거나 페이지에 from: 리스너가 있으면(경로 밖 요청도 htmx가 포커스로 추적한 이 버튼의 formmethod·
+  // name=value를 쓸 수 있다 — form 속성이 양식 아닌 요소를 가리키는 연결 포함) 경로의 제출 덮어쓰기를 본다.
+  if (htmxOnPath || seenListeners > 0) {
+    checkFormMethod(form);
+    for (const node of nodes) checkOverrides(node);
   }
   return out;
 }
