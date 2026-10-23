@@ -200,6 +200,9 @@ export async function queryContent<T>(tabId: number, msg: BgToContent, timeoutMs
     timeoutMs,
     label,
   )) as ContentResponse<T>;
-  if (!res?.ok) throw new Error(res?.error ?? `${label} 실패`);
+  if (!res?.ok) {
+    if (res?.diag) debugLog("content:diag", `${label} · ${res.diag}`, "warn");
+    throw new Error(res?.error ?? `${label} 실패`);
+  }
   return res.data as T;
 }
