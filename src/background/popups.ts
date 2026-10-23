@@ -178,6 +178,11 @@ export function watchNewTabs(tabId: number): { stop(): CreatedTab[] } {
   };
 }
 
+// 따라가지 않은 후보와 그 이유(디버그 로그). 주소·창 이름·features·페이지 글자는 싣지 않고 탭 id와 고정 문구만 남긴다.
+function skipLog(tabId: number, why: string): void {
+  debugLog("popup:skip", `tab ${tabId} · ${why}`);
+}
+
 // 클릭이 끝난 뒤: 막힌 window.open과 열린 팝업 창을 정리하고, 열린 팝업 창(첫 번째)은 따라간다.
 // pageUrl은 클릭한 페이지 주소(다른 사이트 창인지 알리는 데만 쓴다 — 승인 판정은 openrouter가 지금 창 주소로 한다).
 export async function settlePopups(
@@ -195,8 +200,14 @@ export async function settlePopups(
   if (blocked.length) effect.blocked = { count: blocked.length, where: popupWhere(blocked[0].url) };
   // 다시 쓴 이름 있는 창: 이 클릭의 window.open이 창을 돌려줬고 주소가 같으며, 우리 클릭으로 열린 적 있는 이 탭의
   // 팝업이거나 opener가 클릭한 탭인 것만(사용자가 따로 연 창은 아니다). 창 종류 popup·깊이 한도는 아래에서 같게 본다.
+  const navigated = created.filter((t) => t.reused);
+  const matched = reusedTargets(opens, navigated);
+  // 클릭 동안 다른 탭에서 시작된 이동 중 이 클릭의 window.open 주소와 짝지어지지 않은 것(대개 무관한 탭)은 수만 남긴다.
+  if (navigated.length > matched.length) {
+    debugLog("popup:skip", `다른 탭 이동 ${navigated.length - matched.length}개 — 이 클릭의 window.open 주소와 다름`);
+  }
   const reused: CreatedTab[] = [];
-  for (const n of reusedTargets(opens, created.filter((t) => t.reused))) {
+  for (const n of matched) {
     let openerOk = isKnownPopup(turnTab, n.tabId);
     if (!openerOk) {
       try {
@@ -206,13 +217,17 @@ export async function settlePopups(
       }
     }
     if (openerOk) reused.push(n);
+    else skipLog(n.tabId, "다시 쓴 창 후보 — 이 탭의 팝업도, 이 탭이 연 창도 아님");
   }
-  for (const t of [...fresh, ...reused]) {
+  const candidates = [...fresh, ...reused];
+  for (let i = 0; i < candidates.length; i++) {
+    const t = candidates[i];
     let tab: chrome.tabs.Tab | null = null;
     try {
       tab = await chrome.tabs.get(t.tabId);
     } catch {
       // 열렸다가 바로 닫힌 창
+      skipLog(t.tabId, "탭이 이미 닫힘");
       continue;
     }
     let win: chrome.windows.Window | null = null;
@@ -221,12 +236,16 @@ export async function settlePopups(
     } catch {
       win = null;
     }
-    if (win?.type !== "popup") continue;
+    if (win?.type !== "popup") {
+      skipLog(t.tabId, win ? `창 종류 ${win.type}${t.reused ? " (다시 쓴 창)" : ""}` : "창을 조회하지 못함");
+      continue;
+    }
     // 열린 직후는 about:blank에서 시작해 이동 중일 수 있다. 가려는 주소(pendingUrl)를 먼저 본다.
     const url = t.reused ? t.url : tab.pendingUrl || tab.url || t.url;
     const followed = await followPopup(turnTab, { tabId: t.tabId, windowId: tab.windowId });
     effect.opened = { where: popupWhere(url), followed, otherSite: /^https?:/i.test(url) && !sameSiteAs(pageUrl, url) };
-    debugLog("popup:opened", `tab ${t.tabId}${t.reused ? " (다시 쓴 창)" : ""}${followed ? " (따라감)" : ""}`);
+    debugLog("popup:opened", `tab ${t.tabId}${t.reused ? " (다시 쓴 창)" : ""}${followed ? " (따라감)" : " (따라가지 않음 — 깊이 한도 또는 이미 따라가는 창)"}`);
+    if (i + 1 < candidates.length) debugLog("popup:skip", `첫 팝업 창 뒤 남은 후보 ${candidates.length - i - 1}개는 보지 않음`);
     break;
   }
   return effect.blocked || effect.opened ? effect : null;
