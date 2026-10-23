@@ -43,7 +43,8 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
   - 가입·신청·제출·인증 버튼
   - 되돌리기 어려운 동작(삭제·스팸)(#62) — 클릭·입력·이동 모두:
     - 구조 선언: `data-method`·`data-turbo-method="delete"`, `hx-delete`, 양식 칸·누른 제출 버튼의 `_method=DELETE`(대상·조상·양식·label이 작동시키는 컨트롤, 입력 칸 자신 포함)
-    - 실제로 실릴 값: 누른 제출 버튼의 name=value(`<button name="action" value="delete">확인</button>`), 클릭·입력으로 바뀌는 checkbox·radio 자신의 name=value, 양식의 숨은 칸(type=hidden)의 name=value, htmx 요청 주소(hx-get·hx-post 등)의 경로 낱말. 누르지 않은 다른 제출 버튼의 값과 사용자가 입력하는 칸의 값(검색어 등)은 보지 않음
+    - 실제로 실릴 값: 누른 제출 버튼의 name=value(`<button name="action" value="delete">확인</button>`), 클릭·입력으로 바뀌는 checkbox·radio 자신의 name=value, 양식을 제출하면 실릴 선택 컨트롤(숨은 칸, 이미 체크된 checkbox·radio, select의 선택된 option의 value·글자)의 name=value(입력은 쓰기 전 상태로 판정). 누르지 않은 다른 제출 버튼의 값과 사용자가 치는 글자 칸·textarea의 값(검색어 등)은 보지 않음
+    - 이벤트가 지나가는 노드: 대상·연결 컨트롤·제출자·양식(form 속성으로 연결한 바깥 버튼의 submit은 양식에서 시작)에서 문서 끝까지 올라가는 경로의 htmx 요청 주소(hx-get·hx-post 등, 빈 값은 지금 문서 주소)·hx-delete·요청에 더하는 값(hx-vals·data-params). 경로 밖에서 `hx-trigger="… from:…"`으로 듣는 htmx 요소도 그 선택자가 경로의 노드에 맞으면 봄(document·window·closest 같은 확장 문법과 풀 수 없는 선택자는 듣는 것으로 봄). 경로가 1만 단계를 넘거나 from: 요소가 200개를 넘거나 양식 칸이 5000개를 넘거나 주소로 풀리지 않는 값이면 모르는 것으로 보고 물음
     - 글자: 버튼 자신과 실제로 작동하는 바깥 버튼·링크(입력 칸은 라벨)의 글자·aria-label·title·alt에 삭제·지우기·제거·휴지통·스팸·차단·영구·비우기·탈퇴·delete·remove·trash·spam·junk·discard·erase·purge·block 등(아이콘 버튼은 aria-label·title로). select는 고를 선택지의 글자·value에 같은 단서가 있으면 물음(다른 선택지를 고르면 묻지 않음)
     - 주소: 링크·감싼 링크·양식 제출 주소(action·formaction)·ping·선택지 주소와 `navigate_to_url`의 이동 주소의 경로·쿼리 낱말
     - 선택지(메뉴 항목)는 펼친 트리거에도 적용. 행 문맥(메일 제목 등)은 보지 않아 제목에 '삭제'가 든 메일 행의 체크박스·열기 버튼은 그대로 자동 실행됨(그 행의 링크 글자 자체가 제목이면 물음). 범위 안 다른 양식·누르지 않은 제출 버튼의 주소는 보지 않음(목록 양식의 '삭제' 버튼 하나로 화면의 모든 체크가 걸리지 않게 — 처리기가 다른 양식을 대신 제출하는 삭제는 놓침)

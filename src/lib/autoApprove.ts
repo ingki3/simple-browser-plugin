@@ -82,7 +82,9 @@ export function destructiveRoute(url: string): boolean {
   try {
     u = new URL(normalizeUrlText(url));
   } catch {
-    return false;
+    // 주소로 풀리지 않으면 글자 그대로 낱말을 본다(모르는 값을 통과시키지 않게).
+    const raw = decodeDeepText(url);
+    return DESTRUCTIVE_TEXT_RE.test(raw) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(raw).replace(/[/?#&=+]+/g, " "));
   }
   const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join(" ");
   return DESTRUCTIVE_TEXT_RE.test(route) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(route).replace(/[/?#&=+]+/g, " "));

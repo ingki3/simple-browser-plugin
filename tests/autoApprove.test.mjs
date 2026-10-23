@@ -426,6 +426,13 @@ test("#62: 실릴 값(누른 제출 버튼·숨은 칸·htmx 주소)의 삭제 �
   );
 });
 
+test("#62: 주소로 풀리지 않는 값도 글자 그대로 삭제 낱말을 본다", async () => {
+  const { destructiveRoute } = await import("../src/lib/autoApprove.ts");
+  assert.equal(destructiveRoute("http://[bad/messages/delete"), true);
+  assert.equal(destructiveRoute("http://[bad/messages/archive"), false);
+  assert.equal(destructiveRoute("https://mail.example/messages/archive"), false);
+});
+
 test("#62: select에서 삭제 선택지를 고르면 묻고, 다른 선택지·글자 칸 값은 묻지 않는다", async () => {
   const { destructiveFillBlock } = await import("../src/lib/autoApprove.ts");
   const R = "되돌리기 어려운 동작(삭제·스팸)";
