@@ -804,7 +804,11 @@ async function runTool(
       const fromTabPopup = followingTabPopup(turnTab);
       const leftPopup = stopFollowingPopups(turnTab);
       markOptimisticNavigation(tabId);
-      await chrome.tabs.update(tabId, fromTabPopup ? { url, active: true } : { url });
+      const moved = await chrome.tabs.update(tabId, fromTabPopup ? { url, active: true } : { url });
+      // 탭 팝업 위에 팝업 창이 떠 있었으면 그 창이 포커스를 갖고 있다. 원래 탭의 창도 앞으로 가져온다.
+      if (fromTabPopup && moved?.windowId !== undefined) {
+        await chrome.windows.update(moved.windowId, { focused: true }).catch(() => {});
+      }
       const note = fromTabPopup
         ? "팝업으로 열린 탭 따라가기를 멈추고 원래 탭을 앞으로 띄워 이동했습니다(팝업 탭은 열린 채로 둡니다). 이제 도구는 원래 탭에서 동작합니다."
         : "팝업 창 따라가기를 멈추고 원래 탭을 이동했습니다. 이제 도구는 원래 탭에서 동작합니다.";
