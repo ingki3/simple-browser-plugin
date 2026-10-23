@@ -82,9 +82,17 @@ async function injectContentScript(tabId: number): Promise<void> {
   });
 }
 
+// 확장을 다시 불러오기 전에 열려 있던 탭처럼 content script가 없는 문서 하나에만 주입한다. documentIds로 대상을 고정해
+// 그 사이 탭이 다른 문서로 바뀌었으면 주입이 실패한다(다른 탭 읽기에서 고른 문서 밖으로 새지 않게).
+export async function injectContentScriptInDocument(tabId: number, documentId: string): Promise<void> {
+  const files = getContentScriptFiles();
+  if (!files.length) throw new Error("manifest에 content script가 선언되지 않았습니다.");
+  await chrome.scripting.executeScript({ target: { tabId, documentIds: [documentId] }, files });
+}
+
 // 주입한 content script는 로더가 본체 모듈을 동적 import한 뒤에야 리스너를 등록한다.
 // 그 전에 보낸 메시지는 "Receiving end does not exist"로 실패하므로 잠깐씩 기다리며 재시도.
-const INJECT_READY_DELAYS_MS = [50, 100, 200, 400, 800, 1500];
+export const INJECT_READY_DELAYS_MS = [50, 100, 200, 400, 800, 1500];
 
 export function isMissingReceiver(err: unknown): boolean {
   return (

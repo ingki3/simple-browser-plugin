@@ -1,5 +1,10 @@
 import type { ContentResponse } from "@/lib/messages";
-import type { TurnTab } from "./tools/handlers";
+import {
+  INJECT_READY_DELAYS_MS,
+  injectContentScriptInDocument,
+  isMissingReceiver,
+  type TurnTab,
+} from "./tools/handlers";
 import { debugLog } from "./debug";
 
 // 다른 탭 참조(read_other_tabs). 탭 목록은 모델에 보내지 않는다: 승인 카드를 띄우기 전에 같은 창의 후보를
@@ -141,10 +146,7 @@ export async function readChosenTabs(callId: string, turnTab: TurnTab, signal?: 
       continue;
     }
     try {
-      const res = (await Promise.race([
-        chrome.tabs.sendMessage(snap.tabId, { kind: "read_page_text", expectUrl: snap.url }, { documentId: snap.documentId }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("응답 시간 초과")), READ_TIMEOUT_MS)),
-      ])) as ContentResponse<{ url: string; title: string; mainText: string }>;
+      const res = await readTabText(snap.tabId, snap.documentId, snap.url, signal);
       if (signal?.aborted) throw new Error("사용자가 중단했습니다.");
       if (!res?.ok || !res.data) {
         out.push({ ...base, error: res?.error ?? "본문을 읽지 못했습니다." });
@@ -162,9 +164,41 @@ export async function readChosenTabs(callId: string, turnTab: TurnTab, signal?: 
       if (signal?.aborted) throw new Error("사용자가 중단했습니다.");
       const msg = err instanceof Error ? err.message : String(err);
       debugLog("other_tabs:read_fail", msg, "warn");
-      // 수신자가 없어도 다시 주입하지 않는다(그 사이 문서가 바뀌었을 수 있다).
       out.push({ ...base, error: "이 탭의 내용을 읽지 못했습니다. 탭을 새로고침한 뒤 다시 요청해 주세요." });
     }
   }
   return out;
+}
+
+type PageText = ContentResponse<{ url: string; title: string; mainText: string }>;
+
+// 고른 문서(documentId)에 본문 읽기를 보낸다. 확장을 다시 불러오기 전에 열려 있던 탭에는 content script가 없어
+// "Receiving end does not exist"로 실패하므로, 그 문서에만 주입(documentIds로 고정 — 그 사이 문서가 바뀌었으면 주입이
+// 실패한다)한 뒤 잠깐씩 기다리며 다시 보낸다.
+async function readTabText(tabId: number, documentId: string, url: string, signal?: AbortSignal): Promise<PageText> {
+  const send = () =>
+    Promise.race([
+      chrome.tabs.sendMessage(tabId, { kind: "read_page_text", expectUrl: url }, { documentId }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("응답 시간 초과")), READ_TIMEOUT_MS)),
+    ]) as Promise<PageText>;
+  try {
+    return await send();
+  } catch (err) {
+    if (!isMissingReceiver(err)) throw err;
+  }
+  if (signal?.aborted) throw new Error("사용자가 중단했습니다.");
+  debugLog("other_tabs:inject_retry", String(tabId), "warn");
+  await injectContentScriptInDocument(tabId, documentId);
+  let lastErr: unknown = null;
+  for (const delay of INJECT_READY_DELAYS_MS) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (signal?.aborted) throw new Error("사용자가 중단했습니다.");
+    try {
+      return await send();
+    } catch (err) {
+      lastErr = err;
+      if (!isMissingReceiver(err)) throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
