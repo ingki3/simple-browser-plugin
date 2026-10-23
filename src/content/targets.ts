@@ -883,7 +883,8 @@ function pinnedRowOf(el: HTMLElement): PinnedRow | null {
   }
   // 칸에서 행까지 사이에 새 행 경계가 생겼으면(기존 조상에 role=row를 붙이고 글자를 그 안으로 옮김) 다른 대상이다.
   const fresh = rowElement(el)?.row;
-  if (fresh && fresh !== row && row.contains(fresh)) return null;
+  // shadow root 경계를 넘는 경우도 잡도록 contains가 아니라 이미 구한 조상 사슬로 본다.
+  if (fresh && fresh !== row && now.includes(fresh)) return null;
   return { row, exclude: pinned.combo ? newPopupLists(el, row, kept) : [] };
 }
 
