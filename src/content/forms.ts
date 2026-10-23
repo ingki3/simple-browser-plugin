@@ -198,45 +198,58 @@ function isSubmitter(c: Element): boolean {
 }
 
 const HX_URL_ATTRS = ["get", "post", "put", "patch", "delete"].flatMap((v) => [`hx-${v}`, `data-hx-${v}`]);
-// 요청에 값·헤더를 더하는 속성(htmx의 hx-vals·hx-headers, rails-ujs의 data-params). 글자에 삭제 단서가 있으면 묻는다
-// ({"_method":"DELETE"}, {"X-HTTP-Method-Override":"DELETE"}). 값을 스크립트로 만드는 것(js:·javascript: 접두,
-// hx-vars)은 무엇이 실릴지 모르므로 묻는다. hx-params(실릴 칸 거르기)·hx-request(시간 제한·자격 증명 등 요청 설정)는
-// 값이나 메서드를 더하지 않아 보지 않는다.
-const EXTRA_VALUE_ATTRS = ["hx-vals", "data-hx-vals", "hx-headers", "data-hx-headers", "data-params"];
-const SCRIPTED_VALUE_ATTRS = ["hx-vars", "data-hx-vars"];
-// 다른 칸의 값을 요청에 싣는 속성(htmx의 hx-include). 조상에 달린 것도 상속되어 쓰인다(경로의 노드를 모두 본다).
-const INCLUDE_ATTRS = ["hx-include", "data-hx-include"];
-const MAX_INCLUDED = 500;
+// htmx 요청을 바꾸는 속성(다른 칸·값·헤더를 싣거나, 실을 칸을 거르거나, 확장·처리기로 요청을 고친다). 의미를 흉내 내
+// 해석하지 않고, 요청 요소와 그 조상 어디에든 하나라도 있으면 "요청 내용을 확인할 수 없음"으로 늘 묻는다(fail-closed).
+const HX_MODIFIER_NAMES = ["include", "headers", "vals", "vars", "params", "ext", "request"];
+function hasRequestModifier(node: Element): boolean {
+  for (const attr of Array.from(node.attributes)) {
+    const name = attr.name.toLowerCase().replace(/^data-/, "");
+    if (!name.startsWith("hx-")) continue;
+    const rest = name.slice(3);
+    // hx-on:…·hx-on-…·hx-on::… 처리기는 htmx:configRequest에서 메서드·값을 바꿀 수 있다.
+    if (HX_MODIFIER_NAMES.includes(rest) || rest.startsWith("on")) return true;
+  }
+  return false;
+}
+// 요청에 값을 더하는 rails-ujs 속성. 글자에 삭제 단서가 있으면 묻는다.
+const EXTRA_VALUE_ATTRS = ["data-params"];
 // 다른 요소의 이벤트로 요청하는 htmx 요소(hx-trigger="click from:#btn"). 이벤트 경로 밖에 있어 문서에서 따로 찾는다.
 const HX_FROM_SELECTOR = '[hx-trigger*="from:" i], [data-hx-trigger*="from:" i]';
 const MAX_HX_FROM = 200;
 
-// 이벤트가 지나가는 노드들의 htmx 요청 주소(절대 주소로)와 요청에 더하는 값의 글자.
-// 시작점(starts): 대상, label이 작동시키는 컨트롤 등 실제로 이벤트를 받는 컨트롤, 그 양식(외부 버튼이 form 속성으로
+// 이벤트가 지나가는 노드들과 from: 리스너(경로 밖 요청 요소)의 htmx 요청 주소(절대 주소로)와 요청에 더하는 값의 글자.
+// 시작점(starts): 대상, label이 작동시키는 컨트롤 등 실제로 이벤트를 받는 컨트롤, 제출자, 그 양식(외부 버튼이 form 속성으로
 // 제출해도 submit 이벤트는 양식에서 시작해 양식의 조상으로 올라간다). 시작점마다 경로를 문서 끝까지 본다.
-// 'from:' 트리거를 단 htmx 요소는 경로와 관계없이 문서(대상이 든 문서)에서 모두 본다.
-// 모르면 null(호출한 쪽이 묻는 쪽으로 다룬다): 비정상적으로 깊은 경로, 너무 많은 from: 요소, 주소로 풀리지 않는 값.
+// from: 리스너는 그 요소와 조상 전체를 더한다(조상에서 상속되는 속성).
+// htmx로 자동 실행되는 것은 요청 요소와 조상 어디에도 요청 변형 속성(hasRequestModifier)이 없고, 요청 주소·메서드(hx-delete)·
+// 실릴 양식 값에 삭제 단서가 없는 경우뿐이다.
+// 모르면 null(호출한 쪽이 묻는 쪽으로 다룬다): 비정상적으로 깊은 경로, 너무 많은 from: 요소, 주소로 풀리지 않는 값,
+// htmx 요청이 있는데 요청 변형 속성이 있음.
 const MAX_EVENT_PATH = 10_000;
 function requestSignalsOf(starts: Array<Element | null>): { urls: string[]; values: string[] } | null {
   const nodes = new Set<Element>();
-  for (const start of starts) {
+  // 시작점에서 문서 끝까지(조상 전체). 깊이를 넘으면 false.
+  const addChain = (start: Element | null): boolean => {
     let n = 0;
     for (let cur: Element | null = start; cur; cur = eventParent(cur)) {
-      if (++n > MAX_EVENT_PATH) return null;
+      if (++n > MAX_EVENT_PATH) return false;
       if (nodes.has(cur)) break;
       nodes.add(cur);
     }
-  }
+    return true;
+  };
+  for (const start of starts) if (!addChain(start)) return null;
   const path = [...nodes];
   const docs = new Set<Document>();
   for (const start of starts) if (start) docs.add(start.ownerDocument);
   for (const doc of docs) {
     const remote = doc.querySelectorAll(HX_FROM_SELECTOR);
     if (remote.length > MAX_HX_FROM) return null;
-    for (const r of Array.from(remote)) if (listensOnPath(r, path)) nodes.add(r);
+    for (const r of Array.from(remote)) if (listensOnPath(r, path) && !addChain(r)) return null;
   }
   const urls: string[] = [];
   const values: string[] = [];
+  let modified = false;
   for (const node of nodes) {
     for (const attr of HX_URL_ATTRS) {
       // 속성이 없을 때만 건너뛴다. 빈 값(hx-post="")은 htmx가 지금 문서 주소로 요청하므로 그 주소로 본다.
@@ -250,96 +263,17 @@ function requestSignalsOf(starts: Array<Element | null>): { urls: string[]; valu
     }
     // 'from:' 요소의 hx-delete는 경로 밖이라 declaresDelete가 보지 못한다. 선언 자체를 삭제 단서로 넣는다.
     if (node.hasAttribute("hx-delete") || node.hasAttribute("data-hx-delete")) values.push("delete");
-    if (SCRIPTED_VALUE_ATTRS.some((a) => node.hasAttribute(a))) return null;
+    if (hasRequestModifier(node)) modified = true;
     for (const attr of EXTRA_VALUE_ATTRS) {
       const v = node.getAttribute(attr);
-      if (!v) continue;
-      if (/^\s*(js|javascript)\s*:/i.test(v)) return null;
-      values.push(v);
-    }
-    for (const attr of INCLUDE_ATTRS) {
-      const spec = node.getAttribute(attr);
-      if (spec === null) continue;
-      const included = includedTexts(node, spec);
-      if (included === null) return null;
-      values.push(...included);
+      if (v) values.push(v);
     }
   }
+  // htmx 요청(요청 주소 속성, 또는 링크·양식을 htmx 요청으로 바꾸는 hx-boost)이 있는데 요청을 바꾸는 속성도 있으면 모른다.
+  const htmxRequest =
+    urls.length > 0 || Array.from(nodes).some((n) => n.hasAttribute("hx-boost") || n.hasAttribute("data-hx-boost"));
+  if (htmxRequest && modified) return null;
   return { urls, values };
-}
-
-// hx-include가 가리키는 요소들(htmx 확장 문법: this, closest·find·next·previous <선택자>, next·previous만, inherit).
-// 선택자는 그 속성을 단 요소 기준으로 푼다. 풀 수 없거나 MAX_INCLUDED를 넘으면 null(모름 — 묻는다).
-// 쉼표로 나눠 보므로 :is(a, b)처럼 괄호 안 쉼표가 든 선택자는 풀지 못해 묻는다.
-function includeTargets(node: Element, spec: string): Element[] | null {
-  const out: Element[] = [];
-  const doc = node.ownerDocument;
-  try {
-    for (const raw of spec.split(",")) {
-      const part = raw.trim();
-      if (!part || /^inherit$/i.test(part)) continue;
-      if (/^this$/i.test(part)) {
-        out.push(node);
-        continue;
-      }
-      const m = /^(closest|find|next|previous)(?:\s+([\s\S]*))?$/i.exec(part);
-      if (!m) {
-        const all = doc.querySelectorAll(part);
-        if (all.length > MAX_INCLUDED) return null;
-        out.push(...Array.from(all));
-      } else {
-        const kw = m[1].toLowerCase();
-        const sel = (m[2] ?? "").trim();
-        if (kw === "closest" || kw === "find") {
-          if (!sel) return null;
-          const hit = kw === "closest" ? closestAcross(node, sel) : node.querySelector(sel);
-          if (hit) out.push(hit);
-        } else if (!sel) {
-          const sib = kw === "next" ? node.nextElementSibling : node.previousElementSibling;
-          if (sib) out.push(sib);
-        } else {
-          const all = Array.from(doc.querySelectorAll(sel));
-          if (all.length > MAX_INCLUDED) return null;
-          const hit =
-            kw === "next"
-              ? all.find((e) => node.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)
-              : all.reverse().find((e) => node.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_PRECEDING);
-          if (hit) out.push(hit);
-        }
-      }
-      if (out.length > MAX_INCLUDED) return null;
-    }
-  } catch {
-    return null;
-  }
-  return out;
-}
-
-// hx-include로 실릴 칸들의 name=value 글자(양식이면 그 양식에 실릴 칸, 칸이 아닌 요소면 그 안의 칸).
-// 실릴 값의 규칙은 submittedText와 같다(사용자가 치는 글자 칸의 값은 보지 않는다).
-function includedTexts(node: Element, spec: string): string[] | null {
-  const targets = includeTargets(node, spec);
-  if (targets === null) return null;
-  const out: string[] = [];
-  let seen = 0;
-  for (const t of targets) {
-    if (isTag(t, "form")) {
-      const texts = submittedChoiceTexts(t as HTMLFormElement);
-      if (texts === null) return null;
-      out.push(...texts);
-      continue;
-    }
-    const controls = /^(input|select|textarea|button)$/.test(t.localName)
-      ? [t]
-      : Array.from(t.querySelectorAll("input, select, textarea"));
-    seen += controls.length;
-    if (seen > MAX_FORM_CONTROLS) return null;
-    for (const c of controls) {
-      const text = submittedText(c);
-      if (text !== null) out.push(text);
-    }
-  }
-  return out;
 }
 
 // 'from:' 트리거가 이벤트 경로의 노드에서 듣는지. from:document·from:window, 확장 문법(closest·find·next·previous),
@@ -368,13 +302,13 @@ const MAX_FORM_CONTROLS = 5000;
 // 양식을 제출하면 실제로 실릴 선택 컨트롤의 name=value 글자. 누른 제출 버튼은 submitter로만 넣는다(다른 제출 버튼 값은
 // 실리지 않는다). 숨은 칸, 체크된 checkbox·radio, select의 선택된 option(value와 보이는 글자)을 넣고, 사용자가 치는
 // 글자 칸·textarea의 값은 넣지 않는다. 비활성 칸은 실리지 않는다. 칸이 너무 많으면 null(모름 — 묻는다).
-// skip: 판정에서 뺄 칸(입력 도구가 승인받은 삭제 선택지를 쓴 그 칸 — 재검사의 예상된 변화, targets.ts riskAdded).
-function submittedChoiceTexts(form: HTMLFormElement, skip: Element | null = null): string[] | null {
+// skip: 판정에서 뺄 칸들(입력 묶음이 승인받은 삭제 선택지를 쓴 칸 — 재검사의 예상된 변화, targets.ts riskAdded).
+function submittedChoiceTexts(form: HTMLFormElement, skip: ReadonlySet<Element> = new Set()): string[] | null {
   const controls = formElements(form);
   if (controls.length > MAX_FORM_CONTROLS) return null;
   const out: string[] = [];
   for (const c of controls) {
-    if (c === skip || isSubmitter(c)) continue;
+    if (skip.has(c) || isSubmitter(c)) continue;
     const text = submittedText(c);
     if (text !== null) out.push(text);
   }
@@ -405,16 +339,16 @@ function submittedText(c: Element): string | null {
 //   (<select name="action"><option value="delete" selected>정리</option></select> + 평범한 '확인' 버튼).
 //   사용자가 입력하는 글자 칸의 값은 보지 않는다(검색어 '스팸'으로 검색 버튼이 걸리지 않게). 결과는 참·거짓만 남기고
 //   값 자체는 어디에도 보내지 않는다.
-// - 이벤트가 지나가는 노드의 htmx 요청 주소(hx-get·hx-post·hx-put·hx-patch, data-hx-*)의 경로 낱말과 요청에 더하는 값
-//   (hx-vals·data-params). 시작점은 대상·연결 컨트롤·양식.
-// skip: 양식에 실릴 값 판정에서 뺄 칸(FIELD_KIND.expectedDeleteChoice). htmx 신호는 skip과 관계없이 그대로 본다
-// (그 칸을 hx-include하는 요청은 승인한 선택으로 생긴 것이라도 묻는다 — 더 묻는 쪽).
+// - 이벤트가 지나가는 노드와 from: 리스너의 htmx 요청 주소(hx-get·hx-post·hx-put·hx-patch, data-hx-*)의 경로 낱말,
+//   hx-delete, rails-ujs data-params의 글자. 요청 요소와 조상에 요청 변형 속성(hx-include·hx-headers·hx-vals 등)이 있으면
+//   해석하지 않고 묻는다(requestSignalsOf). 시작점은 대상·연결 컨트롤·제출자·양식.
+// skip: 양식에 실릴 값 판정에서 뺄 칸들(FIELD_KIND.deleteParamExplained). htmx 신호는 skip과 관계없이 그대로 본다.
 export function deleteParamOf(
   el: Element,
   submitter: Element | null,
   controls: Array<Element | null>,
   form: HTMLFormElement | null,
-  skip: Element | null = null,
+  skip: ReadonlySet<Element> = new Set(),
 ): boolean {
   const words = (text: string) => DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text));
   const pair = (c: Element) => `${c.getAttribute("name") ?? ""} ${(c as HTMLInputElement).value ?? c.getAttribute("value") ?? ""}`;
@@ -941,15 +875,21 @@ const FIELD_KIND: TargetKind = {
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다). 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
   risk: (el) => labelRisk(el, fieldRisk(el)),
-  // 승인 카드로 물은 삭제 선택지(consentDeleteChoice)를 이 칸에 쓴 것만으로 생긴 deleteParam인지(#62):
-  // 지금 선택된 선택지의 보이는 글자가 승인한 글자와 같고, 이 칸을 뺀 나머지로는 deleteParam이 생기지 않아야 한다.
-  expectedDeleteChoice: (el, label) => {
-    if (!isTag(el, "select")) return false;
-    const sel = el as HTMLSelectElement;
-    const picked = Array.from(sel.selectedOptions);
-    if (picked.length !== 1 || optionLabel(picked[0]).replace(/\s+/g, " ").trim() !== label) return false;
-    const form = sel.form ?? (el.closest("form") as HTMLFormElement | null);
-    return !deleteParamOf(el, null, [el], form, el);
+  // 이 칸의 deleteParam이 입력 묶음이 승인받은 삭제 선택지들(choices: 칸 → 선택지 글자)만으로 설명되는지(#62).
+  // 지금 그 선택지가 그대로 선택된 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
+  deleteParamExplained: (el, choices) => {
+    const skip = new Set<Element>();
+    for (const [c, label] of choices) {
+      if (!c.isConnected || !isTag(c, "select")) continue;
+      const picked = Array.from((c as HTMLSelectElement).selectedOptions);
+      if (picked.length === 1 && optionLabel(picked[0]).replace(/\s+/g, " ").trim() === label) skip.add(c);
+    }
+    if (!skip.size) return false;
+    const form = isFieldElement(el) ? (el.form ?? (el.closest("form") as HTMLFormElement | null)) : null;
+    if (deleteParamOf(el, null, [el], form, skip)) return false;
+    // 보이는 label로 바꾸는 칸은 그 label 쪽 신호도 같은 기준으로 본다(labelRisk).
+    const label = proxied(el) ? proxyLabel(el) : null;
+    return !label || !deleteParamOf(label, null, [], closestAcross(label, "form") as HTMLFormElement | null, skip);
   },
 };
 

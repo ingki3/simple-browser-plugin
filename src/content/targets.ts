@@ -33,8 +33,8 @@ export interface TargetKind {
   // 숨긴 칸을 보이는 대리 요소(연결된 label)로 바꾸면 그 label의 표시 이름, 아니면 null(#56).
   // 기술의 proxy·proxyLabel로 고정하고 승인 카드에 보여 준다.
   proxyLabelName?(el: HTMLElement): string | null;
-  // 입력 칸: 승인 카드로 물은 삭제 선택지(label)를 쓴 것만으로 생긴 deleteParam인지(재검사의 예상된 변화, #62).
-  expectedDeleteChoice?(el: HTMLElement, label: string): boolean;
+  // 입력 칸: deleteParam이 입력 묶음이 승인받은 삭제 선택지들(칸 → 선택지 글자)만으로 설명되는지(재검사의 예상된 변화, #62).
+  deleteParamExplained?(el: HTMLElement, choices: ReadonlyMap<Element, string>): boolean;
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
@@ -550,6 +550,8 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 // 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
 // 승인 당시 값이 채워져 있던 개인정보·비밀 칸과 그때의 값. 실행 직전에 값이 바뀌었으면(이 호출이 쓴 값이 아니면) 멈춘다.
 const consentAllowed = new Map<string, Map<Element, string>>();
+// 입력 묶음이 승인 카드로 물은 삭제 선택지(칸 → 선택지 글자, #62). 호출(callId)마다.
+const consentDeleteChoices = new Map<string, Map<Element, string>>();
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
@@ -569,13 +571,23 @@ export function noteWritten(callId: string, el: Element, value: string): void {
 
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
 export function inspectTargets(ids: string[], callId: string, prefix: string, values?: string[]): TargetInfo[] {
-  // 삭제 선택지(deleteChoices)를 고르는 입력은 늘 카드로 묻는다(#62). 그 선택지 글자를 승인 기술에 남겨, 그 값을 쓴 것만으로
-  // 생기는 deleteParam을 재검사가 예상된 변화로 구분하게 한다(riskAdded).
-  const infos = ids.map((id, i) => {
-    const info = inspectTarget(id, callId, prefix);
+  const infos = ids.map((id) => inspectTarget(id, callId, prefix));
+  // 삭제 선택지(deleteChoices)를 고르는 입력은 늘 카드로 묻는다(#62). 이번 호출이 쓸 (칸, 선택지 글자) 쌍을 묶음 단위로 남겨,
+  // 그 선택들로만 생기는 deleteParam을 재검사가 묶음의 모든 칸에서 예상된 변화로 구분하게 한다(riskAdded).
+  const choices = new Map<Element, string>();
+  ids.forEach((id, i) => {
     const want = values?.[i]?.replace(/\s+/g, " ").trim();
-    return want !== undefined && (info.deleteChoices ?? []).includes(want) ? { ...info, consentDeleteChoice: want } : info;
+    const el = registry.get(id)?.ref.deref();
+    if (el && want !== undefined && (infos[i].deleteChoices ?? []).includes(want)) choices.set(el, want);
   });
+  if (choices.size) {
+    consentDeleteChoices.set(callId, choices);
+    while (consentDeleteChoices.size > 50) {
+      const oldest = consentDeleteChoices.keys().next().value;
+      if (oldest === undefined) break;
+      consentDeleteChoices.delete(oldest);
+    }
+  }
   // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
   // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
   // 칸 단서가 없어도 입력할 값이 개인정보(이메일·전화 등)면 승인 카드가 뜨므로 개인정보 묶음으로 본다.
@@ -718,11 +730,15 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   if ((now.outerText ?? "") !== (info.outerText ?? "")) return "감싼 버튼 글자가 바뀜";
   if (now.download && !info.download) return "내려받기 링크로 바뀜";
   if (now.deleteMethod && !info.deleteMethod) return "삭제 요청으로 바뀜";
-  // 승인 카드로 물은 삭제 선택지를 그 칸에 쓴 것만으로 생긴 신호는 예상된 변화다(#62). 다른 원인이면 멈춘다.
+  // 같은 입력 묶음이 승인 카드로 물은 삭제 선택지들을 쓴 것만으로 생긴 신호는 예상된 변화다(#62 — 그 select 칸과 같은
+  // 양식의 다른 칸 모두). 다른 원인이면 멈춘다.
   if (
     now.deleteParam &&
     !info.deleteParam &&
-    !(info.consentDeleteChoice && kind.expectedDeleteChoice?.(el, info.consentDeleteChoice))
+    !(() => {
+      const choices = info.consentCall ? consentDeleteChoices.get(info.consentCall) : undefined;
+      return !!choices && !!kind.deleteParamExplained?.(el, choices);
+    })()
   ) {
     return "삭제 요청으로 바뀜";
   }

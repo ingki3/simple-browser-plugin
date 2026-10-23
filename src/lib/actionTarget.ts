@@ -86,8 +86,6 @@ export interface TargetInfo {
   deleteParam?: boolean;
   // select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자 그대로, #62). 판정 전용.
   deleteChoices?: string[];
-  // 승인 카드로 물은 삭제 선택지 글자(입력 도구가 그 칸에 쓰는 값, #62). 재검사가 그 값으로 생긴 deleteParam을 예상된 변화로 본다.
-  consentDeleteChoice?: string;
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
   // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
   consentPersonal?: boolean;
