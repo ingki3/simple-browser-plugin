@@ -11,12 +11,14 @@ import {
   sensitiveUrlReason,
   splitIdentifier,
 } from "@/lib/autoApprove";
+import { choiceState, sameChoiceState } from "./choiceState";
 import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
+  noteChoiceWritten,
   noteWritten,
   peekApproved,
   recheckApproved,
@@ -280,27 +282,40 @@ function requestSignals(
       else if (texts.some(words)) out.del = true;
     }
   };
+  // 양식 제출의 메서드·주소에 영향을 주는 속성(htmx가 관여할 때): 양식의 method와 누른 제출자의 formmethod는 있으면
+  // 'get'이어야 하고(빈 값 포함 그 밖은 묻는다), formaction은 주소의 삭제 단서를 본다(풀리지 않으면 모름).
+  // formenctype·formtarget은 요청 방식·결과 위치를 바꾸므로 해석하지 않고 묻는다.
+  const checkFormMethod = (f: HTMLFormElement | null, sub: Element | null): void => {
+    const nonGet = (v: string | null) => v !== null && v.trim().toLowerCase() !== "get";
+    if (f && nonGet(f.getAttribute("method"))) out.opaque = true;
+    if (!sub || !isSubmitter(sub)) return;
+    if (nonGet(sub.getAttribute("formmethod"))) out.opaque = true;
+    if (sub.hasAttribute("formenctype") || sub.hasAttribute("formtarget")) out.opaque = true;
+    const action = sub.getAttribute("formaction");
+    if (action !== null) {
+      try {
+        if (destructiveRoute(new URL(action.trim() || sub.ownerDocument.URL, sub.baseURI).href)) out.del = true;
+      } catch {
+        out.opaque = true;
+      }
+    }
+  };
+  let htmxOnPath = false;
   // 경로: 모든 노드의 htmx 속성이 허용 목록 안이어야 하고, 요청 메서드는 GET이어야 한다.
   for (const node of nodes) {
+    if (hxAttrs(node).length) htmxOnPath = true;
     if (hxDisallowed(node)) out.opaque = true;
     if (HX_NON_GET.some((v) => hasHx(node, v))) out.opaque = true;
     if (hasHx(node, "get")) checkGet(node);
     const boost = node.getAttribute("hx-boost") ?? node.getAttribute("data-hx-boost");
-    if (boost !== null && boost.trim().toLowerCase() !== "false" && form) {
-      // 부스트된 양식은 양식의 method(제출자의 formmethod 우선)로 요청한다. GET이 아니면 묻는다(링크는 GET).
-      const method = (
-        (submitter && isSubmitter(submitter) && submitter.getAttribute("formmethod")) ||
-        form.getAttribute("method") ||
-        "get"
-      ).trim().toLowerCase();
-      if (method !== "get") out.opaque = true;
-      else checkGet(form);
-    }
+    // 부스트된 양식은 양식의 method(제출자의 formmethod 우선)로 요청한다 — 아래 checkFormMethod가 본다(링크는 GET).
+    if (boost !== null && boost.trim().toLowerCase() !== "false" && form) checkGet(form);
     for (const attr of EXTRA_VALUE_ATTRS) {
       const v = node.getAttribute(attr);
       if (v && words(v)) out.del = true;
     }
   }
+  if (htmxOnPath) checkFormMethod(form, submitter);
   // 페이지의 모든 from: 리스너(어느 이벤트를 듣는지 해석하지 않는다): hx-get 요청 요소이고, 그 요소와 조상의 htmx 속성이
   // 모두 허용 목록 안이어야 한다(hx-boost 양식처럼 hx-get이 없는 리스너는 메서드를 확인할 수 없어 묻는다).
   // 접근 가능한 모든 루트(문서·열린 shadow root·같은 출처 iframe 문서 — getAccessibleRoots)에서 찾는다. 닫힌 shadow root와
@@ -320,6 +335,7 @@ function requestSignals(
         continue;
       }
       checkGet(r);
+      if (isTag(r, "form")) checkFormMethod(r as HTMLFormElement, null);
     }
   }
   return out;
@@ -933,19 +949,15 @@ const FIELD_KIND: TargetKind = {
   // 칸 자신이 개인정보인지에 더해, 그 양식에 개인정보가 채워졌는지와 제출 주소도 본다
   // (change 처리기로 바로 제출하는 칸이 있다). 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
   risk: (el) => labelRisk(el, fieldRisk(el)),
-  // 이 칸의 deleteParam이 입력 묶음이 승인받은 쓰기들(writes: 칸 → select는 선택지 글자, checkbox·radio는 체크 여부)만으로
-  // 설명되는지(#62). 지금 승인한 상태 그대로인 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
+  // 이 칸의 deleteParam이 입력 묶음이 쓴 선택 칸들(writes: 칸 → 쓴 직전·처리기가 돌기 전의 상태 기록)만으로 설명되는지(#62).
+  // 지금 상태가 쓴 상태와 그대로 같은 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
+  // 비교는 글자가 아니라 실제 상태다: select는 선택된 option 요소·그 value·선택 상태·select의 name, checkbox·radio는
+  // name·value·checked. 처리기가 글자는 두고 value만 delete로 바꾸면 예외가 아니다.
   deleteParamExplained: (el, writes) => {
     const skip = new Set<Element>();
-    for (const [c, want] of writes) {
-      if (!c.isConnected) continue;
-      if (isTag(c, "select") && typeof want === "string") {
-        const picked = Array.from((c as HTMLSelectElement).selectedOptions);
-        if (picked.length === 1 && optionLabel(picked[0]).replace(/\s+/g, " ").trim() === want) skip.add(c);
-      } else if (isTag(c, "input") && typeof want === "boolean") {
-        const input = c as HTMLInputElement;
-        if ((input.type === "checkbox" || input.type === "radio") && input.checked === want) skip.add(c);
-      }
+    for (const [c, was] of writes) {
+      const now = choiceState(c);
+      if (c.isConnected && now && sameChoiceState(now, was)) skip.add(c);
     }
     if (!skip.size) return false;
     const form = isFieldElement(el) ? (el.form ?? (el.closest("form") as HTMLFormElement | null)) : null;
@@ -1259,11 +1271,13 @@ function intendedValue(el: FieldElement, value: string): string {
 
 // onSet: 글자 칸에 브라우저가 정리한 실제 값(앞뒤 공백 제거 등)을 페이지 처리기가 돌기 전에 알려 준다.
 // guard: input 처리기가 돈 뒤 change를 보내기 전에 부른다. 이유를 돌려주면 change를 보내지 않는다(ChangeBlocked).
+// onWritten: 선택 칸(select·checkbox·radio)에 상태를 쓴 직후, 이벤트(페이지 처리기)를 보내기 전에 부른다(#62 쓴 상태 기록).
 function fillOne(
   el: FieldElement,
   value: string,
   onSet?: (actual: string) => void,
   guard?: () => string | null,
+  onWritten?: () => void,
 ): boolean {
   if (isTag(el, "select")) {
     const match = optionByLabel(el, value);
@@ -1272,6 +1286,7 @@ function fillOne(
     setNativeProperty(el, "selectedIndex", match.index);
     // 이벤트를 보내기 전에 그 선택지 하나만 골라졌는지 본다. 아니면 이벤트 없이 실패.
     if (el.selectedOptions.length !== 1 || el.selectedOptions[0] !== match) return false;
+    onWritten?.();
     dispatchChange(el, guard);
     return true;
   }
@@ -1281,8 +1296,9 @@ function fillOne(
     if (want === null) return false;
     if (el.checked !== want) {
       setNativeProperty(el, "checked", want);
+      onWritten?.();
       dispatchChange(el, guard);
-    }
+    } else onWritten?.();
     return true;
   }
   if (isTag(el, "input") && el.type === "radio") {
@@ -1292,8 +1308,9 @@ function fillOne(
     if (!want) return !el.checked;
     if (!el.checked) {
       setNativeProperty(el, "checked", true);
+      onWritten?.();
       dispatchChange(el, guard);
-    }
+    } else onWritten?.();
     return true;
   }
   // 브라우저가 정리할 값(줄바꿈 제거, range의 숫자 정규화 등)을 페이지에 붙지 않은 복제본에서 먼저 구해 검사한다.
@@ -1501,6 +1518,7 @@ export async function fillFormFields(
           if (!expectedSig) noteWritten(callId, el, v);
         },
         guard,
+        () => noteChoiceWritten(callId, el),
       );
     } catch (err) {
       if (!(err instanceof ChangeBlocked)) throw err;

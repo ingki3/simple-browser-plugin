@@ -7,7 +7,6 @@ import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
 import {
   describeDifference,
-  parseCheckedRequest,
   sameApproved,
   sameApprovedInFlight,
   sameBase,
@@ -15,6 +14,7 @@ import {
 } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
+import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
 import { groupLabel, modelText } from "./modelText";
 
@@ -41,7 +41,7 @@ export interface TargetKind {
   // 기술의 proxy·proxyLabel로 고정하고 승인 카드에 보여 준다.
   proxyLabelName?(el: HTMLElement): string | null;
   // 입력 칸: deleteParam이 입력 묶음이 승인받은 삭제 선택지들(칸 → 선택지 글자)만으로 설명되는지(재검사의 예상된 변화, #62).
-  deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, string | boolean>): boolean;
+  deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
@@ -557,8 +557,26 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 // 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
 // 승인 당시 값이 채워져 있던 개인정보·비밀 칸과 그때의 값. 실행 직전에 값이 바뀌었으면(이 호출이 쓴 값이 아니면) 멈춘다.
 const consentAllowed = new Map<string, Map<Element, string>>();
-// 입력 묶음이 쓸 선택 칸들(칸 → select 선택지 글자·checkbox·radio 체크 여부, #62). 호출(callId)마다.
-const consentDeleteChoices = new Map<string, Map<Element, string | boolean>>();
+// 입력 묶음이 쓴 선택 칸들의 쓴 직후 상태(칸 → ChoiceState, #62). 호출(callId)마다.
+const consentDeleteChoices = new Map<string, Map<Element, ChoiceState>>();
+
+// 입력 묶음이 선택 칸에 상태를 쓴 직후(페이지 처리기가 돌기 전) 그 상태를 기록한다(#62, forms.ts fillOne의 onWritten).
+// 재검사는 이 기록과 지금 상태가 그대로 같은 칸만 예상된 변화로 뺀다(deleteParamExplained).
+export function noteChoiceWritten(callId: string, el: Element): void {
+  const state = choiceState(el);
+  if (!state) return;
+  let m = consentDeleteChoices.get(callId);
+  if (!m) {
+    m = new Map();
+    consentDeleteChoices.set(callId, m);
+    while (consentDeleteChoices.size > 50) {
+      const oldest = consentDeleteChoices.keys().next().value;
+      if (oldest === undefined) break;
+      consentDeleteChoices.delete(oldest);
+    }
+  }
+  m.set(el, state);
+}
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
@@ -579,28 +597,8 @@ export function noteWritten(callId: string, el: Element, value: string): void {
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
 export function inspectTargets(ids: string[], callId: string, prefix: string, values?: string[]): TargetInfo[] {
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
-  // 이번 호출이 쓸 선택 칸들의 (칸, 값)을 묶음 단위로 남긴다(#62): select는 고를 선택지 글자, checkbox·radio는 체크 여부.
-  // 이 쓰기들로만 생기는 deleteParam(같은 양식의 다른 칸에서 보이는 것 포함)을 재검사가 예상된 변화로 구분한다(riskAdded).
-  // 삭제 단서가 있는 쓰기는 승인 카드로 이미 물었다(deleteChoices·checkbox 자신의 name=value). 글자 칸은 값을 보지 않으므로 남기지 않는다.
-  const choices = new Map<Element, string | boolean>();
-  ids.forEach((id, i) => {
-    const raw = values?.[i];
-    const el = registry.get(id)?.ref.deref();
-    if (!el || raw === undefined) return;
-    if (el.localName === "select") choices.set(el, raw.replace(/\s+/g, " ").trim());
-    else if (el.localName === "input" && ["checkbox", "radio"].includes((el as HTMLInputElement).type)) {
-      const want = parseCheckedRequest(raw);
-      if (want !== null) choices.set(el, want);
-    }
-  });
-  if (choices.size) {
-    consentDeleteChoices.set(callId, choices);
-    while (consentDeleteChoices.size > 50) {
-      const oldest = consentDeleteChoices.keys().next().value;
-      if (oldest === undefined) break;
-      consentDeleteChoices.delete(oldest);
-    }
-  }
+  // 이번 호출이 선택 칸에 쓴 상태는 쓰는 순간 기록한다(noteChoiceWritten). 승인 때 지난 기록이 있으면 지운다.
+  consentDeleteChoices.delete(callId);
   // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
   // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
   // 칸 단서가 없어도 입력할 값이 개인정보(이메일·전화 등)면 승인 카드가 뜨므로 개인정보 묶음으로 본다.
