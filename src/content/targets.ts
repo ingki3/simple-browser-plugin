@@ -120,8 +120,21 @@ const ROW_SELECTOR =
 
 const CONTEXT_MAX = 2000;
 
-function textOf(el: Element): string {
-  return (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
+// exclude: 글자에서 뺄 하위 요소(입력 도중 확인에서 승인 뒤 새로 붙은 자동완성 목록, pinnedRowOf). 빼는 것이 없으면
+// textContent 그대로다.
+function textOf(el: Element, exclude: Element[] = []): string {
+  let raw: string;
+  if (!exclude.length) raw = el.textContent ?? "";
+  else {
+    const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    raw = "";
+    // textContent와 같게 끝까지 모은다(중간에 끊으면 긴 공백 뒤에 덧붙인 글자를 놓친다). 자르기는 공백 정리 뒤에 한다.
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (exclude.some((x) => x.contains(node))) continue;
+      raw += node.nodeValue ?? "";
+    }
+  }
+  return raw.replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
 }
 
 function repeated(cur: Element): boolean {
@@ -221,8 +234,10 @@ function statesOf(el: HTMLElement): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-function baseInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
-  const row = rowElement(el);
+// pinnedRow: 입력 도중 확인에서 승인 때 찾은 행 요소(아래 approvedRows)와 그 글자에서 뺄 새 자동완성 목록. 구조가
+// 그대로임을 확인한 경우에만 주어지며, 다시 찾지 않고 그 행의 글자를 쓴다.
+function baseInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | null): TargetInfo {
+  const row = pinnedRow ? { row: pinnedRow.row, text: textOf(pinnedRow.row, pinnedRow.exclude) } : rowElement(el);
   const detail: Partial<TargetInfo> = {};
   if (kind.detail || kind.rowContext) {
     const modelContext = modelContextOf(row?.row ?? null);
@@ -299,8 +314,8 @@ function listPosition(el: HTMLElement): TargetInfo["list"] {
   return null;
 }
 
-function fullInfo(kind: TargetKind, el: HTMLElement): TargetInfo {
-  return { ...baseInfo(kind, el), list: listPosition(el) };
+function fullInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | null): TargetInfo {
+  return { ...baseInfo(kind, el, pinnedRow), list: listPosition(el) };
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +593,16 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
     relation,
   );
   entry.approved = { callId, info, relation };
+  const row = rowElement(el)?.row;
+  const texts = row ? rowTextNodes(row) : null;
+  if (row && texts) {
+    approvedRows.set(el, {
+      row: new WeakRef(row),
+      path: ancestorsUpTo(el, row).map((a) => new WeakRef(a)),
+      texts,
+      combo: comboboxField(el),
+    });
+  } else approvedRows.delete(el);
   return info;
 }
 
@@ -710,7 +735,10 @@ export function takeApproved(
   }
   const { entry, el } = resolve(id);
   entry.approved = null;
-  const now = fullInfo(entry.kind, el);
+  // 묶음의 앞 칸 입력이 이 칸의 형제 묶음 틀을 바꿔(자동완성 목록이 붙음) 행이 다른 요소로 잡힐 수 있어, 입력 도중이면
+  // 승인 때의 행을 구조가 그대로일 때만 다시 쓴다(pinnedRowOf).
+  const pinned = inFlight ? pinnedRowOf(el) : null;
+  const now = fullInfo(entry.kind, el, pinned);
   if (!(inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info))) {
     const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
@@ -793,6 +821,101 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   return null;
 }
 
+// 승인 때 찾은 대상의 행 요소. 입력 도중 확인은 아래가 모두 구조로 확인될 때만 승인 때의 행을 기준으로 삼는다
+// (pinnedRowOf). 아니면 지금처럼 행을 다시 찾아 엄격히 비교한다.
+// - 지금 다시 찾은 행이 승인 때 행과 같은 요소다.
+// - 대상에서 행까지의 조상 사슬이 승인 때와 같다(하위 행으로 옮겨지지 않음).
+// - 승인 때 행 안에 있던 글자 노드가 모두 같은 행 안에 같은 글자로 남아 있다.
+// 행 글자 비교(원문 context)는 여전히 승인 때와 같아야 한다. 다만 대상이 자동완성 입력 칸(combobox)이면, 승인 뒤 행 안에
+// 새로 펼친 자동완성 목록(newPopupLists)의 글자는 빼고 비교한다.
+// 기존 제목 곁에 글자를 덧붙이는 것('문서 A' + ' 사본')은 목록 밖이라 다른 대상이다.
+const approvedRows = new WeakMap<
+  HTMLElement,
+  {
+    row: WeakRef<Element>;
+    path: WeakRef<Element>[];
+    texts: Array<{ node: WeakRef<Text>; value: string }>;
+    combo: boolean;
+  }
+>();
+
+interface PinnedRow {
+  row: Element;
+  exclude: Element[];
+}
+
+// 자동완성 입력 칸: role=combobox, aria-autocomplete, 또는 datalist를 쓰는 input(구조로만 판정).
+function comboboxField(el: HTMLElement): boolean {
+  const role = (el.getAttribute("role") ?? "").trim().toLowerCase();
+  return role === "combobox" || el.hasAttribute("aria-autocomplete") || (el.localName === "input" && el.hasAttribute("list"));
+}
+
+// 행 안의 비어 있지 않은 글자 노드(최대 ROW_TEXT_NODES_MAX개). 넘으면 null — 행을 고정하지 않고 이전처럼 엄격히 비교한다.
+const ROW_TEXT_NODES_MAX = 500;
+function rowTextNodes(row: Element): Array<{ node: WeakRef<Text>; value: string }> | null {
+  const walker = row.ownerDocument.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+  const out: Array<{ node: WeakRef<Text>; value: string }> = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node.nodeValue ?? "").trim()) continue;
+    if (out.length >= ROW_TEXT_NODES_MAX) return null;
+    out.push({ node: new WeakRef(node as Text), value: node.nodeValue ?? "" });
+  }
+  return out;
+}
+
+// 대상의 부모부터 행까지의 조상(행 포함, shadow root는 host로 넘어감). 행에 닿지 못하면 빈 배열.
+function ancestorsUpTo(el: Element, row: Element): Element[] {
+  const out: Element[] = [];
+  for (let cur = parentAcross(el); cur; cur = parentAcross(cur)) {
+    out.push(cur);
+    if (cur === row) return out;
+  }
+  return [];
+}
+
+function pinnedRowOf(el: HTMLElement): PinnedRow | null {
+  const pinned = approvedRows.get(el);
+  const row = pinned?.row.deref();
+  if (!pinned || !row || !row.isConnected) return null;
+  const now = ancestorsUpTo(el, row);
+  if (now.length === 0 || now.length !== pinned.path.length) return null;
+  if (!now.every((a, i) => pinned.path[i].deref() === a)) return null;
+  const kept: Text[] = [];
+  for (const t of pinned.texts) {
+    const node = t.node.deref();
+    if (!node || !node.isConnected || !row.contains(node) || node.nodeValue !== t.value) return null;
+    kept.push(node);
+  }
+  // 칸에서 행까지 사이에 새 행 경계가 생겼으면(기존 조상에 role=row를 붙이고 글자를 그 안으로 옮김) 다른 대상이다.
+  // 지금 다시 찾은 행이 승인 때 행과 같아야 한다. 칸과 행 사이에 새 행 경계가 생겼거나(하위 행, shadow DOM 안 포함),
+  // 행 표시가 지워져 바깥 항목으로 넓어졌으면 다른 대상이다.
+  if (rowElement(el)?.row !== row) return null;
+  return { row, exclude: pinned.combo ? newPopupLists(el, row, kept) : [] };
+}
+
+// 자동완성 입력 칸이 펼친 새 팝업 목록(행 글자에서 뺄 것). 모두 구조로만 정한다.
+// - 칸이 지금 펼쳐져 있다(aria-expanded="true").
+// - 칸이 aria-controls·aria-owns로 목록을 가리키면 그 목록만. 가리키지 않으면 행 안의 role=listbox 중
+// - 선택지(role=option)를 담고, 대상·승인 때의 글자 노드를 담지 않으며, 목록에서 행까지의 조상 중 승인 때의 글자 노드를
+//   담은 요소가 없는 것(대상의 조상은 제외) — 기존 제목 안에 끼워 넣은 목록(<span role=listbox> 사본</span>)은 빼지 않는다.
+function newPopupLists(el: HTMLElement, row: Element, kept: Text[]): Element[] {
+  if ((el.getAttribute("aria-expanded") ?? "").trim().toLowerCase() !== "true") return [];
+  const refs = `${el.getAttribute("aria-controls") ?? ""} ${el.getAttribute("aria-owns") ?? ""}`.split(/\s+/).filter(Boolean);
+  const root = el.getRootNode() as Document | ShadowRoot;
+  const candidates = refs.length
+    ? refs.map((id) => root.getElementById?.(id) ?? null).filter((x): x is HTMLElement => !!x && row.contains(x))
+    : Array.from(row.querySelectorAll("[role='listbox' i]"));
+  const lists = candidates.filter((list) => {
+    if (list.contains(el) || kept.some((n) => list.contains(n))) return false;
+    if (!list.querySelector("[role='option' i]")) return false;
+    for (let a = list.parentElement; a && a !== row; a = a.parentElement) {
+      if (!a.contains(el) && kept.some((n) => a.contains(n))) return false;
+    }
+    return true;
+  });
+  return lists.filter((x) => !lists.some((y) => y !== x && y.contains(x)));
+}
+
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
 // 같으면 null, 다르면 이유. inFlight: 입력 도중·직후의 확인이면 원문 행 글자가 그대로일 때 모델용 행 문맥만 바뀐 것은
 // 허용한다(sameApprovedInFlight — 입력 처리기가 행 안의 숨은 안내 글을 보이게 하는 경우).
@@ -804,7 +927,8 @@ export function recheckApproved(
   inFlight = false,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
-  const now = fullInfo(kind, el);
+  const pinned = inFlight ? pinnedRowOf(el) : null;
+  const now = fullInfo(kind, el, pinned);
   if (!(inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info))) return describeDifference(info, now);
   const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
