@@ -1,5 +1,6 @@
 import type { PageImage } from "@/lib/messages";
 import { getAccessibleRoots } from "./docs";
+import { hasUrlCredentials } from "@/lib/fileFormat";
 
 const LAZY_ATTRS = ["data-src", "data-original", "data-lazy-src", "data-lazy", "data-url"];
 
@@ -29,6 +30,8 @@ export function listPageImages(args: { minWidth?: number }): PageImage[] {
       const url = resolveSrc(img);
       if (!url || seen.has(url)) return;
       if (!/^https?:/i.test(url)) return;
+      // 계정 정보가 실린 주소는 모델에 보내지 않는다(저장 후보도 아니다).
+      if (hasUrlCredentials(url)) return;
       const width = img.naturalWidth || img.width || 0;
       const height = img.naturalHeight || img.height || 0;
       if (width && width < minWidth) return;
@@ -43,7 +46,7 @@ export function listPageImages(args: { minWidth?: number }): PageImage[] {
       if (!first) return;
       try {
         const url = new URL(first, src.ownerDocument.location?.href ?? location.href).href;
-        if (/^https?:/i.test(url) && !seen.has(url)) {
+        if (/^https?:/i.test(url) && !hasUrlCredentials(url) && !seen.has(url)) {
           seen.add(url);
           out.push({ url, alt: "", width: 0, height: 0 });
         }

@@ -31,6 +31,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   click_element: ACTION,
   navigate_to_url: ACTION,
   download_images: ACTION,
+  // 결과에 서버가 정한 파일 이름(Content-Disposition)·받은 형식이 실린다.
+  download_files: EXTERNAL,
   read_document: EXTERNAL,
   // Google 도구는 읽기뿐 아니라 쓰기도 응답 메타데이터(updatedRange)와 오류의 응답 본문이 외부 데이터다.
   google_sheets_list: EXTERNAL,

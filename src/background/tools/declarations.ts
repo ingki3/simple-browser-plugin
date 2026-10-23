@@ -47,7 +47,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "list_file_links",
     description:
-      "현재 페이지에서 파일 링크(첨부 파일·다운로드 링크)를 찾아 링크 글자, URL, 짐작한 형식을 반환한다. 페이지에 링크된 문서를 read_document로 읽기 전에 URL을 얻을 때 쓴다. 형식이 null이면 확장자 없는 다운로드 링크다.",
+      "현재 페이지에서 파일 링크(첨부 파일·다운로드 링크)를 찾아 링크 글자, URL, 짐작한 형식을 반환한다. 페이지에 링크된 문서를 read_document로 읽기 전에 URL을 얻을 때 쓴다. 형식이 null이면 확장자 없는 다운로드 링크다. readable이 false인 링크(zip·구형 Office·이미지 등, ext에 확장자)는 read_document로 읽을 수 없고 download_files로 저장만 할 수 있다.",
     parameters: {
       type: "object",
       properties: {
@@ -180,13 +180,33 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "download_images",
     description:
-      "사용자 승인 후 지정된 URL들을 chrome.downloads로 저장한다. 민감 작업이라 실행 전 사용자 승인 카드가 표시된다. URL은 list_page_images에서 얻은 http(s) 주소여야 한다.",
+      "지금 페이지의 이미지를 저장한다. URL은 list_page_images가 준 주소 그대로 넘긴다(페이지에 없는 주소는 받지 않는다). 사용자가 승인 카드에서 저장할 이미지를 고르고(넘긴 이미지는 미리 체크됨), 고른 것만 저장한다. 결과는 항목별 저장 성공·실패(이유)와 저장 위치(폴더/파일 이름).",
     parameters: {
       type: "object",
       properties: {
         urls: {
           type: "array",
-          description: "다운로드할 이미지 URL 배열 (http/https).",
+          description: "저장할 이미지 URL 배열(list_page_images의 url 그대로). 사용자가 지정한 범위·조건에 맞는 것만.",
+          items: { type: "string" },
+        },
+        folderPrefix: {
+          type: "string",
+          description: "저장 폴더 접두사. 미지정 시 설정값 사용.",
+        },
+      },
+      required: ["urls"],
+    },
+  },
+  {
+    name: "download_files",
+    description:
+      "지금 페이지의 첨부·다운로드 파일 링크(PDF·엑셀·한글·zip 등)를 브라우저 다운로드로 저장한다(로그인 쿠키 포함). URL은 list_file_links가 준 주소(페이지 링크의 href) 그대로 넘긴다(페이지에 없는 주소는 받지 않는다, 최대 20개). 사용자가 승인 카드에서 받을 파일을 고르고(넘긴 링크는 미리 체크됨), 고른 것만 받는다. 파일 이름은 서버가 준 이름(Content-Disposition)·주소의 이름, 없으면 받은 형식으로 정한다. 결과는 항목별 저장 성공·실패(이유)와 저장 위치(폴더/파일 이름).",
+    parameters: {
+      type: "object",
+      properties: {
+        urls: {
+          type: "array",
+          description: "받을 파일 링크 URL 배열(list_file_links의 url 그대로). 사용자가 지정한 조건(형식·순서 등)에 맞는 것만.",
           items: { type: "string" },
         },
         folderPrefix: {

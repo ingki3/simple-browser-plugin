@@ -76,7 +76,7 @@ export function ToolPreviewCard(props: Props) {
             )}
             {choices ? (
               <button className="btn-approve" disabled={picked.length === 0} onClick={() => onApprove(callId, false, picked)}>
-                {KO.approveChoices}
+                {toolName === "download_images" || toolName === "download_files" ? KO.approveChoicesSave : KO.approveChoices}
               </button>
             ) : (
               <button className="btn-approve" onClick={() => onApprove(callId)}>
