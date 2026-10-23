@@ -827,7 +827,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
 // - 대상에서 행까지의 조상 사슬이 승인 때와 같다(하위 행으로 옮겨지지 않음).
 // - 승인 때 행 안에 있던 글자 노드가 모두 같은 행 안에 같은 글자로 남아 있다.
 // 행 글자 비교(원문 context)는 여전히 승인 때와 같아야 한다. 다만 대상이 자동완성 입력 칸(combobox)이면, 승인 뒤 행 안에
-// 새로 생긴 팝업 목록(role=listbox·grid·tree — 승인 때의 글자 노드를 담지 않은 것)의 글자는 빼고 비교한다.
+// 새로 펼친 자동완성 목록(newPopupLists)의 글자는 빼고 비교한다.
 // 기존 제목 곁에 글자를 덧붙이는 것('문서 A' + ' 사본')은 목록 밖이라 다른 대상이다.
 const approvedRows = new WeakMap<
   HTMLElement,
@@ -844,8 +844,6 @@ function comboboxField(el: HTMLElement): boolean {
   const role = (el.getAttribute("role") ?? "").trim().toLowerCase();
   return role === "combobox" || el.hasAttribute("aria-autocomplete") || (el.localName === "input" && el.hasAttribute("list"));
 }
-
-const POPUP_LIST_SELECTOR = "[role='listbox' i], [role='grid' i], [role='tree' i]";
 
 // 행 안의 비어 있지 않은 글자 노드(최대 ROW_TEXT_NODES_MAX개). 넘으면 null — 행을 고정하지 않고 이전처럼 엄격히 비교한다.
 const ROW_TEXT_NODES_MAX = 500;
@@ -883,13 +881,33 @@ function pinnedRowOf(el: HTMLElement): PinnedRow | null {
     if (!node || !node.isConnected || !row.contains(node) || node.nodeValue !== t.value) return null;
     kept.push(node);
   }
-  // 대상을 담지 않고 승인 때의 글자 노드도 담지 않은 팝업 목록만(새로 생긴 자동완성 목록) 뺀다. 가장 바깥 것만 둔다.
-  const exclude = pinned.combo
-    ? Array.from(row.querySelectorAll(POPUP_LIST_SELECTOR)).filter(
-        (list) => !list.contains(el) && !kept.some((n) => list.contains(n)),
-      )
-    : [];
-  return { row, exclude: exclude.filter((x) => !exclude.some((y) => y !== x && y.contains(x))) };
+  // 칸에서 행까지 사이에 새 행 경계가 생겼으면(기존 조상에 role=row를 붙이고 글자를 그 안으로 옮김) 다른 대상이다.
+  const fresh = rowElement(el)?.row;
+  if (fresh && fresh !== row && row.contains(fresh)) return null;
+  return { row, exclude: pinned.combo ? newPopupLists(el, row, kept) : [] };
+}
+
+// 자동완성 입력 칸이 펼친 새 팝업 목록(행 글자에서 뺄 것). 모두 구조로만 정한다.
+// - 칸이 지금 펼쳐져 있다(aria-expanded="true").
+// - 칸이 aria-controls·aria-owns로 목록을 가리키면 그 목록만. 가리키지 않으면 행 안의 role=listbox 중
+// - 선택지(role=option)를 담고, 대상·승인 때의 글자 노드를 담지 않으며, 목록에서 행까지의 조상 중 승인 때의 글자 노드를
+//   담은 요소가 없는 것(대상의 조상은 제외) — 기존 제목 안에 끼워 넣은 목록(<span role=listbox> 사본</span>)은 빼지 않는다.
+function newPopupLists(el: HTMLElement, row: Element, kept: Text[]): Element[] {
+  if ((el.getAttribute("aria-expanded") ?? "").trim().toLowerCase() !== "true") return [];
+  const refs = `${el.getAttribute("aria-controls") ?? ""} ${el.getAttribute("aria-owns") ?? ""}`.split(/\s+/).filter(Boolean);
+  const root = el.getRootNode() as Document | ShadowRoot;
+  const candidates = refs.length
+    ? refs.map((id) => root.getElementById?.(id) ?? null).filter((x): x is HTMLElement => !!x && row.contains(x))
+    : Array.from(row.querySelectorAll("[role='listbox' i]"));
+  const lists = candidates.filter((list) => {
+    if (list.contains(el) || kept.some((n) => list.contains(n))) return false;
+    if (!list.querySelector("[role='option' i]")) return false;
+    for (let a = list.parentElement; a && a !== row; a = a.parentElement) {
+      if (!a.contains(el) && kept.some((n) => a.contains(n))) return false;
+    }
+    return true;
+  });
+  return lists.filter((x) => !lists.some((y) => y !== x && y.contains(x)));
 }
 
 // 승인 확인 뒤 실제 실행까지 페이지 코드가 돌 틈이 있으면(스크롤·포커스 처리기 등) 실행 바로 앞에서 다시 본다.
