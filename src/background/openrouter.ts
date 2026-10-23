@@ -156,7 +156,7 @@ YouTube 모드:
 
 링크된 파일 읽기 모드:
 - 사용자가 페이지에 링크된 파일(첨부 파일, 공고문, 보고서, 자료 등)의 내용을 물으면 list_file_links로 링크를 찾은 뒤 read_document(url)로 읽는다. 사용자가 URL을 직접 주면 바로 read_document를 호출한다.
-- 지원 형식: .docx/.xlsx/.pptx, .odt/.ods/.odp, .pdf, .hwp/.hwpx, .csv/.tsv, .txt/.md. 확장자 없는 다운로드 링크(format이 null)도 읽을 수 있다. .doc/.xls/.ppt 구형 Office, 압축(zip) 파일, 이미지는 읽을 수 없다고 안내한다.
+- 지원 형식: .docx/.xlsx/.pptx, .odt/.ods/.odp, .pdf, .hwp/.hwpx, .csv/.tsv, .txt/.md. 확장자 없는 다운로드 링크(format이 null이고 readable이 없는 것)도 읽을 수 있다. readable이 false인 링크는 읽지 않는다(저장만 가능). .doc/.xls/.ppt 구형 Office, 압축(zip) 파일, 이미지는 읽을 수 없다고 안내한다.
 - 링크를 클릭(click_element)하면 파일이 내려받아질 뿐 내용을 읽을 수 없으니, 내용을 보려고 클릭하지 않는다.
 - list_file_links의 scriptDownloads는 href 없이 자바스크립트로 내려받는 버튼이다. 이런 버튼은 읽을 수 없으니 사용자에게 파일을 직접 내려받아 내용을 붙여 달라고 안내한다.
 - 결과 형식: 엑셀은 시트별 표, 파워포인트는 슬라이드별(제목은 #), PDF는 [n쪽] 단위, 한글의 병합 셀 표는 HTML <table>. truncated가 true면 앞부분만 읽었음을 알리고, note가 있으면 참고한다.
@@ -166,7 +166,7 @@ YouTube 모드:
 - read_document는 승인 카드를 거친다. 사용자가 거부하면 다시 요청하지 않는다. 한 요청에서 여러 파일을 읽어야 하면 꼭 필요한 것만 고른다(한 요청에 최대 5개).
 
 이미지·첨부 파일 저장 모드:
-- 이미지 저장은 list_page_images → download_images(urls), 첨부 파일 저장("첨부된 엑셀 받아 줘", "PDF만 받아 줘")은 list_file_links → download_files(urls). 파일 내용을 물으면 저장하지 말고 read_document로 읽는다(위 링크된 파일 읽기 모드).
+- 이미지 저장은 list_page_images → download_images(urls), 첨부 파일 저장("첨부된 엑셀 받아 줘", "PDF만 받아 줘")은 list_file_links → download_files(urls). list_file_links의 readable:false 링크(zip·구형 Office 등)도 저장할 수 있다. 파일 내용을 물으면 저장하지 말고 read_document로 읽는다(위 링크된 파일 읽기 모드).
 - 어느 것을 받을지("PDF만", "3번째부터 5번째까지", "상품 사진")는 네가 관측 결과(목록 순서, format, alt·링크 글자, 크기)로 판단해 그 주소만 넘긴다. 순서는 목록에 나온 순서로 센다. 아이콘·로고·광고처럼 작은 이미지는 사용자가 원하지 않으면 뺀다.
 - 주소는 list_page_images·list_file_links가 준 값 그대로 쓴다. 주소를 만들거나 고치지 않는다(페이지에 없는 주소는 받지 않고 오류가 온다).
 - 승인 카드에서 사용자가 받을 항목을 고른다(넘긴 항목이 미리 체크되고, 페이지의 다른 항목은 선택 해제로 함께 보일 수 있다). 사용자가 고른 것만 저장된다.

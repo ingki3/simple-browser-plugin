@@ -47,7 +47,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "list_file_links",
     description:
-      "현재 페이지에서 파일 링크(첨부 파일·다운로드 링크)를 찾아 링크 글자, URL, 짐작한 형식을 반환한다. 페이지에 링크된 문서를 read_document로 읽기 전에 URL을 얻을 때 쓴다. 형식이 null이면 확장자 없는 다운로드 링크다.",
+      "현재 페이지에서 파일 링크(첨부 파일·다운로드 링크)를 찾아 링크 글자, URL, 짐작한 형식을 반환한다. 페이지에 링크된 문서를 read_document로 읽기 전에 URL을 얻을 때 쓴다. 형식이 null이면 확장자 없는 다운로드 링크다. readable이 false인 링크(zip·구형 Office·이미지 등, ext에 확장자)는 read_document로 읽을 수 없고 download_files로 저장만 할 수 있다.",
     parameters: {
       type: "object",
       properties: {

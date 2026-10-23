@@ -145,6 +145,10 @@ export interface FileLink {
   url: string;
   // 이름으로 짐작한 형식. null이면 확장자 없는 다운로드 링크(받은 뒤 판별).
   format: ReadableFormat | null;
+  // false면 read_document로 읽을 수 없고 download_files로 저장만 할 수 있는 파일(zip·구형 Office·이미지 등, #48).
+  readable?: false;
+  // readable=false인 링크의 확장자.
+  ext?: string;
 }
 
 export interface FileLinkList {
@@ -249,8 +253,9 @@ export type BgToContent =
   | { kind: "read_page_text"; expectUrl: string }
   // read_linked_pages: 이 주소들이 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 링크에 있는지와 링크 글자.
   | { kind: "link_lookup"; urls: string[] }
-  // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크 전부(후보 고정용).
-  | { kind: "download_links" };
+  // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크(후보 고정용).
+  // urls(모델이 넘긴 주소)는 돌려주는 수의 한도와 관계없이 끝까지 찾는다.
+  | { kind: "download_links"; urls: string[] };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;

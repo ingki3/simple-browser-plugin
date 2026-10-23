@@ -169,3 +169,18 @@ test("engineFor routes formats to converters", () => {
   assert.equal(engineFor("txt"), "text");
   assert.equal(engineFor("md"), "text");
 });
+
+test("saveOnlyExtension: 읽을 수 없지만 저장할 수 있는 파일만(#48), 읽기 판정은 그대로", async () => {
+  const { saveOnlyExtension } = await import("../src/lib/fileFormat.ts");
+  assert.equal(saveOnlyExtension("https://a.com/files/%EC%9E%90%EB%A3%8C.zip"), "zip");
+  assert.equal(saveOnlyExtension("https://a.com/old.xls"), "xls");
+  assert.equal(saveOnlyExtension("https://a.com/photo.jpg?x=1"), "jpg");
+  // 웹 페이지·스크립트·데이터는 저장 후보가 아니다.
+  assert.equal(saveOnlyExtension("https://a.com/index.html"), null);
+  assert.equal(saveOnlyExtension("https://a.com/app.js"), null);
+  // 읽을 수 있는 것과 확장자 없는 다운로드 링크는 이 함수의 대상이 아니다(read_document 경로).
+  assert.equal(saveOnlyExtension("https://a.com/a.pdf"), null);
+  assert.equal(saveOnlyExtension("https://a.com/download.do?fileId=1"), null);
+  assert.equal(saveOnlyExtension("javascript:void(0)"), null);
+  assert.equal(checkFileUrl("https://a.com/files/x.zip").ok, false);
+});

@@ -1,5 +1,5 @@
 import type { FileLink, FileLinkList } from "@/lib/messages";
-import { checkFileUrl, extensionOf, formatFromExtension } from "@/lib/fileFormat";
+import { checkFileUrl, extensionOf, formatFromExtension, saveOnlyExtension } from "@/lib/fileFormat";
 import { getAccessibleRoots } from "./docs";
 
 const DEFAULT_LIMIT = 50;
@@ -26,21 +26,38 @@ function formatFromText(text: string): FileLink["format"] {
 }
 
 // 링크가 파일 링크로 보이는지(list_file_links의 목록 기준). 목록에 보일지만 정하고 승인에는 쓰지 않는다.
-function looksLikeFile(a: HTMLAnchorElement | HTMLAreaElement, url: string, format: FileLink["format"], text: string): boolean {
-  return format !== null || a.hasAttribute("download") || DOWNLOAD_URL.test(url) || DOWNLOAD_TEXT.test(text);
+// saveExt: 읽을 수 없지만 저장할 수 있는 파일의 확장자(saveOnlyExtension).
+function looksLikeFile(
+  a: HTMLAnchorElement | HTMLAreaElement,
+  url: string,
+  format: FileLink["format"],
+  text: string,
+  saveExt: string | null = null,
+): boolean {
+  return format !== null || saveExt !== null || a.hasAttribute("download") || DOWNLOAD_URL.test(url) || DOWNLOAD_TEXT.test(text);
 }
 
 const MAX_PAGE_LINKS = 3_000;
 
 // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임 + 열린 shadow root, list_file_links와 같은 범위)의
-// http(s) 링크 전부. 백그라운드가 모델이 넘긴 주소가 이 안에 있는지 구조로 확인해 후보를 고정한다.
-// listed는 모델이 고르지 않은 링크를 카드에 선택 해제로 함께 보일지(파일 링크로 보이는 것만)다.
-export function pageDownloadLinks(): Array<{ url: string; label: string; meta: string; listed: boolean }> {
+// http(s) 링크. 백그라운드가 모델이 넘긴 주소(requested)가 이 안에 있는지 구조로 확인해 후보를 고정한다.
+// 돌려주는 수는 MAX_PAGE_LINKS까지지만, 요청한 주소는 한도와 관계없이 문서 끝까지 찾아 넣는다(한도 때문에 실제로 있는
+// 첨부를 "페이지에 없는 링크"로 보지 않게). listed는 모델이 고르지 않은 링크를 카드에 선택 해제로 함께 보일지다.
+export function pageDownloadLinks(requested: string[] = []): Array<{ url: string; label: string; meta: string; listed: boolean }> {
   const out: Array<{ url: string; label: string; meta: string; listed: boolean }> = [];
   const seen = new Set<string>();
+  const wanted = new Set<string>();
+  for (const r of requested) {
+    try {
+      const u = new URL(r);
+      u.hash = "";
+      wanted.add(u.href);
+    } catch {
+      /* 주소가 아니면 찾지 않는다 */
+    }
+  }
   for (const root of getAccessibleRoots()) {
     for (const a of Array.from(root.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>("a[href], area[href]"))) {
-      if (out.length >= MAX_PAGE_LINKS) return out;
       let key: string;
       try {
         const u = new URL(a.href);
@@ -51,11 +68,13 @@ export function pageDownloadLinks(): Array<{ url: string; label: string; meta: s
         continue;
       }
       if (seen.has(key)) continue;
+      if (out.length >= MAX_PAGE_LINKS && !wanted.has(key)) continue;
       seen.add(key);
       const text = linkText(a);
       const checked = checkFileUrl(key);
       const format = checked.ok ? (checked.target.hint ?? formatFromText(text)) : null;
-      out.push({ url: key, label: text, meta: format ?? "", listed: looksLikeFile(a, key, format, text) });
+      const saveExt = saveOnlyExtension(key);
+      out.push({ url: key, label: text, meta: format ?? saveExt ?? "", listed: looksLikeFile(a, key, format, text, saveExt) });
     }
   }
   return out;
@@ -80,7 +99,28 @@ export function listFileLinks(args: { query?: string; limit?: number }): FileLin
         return;
       }
       const checked = checkFileUrl(a.href);
-      if (!checked.ok) return;
+      if (!checked.ok) {
+        // 읽을 수는 없지만 저장할 수 있는 파일(zip·구형 Office·이미지 등)은 readable:false로 따로 알린다(download_files용).
+        const ext = saveOnlyExtension(a.href);
+        if (!ext) return;
+        let url: string;
+        try {
+          const u = new URL(a.href);
+          u.hash = "";
+          url = u.href;
+        } catch {
+          return;
+        }
+        if (seen.has(url)) return;
+        if (query && !`${text} ${url}`.toLowerCase().includes(query)) return;
+        seen.add(url);
+        if (links.length >= limit) {
+          omitted++;
+          return;
+        }
+        links.push({ text, url, format: null, readable: false, ext });
+        return;
+      }
       const { url, hint } = checked.target;
       if (seen.has(url)) return;
       const format = hint ?? formatFromText(text);

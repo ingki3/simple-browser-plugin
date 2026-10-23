@@ -96,7 +96,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind === "download_links") {
     try {
-      sendResponse({ ok: true, data: pageDownloadLinks() } satisfies ContentResponse);
+      sendResponse({ ok: true, data: pageDownloadLinks(msg.urls) } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
     }

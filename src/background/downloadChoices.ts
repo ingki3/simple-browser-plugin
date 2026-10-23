@@ -35,7 +35,7 @@ export interface DownloadChoices {
   grantBlock: string | null;
 }
 
-async function pageItems(kind: DownloadKind, callId: string, turnTab: TurnTab): Promise<PageDownloadItem[]> {
+async function pageItems(kind: DownloadKind, urls: string[], callId: string, turnTab: TurnTab): Promise<PageDownloadItem[]> {
   if (kind === "image") {
     // list_page_images와 같은 수집(모델이 본 목록과 같은 순서).
     const images = await callContentTool<PageImage[]>("list_page_images", {}, callId, turnTab);
@@ -48,7 +48,7 @@ async function pageItems(kind: DownloadKind, callId: string, turnTab: TurnTab): 
   }
   const tabId = await resolveTurnTab(turnTab);
   await waitForNavigationSettle(tabId, 10_000);
-  const links = await queryContent<PageDownloadItem[]>(tabId, { kind: "download_links" }, LOOKUP_TIMEOUT_MS, "페이지 링크 확인");
+  const links = await queryContent<PageDownloadItem[]>(tabId, { kind: "download_links", urls }, LOOKUP_TIMEOUT_MS, "페이지 링크 확인");
   // 형식을 짐작하지 못한 링크는 주소의 파일 이름 확장자를 보인다.
   return links.map((l) => ({ ...l, meta: l.meta || (urlFileName(l.url)?.split(".").pop()?.toLowerCase() ?? "") }));
 }
@@ -62,7 +62,7 @@ export async function snapshotDownloads(
   const tabId = await resolveTurnTab(turnTab);
   let items: PageDownloadItem[];
   try {
-    items = await pageItems(kind, callId, turnTab);
+    items = await pageItems(kind, urls, callId, turnTab);
   } catch (err) {
     throw new Error(`지금 페이지의 ${kind === "image" ? "이미지" : "링크"}를 확인하지 못했습니다: ${err instanceof Error ? err.message : String(err)}`);
   }

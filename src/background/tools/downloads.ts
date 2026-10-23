@@ -1,5 +1,5 @@
 import { DEFAULT_DOWNLOAD_FOLDER, sanitizeFilenameSegment } from "@/lib/sanitize";
-import { downloadOutcome, saveFileName, savedLocation, urlFileName, type DownloadKind } from "@/lib/downloadPick";
+import { downloadOutcome, imageSavedLocation, saveFileName, savedLocation, urlFileName, type DownloadKind } from "@/lib/downloadPick";
 
 // 이미지·첨부 파일 저장(#48). 사용자가 카드에서 고른 고정 후보만 넘어온다(downloadChoices.ts).
 // 항목마다 내려받기를 시작하고 끝날 때까지(한도 안에서) 기다려 성공·실패(이유)와 저장 위치를 돌려준다.
@@ -120,7 +120,7 @@ export async function runDownloads(
   const folder = sanitizeFilenameSegment(folderPrefix || DEFAULT_DOWNLOAD_FOLDER);
   const seen = new Set<string>();
   const unique = items.filter((it) => !seen.has(it.url) && seen.add(it.url));
-  const started: Array<{ req: DownloadRequest; id: number }> = [];
+  const started: Array<{ req: DownloadRequest; id: number; name?: string }> = [];
   const results = new Map<string, DownloadItemResult>();
   const fileUrls: string[] = [];
   if (kind === "file") beginNaming();
@@ -134,9 +134,10 @@ export async function runDownloads(
       }
       try {
         let id: number;
+        let name: string | undefined;
         if (kind === "image") {
           // 이미지는 주소의 이름으로 저장한다(허락 경로의 data: 주소는 받은 형식으로 확장자를 붙인다).
-          const name = saveFileName({ kind, suggested: urlFileName(req.url), url: req.url, mime: dataMime(req.source), index: i });
+          name = saveFileName({ kind, suggested: urlFileName(req.url), url: req.url, mime: dataMime(req.source), index: i });
           id = await chrome.downloads.download({ url: req.source, filename: `${folder}/${name}`, saveAs: false, conflictAction: "uniquify" });
         } else {
           const queue = nameHints.get(req.source) ?? [];
@@ -145,14 +146,15 @@ export async function runDownloads(
           fileUrls.push(req.source);
           id = await chrome.downloads.download({ url: req.source, saveAs: false, conflictAction: "uniquify" });
         }
-        started.push({ req, id });
+        started.push({ req, id, ...(name ? { name } : {}) });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        results.set(req.url, { ...base, ...downloadOutcome({ kind, state: "not_started", startError: `내려받기를 시작하지 못함: ${msg.slice(0, 120)}`, url: req.url }) });
+        // 오류 문구는 모델에 싣지 않고(고정 분류만) 디버그 콘솔에만 남긴다.
+        console.warn(`[${kind === "image" ? "download_images" : "download_files"}] start failed`, req.url, err);
+        results.set(req.url, { ...base, ...downloadOutcome({ kind, state: "not_started", url: req.url }) });
       }
     }
     const done = started.length ? await waitForDownloads(started.map((s) => s.id), signal) : new Map();
-    for (const { req, id } of started) {
+    for (const { req, id, name } of started) {
       const it = done.get(id);
       const base = { url: req.url, ...(req.label ? { label: req.label } : {}) };
       if (!it) {
@@ -161,7 +163,16 @@ export async function runDownloads(
       }
       const state = it.state === "complete" || it.state === "interrupted" ? it.state : "in_progress";
       const outcome = downloadOutcome({ kind, state, error: it.error, mime: it.mime, url: req.source, finalUrl: it.finalUrl });
-      const savedAs = it.filename ? savedLocation(folder, it.filename) : "";
+      // 첨부 파일(download_files, 외부 본문 보호를 켜는 도구)은 브라우저가 정한 이름(Content-Disposition 포함) 그대로,
+      // 이미지(보호를 켜지 않음)는 확장이 정한 이름과 uniquify 꼬리표만 알린다.
+      let savedAs = "";
+      if (it.filename && kind === "image" && name) {
+        const loc = imageSavedLocation(folder, name, it.filename);
+        savedAs = loc.savedAs;
+        if (loc.renamed) outcome.note = [outcome.note, "브라우저가 받은 형식에 맞춰 파일 이름을 바꿨을 수 있음"].filter(Boolean).join(" / ");
+      } else if (it.filename) {
+        savedAs = savedLocation(folder, it.filename);
+      }
       results.set(req.url, {
         ...base,
         ...outcome,

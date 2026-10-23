@@ -287,7 +287,8 @@ const INTERRUPT_REASONS: Record<string, string> = {
 
 export function downloadFailReason(code: string | null | undefined): string {
   if (!code) return "알 수 없는 이유로 중단됨";
-  return INTERRUPT_REASONS[code] ?? `중단됨(${code})`;
+  // 표에 없는 값은 그대로 싣지 않고 고정 문구로만 알린다.
+  return INTERRUPT_REASONS[code] ?? "중단됨(기타 이유)";
 }
 
 export interface DownloadOutcome {
@@ -298,17 +299,18 @@ export interface DownloadOutcome {
   note?: string;
 }
 
-// 한 항목의 결과. state는 chrome.downloads의 상태, 시작조차 못 했으면 "not_started"(startError).
+// 한 항목의 결과. state는 chrome.downloads의 상태, 시작조차 못 했으면 "not_started".
+// 모델로 가는 글자에는 서버가 정한 문자열(MIME·리다이렉트 목적지 호스트·오류 문구)을 싣지 않고 고정된 분류만 쓴다
+// (download_images는 외부 본문 보호를 켜지 않는 도구라, 서버 문자열에 숨긴 지시문이 들어가면 안 된다).
 export function downloadOutcome(o: {
   kind: DownloadKind;
   state: "complete" | "interrupted" | "in_progress" | "not_started";
   error?: string | null;
-  startError?: string | null;
   mime?: string | null;
   url: string;
   finalUrl?: string | null;
 }): DownloadOutcome {
-  if (o.state === "not_started") return { ok: false, reason: o.startError || "내려받기를 시작하지 못함" };
+  if (o.state === "not_started") return { ok: false, reason: "내려받기를 시작하지 못함" };
   if (o.state === "interrupted") return { ok: false, reason: downloadFailReason(o.error) };
   if (o.state === "in_progress") return { ok: false, reason: "아직 받는 중(완료를 기다리지 못함)" };
   const notes: string[] = [];
@@ -317,19 +319,28 @@ export function downloadOutcome(o: {
   if (mime === "text/html" || mime === "application/xhtml+xml") {
     notes.push("받은 것이 웹 페이지(HTML)입니다. 로그인 화면이나 오류 페이지일 수 있습니다");
   } else if (o.kind === "image" && mime && !mime.startsWith("image/") && !o.url.startsWith("data:")) {
-    notes.push(`이미지가 아닌 응답(${mime})`);
+    notes.push("이미지가 아닌 응답");
   }
   if (o.finalUrl && o.finalUrl !== o.url && /^https?:/i.test(o.finalUrl)) {
     const site = siteOf(o.url);
-    if (!site || !withinSite(site, o.finalUrl)) {
-      let host = o.finalUrl;
-      try {
-        host = new URL(o.finalUrl).host;
-      } catch {
-        /* 주소 그대로 */
-      }
-      notes.push(`다른 사이트(${host})로 리다이렉트되어 받음`);
-    }
+    if (!site || !withinSite(site, o.finalUrl)) notes.push("다른 사이트로 리다이렉트되어 받음");
   }
   return notes.length ? { ok: true, note: notes.join(" / ") } : { ok: true };
+}
+
+// 이미지 저장 위치: 확장이 정한 이름(주소의 이름)과 브라우저의 uniquify 꼬리표(" (1)")만 모델에 보낸다. 브라우저가
+// 받은 형식에 따라 이름을 바꿨으면(서버가 정한 값이 섞일 수 있음) 확장이 정한 이름만 알리고 renamed로 표시한다.
+export function imageSavedLocation(
+  folder: string,
+  requestedName: string,
+  fullPath: string,
+): { savedAs: string; renamed: boolean } {
+  const actual = fullPath.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+  const ext = extensionOf(requestedName);
+  const stem = ext ? requestedName.slice(0, requestedName.length - ext.length - 1) : requestedName;
+  const m = actual.match(/ \((\d{1,4})\)(\.[^.]*)?$/);
+  const n = m && actual === `${stem} (${m[1]})${ext ? `.${ext}` : ""}` ? m[1] : null;
+  if (actual === requestedName) return { savedAs: `${folder}/${requestedName}`, renamed: false };
+  if (n) return { savedAs: `${folder}/${stem} (${n})${ext ? `.${ext}` : ""}`, renamed: false };
+  return { savedAs: `${folder}/${requestedName}`, renamed: true };
 }
