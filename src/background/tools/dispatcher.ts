@@ -1,5 +1,7 @@
 import { autoApproveBlock } from "@/lib/autoApprove";
-import { downloadScope, imageDownloadSources, imageSaveGrantBlock } from "@/lib/chatGrant";
+import { downloadScope, imageDownloadSources } from "@/lib/chatGrant";
+import { DOWNLOAD_LIMITS } from "@/lib/downloadPick";
+import { snapshotDownloads, takeChosenDownloads } from "../downloadChoices";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import { readChosenLinks, snapshotLinks } from "../linkedPages";
 import type {
@@ -16,7 +18,7 @@ import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
 import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize";
 import { getSettings } from "../storage";
 import { callContentTool, isMissingReceiver, queryContent, resolveTurnTab, type TurnTab } from "./handlers";
-import { startImageDownloads } from "./downloads";
+import { runDownloads, type DownloadRunResult } from "./downloads";
 import { markOptimisticNavigation, waitForNavigationSettle } from "../navigation";
 import {
   clickCard,
@@ -80,6 +82,9 @@ export interface ToolPreview {
   grantBlock?: string | null;
   // 이번 대화 허락의 범위(download_images의 저장 폴더). 같은 범위일 때만 허락을 쓴다.
   grantScope?: string;
+  // 이번 대화 허락으로 카드 없이 실행할 때 고른 것으로 할 후보 id(read_linked_pages는 후보 전부, download_images는
+  // 모델이 넘긴 주소의 후보 — 선택 해제로 함께 보인 페이지의 다른 이미지는 받지 않는다).
+  grantChoiceIds?: string[];
   // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
   execArgs?: unknown;
 }
@@ -195,18 +200,31 @@ export async function buildToolPreview(
         baseUrls: [...new Set(infos.map((info) => info.baseUri ?? "").filter(Boolean))],
       };
     }
-    case "download_images": {
-      const args = parsedArgs as ToolArgs["download_images"];
+    case "download_images":
+    case "download_files": {
+      const args = parsedArgs as ToolArgs["download_images"] | ToolArgs["download_files"];
+      const kind = toolName === "download_images" ? "image" : "file";
       const { downloadFolderPrefix } = await getSettings();
       // 빈 값도 실제로 저장할 기본 폴더로 확정한다(카드·허락 판정·실행이 같은 폴더를 보게).
       const folder = args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER;
-      const sample = args.urls.slice(0, 5).map((u) => `• ${truncate(u, 100)}`);
-      const extra = args.urls.length > 5 ? `\n… 그 외 ${args.urls.length - 5}개` : "";
+      // 지금 페이지에 실제로 있는 이미지·링크인지 확인해 후보를 고정한다. 실행은 사용자가 고른 후보만 받는다.
+      const snap = await snapshotDownloads(callId, turnTab, kind, args.urls);
+      const limit = DOWNLOAD_LIMITS[kind].maxPick;
+      const what =
+        kind === "image"
+          ? `이미지를 '${folder}/' 폴더에 저장합니다.`
+          : `첨부·다운로드 파일을 로그인 쿠키와 함께 받아 '${folder}/' 폴더에 저장합니다.`;
+      const extra = snap.choices.length > snap.requestedIds.length ? " 모델이 고르지 않은 페이지 항목은 선택 해제로 함께 보입니다." : "";
       return {
-        summary: `이미지 ${args.urls.length}개를 '${folder}/' 폴더에 저장합니다.`,
-        details: sample.join("\n") + extra,
-        grantBlock: await imageGrantBlockAt(args.urls, callId, turnTab),
-        grantScope: downloadScope(folder),
+        summary: `${what} 저장할 항목을 고르세요(최대 ${limit}개).${extra}`,
+        ...(snap.rejected.length ? { details: `받지 않는 주소:\n${snap.rejected.join("\n")}` } : {}),
+        choices: snap.choices,
+        choiceLimit: Math.min(limit, snap.choices.length),
+        choiceDefaults: snap.defaults,
+        // 첨부 파일은 이번 대화 허락 대상이 아니다(쿠키를 실어 받으므로 늘 카드에서 고른다).
+        ...(kind === "image"
+          ? { grantBlock: snap.grantBlock, grantScope: downloadScope(folder), grantChoiceIds: snap.requestedIds }
+          : {}),
         // 폴더를 생략한 호출은 실행 때 설정을 다시 읽지 않고, 카드·허락 판정에 쓴 이 폴더에 저장한다.
         execArgs: { ...args, folderPrefix: folder },
       };
@@ -246,6 +264,7 @@ export async function buildToolPreview(
         choiceLimit: choices.length,
         choiceDefaults: defaults,
         grantBlock,
+        grantChoiceIds: choices.map((c) => c.id),
       };
     }
     case "read_other_tabs": {
@@ -325,18 +344,6 @@ export async function buildToolPreview(
   }
 }
 
-// 이미지 저장을 이번 대화 허락(#53)으로 덮을 수 있는지: 주소가 모두 지금 페이지의 이미지(list_page_images와 같은 수집)
-// 그대로여야 한다. 페이지를 읽지 못하면 덮지 않는다(카드로 묻는다).
-async function imageGrantBlockAt(urls: string[], callId: string, turnTab: TurnTab): Promise<string | null> {
-  let images: PageImage[];
-  try {
-    images = await callContentTool<PageImage[]>("list_page_images", {}, callId, turnTab);
-  } catch {
-    return "지금 페이지의 이미지를 확인하지 못함";
-  }
-  return imageSaveGrantBlock(urls, new Set(images.map((i) => i.url)));
-}
-
 // 클릭 뒤 이동이 시작될 틈. markOptimisticNavigation은 500ms 안에 이동이 시작되지 않으면 기다림을 푼다.
 const CLICK_SETTLE_MS = 700;
 
@@ -381,6 +388,21 @@ async function observeClickEffect(
     sameDocument = isMissingReceiver(err) ? false : null;
   }
   return { navigation: navKind(before, url), url, sameDocument, newTab: newTabs(), dom };
+}
+
+// 결과 요약: 시작·저장·실패 수와 저장한 이름(앞 몇 개), 실패 이유.
+function downloadSummary(res: DownloadRunResult): string {
+  const failed = res.results.filter((r) => !r.ok);
+  const saved = res.results.filter((r) => r.ok && r.savedAs).map((r) => r.savedAs as string);
+  const names = saved.length ? ` (${saved.slice(0, 3).map((n) => truncate(n, 60)).join(", ")}${saved.length > 3 ? ` 외 ${saved.length - 3}개` : ""})` : "";
+  const fails = failed.length
+    ? ` 실패 ${failed.length}개: ${failed
+        .slice(0, 3)
+        .map((r) => `${truncate(r.label || r.url, 40)}(${r.reason ?? ""})`)
+        .join(", ")}`
+    : "";
+  const notes = res.results.filter((r) => r.note).length;
+  return `${res.startedCount}개 다운로드 시작, ${res.savedCount}개 저장 완료${names}.${fails}${notes ? ` 확인 필요 ${notes}개.` : ""}`;
 }
 
 function truncate(s: string, max: number): string {
@@ -636,20 +658,33 @@ async function runTool(
         data,
       };
     }
-    case "download_images": {
-      const args = parsedArgs as ToolArgs["download_images"];
-      // download_images는 늘 미리보기(카드·허락 판정)를 거치고, 미리보기가 확정한 폴더(execArgs)로 온다.
+    case "download_images":
+    case "download_files": {
+      const args = parsedArgs as ToolArgs["download_images"] | ToolArgs["download_files"];
+      const kind = toolName === "download_images" ? "image" : "file";
+      // 늘 미리보기(카드·허락 판정)를 거치고, 미리보기가 확정한 폴더(execArgs)로 온다.
       // 실행부는 설정을 다시 읽지 않는다(그 사이 설정이 바뀌어도 확인한 폴더에 저장).
       const folder = args.folderPrefix || DEFAULT_DOWNLOAD_FOLDER;
+      // 받는 것은 카드에서 고른(허락 경로면 모델이 넘긴) 고정 후보뿐이다. 모델 인자의 주소는 다시 쓰지 않는다.
+      const picked = takeChosenDownloads(callId, kind);
+      if (!picked.length) throw new Error("고른 항목이 없어 저장하지 않았습니다.");
+      const urls = picked.map((p) => p.url);
       // 이번 대화 허락으로 실행하는 호출은 그 호출을 위해 쿠키 없이 미리 받은 이미지만 저장한다(grantImages.ts).
       // 미리 받은 것이 없으면 원본 주소로 내려받지 않고 실패한다(fail-closed, imageDownloadSources).
-      const sources = imageDownloadSources(args.urls, opts.viaGrant === true, opts.grantImages);
+      // 첨부 파일은 허락 대상이 아니라 viaGrant로 오지 않지만, 오더라도 같은 판정으로 실패한다.
+      const sources = imageDownloadSources(urls, opts.viaGrant === true, opts.grantImages);
       if ("error" in sources) throw new Error(sources.error);
-      const res = await startImageDownloads(sources, folder);
+      const labels = new Map(picked.map((p) => [p.url, p.label]));
+      const res = await runDownloads(
+        kind,
+        sources.map((s) => ({ ...s, label: labels.get(s.url) ?? "" })),
+        folder,
+        signal,
+      );
       return {
-        ok: true,
-        summary: `${res.startedCount}개 다운로드 시작 (건너뜀 ${res.skippedCount}).`,
-        data: res,
+        ok: res.savedCount > 0,
+        summary: downloadSummary(res),
+        data: { ...res, location: `브라우저 다운로드 폴더 아래 '${res.folder}/'` },
       };
     }
     case "query_dom": {

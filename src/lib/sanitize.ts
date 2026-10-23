@@ -11,10 +11,6 @@ function parseSafeHttpUrl(raw: string): URL | null {
   }
 }
 
-export function isDownloadSafeUrl(raw: string): boolean {
-  return parseSafeHttpUrl(raw) !== null;
-}
-
 export function isNavigationSafeUrl(raw: string): boolean {
   const url = parseSafeHttpUrl(raw);
   return url !== null && url.username === "" && url.password === "";
@@ -28,18 +24,6 @@ export function normalizeNavigationUrl(raw: string): string {
   return url.href;
 }
 
-export function sanitizeDownloadUrls(urls: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const u of urls) {
-    if (!isDownloadSafeUrl(u)) continue;
-    if (seen.has(u)) continue;
-    seen.add(u);
-    out.push(u);
-  }
-  return out;
-}
-
 // 설정에도 호출에도 저장 폴더가 없을 때 쓰는 폴더.
 export const DEFAULT_DOWNLOAD_FOLDER = "downloads";
 
@@ -50,16 +34,4 @@ export function sanitizeFilenameSegment(raw: string): string {
     .replace(/^\.+/, "")
     .slice(0, 80)
     .trim() || "file";
-}
-
-export function deriveFilenameFromUrl(rawUrl: string, fallbackIndex: number): string {
-  try {
-    const u = new URL(rawUrl);
-    const last = u.pathname.split("/").filter(Boolean).pop() ?? "";
-    const cleaned = sanitizeFilenameSegment(decodeURIComponent(last));
-    if (cleaned && cleaned !== "file") return cleaned;
-  } catch {
-    // fall through
-  }
-  return `image-${fallbackIndex + 1}`;
 }

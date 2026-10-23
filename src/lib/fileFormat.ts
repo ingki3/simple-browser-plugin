@@ -73,6 +73,43 @@ const NOT_DOCUMENT = new Set([
   "rtf", "epub", "key", "pages", "numbers",
 ]);
 
+// 웹 페이지·스크립트·데이터 주소. 읽지도 저장 후보로 보이지도 않는다(링크한 페이지이지 첨부 파일이 아니다).
+const WEB_RESOURCE = new Set(["html", "htm", "xhtml", "shtml", "js", "mjs", "css", "json", "xml"]);
+
+// 사용자 이름·비밀번호가 실린 주소(https://user:pass@host/…). 이런 주소는 모델에 보내는 목록에 넣지 않는다.
+export function hasUrlCredentials(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    return u.username !== "" || u.password !== "";
+  } catch {
+    return false;
+  }
+}
+
+// 읽을 수는 없지만 파일로 저장할 수 있는 링크의 확장자(#48: zip·구형 Office·이미지·한글 외 문서 등). read_document의
+// 판정(checkFileUrl)은 바꾸지 않고, 그 판정이 거절한 링크 중 웹 페이지가 아닌 파일만 고른다. 아니면 null.
+export function saveOnlyExtension(rawUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  // checkFileUrl과 같은 거절 조건을 먼저 적용한다: http(s)만, 계정 정보가 실린 주소는 받지도 모델에 알리지도 않는다.
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (hasUrlCredentials(url.href)) return null;
+  if (checkFileUrl(url.href).ok) return null;
+  let last: string;
+  try {
+    last = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+  } catch {
+    return null;
+  }
+  const ext = extensionOf(last);
+  if (!ext || WEB_RESOURCE.has(ext)) return null;
+  return LEGACY_OFFICE.includes(ext) || NOT_DOCUMENT.has(ext) ? ext : null;
+}
+
 export function extensionOf(name: string): string | null {
   return name.match(/\.([a-z0-9]{1,10})$/i)?.[1]?.toLowerCase() ?? null;
 }

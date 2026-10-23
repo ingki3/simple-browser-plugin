@@ -13,6 +13,7 @@ export type ToolName =
   | "fill_form_fields"
   | "list_page_images"
   | "download_images"
+  | "download_files"
   | "query_dom"
   | "navigate_to_url"
   | "find_clickables"
@@ -31,6 +32,8 @@ export type ToolName =
 export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "fill_form_fields",
   "download_images",
+  // 지금 페이지의 첨부·다운로드 링크를 로그인 쿠키와 함께 내려받는다(#48). 늘 사용자가 카드에서 고른다.
+  "download_files",
   "navigate_to_url",
   "click_element",
   // 모델이 고른 URL로 쿠키를 실어 GET을 보낸다. 프롬프트 주입이 쿼리에 대화 내용을 담아 외부로 보낼 수 있다.
@@ -142,6 +145,10 @@ export interface FileLink {
   url: string;
   // 이름으로 짐작한 형식. null이면 확장자 없는 다운로드 링크(받은 뒤 판별).
   format: ReadableFormat | null;
+  // false면 read_document로 읽을 수 없고 download_files로 저장만 할 수 있는 파일(zip·구형 Office·이미지 등, #48).
+  readable?: false;
+  // readable=false인 링크의 확장자.
+  ext?: string;
 }
 
 export interface FileLinkList {
@@ -245,7 +252,10 @@ export type BgToContent =
   // 다른 탭 참조: 이 문서의 본문. 지금 주소가 expectUrl과 다르면 읽지 않는다.
   | { kind: "read_page_text"; expectUrl: string }
   // read_linked_pages: 이 주소들이 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 링크에 있는지와 링크 글자.
-  | { kind: "link_lookup"; urls: string[] };
+  | { kind: "link_lookup"; urls: string[] }
+  // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크(후보 고정용).
+  // urls(모델이 넘긴 주소)는 돌려주는 수의 한도와 관계없이 끝까지 찾는다.
+  | { kind: "download_links"; urls: string[] };
 
 export interface ContentResponse<T = unknown> {
   ok: boolean;
