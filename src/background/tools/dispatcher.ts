@@ -22,6 +22,7 @@ import {
   currentToolTab,
   followingPopup,
   followingTabPopup,
+  recheckTabPopup,
   isMissingReceiver,
   pruneClosedPopups,
   queryContent,
@@ -118,6 +119,8 @@ async function inspectTargets(
 ): Promise<TargetInfo[]> {
   const tabId = await resolveTurnTab(turnTab);
   await waitForNavigationSettle(tabId, 10_000);
+  // 탭으로 열린 팝업이면 기다린 뒤에도 앞에 보이는지 다시 본다(확인 실패면 오류로 멈춘다).
+  await recheckTabPopup(turnTab, tabId);
   try {
     return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId, prefix, values }, 5_000, "대상 확인");
   } catch (err) {

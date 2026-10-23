@@ -109,8 +109,9 @@ const TAB_POPUP_CHANGED_ERROR =
 
 // 탭으로 열린 팝업에서 도구를 실행해도 되는지: 그 탭이 따라가기 시작한 창에 있고 그 창의 활성 탭이며 창이 내려가
 // 있지 않아야 한다. 첫 도구 전에는 문서도 따라가기 시작할 때와 같아야 한다. 아니면 오류(따라가기는 그대로 둔다 —
-// 사용자가 다시 앞에 띄우면 이어 간다).
-async function assertTabPopupVisible(top: FollowedPopup, tab: chrome.tabs.Tab): Promise<void> {
+// 사용자가 다시 앞에 띄우면 이어 간다). 확인한 지금 문서 id를 돌려준다(보낼 메시지를 그 문서에 고정).
+// 확인만 하고 checked는 바꾸지 않는다 — 메시지를 실제로 그 문서에 보낸 뒤 markTabPopupUsed가 표시한다.
+async function assertTabPopupVisible(top: FollowedPopup, tab: chrome.tabs.Tab): Promise<string> {
   if (!tab.active || tab.windowId !== top.windowId) throw new Error(TAB_POPUP_HIDDEN_ERROR);
   let win: chrome.windows.Window;
   try {
@@ -119,10 +120,33 @@ async function assertTabPopupVisible(top: FollowedPopup, tab: chrome.tabs.Tab): 
     throw new Error(TAB_POPUP_HIDDEN_ERROR);
   }
   if (win.state === "minimized") throw new Error(TAB_POPUP_HIDDEN_ERROR);
-  if (!top.checked) {
-    if (!top.documentId || (await topDocumentId(tab.id as number)) !== top.documentId) throw new Error(TAB_POPUP_CHANGED_ERROR);
-    top.checked = true;
+  const doc = await topDocumentId(tab.id as number);
+  if (!doc) throw new Error(TAB_POPUP_HIDDEN_ERROR);
+  if (!top.checked && doc !== top.documentId) throw new Error(TAB_POPUP_CHANGED_ERROR);
+  return doc;
+}
+
+// 내용 스크립트에 보내기 직전(탐색 대기·주입 재시도 뒤 포함)에 부른다. tabId가 지금 따라가는 탭 팝업이면 가시성·문서를
+// 다시 확인하고 그 문서 id를 돌려준다(보낼 메시지를 그 문서에 고정). 탭 팝업이 아니면 null(고정 없음).
+export async function recheckTabPopup(turnTab: TurnTab, tabId: number): Promise<string | null> {
+  if ("error" in turnTab) return null;
+  const top = turnTab.popups?.[turnTab.popups.length - 1];
+  if (!top || top.kind !== "tab" || top.tabId !== tabId) return null;
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    await pruneClosedPopups(turnTab);
+    throw new Error("따라가던 팝업 창이 방금 닫혔습니다. 다시 관측하세요.");
   }
+  return assertTabPopupVisible(top, tab);
+}
+
+// 탭 팝업의 확인한 문서에 첫 메시지를 보냈다(그 뒤로는 탭 안 이동을 허용 — 달력의 다음 달 등).
+function markTabPopupUsed(turnTab: TurnTab, tabId: number): void {
+  if ("error" in turnTab) return;
+  const top = turnTab.popups?.[turnTab.popups.length - 1];
+  if (top && top.kind === "tab" && top.tabId === tabId) top.checked = true;
 }
 
 // 지금 팝업 창을 따라가는 중인지(동기, 상태만 본다 — 닫혔는지는 currentToolTab이 확인한다).
@@ -190,10 +214,8 @@ export function takeTabNote(turnTab: TurnTab): string | null {
 // (보이지 않는 탭 팝업으로 조용히 따라가지 않음). 복원은 기록한 상태로만 하고 주소·opener로 추측하지 않는다.
 export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boolean> {
   if ("error" in prev || "error" in next || !prev.popups?.length) return false;
-  const lastTabPopup = [...prev.popups].reverse().find((p) => p.kind === "tab");
-  if (lastTabPopup ? next.tabId !== lastTabPopup.tabId : next.tabId !== prev.tabId) return false;
   const origin = prev.originDocumentId;
-  if (!origin || (await topDocumentId(prev.tabId)) !== origin) return false;
+  if (!origin) return false;
   // 닫힌 창은 건너뛰고 살아 있는 창을 순서대로 남긴다(원래 탭 → A → B에서 A만 닫혀도 지금 턴처럼 B에서 이어 간다 —
   // pruneClosedPopups도 맨 위가 살아 있으면 그 창을 쓴다).
   const alive: FollowedPopup[] = [];
@@ -201,8 +223,11 @@ export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boole
     if (await tabExists(p.tabId)) alive.push(p);
   }
   if (!alive.length) return false;
+  // 닫힌 항목을 걷어 낸 뒤의 마지막 탭 팝업으로 본다(O → A → B에서 B가 닫혔으면 A가 앞에 있을 때 잇는다).
+  const lastTabPopup = [...alive].reverse().find((p) => p.kind === "tab");
+  if (lastTabPopup ? next.tabId !== lastTabPopup.tabId : next.tabId !== prev.tabId) return false;
+  if ((await topDocumentId(prev.tabId)) !== origin) return false;
   if (lastTabPopup) {
-    if (!alive.includes(lastTabPopup)) return false;
     let internal = false;
     try {
       internal = isBrowserInternalUrl((await chrome.tabs.get(prev.tabId)).url);
@@ -347,11 +372,15 @@ export async function callContentTool<T = unknown>(
   const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
 
   const send = async (): Promise<ContentResponse<T>> => {
-    return (await withTimeout(
-      chrome.tabs.sendMessage(tabId, msg, { frameId: 0 }) as Promise<ContentResponse<T>>,
+    // 탭으로 열린 팝업이면 기다린 뒤에도 앞에 보이는지 다시 보고, 확인한 문서에만 보낸다.
+    const documentId = await recheckTabPopup(turnTab, tabId);
+    const res = (await withTimeout(
+      chrome.tabs.sendMessage(tabId, msg, documentId ? { documentId } : { frameId: 0 }) as Promise<ContentResponse<T>>,
       timeoutMs,
       `컨텐트 스크립트(${toolName})`,
     )) as ContentResponse<T>;
+    if (documentId) markTabPopupUsed(turnTab, tabId);
+    return res;
   };
 
   let res: ContentResponse<T>;
