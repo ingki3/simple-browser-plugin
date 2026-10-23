@@ -62,6 +62,8 @@ export function pageDownloadLinks(requested: string[] = []): Array<{ url: string
       try {
         const u = new URL(a.href);
         if (u.protocol !== "http:" && u.protocol !== "https:") continue;
+        // 계정 정보가 실린 주소는 후보로 쓰지 않는다(카드·모델 어디에도 보내지 않음).
+        if (u.username || u.password) continue;
         u.hash = "";
         key = u.href;
       } catch {

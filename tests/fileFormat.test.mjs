@@ -184,3 +184,15 @@ test("saveOnlyExtension: 읽을 수 없지만 저장할 수 있는 파일만(#48
   assert.equal(saveOnlyExtension("javascript:void(0)"), null);
   assert.equal(checkFileUrl("https://a.com/files/x.zip").ok, false);
 });
+
+test("계정 정보가 실린 주소는 저장 전용 경로로도 다시 허용하지 않는다(#48 리뷰)", async () => {
+  const { saveOnlyExtension, hasUrlCredentials } = await import("../src/lib/fileFormat.ts");
+  assert.equal(checkFileUrl("https://alice:secret@example.com/archive.zip").ok, false);
+  assert.equal(saveOnlyExtension("https://alice:secret@example.com/archive.zip"), null);
+  assert.equal(saveOnlyExtension("https://alice@example.com/old.xls"), null);
+  assert.equal(saveOnlyExtension("https://:pw@example.com/a.jpg"), null);
+  assert.equal(saveOnlyExtension("ftp://example.com/a.zip"), null);
+  assert.equal(hasUrlCredentials("https://alice:secret@example.com/a.png"), true);
+  assert.equal(hasUrlCredentials("https://example.com/a.png?user=alice"), false);
+  assert.equal(hasUrlCredentials("not a url"), false);
+});
