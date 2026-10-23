@@ -8,6 +8,8 @@ const TOOL_TIMEOUT_MS: Partial<Record<ToolName, number>> = {
   translate_page: 180_000,
   download_images: 60_000,
   download_files: 60_000,
+  // capture_page의 시작 단계(문서 재기 — 큰 문서는 요소를 훑는 데 시간이 걸린다).
+  capture_page: 15_000,
 };
 
 export const INTERNAL_PAGE_ERROR =

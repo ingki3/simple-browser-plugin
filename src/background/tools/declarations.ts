@@ -218,6 +218,24 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "capture_page",
+    description:
+      "지금 보고 있는 페이지를 PNG 이미지로 캡처해 다운로드 폴더에 저장한다(승인 카드). 기본은 지금 보이는 화면, fullPage:true면 맨 위부터 스크롤하며 페이지 전체(높이 상한 20,000px, 넘으면 잘림 표시)를 이어 붙인다 — 캡처하는 동안 페이지가 스크롤되고 고정 머리글 등이 잠시 숨겨졌다가 원래대로 돌아온다. 이미지는 저장만 하고 모델에 보내지 않으므로 캡처로 화면 내용을 볼 수는 없다. 결과는 저장 위치(폴더/파일 이름)·이미지 크기(px)·잘림 여부·알림.",
+    parameters: {
+      type: "object",
+      properties: {
+        fullPage: {
+          type: "boolean",
+          description: "true면 스크롤해 페이지 전체를 캡처. 사용자가 '전체', '스크롤해서 끝까지'처럼 요청했을 때만. 기본 false(보이는 화면).",
+        },
+        folderPrefix: {
+          type: "string",
+          description: "저장 폴더 접두사. 미지정 시 설정값 사용.",
+        },
+      },
+    },
+  },
+  {
     name: "query_dom",
     description:
       "CSS 선택자로 현재 활성 탭의 DOM 요소를 조회해 화면 글자와 속성값을 반환한다. 특정 구조를 읽어야 할 때의 이스케이프 해치. 입력 칸·편집 영역·숨은 요소 안의 글자는 돌려주지 않는다.",

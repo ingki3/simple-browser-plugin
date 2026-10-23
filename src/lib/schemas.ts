@@ -81,6 +81,14 @@ export const downloadImagesArgs = z
   })
   .strict();
 
+// 보고 있는 페이지 캡처(#49). 늘 PNG로 저장한다(이미지를 모델에 보내는 선택은 아직 없다).
+export const capturePageArgs = z
+  .object({
+    fullPage: z.boolean().optional(),
+    folderPrefix: z.string().max(120).optional(),
+  })
+  .strict();
+
 // 지금 페이지의 첨부·다운로드 링크(#48). 주소가 페이지에 있는지는 카드 전에 확인하므로 형식 검사는 길이만 본다
 // (잘못된 주소 하나가 호출 전체를 실패시키지 않고 "받지 않는 주소"로 알리게).
 export const downloadFilesArgs = z
@@ -211,6 +219,7 @@ export const toolArgsSchemas = {
   list_page_images: listPageImagesArgs,
   download_images: downloadImagesArgs,
   download_files: downloadFilesArgs,
+  capture_page: capturePageArgs,
   query_dom: queryDomArgs,
   navigate_to_url: navigateToUrlArgs,
   find_clickables: findClickablesArgs,

@@ -10,6 +10,7 @@ import {
   type WorkerJob,
 } from "@/lib/documentJob";
 import { extractParsedDocument } from "@/content/extract";
+import type { StitchJob, StitchReleaseJob, StitchResult } from "@/lib/pageCapture";
 
 // docling wasm(약 15MB)은 한 번만 컴파일하고 모듈을 Worker에 넘긴다.
 let compiled: Promise<WebAssembly.Module> | null = null;
@@ -87,10 +88,70 @@ function runHtmlJob(job: HtmlExtractJob, port: MessagePort): void {
   port.close();
 }
 
+// 페이지 전체 캡처(#49)의 이어 붙이기. 조각마다 캔버스를 하나씩 만들어 그 조각에 걸친 화면만 디코드해 그리고,
+// PNG로 만든 뒤 캔버스를 놓는다(한 번에 하나의 조각만 메모리에 둔다). 결과는 이 문서의 blob: 주소로 돌려주며,
+// 서비스 워커가 저장을 마치면 놓는다(놓지 않아도 일정 시간 뒤 스스로 놓는다).
+const STITCH_URL_TTL_MS = 5 * 60_000;
+const stitchUrls = new Set<string>();
+
+function releaseStitchUrls(urls: readonly string[]): void {
+  for (const url of urls) {
+    if (stitchUrls.delete(url)) URL.revokeObjectURL(url);
+  }
+}
+
+async function runStitchJob(job: StitchJob, port: MessagePort): Promise<void> {
+  let cancelled = false;
+  port.onmessage = (ev: MessageEvent) => {
+    if ((ev.data as { kind?: string } | null)?.kind === "cancel") cancelled = true;
+  };
+  const parts: Array<{ url: string; bytes: number; width: number; height: number }> = [];
+  try {
+    const { plan } = job;
+    for (const part of plan.parts) {
+      if (cancelled) throw new Error("cancelled");
+      const canvas = new OffscreenCanvas(plan.width, part.height);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("캔버스를 만들지 못함");
+      for (const d of part.draws) {
+        if (cancelled) throw new Error("cancelled");
+        const bmp = await createImageBitmap(job.tiles[d.tile]);
+        try {
+          // 화면 이미지의 배율(장치 px / CSS px)은 이미지 폭으로 구한다(스크롤 막대 포함 폭 = windowWidth).
+          // 세로 스크롤 막대(viewportWidth 오른쪽)는 잘라 낸다.
+          const k = bmp.width / job.windowWidth;
+          ctx.drawImage(bmp, 0, d.srcY * k, job.viewportWidth * k, d.srcHeight * k, 0, d.destY, plan.width, d.destHeight);
+        } finally {
+          bmp.close();
+        }
+      }
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      canvas.width = 0;
+      canvas.height = 0;
+      const url = URL.createObjectURL(blob);
+      stitchUrls.add(url);
+      setTimeout(() => releaseStitchUrls([url]), STITCH_URL_TTL_MS);
+      parts.push({ url, bytes: blob.size, width: plan.width, height: part.height });
+    }
+    port.postMessage({ ok: true, parts } satisfies StitchResult);
+  } catch (err) {
+    releaseStitchUrls(parts.map((p) => p.url));
+    if (!cancelled) console.warn("[capture_page] stitch failed", err);
+    port.postMessage({ ok: false, kind: cancelled ? "cancelled" : "failed" } satisfies StitchResult);
+  }
+  port.close();
+}
+
 navigator.serviceWorker.onmessage = (ev: MessageEvent) => {
-  const job = ev.data as DocumentJob | HtmlExtractJob | null;
+  const job = ev.data as DocumentJob | HtmlExtractJob | StitchJob | StitchReleaseJob | null;
   const port = ev.ports[0];
   if (!port) return;
   if (job?.kind === "document_convert") runJob(job, port);
   else if (job?.kind === "html_extract") runHtmlJob(job, port);
+  else if (job?.kind === "capture_stitch") void runStitchJob(job, port);
+  else if (job?.kind === "capture_release") {
+    releaseStitchUrls(job.urls);
+    port.postMessage({ ok: true });
+    port.close();
+  }
 };

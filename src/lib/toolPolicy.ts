@@ -31,6 +31,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   click_element: ACTION,
   navigate_to_url: ACTION,
   download_images: ACTION,
+  // 페이지 캡처(#49): 전체 캡처는 스크롤·스타일을 잠시 바꾼다. 결과에는 확장이 정한 이름·크기만 싣는다.
+  capture_page: ACTION,
   // 결과에 서버가 정한 파일 이름(Content-Disposition)·받은 형식이 실린다.
   download_files: EXTERNAL,
   read_document: EXTERNAL,

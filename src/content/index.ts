@@ -11,6 +11,7 @@ import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect } from "./targets";
 import { pageSkeleton } from "./skeleton";
+import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
 
 async function execTool(toolName: ToolName, args: unknown, callId: string): Promise<unknown> {
   switch (toolName) {
@@ -38,6 +39,13 @@ async function execTool(toolName: ToolName, args: unknown, callId: string): Prom
       return findClickables((args ?? {}) as { query?: string; limit?: number });
     case "click_element":
       return clickElement(args as { id: string }, callId);
+    case "capture_page":
+      // 캡처 자체는 백그라운드가 하고, 여기서는 문서를 재고 전체 캡처의 세션을 연다(#49).
+      {
+        const a = (args ?? {}) as { fullPage?: boolean; token?: unknown };
+        if (typeof a.token !== "string" || !a.token) throw new Error("캡처 세션 값이 없습니다.");
+        return captureBegin(!!a.fullPage, a.token);
+      }
     case "download_images":
     case "download_files":
       throw new Error(`${toolName}는 백그라운드에서 실행해야 합니다.`);
@@ -101,6 +109,21 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
     }
     return false;
+  }
+  if (msg.kind === "capture_step") {
+    const run =
+      msg.step === "scroll"
+        ? captureScroll(msg.token, msg.y)
+        : msg.step === "hide_fixed"
+          ? captureHideFixed(msg.token)
+          : msg.step === "measure"
+            ? Promise.resolve().then(() => captureMeasure(msg.token))
+            : Promise.resolve(captureEnd(msg.token));
+    run.then(
+      (data) => sendResponse({ ok: true, data } satisfies ContentResponse),
+      (err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse),
+    );
+    return true;
   }
   if (msg.kind !== "tool_exec") return false;
 

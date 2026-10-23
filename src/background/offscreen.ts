@@ -2,7 +2,7 @@ import { OFFSCREEN_PATH } from "@/lib/documentJob";
 import { debugLog, timeSpan } from "./debug";
 
 // 공용 offscreen 문서 관리. 일반 프로필에서는 offscreen 문서를 하나만 열 수 있어, 문서 변환(read_document,
-// Worker)과 HTML 본문 추출(read_linked_pages, DOMParser)이 같은 문서를 쓴다. 생성·작업 수·유휴 종료·강제 종료를
+// Worker)과 HTML 본문 추출(read_linked_pages, DOMParser), 캡처 이어 붙이기(capture_page, 캔버스)가 같은 문서를 쓴다. 생성·작업 수·유휴 종료·강제 종료를
 // 여기서만 다룬다. 강제로 닫을 때는(작업 감시 시간 초과) 진행 중인 모든 작업을 즉시 실패로 끝낸다.
 
 // 마지막 작업 뒤 이 시간 동안 새 작업이 없으면 offscreen 문서를 닫아 메모리를 돌려준다.
@@ -40,9 +40,9 @@ async function ensureOffscreen(): Promise<void> {
     creating = chrome.offscreen
       .createDocument({
         url: OFFSCREEN_PATH,
-        reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.DOM_PARSER],
+        reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.DOM_PARSER, chrome.offscreen.Reason.BLOBS],
         justification:
-          "링크된 문서(Office·PDF·한글·CSV)를 강제 종료할 수 있는 Worker에서 변환하고, 받아 온 기사 HTML을 DOMParser로 파싱해 본문을 뽑는다.",
+          "링크된 문서(Office·PDF·한글·CSV)를 강제 종료할 수 있는 Worker에서 변환하고, 받아 온 기사 HTML을 DOMParser로 파싱해 본문을 뽑고, 페이지 전체 캡처의 화면들을 캔버스로 이어 붙여 저장할 이미지(blob)를 만든다.",
       })
       .then(
         () => end("ok"),
