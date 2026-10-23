@@ -25,7 +25,7 @@ const SUBMIT_TEXT_RE =
 export const DESTRUCTIVE_TEXT_RE =
   /(삭제|지우기|지워|지움|제거|휴지통|스팸|차단|영구|비우기|버리기|폐기|탈퇴|\bdelete|\bremove|\btrash|\bspam|\bjunk\b|\bdiscard|\berase|\bpurge|\bblock\b|\bbin\b|\bdel\b)/i;
 export const DESTRUCTIVE_REASON = "되돌리기 어려운 동작(삭제·스팸)";
-// htmx 요청을 확인할 수 없음(#62 — 자동 실행되는 htmx 요청은 요청 변형 속성 없는 hx-get뿐, 그 밖은 늘 묻는다).
+// htmx 요청을 확인할 수 없음(#62 — htmx는 허용 목록 방식: 허용 목록 속성만 쓰는 GET 요청만 자동 실행, 그 밖은 늘 묻는다).
 export const OPAQUE_REQUEST_REASON = "htmx 요청(GET 아님·확인할 수 없음)";
 
 // 클릭·입력이 되돌리기 어려운 동작인지(#62). 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않는다
