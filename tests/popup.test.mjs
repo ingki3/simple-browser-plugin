@@ -4,7 +4,44 @@ import assert from "node:assert/strict";
 import { describeEffect, describePopup, popupWhere } from "../src/lib/actionTarget.ts";
 import { clickObservedChange } from "../src/lib/hopGuard.ts";
 import { sameSiteAs } from "../src/lib/siteTrust.ts";
-import { blockedOpens, openTargetKey } from "../src/lib/popupMatch.ts";
+import { ABORTED, blockedOpens, bounded, openTargetKey } from "../src/lib/popupMatch.ts";
+
+test("bounded: already aborted wait swallows a later rejection (no unhandledRejection)", async () => {
+  const seen = [];
+  const onUnhandled = (e) => seen.push(e);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const ac = new AbortController();
+    ac.abort();
+    const failing = new Promise((_, reject) => setTimeout(() => reject(new Error("No tab with id")), 5));
+    assert.equal(await bounded(failing, 1000, "fb", ac.signal), ABORTED);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(seen, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("bounded: timeout, rejection and abort fall back", async () => {
+  assert.equal(await bounded(new Promise(() => {}), 10, "fb"), "fb");
+  assert.equal(await bounded(Promise.reject(new Error("x")), 1000, "fb"), "fb");
+  assert.equal(await bounded(Promise.resolve("ok"), 1000, "fb"), "ok");
+  const ac = new AbortController();
+  const p = bounded(new Promise(() => {}), 1000, "fb", ac.signal);
+  ac.abort();
+  assert.equal(await p, ABORTED);
+});
+
+test("popup that closes while opening the next popup reports the new window as followed", () => {
+  const text = describeEffect({
+    ...base,
+    sameDocument: null,
+    newTab: true,
+    popup: { closed: "original", opened: { where: "ex.test/calB", followed: true, otherSite: false } },
+  });
+  assert.match(text, /^클릭한 팝업 창이 닫혔습니다\. 팝업 창이 열렸습니다\(ex\.test\/calB\)\. 이제 도구는 팝업 창에서 동작합니다/);
+  assert.doesNotMatch(text, /원래 탭에서 동작합니다/);
+});
 
 test("blockedOpens: noopener null with a created window is not blocked", () => {
   const cal = "https://ex.test/cal";

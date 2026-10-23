@@ -829,7 +829,7 @@ async function runTool(
         if (signal?.aborted) throw new ClickAbortedError();
         data = await callContentTool(toolName, parsedArgs, callId, turnTab);
       } catch (err) {
-        newTabs.stop();
+        const createdEarly = newTabs.stop();
         void readOpens();
         // 누른 팝업 창이 응답하기 전에 닫혔으면(고르자마자 닫히는 달력) 실패가 아니라 창이 닫힌 결과로 알린다.
         // 중단해서 누르지 않은 경우는 그대로 중단으로 알린다.
@@ -837,13 +837,15 @@ async function runTool(
           const back = await pruneClosedPopups(turnTab);
           if (back) {
             takeTabNote(turnTab);
+            // 닫히기 전에 새 팝업 창을 열었으면(다음 단계 창) 남은 창 위에 이어 따라간다.
+            const opened = await settlePopups(turnTab, before, createdEarly, []);
             const effect: ClickEffect = {
               navigation: "none",
               url: before,
               sameDocument: null,
-              newTab: false,
+              newTab: createdEarly.length > 0,
               dom: null,
-              popup: { closed: back },
+              popup: { ...(opened ?? {}), closed: back },
             };
             return {
               ok: true,
@@ -863,17 +865,15 @@ async function runTool(
       const opens = await readOpens();
       // 클릭한 팝업 창이 클릭 뒤 닫혔으면(고른 값을 원래 페이지에 써 넣고 닫히는 달력 등) 아래 창으로 돌아간다.
       // 결과 문구가 돌아간 것을 알리므로 다음 도구 결과에는 따로 붙이지 않는다.
+      let closed: "original" | "popup" | null = null;
       if (clickedPopup) {
-        const back = await pruneClosedPopups(turnTab);
-        if (back) {
-          takeTabNote(turnTab);
-          effect.popup = { closed: back };
-        }
+        closed = await pruneClosedPopups(turnTab);
+        if (closed) takeTabNote(turnTab);
       }
-      if (!effect.popup) {
-        const popup = await settlePopups(turnTab, before, created, opens);
-        if (popup) effect.popup = popup;
-      }
+      // 닫힘 정리 뒤에 새 창을 등록한다: 닫히면서 다음 창을 연 팝업(A가 B를 열고 닫힘)이면 B를 남은 창(원래 탭이나
+      // 그 아래 팝업) 위에 쌓아 따라간다.
+      const popup = await settlePopups(turnTab, before, created, opens);
+      if (popup || closed) effect.popup = { ...(popup ?? {}), ...(closed ? { closed } : {}) };
       return {
         ok: data.clicked && !effect.dom?.aborted,
         summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}`,

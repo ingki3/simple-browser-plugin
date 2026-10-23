@@ -10,6 +10,28 @@ export interface OpenCallRecord {
   blocked: boolean;
 }
 
+export const ABORTED: unique symbol = Symbol("aborted");
+
+// p를 기다리되 ms가 지나면 fallback, signal이 중단되면 ABORTED로 끝낸다. p의 거부도 fallback으로 받는다 — 이미 중단돼
+// 기다리지 않고 끝낼 때도 p에 거부 처리기를 달아(닫힌 탭에 대한 executeScript 실패 등) 처리되지 않은 거부가 남지 않게 한다.
+export function bounded<T>(p: Promise<T>, ms: number, fallback: T, signal?: AbortSignal): Promise<T | typeof ABORTED> {
+  if (signal?.aborted) {
+    p.catch(() => {});
+    return Promise.resolve(ABORTED);
+  }
+  return new Promise((resolve) => {
+    const done = (v: T | typeof ABORTED) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(v);
+    };
+    const onAbort = () => done(ABORTED);
+    const timer = setTimeout(() => done(fallback), ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    p.then(done, () => done(fallback));
+  });
+}
+
 // 비교용 주소: 절대 주소로 정규화하고 해시는 뺀다. 빈 주소는 about:blank.
 export function openTargetKey(url: string): string {
   if (!url) return "about:blank";

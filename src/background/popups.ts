@@ -7,7 +7,7 @@
 //   일반 새 탭(target=_blank)은 따라가지 않는다.
 
 import { popupWhere, type PopupEffect } from "@/lib/actionTarget";
-import { blockedOpens } from "@/lib/popupMatch";
+import { ABORTED, blockedOpens, bounded } from "@/lib/popupMatch";
 import { sameSiteAs } from "@/lib/siteTrust";
 import { debugLog } from "./debug";
 import { followPopup, type TurnTab } from "./tools/handlers";
@@ -80,22 +80,6 @@ export class ClickAbortedError extends Error {
   }
 }
 
-// p를 기다리되 ms가 지나거나 signal이 중단되면 fallback으로 끝낸다(중단은 onAbort가 정한 대로). p의 거부도 fallback.
-function bounded<T>(p: Promise<T>, ms: number, fallback: T, signal?: AbortSignal): Promise<T | typeof ABORTED> {
-  if (signal?.aborted) return Promise.resolve(ABORTED);
-  return new Promise((resolve) => {
-    const done = (v: T | typeof ABORTED) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      resolve(v);
-    };
-    const onAbort = () => done(ABORTED);
-    const timer = setTimeout(() => done(fallback), ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-    p.then(done, () => done(fallback));
-  });
-}
-const ABORTED = Symbol("aborted");
 
 // 클릭 직전에 그 탭 모든 프레임의 window.open을 감싼다. 돌려준 함수를 부르면 기록을 읽고 되돌린다. 넣지 못하거나
 // 한도 안에 넣지 못하면(권한 없는 페이지·멈춘 페이지) 빈 기록 — 관찰은 부가 기능이라 클릭을 막지 않는다. 다만 기다리는

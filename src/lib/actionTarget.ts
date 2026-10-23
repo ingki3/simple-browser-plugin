@@ -422,6 +422,15 @@ function hostOf(url: string): string {
 export function describeEffect(e: ClickEffect): string {
   if (e.dom?.aborted) return `누르기 직전에 대상이 바뀌어 클릭하지 않았습니다(${e.dom.aborted}). 다시 찾으세요.`;
   // 클릭한 팝업 창이 닫혔다(달력처럼 고르면 원래 탭에 값을 써 넣고 닫히는 창). 닫힌 창의 주소·화면 변화는 볼 수 없다.
+  if (e.popup?.closed && (e.popup.opened || e.popup.blocked)) {
+    // 클릭한 팝업 창이 닫히면서 새 창을 열었다(또는 열려다 막혔다). 새 창 문장이 지금 도구가 어디서 동작하는지 알린다.
+    const back = e.popup.opened?.followed
+      ? "클릭한 팝업 창이 닫혔습니다."
+      : e.popup.closed === "original"
+        ? "클릭한 팝업 창이 닫혀 원래 탭으로 돌아왔습니다."
+        : "클릭한 팝업 창이 닫혀 그 창을 연 팝업 창으로 돌아왔습니다.";
+    return [back, ...describePopup(e.popup)].join(" ");
+  }
   if (e.popup?.closed) {
     return e.popup.closed === "original"
       ? "클릭 뒤 팝업 창이 닫혀 원래 탭으로 돌아왔습니다. 이제 도구는 원래 탭에서 동작합니다. 팝업이 원래 탭의 내용을 바꿨을 수 있으니 다시 관측하세요."
