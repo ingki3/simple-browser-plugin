@@ -601,6 +601,8 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
       path: ancestorsUpTo(el, row).map((a) => new WeakRef(a)),
       texts,
       combo: comboboxField(el),
+      bySelector: row.matches(ROW_SELECTOR),
+      role: row.getAttribute("role"),
     });
   } else approvedRows.delete(el);
   return info;
@@ -831,7 +833,15 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
 // 기존 제목 곁에 글자를 덧붙이는 것('문서 A' + ' 사본')은 목록 밖이라 다른 대상이다.
 const approvedRows = new WeakMap<
   HTMLElement,
-  { row: WeakRef<Element>; path: WeakRef<Element>[]; texts: Array<{ node: WeakRef<Text>; value: string }>; combo: boolean }
+  {
+    row: WeakRef<Element>;
+    path: WeakRef<Element>[];
+    texts: Array<{ node: WeakRef<Text>; value: string }>;
+    combo: boolean;
+    // 행이 목록 표시(li·tr·role=row 등, ROW_SELECTOR)로 정해졌는지와 그때의 role. 표시가 지워지면 다른 대상이다.
+    bySelector: boolean;
+    role: string | null;
+  }
 >();
 
 interface PinnedRow {
@@ -885,6 +895,11 @@ function pinnedRowOf(el: HTMLElement): PinnedRow | null {
   const fresh = rowElement(el)?.row;
   // shadow root 경계를 넘는 경우도 잡도록 contains가 아니라 이미 구한 조상 사슬로 본다.
   if (fresh && fresh !== row && now.includes(fresh)) return null;
+  // 승인 때 행을 목록 표시로 정했으면 그 표시(태그·role)가 그대로여야 한다(role=row를 지워 바깥 항목으로 재사용하는 것을 막는다).
+  if (pinned.bySelector && (!row.matches(ROW_SELECTOR) || row.getAttribute("role") !== pinned.role)) return null;
+  // 지금 찾은 행이 승인 때 행보다 바깥이면(같은 틀 형제였던 묶음의 틀이 달라짐) 자동완성 입력 칸이고 승인 때 행이
+  // 같은 틀 형제로만 정해졌을 때만 고정한다(네이버 지도 길찾기: 한 묶음에만 자동완성 목록이 붙음).
+  if (fresh !== row && !(pinned.combo && !pinned.bySelector)) return null;
   return { row, exclude: pinned.combo ? newPopupLists(el, row, kept) : [] };
 }
 
