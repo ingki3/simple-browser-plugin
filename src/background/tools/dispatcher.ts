@@ -1,4 +1,4 @@
-import { autoApproveBlock } from "@/lib/autoApprove";
+import { autoApproveBlock, destructiveClickBlock, destructiveFillBlock } from "@/lib/autoApprove";
 import { downloadScope, imageDownloadSources } from "@/lib/chatGrant";
 import { DOWNLOAD_LIMITS } from "@/lib/downloadPick";
 import { snapshotDownloads, takeChosenDownloads } from "../downloadChoices";
@@ -66,6 +66,9 @@ export interface ToolPreview {
   details?: unknown;
   // 자동 실행을 켰을 때도 승인을 받아야 하는 이유(결제·개인정보 제출). 없으면 null. 대상을 보지 않는 도구는 비워 둔다.
   autoBlock?: string | null;
+  // 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않고 늘 카드로 묻는 이유
+  // (#62 되돌리기 어려운 동작 — 삭제·스팸). 없으면 null.
+  alwaysAsk?: string | null;
   // 클릭 대상 링크의 주소(자동 실행 사이트 경계 판정용).
   linkHrefs?: string[];
   // 입력할 값들(사이트 경계 판정용).
@@ -180,9 +183,17 @@ export async function buildToolPreview(
         turnTab,
         infos.map((info, i) => logTarget(info, args.fills[i].value)),
       );
+      const fillCardInfo = fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value })));
+      // 삭제·스팸 신호가 있는 칸(change 처리기가 지우는 체크박스 등)도 클릭처럼 늘 묻는다(#62).
+      const fillValues = args.fills.map((f) => f.value);
+      const destructiveFill = destructiveFillBlock(infos, fillValues);
       return {
-        ...fillCard(infos.map((info, i) => ({ info, value: args.fills[i].value }))),
-        autoBlock: autoApproveBlock("fill_form_fields", infos),
+        ...fillCardInfo,
+        ...(destructiveFill
+          ? { details: `${fillCardInfo.details}\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` }
+          : {}),
+        autoBlock: autoApproveBlock("fill_form_fields", infos, fillValues),
+        alwaysAsk: destructiveFill,
         // 양식 제출 주소(기존 값 포함)와 선택지 주소. 입력할 값은 fillValues로 따로 본다.
         linkHrefs: infos
           .flatMap((info) => [
@@ -236,9 +247,14 @@ export async function buildToolPreview(
       // 선택지(option·menuitem*)는 펼친 트리거의 위험 정보도 따로 받는다. 승인·사이트 판정은 선택지와 트리거
       // 양쪽을 모두 본다(하나로 합치지 않아 어느 쪽의 목적지·위험 문구도 사라지지 않는다).
       const sides = info.trigger ? [info, info.trigger] : [info];
+      const card = clickCard(info);
+      // 되돌리기 어려운 동작(삭제·스팸)은 자동 실행이 꺼져 있어도 카드에 경고를 붙인다(#62).
+      const destructive = destructiveClickBlock(sides);
       return {
-        ...clickCard(info),
+        ...card,
+        ...(destructive ? { details: `${card.details}\n⚠ ${destructive}입니다. 누르기 전에 대상을 확인하세요.` } : {}),
         autoBlock: autoApproveBlock("click_element", sides),
+        alwaysAsk: destructive,
         // 트리거가 있는 선택지는 링크 이동 허락(grantableLink) 대상이 아니다.
         ...(info.trigger ? {} : { clickTarget: info }),
         linkHrefs: sides

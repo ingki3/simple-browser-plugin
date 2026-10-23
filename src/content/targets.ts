@@ -5,9 +5,16 @@
 
 import { looksPersonalValue } from "@/lib/autoApprove";
 import type { PageRegion } from "@/lib/messages";
-import { describeDifference, sameApproved, sameApprovedInFlight, sameBase, type TargetInfo } from "@/lib/actionTarget";
+import {
+  describeDifference,
+  sameApproved,
+  sameApprovedInFlight,
+  sameBase,
+  type TargetInfo,
+} from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
+import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
 import { groupLabel, modelText } from "./modelText";
 
@@ -33,7 +40,11 @@ export interface TargetKind {
   // 숨긴 칸을 보이는 대리 요소(연결된 label)로 바꾸면 그 label의 표시 이름, 아니면 null(#56).
   // 기술의 proxy·proxyLabel로 고정하고 승인 카드에 보여 준다.
   proxyLabelName?(el: HTMLElement): string | null;
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
+  // 입력 칸: deleteParam이 입력 묶음이 승인받은 삭제 선택지들(칸 → 선택지 글자)만으로 설명되는지(재검사의 예상된 변화, #62).
+  deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
+  // deleteMethod(구조 선언)에 대한 같은 예외(#62).
+  deleteMethodExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
 interface Entry {
@@ -548,6 +559,26 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
 // 승인 카드용 묶음 확인. 묶음에 개인정보·비밀번호·결제 칸이 있으면 각 항목에 표시해 둔다(riskAdded 참고).
 // 승인 당시 값이 채워져 있던 개인정보·비밀 칸과 그때의 값. 실행 직전에 값이 바뀌었으면(이 호출이 쓴 값이 아니면) 멈춘다.
 const consentAllowed = new Map<string, Map<Element, string>>();
+// 입력 묶음이 쓴 선택 칸들의 쓴 직후 상태(칸 → ChoiceState, #62). 호출(callId)마다.
+const consentDeleteChoices = new Map<string, Map<Element, ChoiceState>>();
+
+// 입력 묶음이 선택 칸에 상태를 쓴 직후(페이지 처리기가 돌기 전) 그 상태를 기록한다(#62, forms.ts fillOne의 onWritten).
+// 재검사는 이 기록과 지금 상태가 그대로 같은 칸만 예상된 변화로 뺀다(deleteParamExplained).
+export function noteChoiceWritten(callId: string, el: Element): void {
+  const state = choiceState(el);
+  if (!state) return;
+  let m = consentDeleteChoices.get(callId);
+  if (!m) {
+    m = new Map();
+    consentDeleteChoices.set(callId, m);
+    while (consentDeleteChoices.size > 50) {
+      const oldest = consentDeleteChoices.keys().next().value;
+      if (oldest === undefined) break;
+      consentDeleteChoices.delete(oldest);
+    }
+  }
+  m.set(el, state);
+}
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
@@ -568,6 +599,8 @@ export function noteWritten(callId: string, el: Element, value: string): void {
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
 export function inspectTargets(ids: string[], callId: string, prefix: string, values?: string[]): TargetInfo[] {
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
+  // 이번 호출이 선택 칸에 쓴 상태는 쓰는 순간 기록한다(noteChoiceWritten). 승인 때 지난 기록이 있으면 지운다.
+  consentDeleteChoices.delete(callId);
   // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
   // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
   // 칸 단서가 없어도 입력할 값이 개인정보(이메일·전화 등)면 승인 카드가 뜨므로 개인정보 묶음으로 본다.
@@ -709,6 +742,17 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   if (kind.prefix !== "f" && (now.submitUrl ?? "") !== (info.submitUrl ?? "")) return "양식에 담긴 값이 바뀜";
   if ((now.outerText ?? "") !== (info.outerText ?? "")) return "감싼 버튼 글자가 바뀜";
   if (now.download && !info.download) return "내려받기 링크로 바뀜";
+  // 같은 입력 묶음이 선택 칸에 쓴 상태 그대로로만 생긴 신호는 예상된 변화다(#62 — deleteMethod·deleteParam 모두, 그 칸과
+  // 같은 양식의 다른 칸 모두). 다른 원인이면 멈춘다.
+  const writes = info.consentCall ? consentDeleteChoices.get(info.consentCall) : undefined;
+  if (now.deleteMethod && !info.deleteMethod && !(writes && kind.deleteMethodExplained?.(el, writes))) {
+    return "삭제 요청으로 바뀜";
+  }
+  if (now.opaqueRequest && !info.opaqueRequest) return "확인할 수 없는 htmx 요청으로 바뀜";
+  if (now.deleteParam && !info.deleteParam && !(writes && kind.deleteParamExplained?.(el, writes))) {
+    return "삭제 요청으로 바뀜";
+  }
+  if ((now.deleteChoices ?? []).join("\n") !== (info.deleteChoices ?? []).join("\n")) return "삭제 선택지가 바뀜";
   if (now.insideControl && !info.insideControl) return "버튼 안으로 옮겨짐";
   if ((now.choiceUrls ?? []).join(" ") !== (info.choiceUrls ?? []).join(" ")) return "선택지 주소가 바뀜";
   // 범위 안 다른 양식의 제출 주소: 클릭은 값까지 비교한다. 입력 칸은 묶음 입력이 주변 양식 값을 바꿀 수 있어

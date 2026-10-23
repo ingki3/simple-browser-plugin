@@ -78,6 +78,17 @@ export interface TargetInfo {
   insideControl?: boolean;
   // 대상이나 감싼 링크에 download 속성이 있는지(누르면 파일을 내려받는다).
   download?: boolean;
+  // 누르면 삭제 요청을 보낸다고 페이지가 구조로 선언한 대상(#62): data-method·data-turbo-method="delete",
+  // hx-delete, 작동할 컨트롤이나 그 양식의 _method=DELETE(Rails·Laravel의 메서드 덮어쓰기).
+  deleteMethod?: boolean;
+  // 실제 요청에 실릴 값·요청 주소에 삭제 단서가 있는 대상(#62): 누른 제출 버튼·클릭·입력으로 바뀌는 checkbox·radio 자신의
+  // name=value, 양식의 숨은 칸(type=hidden)의 name=value, htmx 요청 주소(hx-get·hx-post 등)의 경로 낱말.
+  deleteParam?: boolean;
+  // select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자 그대로, #62). 판정 전용.
+  deleteChoices?: string[];
+  // 확인할 수 없는 htmx 요청을 일으킬 수 있는 대상(#62, 허용 목록 방식): 요청 요소(경로·페이지의 모든 'from:' 리스너·hx-boost
+  // 적용 요소)나 그 조상에 허용 목록 밖 htmx 속성이 있거나 요청이 GET이 아님(src/content/forms.ts requestSignals).
+  opaqueRequest?: boolean;
   // 승인한 입력 묶음에 개인정보·비밀번호·결제 칸이 있었는지(그런 묶음은 늘 카드로 승인받는다).
   // 그렇다면 묶음 안의 앞선 입력이 양식을 "개인정보가 채워진 양식"으로 만드는 것은 승인한 변화로 본다.
   consentPersonal?: boolean;
