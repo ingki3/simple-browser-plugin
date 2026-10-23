@@ -133,10 +133,12 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
 // 원문 행 글자(context)와 모델용 행 문맥(modelContext)에 글자가 더해지기만 했으면 같은 대상으로 본다 —
 // 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게),
 // 입력하자 칸이 든 묶음 안에 자동완성 목록이 붙은 경우(네이버 지도 길찾기의 출발지·도착지 칸).
-// 행 글자가 사라지거나 바뀌는 것(A 문구를 숨기고 B 문구를 보임, 같은 칸 노드를 다른 행에 재사용)은 다른 대상이다.
-// 승인 카드·실행 직전 비교는 sameApproved.
-export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
-  if (!onlyAdded(approved.context, now.context)) return false;
+// 원문 행 글자의 추가는 rowPinned(승인 때의 행 요소와 그 행까지의 조상 사슬이 그대로임을 구조로 확인함)일 때만 허용한다.
+// 칸이 다른 행·하위 행으로 옮겨졌으면 다시 찾은 행의 글자가 승인 때 낱말을 모두 담고 있어도('문서 A' → '문서 A 사본')
+// 다른 대상이다. 행 글자가 사라지거나 바뀌는 것(A 문구를 숨기고 B 문구를 보임, 같은 칸 노드를 다른 행에 재사용)도
+// 다른 대상이다. 승인 카드·실행 직전 비교는 sameApproved.
+export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo, rowPinned = false): boolean {
+  if (rowPinned ? !onlyAdded(approved.context, now.context) : now.context !== approved.context) return false;
   if (!onlyAdded(approved.modelContext ?? "", now.modelContext ?? "")) return false;
   return sameApproved({ ...now, context: approved.context, modelContext: approved.modelContext }, approved);
 }

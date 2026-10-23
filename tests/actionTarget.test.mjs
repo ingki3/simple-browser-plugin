@@ -281,11 +281,14 @@ test("sameApprovedInFlight: 모델용 행 문맥이 바뀌어도 추가만 허�
 test("sameApprovedInFlight: 입력하자 칸의 묶음에 자동완성 목록이 붙은 것은 허용한다", () => {
   const box = { ...rowBox, tag: "input", fieldType: "text", proxy: undefined, context: "출발지 입력 끌어서 이동", modelContext: "출발지 입력 끌어서 이동" };
   const withList = "출발지 입력 끌어서 이동 자동완성 검색어 판교역 장소 지하철,전철 판교역 신분당선";
-  assert.equal(sameApprovedInFlight({ ...box, context: withList, modelContext: withList }, box), true);
+  assert.equal(sameApprovedInFlight({ ...box, context: withList, modelContext: withList }, box, true), true);
   // 묶음 앞에 끼어든 글자도 추가만이면 허용.
-  assert.equal(sameApprovedInFlight({ ...box, context: "최근 검색 " + box.context }, box), true);
+  assert.equal(sameApprovedInFlight({ ...box, context: "최근 검색 " + box.context }, box, true), true);
   // 원래 행 글자가 사라지면(다른 행에 재사용) 거부.
-  assert.equal(sameApprovedInFlight({ ...box, context: "도착지 입력 끌어서 이동 자동완성" }, box), false);
+  assert.equal(sameApprovedInFlight({ ...box, context: "도착지 입력 끌어서 이동 자동완성" }, box, true), false);
+  // 승인 때의 행 구조를 확인하지 못했으면(다른 행·하위 행으로 옮겨짐) 원문 행 글자는 그대로여야 한다.
+  assert.equal(sameApprovedInFlight({ ...box, context: withList, modelContext: withList }, box), false);
+  assert.equal(sameApprovedInFlight({ ...box, context: box.context + " 사본" }, box), false);
   // 승인 카드·실행 직전 비교는 그대로 엄격하다.
   assert.equal(sameApproved({ ...box, context: withList, modelContext: withList }, box), false);
 });

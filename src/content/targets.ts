@@ -727,8 +727,11 @@ export function takeApproved(
   }
   const { entry, el } = resolve(id);
   entry.approved = null;
-  const now = fullInfo(entry.kind, el);
-  if (!(inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info))) {
+  // 묶음의 앞 칸 입력이 이 칸의 형제 묶음 틀을 바꿔(자동완성 목록이 붙음) 행이 다른 요소로 잡힐 수 있어, 입력 도중이면
+  // 승인 때의 행을 구조가 그대로일 때만 다시 쓴다(pinnedRowOf).
+  const pinned = inFlight ? pinnedRowOf(el) : null;
+  const now = fullInfo(entry.kind, el, pinned);
+  if (!(inFlight ? sameApprovedInFlight(now, approved.info, !!pinned) : sameApproved(now, approved.info))) {
     const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
     // (묶음 입력의 남은 칸도 멈춘다).
@@ -847,8 +850,9 @@ export function recheckApproved(
   inFlight = false,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
-  const now = fullInfo(kind, el, inFlight ? pinnedRowOf(el) : null);
-  if (!(inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info))) return describeDifference(info, now);
+  const pinned = inFlight ? pinnedRowOf(el) : null;
+  const now = fullInfo(kind, el, pinned);
+  if (!(inFlight ? sameApprovedInFlight(now, info, !!pinned) : sameApproved(now, info))) return describeDifference(info, now);
   const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
   const relationMoved = relationChanged(kind, el, relation);
