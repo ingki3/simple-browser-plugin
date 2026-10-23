@@ -224,7 +224,7 @@ export async function settlePopups(
     if (win?.type !== "popup") continue;
     // 열린 직후는 about:blank에서 시작해 이동 중일 수 있다. 가려는 주소(pendingUrl)를 먼저 본다.
     const url = t.reused ? t.url : tab.pendingUrl || tab.url || t.url;
-    const followed = followPopup(turnTab, { tabId: t.tabId, windowId: tab.windowId });
+    const followed = await followPopup(turnTab, { tabId: t.tabId, windowId: tab.windowId });
     effect.opened = { where: popupWhere(url), followed, otherSite: /^https?:/i.test(url) && !sameSiteAs(pageUrl, url) };
     debugLog("popup:opened", `tab ${t.tabId}${t.reused ? " (다시 쓴 창)" : ""}${followed ? " (따라감)" : ""}`);
     break;

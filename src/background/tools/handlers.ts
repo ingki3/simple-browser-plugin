@@ -20,13 +20,15 @@ export const INTERNAL_PAGE_ERROR =
 // 새 탭·설정 같은 내부 페이지여도 탭을 잡아 두고(internal), 그 탭에서 웹 주소로의 이동만 허용한다(#54).
 // popups: 우리 클릭으로 이 탭(또는 따라간 팝업)이 연 팝업 창(창 종류 popup)을 연 순서대로 쌓은 것. 비어 있지 않으면
 // 도구는 맨 위 팝업 창에서 동작하고, 그 창이 닫히면 아래(결국 원래 탭)로 돌아간다. tabId는 늘 원래 탭이다.
+// originDocumentId: 첫 팝업을 따라가기 시작할 때 원래 탭의 최상위 문서. 다음 턴은 원래 탭이 아직 이 문서일 때만
+// 팝업을 이어 따라간다(사용자가 원래 탭을 다른 페이지로 옮겼으면 새 페이지에서 시작한다, #72).
 // tabNote: 팝업이 닫혀 돌아간 것처럼 다음 도구 결과에 붙여 모델에 알릴 문구(한 번 읽으면 지운다).
 export interface FollowedPopup {
   tabId: number;
   windowId: number;
 }
 export type TurnTab =
-  | { tabId: number; internal: boolean; popups?: FollowedPopup[]; tabNote?: string }
+  | { tabId: number; internal: boolean; popups?: FollowedPopup[]; originDocumentId?: string; tabNote?: string }
   | { error: string };
 
 // 따라가는 팝업 창 깊이 한도(팝업이 또 팝업을 여는 경우).
@@ -39,6 +41,16 @@ export async function captureTurnTab(): Promise<TurnTab> {
     return { tabId: tab.id, internal: isBrowserInternalUrl(tab.url) };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// 탭의 최상위 문서 id. 못 읽으면 null.
+export async function topDocumentId(tabId: number): Promise<string | null> {
+  try {
+    const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    return frame?.documentId ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -61,6 +73,7 @@ export async function pruneClosedPopups(turnTab: TurnTab): Promise<"original" | 
   }
   if (!closed) return null;
   const back = turnTab.popups.length ? "popup" : "original";
+  if (back === "original") turnTab.originDocumentId = undefined;
   turnTab.tabNote =
     back === "original"
       ? "팝업 창이 닫혀 원래 탭으로 돌아왔습니다. 이제 도구는 원래 탭에서 동작합니다(팝업에서 찾은 id는 쓸 수 없으니 다시 찾으세요)."
@@ -97,14 +110,22 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 // 우리 클릭으로 열린 팝업 창을 따라간다. 따라갔으면 true(한도를 넘으면 false).
-export function followPopup(turnTab: TurnTab, popup: FollowedPopup): boolean {
+// 첫 팝업이면 원래 탭의 지금 문서를 originDocumentId로 남긴다(못 읽으면 비워 두어 다음 턴이 잇지 않는다).
+export async function followPopup(turnTab: TurnTab, popup: FollowedPopup): Promise<boolean> {
   if ("error" in turnTab) return false;
   const stack = (turnTab.popups ??= []);
   if (stack.length >= MAX_FOLLOWED_POPUPS || stack.some((p) => p.tabId === popup.tabId)) return false;
+  const first = stack.length === 0;
   stack.push(popup);
   let known = knownPopupTabs.get(turnTab.tabId);
   if (!known) knownPopupTabs.set(turnTab.tabId, (known = new Set()));
   known.add(popup.tabId);
+  if (first) {
+    turnTab.originDocumentId = undefined;
+    const doc = await topDocumentId(turnTab.tabId);
+    // 문서를 읽는 사이 따라가기가 끝나고 다시 시작됐으면(같은 스택 맨 아래가 이 창이 아니면) 덮어쓰지 않는다.
+    if (doc && turnTab.popups?.[0] === popup) turnTab.originDocumentId = doc;
+  }
   return true;
 }
 
@@ -112,6 +133,7 @@ export function followPopup(turnTab: TurnTab, popup: FollowedPopup): boolean {
 export function stopFollowingPopups(turnTab: TurnTab): boolean {
   if ("error" in turnTab || !turnTab.popups?.length) return false;
   turnTab.popups = [];
+  turnTab.originDocumentId = undefined;
   return true;
 }
 
@@ -125,8 +147,12 @@ export function takeTabNote(turnTab: TurnTab): string | null {
 
 // 같은 원래 탭으로 시작한 다음 턴이 앞 턴에서 따라가던(아직 열린) 팝업 창을 이어 따라간다. 사용자가 팝업을 보며
 // "15일로 골라 줘"처럼 이어 요청하는 경우. 우리 클릭으로 열린 창만 목록에 있으므로 그 밖의 창으로 넓어지지 않는다.
+// 원래 탭이 따라가기를 시작할 때의 문서가 아니면(사용자가 다른 페이지로 옮겼거나 새로 고침) 잇지 않는다 — 팝업 창은
+// 그대로 두고 이번 턴은 원래 탭에서 시작한다(#72).
 export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boolean> {
   if ("error" in prev || "error" in next || prev.tabId !== next.tabId || !prev.popups?.length) return false;
+  const origin = prev.originDocumentId;
+  if (!origin || (await topDocumentId(next.tabId)) !== origin) return false;
   // 닫힌 창은 건너뛰고 살아 있는 창을 순서대로 남긴다(원래 탭 → A → B에서 A만 닫혀도 지금 턴처럼 B에서 이어 간다 —
   // pruneClosedPopups도 맨 위가 살아 있으면 그 창을 쓴다).
   const alive: FollowedPopup[] = [];
@@ -135,6 +161,7 @@ export async function inheritPopups(prev: TurnTab, next: TurnTab): Promise<boole
   }
   if (!alive.length) return false;
   next.popups = alive;
+  next.originDocumentId = origin;
   return true;
 }
 
