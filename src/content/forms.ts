@@ -11,7 +11,7 @@ import {
   sensitiveUrlReason,
   splitIdentifier,
 } from "@/lib/autoApprove";
-import { choiceState, sameChoiceState } from "./choiceState";
+import { choiceState, sameChoiceState, type ChoiceState } from "./choiceState";
 import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
@@ -179,18 +179,24 @@ export const DELETE_DECL_SELECTOR =
 
 // 누르거나 값을 바꾸면 삭제 요청을 보낸다고 구조로 선언했는지. controls: 실제로 작동할 컨트롤(누른 제출 버튼,
 // label이 작동시키는 checkbox, 입력 칸 자신).
-export function declaresDelete(el: Element, controls: Array<Element | null>, form: HTMLFormElement | null): boolean {
+// skip: 판정에서 뺄 칸들(입력 묶음이 쓴 상태 그대로인 선택 칸 — FIELD_KIND.deleteMethodExplained). 그 칸의 _method 값만 뺀다.
+export function declaresDelete(
+  el: Element,
+  controls: Array<Element | null>,
+  form: HTMLFormElement | null,
+  skip: ReadonlySet<Element> = new Set(),
+): boolean {
   if (closestAcross(el, DELETE_DECL_SELECTOR)) return true;
   if (form && closestAcross(form, DELETE_DECL_SELECTOR)) return true;
   // label이 작동시키는 컨트롤 등 실제로 눌릴 컨트롤의 선언도 본다(label만 보면 연결된 input의 hx-delete를 놓친다).
   if (controls.some((c) => !!c && !!closestAcross(c, DELETE_DECL_SELECTOR))) return true;
   const isDelete = (c: Element | null | undefined) =>
     !!c && c.getAttribute("name") === "_method" && /^\s*delete\s*$/i.test((c as HTMLInputElement).value ?? c.getAttribute("value") ?? "");
-  if (controls.some(isDelete)) return true;
+  if (controls.some((c) => !!c && !skip.has(c) && isDelete(c))) return true;
   // 양식 밖에서 form 속성으로 연결된 칸까지 실제 제출에 실릴 컨트롤을 모두 본다(자손만 보면 놓친다). name="elements"
   // 칸이 form.elements를 가리지 못하게 플랫폼 접근자로 읽는다. 제출 버튼은 누른 것(controls)만 값이 실리므로 다른
   // 제출 버튼(같은 양식의 '삭제' 버튼)의 _method는 보지 않는다.
-  return !!form && formElements(form).some((c) => !isSubmitter(c) && isDelete(c));
+  return !!form && formElements(form).some((c) => !skip.has(c) && !isSubmitter(c) && isDelete(c));
 }
 
 // 눌렀을 때만 이름·값이 제출에 실리는 컨트롤(제출 버튼).
@@ -252,7 +258,6 @@ function chainOf(start: Element): Element[] | null {
 function requestSignals(
   starts: Array<Element | null>,
   form: HTMLFormElement | null,
-  submitter: Element | null,
   words: (text: string) => boolean,
   skip: ReadonlySet<Element> = new Set(),
 ): { opaque: boolean; del: boolean } {
@@ -285,20 +290,29 @@ function requestSignals(
   // 양식 제출의 메서드·주소에 영향을 주는 속성(htmx가 관여할 때): 양식의 method와 누른 제출자의 formmethod는 있으면
   // 'get'이어야 하고(빈 값 포함 그 밖은 묻는다), formaction은 주소의 삭제 단서를 본다(풀리지 않으면 모름).
   // formenctype·formtarget은 요청 방식·결과 위치를 바꾸므로 해석하지 않고 묻는다.
-  const checkFormMethod = (f: HTMLFormElement | null, sub: Element | null): void => {
-    const nonGet = (v: string | null) => v !== null && v.trim().toLowerCase() !== "get";
+  const nonGet = (v: string | null) => v !== null && v.trim().toLowerCase() !== "get";
+  const checkFormMethod = (f: HTMLFormElement | null): void => {
     if (f && nonGet(f.getAttribute("method"))) out.opaque = true;
-    if (!sub || !isSubmitter(sub)) return;
-    if (nonGet(sub.getAttribute("formmethod"))) out.opaque = true;
-    if (sub.hasAttribute("formenctype") || sub.hasAttribute("formtarget")) out.opaque = true;
-    const action = sub.getAttribute("formaction");
-    if (action !== null) {
-      try {
-        if (destructiveRoute(new URL(action.trim() || sub.ownerDocument.URL, sub.baseURI).href)) out.del = true;
-      } catch {
-        out.opaque = true;
-      }
+  };
+  // 제출자 덮어쓰기(form* 속성)와 name=value: htmx는 네이티브 제출 버튼이 아닌 버튼(type=button)도 포커스로 추적해 그 버튼의
+  // formmethod·formaction과 name=value를 요청에 쓴다. 그래서 type과 관계없이 경로의 모든 button·input을 본다.
+  // formmethod=get과 formaction(주소의 삭제 단서를 본다)·formnovalidate 밖의 form* 속성은 해석하지 않고 묻는다.
+  const checkOverrides = (c: Element): void => {
+    if (!isTag(c, "button") && !isTag(c, "input")) return;
+    for (const attr of Array.from(c.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (!name.startsWith("form") || name === "form") continue;
+      if (name === "formmethod") {
+        if (nonGet(attr.value)) out.opaque = true;
+      } else if (name === "formaction") {
+        try {
+          if (destructiveRoute(new URL(attr.value.trim() || c.ownerDocument.URL, c.baseURI).href)) out.del = true;
+        } catch {
+          out.opaque = true;
+        }
+      } else if (name !== "formnovalidate") out.opaque = true;
     }
+    if (!skip.has(c) && words(ownRequestText(c))) out.del = true;
   };
   let htmxOnPath = false;
   // 경로: 모든 노드의 htmx 속성이 허용 목록 안이어야 하고, 요청 메서드는 GET이어야 한다.
@@ -315,7 +329,10 @@ function requestSignals(
       if (v && words(v)) out.del = true;
     }
   }
-  if (htmxOnPath) checkFormMethod(form, submitter);
+  if (htmxOnPath) {
+    checkFormMethod(form);
+    for (const node of nodes) checkOverrides(node);
+  }
   // 페이지의 모든 from: 리스너(어느 이벤트를 듣는지 해석하지 않는다): hx-get 요청 요소이고, 그 요소와 조상의 htmx 속성이
   // 모두 허용 목록 안이어야 한다(hx-boost 양식처럼 hx-get이 없는 리스너는 메서드를 확인할 수 없어 묻는다).
   // 접근 가능한 모든 루트(문서·열린 shadow root·같은 출처 iframe 문서 — getAccessibleRoots)에서 찾는다. 닫힌 shadow root와
@@ -335,7 +352,7 @@ function requestSignals(
         continue;
       }
       checkGet(r);
-      if (isTag(r, "form")) checkFormMethod(r as HTMLFormElement, null);
+      if (isTag(r, "form")) checkFormMethod(r as HTMLFormElement);
     }
   }
   return out;
@@ -364,7 +381,7 @@ export function opaqueRequestOf(
   controls: Array<Element | null>,
   form: HTMLFormElement | null,
 ): boolean {
-  return requestSignals([el, ...controls, submitter, form], form, submitter, destructiveWords).opaque;
+  return requestSignals([el, ...controls, submitter, form], form, destructiveWords).opaque;
 }
 
 const destructiveWords = (text: string) => DESTRUCTIVE_TEXT_RE.test(text) || DESTRUCTIVE_TEXT_RE.test(splitIdentifier(text));
@@ -435,7 +452,7 @@ export function deleteParamOf(
     const texts = submittedChoiceTexts(form, skip);
     if (texts === null || texts.some(words)) return true;
   }
-  return requestSignals([el, ...controls, submitter, form], form, submitter, words, skip).del;
+  return requestSignals([el, ...controls, submitter, form], form, words, skip).del;
 }
 
 // select에서 글자·value에 삭제 단서가 있는 선택지의 보이는 글자(모델이 고르는 글자, optionByLabel과 같은 글자).
@@ -954,11 +971,7 @@ const FIELD_KIND: TargetKind = {
   // 비교는 글자가 아니라 실제 상태다: select는 선택된 option 요소·그 value·선택 상태·select의 name, checkbox·radio는
   // name·value·checked. 처리기가 글자는 두고 value만 delete로 바꾸면 예외가 아니다.
   deleteParamExplained: (el, writes) => {
-    const skip = new Set<Element>();
-    for (const [c, was] of writes) {
-      const now = choiceState(c);
-      if (c.isConnected && now && sameChoiceState(now, was)) skip.add(c);
-    }
+    const skip = unchangedWrites(writes);
     if (!skip.size) return false;
     const form = isFieldElement(el) ? (el.form ?? (el.closest("form") as HTMLFormElement | null)) : null;
     if (deleteParamOf(el, null, [el], form, skip)) return false;
@@ -966,7 +979,29 @@ const FIELD_KIND: TargetKind = {
     const label = proxied(el) ? proxyLabel(el) : null;
     return !label || !deleteParamOf(label, null, [], closestAcross(label, "form") as HTMLFormElement | null, skip);
   },
+  // deleteMethod(구조 선언 — 양식의 _method=DELETE 등)에도 같은 예외를 적용한다(#62): 쓴 상태 그대로인 선택 칸
+  // (<select name="_method">에서 승인한 DELETE)을 빼고 다시 봐서 선언이 없을 때만 예상된 변화.
+  // 칸 자신이 name=_method이면 늘 deleteMethod라(fieldRisk) 승인 때 이미 물었다.
+  deleteMethodExplained: (el, writes) => {
+    const skip = unchangedWrites(writes);
+    if (!skip.size) return false;
+    const form = isFieldElement(el) ? (el.form ?? (el.closest("form") as HTMLFormElement | null)) : null;
+    if (el.getAttribute("name") === "_method" && !skip.has(el)) return false;
+    if (declaresDelete(el, [el], form, skip)) return false;
+    const label = proxied(el) ? proxyLabel(el) : null;
+    return !label || !declaresDelete(label, [], closestAcross(label, "form") as HTMLFormElement | null, skip);
+  },
 };
+
+// 입력 묶음이 쓴 선택 칸 중 지금 상태가 쓴 상태와 그대로 같은 칸들(재검사에서 예상된 변화로 뺄 칸).
+function unchangedWrites(writes: ReadonlyMap<Element, ChoiceState>): Set<Element> {
+  const skip = new Set<Element>();
+  for (const [c, was] of writes) {
+    const now = choiceState(c);
+    if (c.isConnected && now && sameChoiceState(now, was)) skip.add(c);
+  }
+  return skip;
+}
 
 type FieldRisk = NonNullable<ReturnType<NonNullable<TargetKind["risk"]>>>;
 

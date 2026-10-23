@@ -42,6 +42,8 @@ export interface TargetKind {
   proxyLabelName?(el: HTMLElement): string | null;
   // 입력 칸: deleteParam이 입력 묶음이 승인받은 삭제 선택지들(칸 → 선택지 글자)만으로 설명되는지(재검사의 예상된 변화, #62).
   deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
+  // deleteMethod(구조 선언)에 대한 같은 예외(#62).
+  deleteMethodExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
   risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
@@ -740,18 +742,14 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   if (kind.prefix !== "f" && (now.submitUrl ?? "") !== (info.submitUrl ?? "")) return "양식에 담긴 값이 바뀜";
   if ((now.outerText ?? "") !== (info.outerText ?? "")) return "감싼 버튼 글자가 바뀜";
   if (now.download && !info.download) return "내려받기 링크로 바뀜";
-  if (now.deleteMethod && !info.deleteMethod) return "삭제 요청으로 바뀜";
+  // 같은 입력 묶음이 선택 칸에 쓴 상태 그대로로만 생긴 신호는 예상된 변화다(#62 — deleteMethod·deleteParam 모두, 그 칸과
+  // 같은 양식의 다른 칸 모두). 다른 원인이면 멈춘다.
+  const writes = info.consentCall ? consentDeleteChoices.get(info.consentCall) : undefined;
+  if (now.deleteMethod && !info.deleteMethod && !(writes && kind.deleteMethodExplained?.(el, writes))) {
+    return "삭제 요청으로 바뀜";
+  }
   if (now.opaqueRequest && !info.opaqueRequest) return "확인할 수 없는 htmx 요청으로 바뀜";
-  // 같은 입력 묶음이 승인 카드로 물은 삭제 선택지들을 쓴 것만으로 생긴 신호는 예상된 변화다(#62 — 그 select 칸과 같은
-  // 양식의 다른 칸 모두). 다른 원인이면 멈춘다.
-  if (
-    now.deleteParam &&
-    !info.deleteParam &&
-    !(() => {
-      const choices = info.consentCall ? consentDeleteChoices.get(info.consentCall) : undefined;
-      return !!choices && !!kind.deleteParamExplained?.(el, choices);
-    })()
-  ) {
+  if (now.deleteParam && !info.deleteParam && !(writes && kind.deleteParamExplained?.(el, writes))) {
     return "삭제 요청으로 바뀜";
   }
   if ((now.deleteChoices ?? []).join("\n") !== (info.deleteChoices ?? []).join("\n")) return "삭제 선택지가 바뀜";
