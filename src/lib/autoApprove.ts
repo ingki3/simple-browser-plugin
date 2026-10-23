@@ -143,6 +143,8 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
   }
   if (tool === "click_element") {
     for (const t of targets) {
+      // 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label을 누르는 클릭(#56)은 채우기의 대리 label 칸과 같이 늘 묻는다.
+      if (t.proxy) return "보이지 않는 칸을 대신 보여 주는 라벨 클릭";
       // 실제로 작동하는 바깥 버튼·링크의 글자도 본다(<button>구매 <span>확인</span></button>의 span).
       // 붙여 쓴 이름(PayNow, BuyNow, pay_now)도 낱말로 나눠 본다.
       const raw = `${t.name} ${t.outerText ?? ""}`;

@@ -248,6 +248,7 @@ export function clickCard(info: TargetInfo): { summary: string; details: string 
   // 체크 위젯(role=checkbox·switch·radio, menuitemcheckbox 등)은 지금 상태를 보여 준다(누르면 반대로 바뀐다).
   const checked = info.states?.checked;
   if (checked !== undefined) lines.push(`지금 상태: ${checked === "true" ? "체크됨" : checked === "mixed" ? "일부 체크" : "체크 안 됨"}`);
+  if (info.proxy) lines.push("⚠ 화면에 보이지 않는 체크·선택 칸을 대신 보여 주는 라벨입니다. 누르면 그 칸이 바뀝니다.");
   if (!info.name) lines.push("⚠ 글자가 없는 요소입니다. 무엇을 누르는지 확인하기 어렵습니다.");
   return { summary: `${label} ${name}을(를) 클릭합니다.`, details: lines.join("\n") };
 }

@@ -14,7 +14,7 @@ import {
 import { choiceState, sameChoiceState, type ChoiceState } from "./choiceState";
 import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
-import { getAccessibleDocs, getAccessibleRoots, isShadowRoot, isTag } from "./docs";
+import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { clickRiskOf } from "./clickables";
 import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
 import {
@@ -85,6 +85,17 @@ function labelText(label: HTMLLabelElement): string {
   const copy = label.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("select, textarea, input, button").forEach((n) => n.remove());
   return (copy.textContent ?? "").trim();
+}
+
+// 칸에 연결된 모든 label(for·감싼 label)의 전체 글자(안에 든 입력 요소의 글자는 뺀다). 승인 판정용 — 잘라 쓰지 않는다
+// (보여 주는 이름은 200자로 자르지만, 그 뒤의 '구매 확정' 같은 문구도 판정에는 넣어야 한다). 모델에는 보내지 않는다.
+export function connectedLabelsText(el: Element): string {
+  const labels = (el as HTMLInputElement).labels;
+  if (!labels) return "";
+  return Array.from(labels, (l) => labelText(l))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function resolveLabel(el: FieldElement): string {
@@ -1025,6 +1036,12 @@ function unchangedWrites(writes: ReadonlyMap<Element, ChoiceState>): Set<Element
 
 type FieldRisk = NonNullable<ReturnType<NonNullable<TargetKind["risk"]>>>;
 
+// 채우기에서 이 checkbox·radio 칸을 볼 때의 위험 신호 전체(칸 자신·클릭·대신 보여 주는 label 쪽). 다른 요소(label 등)를
+// 눌러 이 칸이 작동하는 클릭도 칸 쪽 신호를 함께 보도록 clickables.ts가 쓴다.
+export function toggleFieldRisk(el: HTMLInputElement): FieldRisk & { sensitive: TargetInfo["sensitive"] } {
+  return { ...FIELD_KIND.risk!(el), sensitive: sensitivityOf(el) };
+}
+
 function isToggleInput(el: Element): el is HTMLInputElement {
   return isTag(el, "input") && (el.type === "checkbox" || el.type === "radio");
 }
@@ -1135,8 +1152,9 @@ function fieldRisk(el: HTMLElement): FieldRisk {
       personalValuedInScopes(fieldFormlessScopes(el)).some((p) => p !== el),
     // 칸 이름은 200자로 잘리므로 결제 문구 판정용 전체 라벨을 따로 담는다(긴 약관 뒤의 '구매 확정').
     ...(() => {
+      // 연결된 모든 label(첫 label만이 아니라)의 전체 글자도 넣는다.
       const full = isFieldElement(el)
-        ? `${resolveLabel(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
+        ? `${resolveLabel(el)} ${connectedLabelsText(el)} ${accessibleHint(el)}`.replace(/\s+/g, " ").trim()
         : "";
       return full ? { outerText: full } : {};
     })(),
@@ -1355,58 +1373,55 @@ function dispatchChange(el: Element, guard?: () => string | null): void {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-// checkbox·radio를 사용자가 누르듯 el.click()으로 바꾼다. 브라우저가 체크 상태를 바꾸고 click을 보낸 뒤 input·change를
-// 보낸다(click 처리기가 preventDefault하면 상태를 되돌리고 input·change를 보내지 않는다 — 최종 확인이 반영 안 됨으로 본다).
-// 체크 상태만 쓰고 input·change를 보내면 click에만 반응하는 페이지(Google 항공편의 필터 대화상자 등)는 바뀐 것을 모른다.
-// #62의 자리는 그대로 지킨다. 이 호출 동안만 캡처 단계 리스너를 걸어(끝나면 늘 뗀다):
-// - onWritten: 상태가 바뀐 직후, click이 페이지 처리기에 닿기 전(창의 캡처 단계)에 부른다.
-// - guard: click 처리기가 돈 뒤 input이 페이지에 닿기 전(창의 캡처 단계), 그리고 input 처리기가 돈 뒤 change가 페이지에
-//   닿기 전(창 — shadow root 안 칸이면 그 root — 의 캡처 단계)에 부른다. 예전에는 쓰기와 input 사이에 페이지 코드가 돌지
-//   않았지만 이제 click 처리기가 돌므로(action을 바꾸고 input 처리기가 제출하는 페이지) input 앞에서도 본다. 막히면 그
-//   이벤트와 뒤따르는 이벤트(input이면 change까지)의 전파를 멈추고 ChangeBlocked를 던진다.
-// 한계: 우리 리스너는 누르기 직전에 거므로, 페이지가 먼저 창(shadow root 안 칸은 그 root)의 캡처 단계에 건 리스너는
-// 우리보다 먼저 돈다(그 리스너는 막힌 input·change도 본다). click 처리기 자체가 한 일(요청·이동)은 막지 못한다 — 그래서
-// 승인 판정에 같은 칸을 누를 때의 위험 신호를 넣는다(toggleClickRisk). 페이지 리스너가 click 전파를 멈추면 onWritten이
-// 불리지 않아 재검사가 쓴 상태를 예상된 변화로 빼지 않는다(더 멈추는 쪽).
-function clickToggle(el: HTMLInputElement, guard?: () => string | null, onWritten?: () => void): void {
-  const win = el.ownerDocument.defaultView;
-  const root = el.getRootNode();
-  // change는 shadow 경계를 넘지 않으므로(composed 아님) shadow root 안 칸은 그 root에서 받는다. input·click은 창까지 온다.
-  const changeTarget: EventTarget | null = isShadowRoot(root) ? root : win;
-  const own = (e: Event) => e.composedPath()[0] === el;
-  let wrote = false;
-  const checked = new Set<string>();
-  let blocked: string | null = null;
-  const onClick = (e: Event) => {
-    if (wrote || !own(e)) return;
-    wrote = true;
-    onWritten?.();
-  };
-  // 이벤트 종류마다 처음 한 번 재검사한다. 이미 막혔으면 뒤따르는 이벤트도 페이지에 보내지 않는다.
-  const onGuarded = (e: Event) => {
-    if (!own(e)) return;
-    if (!blocked && !checked.has(e.type)) {
-      checked.add(e.type);
-      try {
-        blocked = guard?.() ?? null;
-      } catch (err) {
-        // 재검사가 실패하면 확인하지 못한 것이니 막는다.
-        blocked = `입력 중 칸을 다시 확인하지 못해 변경 이벤트를 보내지 않았습니다(${err instanceof Error ? err.message : String(err)}). 다시 찾으세요.`;
+// checkbox·radio를 사용자가 누를 때처럼 바꾼다: 상태를 쓰고 → click → input → change. 체크 상태만 쓰고 input·change를
+// 보내면 click에만 반응하는 페이지(Google 항공편의 필터 대화상자 등)는 바뀐 것을 모른다.
+// el.click()(브라우저의 활성화 동작)은 쓰지 않는다. 활성화 동작은 click이 끝나면 브라우저가 input·change를 직접 보내므로,
+// click 처리기 뒤의 재검사가 막아도 그 이벤트를 취소할 수 없고(페이지가 먼저 창 캡처 단계에 건 리스너는 우리보다 먼저
+// 본다), 리스너 순서로는 보장할 수 없다. 대신 MouseEvent가 아닌 click 이벤트(Event)를 보낸다 — 이 이벤트는 활성화 동작을
+// 일으키지 않아(DOM 명세: 활성화는 MouseEvent인 click만) 브라우저가 상태를 바꾸거나 input·change를 보내지 않고, 감싼
+// label·링크도 작동하지 않는다. 그래서 input·change는 늘 우리가 보내며, 보장:
+// - onWritten: 상태를 쓴 직후, 페이지 처리기(click 포함)가 돌기 전에 부른다(#62 쓴 상태 기록).
+// - guard: click 처리기가 돈 뒤 input을 보내기 전, input 처리기가 돈 뒤 change를 보내기 전에 부른다. 막히면 그 이벤트를
+//   보내지 않으므로 어떤 페이지 리스너도 input·change를 보지 못한다(예전 경로와 같은 성질).
+// - click 처리기가 preventDefault하면 브라우저처럼 상태를 되돌리고(radio는 그 묶음에서 전에 체크된 칸도) input·change를
+//   보내지 않는다 — 최종 확인이 반영 안 됨으로 알린다.
+// click 처리기가 한 일(요청·이동)은 막을 수 없어, 승인 판정에 같은 칸을 누를 때의 위험 신호를 넣는다(toggleClickRisk).
+// 한계: MouseEvent가 아니라 좌표·button 값이 없다. 그런 값을 요구하는 처리기는 반응하지 않을 수 있다(그때는 예전처럼
+// 상태와 input·change만 반영된다).
+function clickToggle(el: HTMLInputElement, want: boolean, guard?: () => string | null, onWritten?: () => void): void {
+  const was = el.checked;
+  // radio를 체크하면 같은 묶음의 다른 칸이 풀리므로, 취소되면 되살릴 칸을 먼저 기억한다.
+  const prevRadio = el.type === "radio" && !was ? checkedInGroup(el) : null;
+  setNativeProperty(el, "checked", want);
+  onWritten?.();
+  const click = new Event("click", { bubbles: true, cancelable: true, composed: true });
+  el.dispatchEvent(click);
+  if (click.defaultPrevented) {
+    setNativeProperty(el, "checked", was);
+    if (prevRadio) setNativeProperty(prevRadio, "checked", true);
+    return;
+  }
+  const blocked = guard?.();
+  if (blocked) throw new ChangeBlocked(blocked);
+  dispatchChange(el, guard);
+}
+
+// 같은 radio 묶음(같은 name·같은 양식, 양식 밖이면 같은 문서·shadow root)에서 체크된 다른 칸.
+function checkedInGroup(el: HTMLInputElement): HTMLInputElement | null {
+  if (!el.name) return null;
+  const scope: ParentNode = el.form ?? (el.getRootNode() as Document | ShadowRoot);
+  for (const r of Array.from(scope.querySelectorAll<HTMLInputElement>('input[type="radio" i]'))) {
+    if (r !== el && r.checked && r.name === el.name && r.form === el.form) return r;
+  }
+  // 양식에 form 속성으로 연결된 바깥 칸.
+  if (el.form) {
+    for (const r of formElements(el.form)) {
+      if (r !== el && isTag(r, "input") && (r as HTMLInputElement).type === "radio" && (r as HTMLInputElement).checked && (r as HTMLInputElement).name === el.name) {
+        return r as HTMLInputElement;
       }
     }
-    if (blocked) e.stopImmediatePropagation();
-  };
-  win?.addEventListener("click", onClick, true);
-  win?.addEventListener("input", onGuarded, true);
-  changeTarget?.addEventListener("change", onGuarded, true);
-  try {
-    el.click();
-  } finally {
-    win?.removeEventListener("click", onClick, true);
-    win?.removeEventListener("input", onGuarded, true);
-    changeTarget?.removeEventListener("change", onGuarded, true);
   }
-  if (blocked) throw new ChangeBlocked(blocked);
+  return null;
 }
 
 // 이 입력이 실제로 넣을 값(페이지 처리기가 돌기 전에 정한 것): 선택 칸은 고를 option.value, checkbox·radio는 자기 value.
@@ -1444,7 +1459,7 @@ function fillOne(
     // value 속성이 아니라 체크 상태를 바꾼다. 바꿀 때는 사용자처럼 누른다(clickToggle).
     const want = parseCheckedRequest(value);
     if (want === null) return false;
-    if (el.checked !== want) clickToggle(el, guard, onWritten);
+    if (el.checked !== want) clickToggle(el, want, guard, onWritten);
     else onWritten?.();
     return true;
   }
@@ -1453,7 +1468,7 @@ function fillOne(
     const want = parseCheckedRequest(value);
     if (want === null) return false;
     if (!want) return !el.checked;
-    if (!el.checked) clickToggle(el, guard, onWritten);
+    if (!el.checked) clickToggle(el, true, guard, onWritten);
     else onWritten?.();
     return true;
   }

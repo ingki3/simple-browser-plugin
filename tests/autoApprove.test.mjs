@@ -486,3 +486,13 @@ test("checkbox·radio fills click the field, so the click rules also apply", () 
   // 클릭 쪽 htmx 요청 신호도 묻는다.
   assert.ok(autoApproveBlock("fill_form_fields", [box({ opaqueRequest: true })]));
 });
+
+test("clicking a label that stands in for a hidden checkbox·radio always asks, like the fill path", () => {
+  const label = (over = {}) => t({ tag: "label", role: "", name: "직항만", states: { checked: "false" }, ...over });
+  assert.equal(autoApproveBlock("click_element", [label()]), null);
+  assert.ok(autoApproveBlock("click_element", [label({ proxy: true, proxyLabel: "직항만" })]));
+  // 이름은 잘려도 판정 글자(outerText — 연결된 label 전체 글자)의 뒤쪽 결제 문구를 본다.
+  assert.ok(autoApproveBlock("click_element", [label({ outerText: `${"약관 ".repeat(60)}구매 확정` })]));
+  // 숨긴 칸 쪽 결제 화면 신호를 합친 클릭.
+  assert.ok(autoApproveBlock("click_element", [label({ paymentContext: true })]));
+});
