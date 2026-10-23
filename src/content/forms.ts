@@ -217,6 +217,9 @@ const HX_NON_GET = ["post", "put", "patch", "delete"];
 // 요청에 값을 더하는 rails-ujs 속성. 글자에 삭제 단서가 있으면 묻는다.
 const EXTRA_VALUE_ATTRS = ["data-params"];
 // 다른 요소의 이벤트로 요청하는 htmx 요소(hx-trigger="click from:#btn").
+// htmx가 포커스로 추적해 요청에 덮어쓰기·name=value를 쓸 수 있는 버튼.
+const TRACKABLE_BUTTON_SELECTOR = 'button, input[type="submit" i], input[type="button" i], input[type="image" i]';
+const MAX_TRACKABLE_BUTTONS = 2000;
 const HX_FROM_SELECTOR = '[hx-trigger*="from:" i], [data-hx-trigger*="from:" i]';
 const MAX_HX_FROM = 200;
 const MAX_EVENT_PATH = 10_000;
@@ -353,9 +356,22 @@ function requestSignals(
   }
   // 경로에 htmx가 있거나 페이지에 from: 리스너가 있으면(경로 밖 요청도 htmx가 포커스로 추적한 이 버튼의 formmethod·
   // name=value를 쓸 수 있다 — form 속성이 양식 아닌 요소를 가리키는 연결 포함) 경로의 제출 덮어쓰기를 본다.
+  // htmx는 이전에 클릭·포커스로 추적한 버튼의 formmethod·formaction·name=value를 나중 요청(입력 칸의 change 등)에도 쓴다.
+  // 어느 버튼이 추적돼 있는지는 알 수 없으므로, htmx가 관여하면 접근 가능한 모든 루트의 버튼 전체를 같은 규칙으로 본다
+  // (하나라도 덮어쓰기·삭제 값이 있으면 묻는다 — fail-closed). 너무 많으면 모름.
   if (htmxOnPath || seenListeners > 0) {
     checkFormMethod(form);
     for (const node of nodes) checkOverrides(node);
+    let seenButtons = 0;
+    for (const root of getAccessibleRoots()) {
+      const buttons = root.querySelectorAll(TRACKABLE_BUTTON_SELECTOR);
+      seenButtons += buttons.length;
+      if (seenButtons > MAX_TRACKABLE_BUTTONS) {
+        out.opaque = true;
+        break;
+      }
+      for (const b of Array.from(buttons)) checkOverrides(b);
+    }
   }
   return out;
 }
