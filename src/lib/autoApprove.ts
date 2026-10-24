@@ -100,11 +100,41 @@ export function destructiveRoute(url: string): boolean {
 
 // 자동 실행하면 안 되는 이유. 없으면 null(자동 실행 가능).
 // values: fill_form_fields에서 칸마다 넣을 값(select 선택지 판정용, destructiveFillBlock).
-export function autoApproveBlock(tool: string, targets: TargetInfo[], values: ReadonlyArray<string | undefined> = []): string | null {
+// 사용자가 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 고를 수 있는 주소 신호(개인정보 모양만 걸린 주소).
+export const PERSONAL_URL_REASON = "개인정보가 실린 주소";
+
+// deferPersonalUrls: 주어지면 개인정보 모양만 걸린 주소(personalOnlyUrl)는 막지 않고 그 열쇠와 함께 모은 뒤 나머지 검사를 계속한다.
+// 결과가 null이면 "모은 주소를 사용자가 허용했을 때의 판정"이다. 값을 합치는 htmx 요청 주소(requestUrls)는 모으지 않는다
+// (요소의 지금 값이 요청에 붙을 수 있어 같은 주소 글자가 같은 요청을 뜻하지 않는다).
+// 열쇠(personalUrlKey) → 카드에 보일 주소(처음 본 것).
+export interface AutoApproveOptions {
+  deferPersonalUrls?: Map<string, string>;
+}
+
+export function autoApproveBlock(
+  tool: string,
+  targets: TargetInfo[],
+  values: ReadonlyArray<string | undefined> = [],
+  opts: AutoApproveOptions = {},
+): string | null {
+  // 같은 대상의 양식 action들(제출 주소의 허용 열쇠, personalUrlKey). urlBlock을 부르기 전에 대상마다 정한다.
+  let actions: string[] = [];
+  // mode: "exact"면 주소 글자 그대로 모으고, "submission"(양식이 칸 값을 덧붙여 만든 제출 주소 — submitUrl·scopeSubmitUrls)이면
+  // 같은 대상의 action에 묶어 모을 수 있고, "never"면 모으지 않는다.
+  const urlBlock = (url: string, mode: "exact" | "submission" | "never"): string | null => {
+    if (!url) return null;
+    if (mode !== "never" && opts.deferPersonalUrls && personalOnlyUrl(url)) {
+      const key = mode === "submission" ? personalUrlKey(url, actions) : url;
+      if (!opts.deferPersonalUrls.has(key)) opts.deferPersonalUrls.set(key, key);
+      return null;
+    }
+    return sensitiveUrlReason(url);
+  };
   if (!AUTO_APPROVE_TOOLS.has(tool)) return "자동 실행 대상이 아닌 도구";
   if (tool === "fill_form_fields") {
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
+      actions = [t.submitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
       // 숨긴 checkbox·radio를 보이는 label로 표시하는 칸(#56)은 늘 묻는다. 사용자가 보는 label과 그 주변의 위험 신호를
       // 그 위험 신호를 칸 쪽에서 빠짐없이 모으기 어렵다(구조 판정 — 더 묻는 쪽).
       if (t.proxy) return "보이지 않는 칸(보이는 라벨로 표시) 입력";
@@ -122,24 +152,24 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
       // 자동 실행하지 않는 경우(감싼 링크의 결제·개인정보 주소, 내려받기 링크, 가입·제출 문구 등)는 채우기로도 자동 실행하지
       // 않는다. 칸의 위험 신호에는 클릭 신호가 합쳐져 있다(content script forms.ts toggleClickRisk).
       if (t.fieldType === "checkbox" || t.fieldType === "radio") {
-        const clickWhy = autoApproveBlock("click_element", [t]);
+        const clickWhy = autoApproveBlock("click_element", [t], [], opts);
         if (clickWhy) return `체크·선택은 칸을 누르는 동작이라 클릭과 같이 묻습니다(${clickWhy})`;
       }
       // 입력의 change 처리기가 양식을 바로 제출하는 페이지가 있어, 개인정보가 채워진 양식의 칸도 묻는다.
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
       // 결제·개인정보 주소를 가리키는 선택지가 있는 칸도 묻는다.
-      for (const url of [
-        t.submitTo ?? "",
-        t.submitUrl ?? "",
-        ...(t.choiceUrls ?? []),
-        ...(t.scopeSubmitUrls ?? []),
-        ...(t.scopeFormActions ?? []),
-        ...(t.aroundFormActions ?? []),
-        // 값을 바꾸거나 누르면 일으킬 htmx GET 요청의 목적지.
-        ...(t.requestUrls ?? []),
-      ]) {
-        const why = url ? sensitiveUrlReason(url) : null;
+      for (const url of [t.submitTo ?? "", ...(t.choiceUrls ?? []), ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])]) {
+        const why = urlBlock(url, "exact");
+        if (why) return `${why}로 이어지는 칸 입력`;
+      }
+      for (const url of [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])]) {
+        const why = urlBlock(url, "submission");
+        if (why) return `${why}로 이어지는 칸 입력`;
+      }
+      // 값을 바꾸거나 누르면 일으킬 htmx GET 요청의 목적지.
+      for (const url of t.requestUrls ?? []) {
+        const why = urlBlock(url, "never");
         if (why) return `${why}로 이어지는 칸 입력`;
       }
     }
@@ -147,6 +177,7 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
   }
   if (tool === "click_element") {
     for (const t of targets) {
+      actions = [t.submitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
       // 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label을 누르는 클릭(#56)은 채우기의 대리 label 칸과 같이 늘 묻는다.
       if (t.proxy) return "보이지 않는 칸을 대신 보여 주는 라벨 클릭";
       // 실제로 작동하는 바깥 버튼·링크의 글자도 본다(<button>구매 <span>확인</span></button>의 span).
@@ -167,17 +198,22 @@ export function autoApproveBlock(tool: string, targets: TargetInfo[], values: Re
         t.href,
         t.ancestorHref ?? "",
         t.submitTo ?? "",
-        t.submitUrl ?? "",
         ...(t.choiceUrls ?? []),
-        ...(t.scopeSubmitUrls ?? []),
         ...(t.scopeFormActions ?? []),
         ...(t.aroundFormActions ?? []),
         // 링크의 ping 주소(쿠키를 실은 POST)도 결제·개인정보 주소인지 본다.
         ...(t.pingUrls ?? []),
-        // 누르면 일으킬 htmx GET 요청의 목적지(hx-get hx-trigger="click").
-        ...(t.requestUrls ?? []),
       ]) {
-        const why = href ? sensitiveUrlReason(href) : null;
+        const why = urlBlock(href, "exact");
+        if (why) return `${why}로 가는 링크`;
+      }
+      for (const href of [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])]) {
+        const why = urlBlock(href, "submission");
+        if (why) return `${why}로 가는 링크`;
+      }
+      // 누르면 일으킬 htmx GET 요청의 목적지(hx-get hx-trigger="click").
+      for (const href of t.requestUrls ?? []) {
+        const why = urlBlock(href, "never");
         if (why) return `${why}로 가는 링크`;
       }
       if (t.submitsPersonal) return "개인정보가 채워진 양식 제출";
@@ -396,22 +432,93 @@ export function looksPersonalValue(raw: string): boolean {
 
 // ignorePayment: 결제 단서(경로 낱말)는 보지 않고 개인정보·계정 정보·끝까지 못 본 주소만 본다
 // (사용자가 이번 요청 동안 링크 이동을 허락한 경우, grantableLink).
-export function sensitiveUrlReason(url: string, { ignorePayment = false }: { ignorePayment?: boolean } = {}): string | null {
+export function sensitiveUrlReason(url: string, opts: { ignorePayment?: boolean } = {}): string | null {
+  return urlReasons(url, opts).first;
+}
+
+// 펼친 주소 모두에서 개인정보 모양 말고는 걸리는 신호가 없고 개인정보 모양은 걸리는 주소(사용자가 허용할 수 있는 주소).
+// 감싼 주소 안의 계정 정보·결제 경로·끝까지 못 본 주소가 하나라도 있으면 false.
+export function personalOnlyUrl(url: string): boolean {
+  const r = urlReasons(url, {});
+  return r.personal && r.other === null;
+}
+
+// 매개변수 하나에 개인정보·비밀 단서(이름)나 개인정보 모양(값)이 있는지.
+function personalParam(k: string, raw: string): boolean {
+  const v = decodeDeepText(raw);
+  const name = splitIdentifier(decodeDeepText(k));
+  return (
+    !!v.trim() &&
+    (PERSONAL_PARAM_RE.test(name) ||
+      SECRET_HINT_RE.test(name) ||
+      PERSONAL_HINT_RE.test(name) ||
+      FIELD_PAYMENT_HINT_RE.test(name) ||
+      looksPersonalValue(v))
+  );
+}
+
+// 사용자가 허용하는 단위(personalOnlyUrl인 주소의 열쇠)는 주소 글자 그대로다. 예외는 양식 제출 주소 하나: 같은 대상의
+// 양식 action(actions — submitTo·scopeFormActions·aroundFormActions) 주소 뒤에 칸 값(name=value)만 덧붙인 주소
+// (formSubmissionUrl)이고 덧붙은 매개변수에 개인정보 신호가 없으면 그 action의 열쇠를 쓴다. 양식이 자기 칸 값으로 만든
+// 주소라 값이 바뀌어도 같은 양식으로 본다(신호가 없는 양식의 제출처럼). 링크 주소 등 나머지는 한 글자만 달라도 다시 묻는다.
+export function personalUrlKey(url: string, actions: readonly string[] = []): string {
+  for (const action of actions) {
+    if (action && action !== url && extendsAction(url, action) && personalOnlyUrl(action)) return action;
+  }
+  return url;
+}
+
+// url이 action 주소 뒤에 매개변수만 덧붙인 것인지: 출처·경로·해시가 같고, 쿼리가 action의 매개변수 그대로로 시작한다.
+// 덧붙은 매개변수에 개인정보 신호가 있으면 false.
+function extendsAction(url: string, action: string): boolean {
+  let u: URL;
+  let a: URL;
+  try {
+    u = new URL(url);
+    a = new URL(action);
+  } catch {
+    return false;
+  }
+  if (u.origin !== a.origin || u.pathname !== a.pathname || u.hash !== a.hash || u.username || u.password) return false;
+  const up = [...u.searchParams];
+  const ap = [...a.searchParams];
+  if (up.length <= ap.length) return false;
+  for (let i = 0; i < ap.length; i++) {
+    if (up[i][0] !== ap[i][0] || up[i][1] !== ap[i][1]) return false;
+  }
+  return up.slice(ap.length).every(([k, v]) => !personalParam(k, v));
+}
+
+// first: 펼친 순서대로 처음 걸린 이유(sensitiveUrlReason). other: 개인정보 모양이 아닌 이유 중 처음. personal: 개인정보 모양이 걸렸는지.
+function urlReasons(
+  url: string,
+  { ignorePayment = false }: { ignorePayment?: boolean },
+): { first: string | null; other: string | null; personal: boolean } {
+  let first: string | null = null;
+  let personalHit = false;
+  // 펼친 주소 중 끝까지 풀지 못한 표시(about:undecodable 등). 사이트 경계 판정이 따로 막으므로 first(sensitiveUrlReason)는
+  // 바꾸지 않고, 사용자 허용(personalOnlyUrl)에서만 면제할 수 없는 이유로 쓴다.
+  let unverified: string | null = null;
+  const other = (why: string) => ({ first: first ?? why, other: why, personal: personalHit });
   // content script가 넣는 "끝까지 보지 못함" 표시(about:too-many-…, about:undecodable).
-  if (/^about:(too-many|undecodable|over-budget)/.test(url)) return "끝까지 확인하지 못한 주소";
+  if (/^about:(too-many|undecodable|over-budget)/.test(url)) return other("끝까지 확인하지 못한 주소");
   // 리다이렉트 매개변수에 감싼 주소도 같은 기준으로 본다.
   const { urls, overflow } = expandUrls(url);
-  if (overflow) return "끝까지 확인하지 못한 복잡한 주소";
+  if (overflow) return other("끝까지 확인하지 못한 복잡한 주소");
   for (const u of urls) {
+    if (u.protocol === "about:" && /^(too-many|undecodable|over-budget)/.test(u.pathname)) {
+      unverified ??= "끝까지 확인하지 못한 주소";
+      continue;
+    }
     // 경로·쿼리·해시를 따로 풀어 본다(한 부분의 잘못된 인코딩이 다른 부분 해석을 막지 않게).
     const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join("");
     // 이어 붙인 표기(pay_now, confirm_order, placeOrder)도 낱말로 나눠 보고, 버튼 문구와 같은 금전 단서
     // (donate, purchase, buy, 충전 등)도 경로 낱말에 적용한다.
     const words = splitIdentifier(route).replace(/[/?#&=+]+/g, " ");
     if (!ignorePayment && (PAYMENT_ROUTE_RE.test(route) || PAYMENT_ROUTE_RE.test(words) || PAYMENT_TEXT_RE.test(words))) {
-      return "결제·주문 주소";
+      return other("결제·주문 주소");
     }
-    if (u.username || u.password) return "계정 정보가 실린 주소";
+    if (u.username || u.password) return other("계정 정보가 실린 주소");
     // 쿼리와 해시(#a=b, #/path?a=b — 해시 값을 읽는 SPA) 매개변수 모두 본다.
     const params: Array<[string, string]> = [...u.searchParams];
     if (u.hash.length > 1) {
@@ -422,18 +529,7 @@ export function sensitiveUrlReason(url: string, { ignorePayment = false }: { ign
         /* ignore */
       }
     }
-    const personal = params.some(([k, raw]) => {
-      const v = decodeDeepText(raw);
-      const name = splitIdentifier(decodeDeepText(k));
-      return (
-        !!v.trim() &&
-        (PERSONAL_PARAM_RE.test(name) ||
-          SECRET_HINT_RE.test(name) ||
-          PERSONAL_HINT_RE.test(name) ||
-          FIELD_PAYMENT_HINT_RE.test(name) ||
-          looksPersonalValue(v))
-      );
-    });
+    const personal = params.some(([k, raw]) => personalParam(k, raw));
     // 경로에서는 이메일·키·토큰과, 구분 기호가 있는 전화·주민·카드 번호와 휴대전화 번호, Luhn이 맞는 카드 번호를 본다
     // (평범한 기사·상품 번호는 대개 이 모양이 아니다).
     if (
@@ -444,10 +540,11 @@ export function sensitiveUrlReason(url: string, { ignorePayment = false }: { ign
       PERSONAL_VALUE_RE.test(route) ||
       hasCardNumber(route)
     ) {
-      return "개인정보가 실린 주소";
+      first ??= PERSONAL_URL_REASON;
+      personalHit = true;
     }
   }
-  return null;
+  return { first, other: unverified, personal: personalHit };
 }
 
 // 승인 카드에서 "이번 요청 동안 링크 이동은 묻지 않기"를 고른 뒤 카드 없이 누를 수 있는 링크인지.
