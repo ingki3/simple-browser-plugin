@@ -64,11 +64,21 @@ function independentIn(chain: readonly Element[], el: Element): Element | null {
   return null;
 }
 
-// 점에서 맨 위 요소. 열린 shadow root 안으로 따라 내려간다.
+// 요소의 shadow root(닫힌 것 포함 — content script만 chrome.dom으로 열어 볼 수 있다).
+function shadowOf(el: Element): ShadowRoot | null {
+  if (el.shadowRoot) return el.shadowRoot;
+  try {
+    return (chrome.dom?.openOrClosedShadowRoot?.(el as HTMLElement) as ShadowRoot | null | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// 점에서 맨 위 요소. 열린·닫힌 shadow root 안으로 따라 내려간다(실제 입력은 닫힌 root 안의 요소도 활성화하므로).
 function hitAt(doc: Document, p: Point): Element | null {
   let hit = doc.elementFromPoint(p.x, p.y);
-  while (hit?.shadowRoot) {
-    const inner = hit.shadowRoot.elementFromPoint(p.x, p.y);
+  for (let root = hit ? shadowOf(hit) : null; hit && root; root = shadowOf(hit)) {
+    const inner = root.elementFromPoint(p.x, p.y);
     if (!inner || inner === hit) break;
     hit = inner;
   }
@@ -99,11 +109,15 @@ export function pointOf(el: HTMLElement): Point | null {
 // 가드
 // ---------------------------------------------------------------------------
 
+// 재확인 단계. down: 첫 pointerdown(아직 페이지 처리기가 돌지 않음 — 엄격). up: mousedown·떼기(앞 단계 처리기가 펼침·눌림
+// 같은 화면 상태를 바꿨을 수 있음). click: 브라우저가 checkbox·radio 상태를 먼저 바꾼 뒤.
+export type RecheckPhase = "down" | "up" | "click";
+
 interface TopGuard {
   el: HTMLElement;
   point: Point;
   // 승인한 대상이 아직 같은지(clickables의 recheckApproved). 바뀌었으면 이유.
-  recheck: () => string | null;
+  recheck: (phase: RecheckPhase) => string | null;
   deadline: number;
   status: TrustedClickStatus;
   remove: () => void;
@@ -135,7 +149,7 @@ function listen(win: Window, handler: (e: Event) => void, ms: number, onExpire: 
 }
 
 // top 문서 가드: 실제 입력이 승인한 대상(그 안의 장식 요소 포함)에만 가게 한다. 누르기 전 단계에서는 대상도 다시 확인한다.
-export function armTopGuard(token: string, el: HTMLElement, point: Point, recheck: () => string | null): void {
+export function armTopGuard(token: string, el: HTMLElement, point: Point, recheck: (phase: RecheckPhase) => string | null): void {
   disarm(token);
   const guard: TopGuard = {
     el,
@@ -154,18 +168,24 @@ export function armTopGuard(token: string, el: HTMLElement, point: Point, rechec
       block(e);
     };
     if (Date.now() > guard.deadline) return stop("확인 시간이 지남");
+    // 누르기 한 번(mousePressed·mouseReleased)이 만드는 이벤트만 받는다.
+    if (e.type === "auxclick" || e.type === "dblclick" || e.type === "contextmenu") return stop("예상하지 않은 입력");
     const path = e.composedPath();
     const at = path.indexOf(el);
     if (at < 0) return stop("다른 요소에 닿음");
     const chain = path.slice(0, at).filter((n): n is Element => n instanceof Element);
     const other = independentIn(chain, el);
     if (other) return stop(`대상 안의 다른 ${other.tagName.toLowerCase()} 요소에 닿음`);
-    // 누르기 단계에서는 대상 기술 전체를 다시 본다. click 단계는 브라우저가 체크 상태를 먼저 바꾸므로(활성화 전 단계)
-    // 상태 비교를 하지 않고 위치만 본다.
-    if (e.type === "pointerdown" || e.type === "mousedown") {
-      const changed = recheck();
-      if (changed) return stop(changed);
+    // composedPath는 닫힌 shadow root 안을 감추므로, 입력 좌표에서 닫힌 root까지 따라 내려가 다시 본다.
+    if (e instanceof MouseEvent) {
+      const hit = checkPoint(el, { x: e.clientX, y: e.clientY });
+      if (!hit.ok) return stop(hit.reason);
     }
+    // 단계마다 대상 기술 전체(주소·양식 관계·위험 신호 포함)를 다시 본다 — 앞 단계 처리기가 href·formaction 등을 바꿨으면
+    // 막는다. pointerdown 뒤에는 화면 상태(펼침·눌림 등, 체크 제외)의 변화만, click 단계는 브라우저가 바꾼 checkbox·radio
+    // 상태의 예상 변화만 허용한다(clickables의 phaseInfo).
+    const changed = recheck(e.type === "click" ? "click" : e.type === "pointerdown" ? "down" : "up");
+    if (changed) return stop(changed);
     if (e.type === "click") {
       guard.status = { status: "clicked" };
       // 결과(status)는 백그라운드가 읽을 때까지 남기고 리스너만 뗀다.
@@ -193,7 +213,7 @@ export function checkBeforePress(token: string): number {
   };
   if (guard.status.status !== "none") fail("이미 처리된 클릭");
   const remaining = guard.deadline - Date.now();
-  const changed = guard.recheck();
+  const changed = guard.recheck("down");
   if (changed) fail(changed);
   const now = pointOf(guard.el);
   if (!now || Math.abs(now.x - guard.point.x) > 1 || Math.abs(now.y - guard.point.y) > 1) fail("대상의 위치가 바뀜");

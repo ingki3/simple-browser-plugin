@@ -25,6 +25,8 @@ export class InputSession {
   // 사용자가 디버깅 막대의 취소를 눌렀으면 이 대화에서는 다시 붙이지 않는다(사용자 선택).
   canceledByUser = false;
   readonly tabs = new Set<number>();
+  // detachSession마다 올린다. 붙이는 동안 떼기가 있었으면(중단·턴 끝) 붙인 직후 다시 뗀다.
+  generation = 0;
 }
 
 // 탭마다 디버거를 붙인 대화.
@@ -58,10 +60,15 @@ async function ensureAttached(tabId: number, session: InputSession): Promise<str
   const owner = attached.get(tabId);
   if (owner === session) return null;
   if (owner) return "다른 대화가 이 탭에 붙어 있음";
+  const generation = session.generation;
   try {
     await chrome.debugger.attach({ tabId }, PROTOCOL_VERSION);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
+  }
+  if (session.generation !== generation) {
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+    return "붙이는 동안 중단됨";
   }
   attached.set(tabId, session);
   session.tabs.add(tabId);
@@ -71,6 +78,7 @@ async function ensureAttached(tabId: number, session: InputSession): Promise<str
 
 // 턴이 끝나거나 대화가 중단·초기화되면 이 대화가 붙인 디버거를 모두 뗀다.
 export async function detachSession(session: InputSession): Promise<void> {
+  session.generation++;
   const tabs = [...session.tabs];
   session.tabs.clear();
   await Promise.all(
@@ -313,7 +321,7 @@ async function pressIn(
   if (status.status === "clicked") return { ...data, input: "trusted" };
   if (status.status === "blocked") {
     throw new Error(
-      `실제 입력이 승인한 대상에 닿지 않아 막았습니다(${status.reason}). 누르기 단계의 처리는 페이지에서 이미 일어났을 수 있으니 다시 관측하세요.`,
+      `실제 입력 클릭을 도중에 막았습니다(${status.reason}). 누르기 단계의 처리는 페이지에서 이미 일어났을 수 있으니 다시 관측하세요.`,
     );
   }
   await cancel("입력이 도착하지 않음");

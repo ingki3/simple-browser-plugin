@@ -43,13 +43,14 @@ import {
   registeredInfo,
   scanTargets,
   startEffectWatch,
+  statesOf,
   takeApproved,
   type Relation,
   type TargetKind,
 } from "./targets";
 import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
 import type { TrustedPrepare } from "@/lib/trustedClick";
-import { armTopGuard, checkPoint, pointOf } from "./trustedClick";
+import { armTopGuard, checkPoint, pointOf, type RecheckPhase } from "./trustedClick";
 
 const BASE_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
@@ -544,7 +545,7 @@ export function clickElement(
       return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
     }
     startEffectWatch(effectToken, el);
-    armTopGuard(trusted, el, point, () => recheckApproved(CLICK_KIND, el, info, relation));
+    armTopGuard(trusted, el, point, (phase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase), relation));
     return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
   }
 
@@ -553,6 +554,22 @@ export function clickElement(
   setTimeout(() => scriptClick(el, info, relation, effectToken, true), 0);
 
   return { clicked: true, text, href, effectToken };
+}
+
+// 실제 입력의 단계별 재확인에 쓸 승인 기술.
+// - down: 그대로(엄격).
+// - up·click: 앞 단계의 페이지 처리기가 바꾼 화면 상태(aria 펼침·눌림·선택 등)는 받아들인다. 체크 상태는 그대로 고정하되,
+//   click 단계에서 대상 자신이 checkbox·radio면 브라우저가 click 처리기보다 먼저 바꾼 예상 상태(checkbox는 반대, radio는
+//   체크)로 본다. label은 컨트롤의 click이 따로 오므로 그대로. 주소·양식·위험 신호는 어느 단계든 그대로 비교한다.
+function phaseInfo(el: HTMLElement, info: TargetInfo, phase: RecheckPhase): TargetInfo {
+  if (phase === "down") return info;
+  const { checked: _now, ...ui } = statesOf(el) ?? {};
+  let checked = info.states?.checked;
+  if (phase === "click" && isToggleInput(el) && checked !== undefined) {
+    checked = el.type === "radio" ? "true" : checked === "true" ? "false" : checked === "false" ? "true" : String(el.checked);
+  }
+  const states = { ...ui, ...(checked !== undefined ? { checked } : {}) };
+  return { ...info, states: Object.keys(states).length ? states : undefined };
 }
 
 function scrollToCenter(el: HTMLElement): void {
