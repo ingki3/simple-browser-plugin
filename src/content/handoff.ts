@@ -52,10 +52,30 @@ function shownElement(el: HTMLElement): HTMLElement {
   return visibleProxy(el) ?? el;
 }
 
+// 대상을 담은 모달 대화상자·팝오버(최상위 레이어). shadow 경계를 넘어 올라간다.
+function topLayerOf(el: Element): Element | null {
+  let node: Element | null = el;
+  while (node) {
+    try {
+      if (node.matches("dialog:modal, :popover-open")) return node;
+    } catch {
+      return null;
+    }
+    const parent: Element | null = node.parentElement;
+    if (parent) {
+      node = parent;
+      continue;
+    }
+    const root = node.getRootNode();
+    node = root instanceof ShadowRoot ? root.host : null;
+  }
+  return null;
+}
+
 // 대상마다 그 문서에 표시 상자를 붙인다(같은 출처 iframe 안의 대상은 그 문서에).
 function drawBoxes(targets: HTMLElement[]): () => void {
   const hosts: HTMLElement[] = [];
-  const items: Array<{ el: HTMLElement; box: HTMLElement }> = [];
+  const items: Array<{ el: HTMLElement; box: HTMLElement; host: HTMLElement }> = [];
   targets.forEach((el, i) => {
     const doc = el.ownerDocument;
     const host = doc.createElement("div");
@@ -73,27 +93,23 @@ function drawBoxes(targets: HTMLElement[]): () => void {
     }
     root.append(style, box);
     // 모달 대화상자·팝오버 안의 대상은 그 최상위 레이어 요소 안에 붙여야 가려지지 않는다.
-    let layer: Element | null = null;
-    try {
-      layer = el.closest("dialog:modal, :popover-open");
-    } catch {
-      layer = null;
-    }
-    (layer ?? doc.body ?? doc.documentElement).append(host);
+    (topLayerOf(el) ?? doc.body ?? doc.documentElement).append(host);
     hosts.push(host);
-    items.push({ el: shownElement(el), box });
+    items.push({ el: shownElement(el), box, host });
   });
   let frame = 0;
   const place = () => {
-    for (const { el, box } of items) {
+    for (const { el, box, host } of items) {
       const r = el.isConnected ? el.getBoundingClientRect() : null;
       if (!r || (r.width === 0 && r.height === 0)) {
         box.style.display = "none";
         continue;
       }
+      // 표시를 붙인 요소(transform이 있는 모달 등)가 fixed의 기준이 될 수 있어, 호스트의 화면 위치를 빼서 맞춘다.
+      const origin = host.getBoundingClientRect();
       box.style.display = "block";
-      box.style.left = `${r.left - 4}px`;
-      box.style.top = `${r.top - 4}px`;
+      box.style.left = `${r.left - origin.left - 4}px`;
+      box.style.top = `${r.top - origin.top - 4}px`;
       box.style.width = `${r.width + 8}px`;
       box.style.height = `${r.height + 8}px`;
     }
