@@ -19,7 +19,7 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { groupLabel, modelText, selectProxyOf, subtreeText } from "./modelText";
+import { groupLabel, modelText, selectProxyOf, subtreeText, subtreeTextInfo } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -127,24 +127,28 @@ function textOf(el: Element, exclude: Element[] = [], substitute?: ReadonlyMap<E
   let raw: string;
   if (!exclude.length && !substitute?.size) raw = el.textContent ?? "";
   else {
-    const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    raw = "";
-    const emitted = new Set<Element>();
-    // textContent와 같게 끝까지 모은다(중간에 끊으면 긴 공백 뒤에 덧붙인 글자를 놓친다). 자르기는 공백 정리 뒤에 한다.
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (exclude.some((x) => x.contains(node))) continue;
-      let swapped = false;
-      for (const [box, text] of substitute ?? []) {
-        if (!box.contains(node)) continue;
-        if (!emitted.has(box)) {
-          emitted.add(box);
-          raw += text;
-        }
-        swapped = true;
-        break;
+    // textContent와 같은 순서로 끝까지 모은다(중간에 끊으면 긴 공백 뒤에 덧붙인 글자를 놓친다). 자르기는 공백 정리 뒤에 한다.
+    // 바꿔 넣을 요소는 그 자리에서 주어진 글자를 넣고 안을 보지 않는다(글자 노드가 없는 빈 요소도 같은 자리에 넣는다).
+    const parts: string[] = [];
+    const stack: Node[] = [el];
+    while (stack.length) {
+      const node = stack.pop()!;
+      if (node.nodeType === Node.TEXT_NODE) {
+        parts.push(node.nodeValue ?? "");
+        continue;
       }
-      if (!swapped) raw += node.nodeValue ?? "";
+      if (node !== el && node.nodeType === Node.ELEMENT_NODE) {
+        if (exclude.includes(node as Element)) continue;
+        const swapped = substitute?.get(node as Element);
+        if (swapped !== undefined) {
+          parts.push(swapped);
+          continue;
+        }
+      }
+      const kids = node.childNodes;
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
     }
+    raw = parts.join("");
   }
   return raw.replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
 }
@@ -213,8 +217,11 @@ function inFlightSubstitute(
     if (select.selectedOptions.length !== 1 || select.selectedOptions[0] !== option) return;
     if (option.value !== picked.value || select.value !== picked.value) return;
     // 선택지 이름도 쓴 직후 그대로여야 하고(처리기가 이름을 바꿨으면 그대로 비교), 콤보박스가 그 이름을 보여 줘야 한다.
-    // 콤보박스의 보이는 글자(aria-hidden인 해제 아이콘 등은 뺀 것)가 그 이름이어야 한다.
-    if (option.label !== picked.label || norm(subtreeText(combo, MODEL_CONTEXT_MAX)) !== norm(picked.label)) return;
+    // 콤보박스의 보이는 글자(aria-hidden인 해제 아이콘 등은 뺀 것)가 끝까지 모은 그대로 그 이름이어야 한다(잘렸으면 뒤에 숨은
+    // 글자가 있을 수 있어 되돌리지 않는다).
+    if (option.label !== picked.label) return;
+    const shown = subtreeTextInfo(combo, MODEL_CONTEXT_MAX);
+    if (shown.cut || norm(shown.text) !== norm(picked.label)) return;
     raw.set(combo, before[i].raw);
     model.set(combo, before[i].model);
   });
