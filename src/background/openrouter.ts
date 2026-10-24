@@ -26,7 +26,9 @@ import {
   type OpenRouterToolCall,
 } from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
-import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction } from "./tools/dispatcher";
+import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
+import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
+import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
 import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
 import { getSettings, readFlags, setFlag } from "./storage";
@@ -75,7 +77,7 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
    (c) 다음에 부를 툴과 그 이유.
    navigate_to_url을 바로 호출하는 예외에서는 현재 페이지 관측 대신 사용자가 요청한 목적지와 사용할 공식 URL을 밝힌다.
 3. 관측 결과가 예상과 다르거나 후보가 여러 개면 바로 행동하지 말고, Thought에서 이유를 밝힌 뒤 다른 필터/도구로 재관측하거나 사용자에게 되묻는다. 단, 아래 '목표 페이지 찾아가기 모드'에서 경로 중간의 링크를 고를 때는 되묻지 않고 가장 그럴듯한 후보를 고른다.
-4. 민감 툴(navigate_to_url, click_element, fill_form_fields, download_images, download_files, capture_page)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다(목표 페이지 찾아가기 모드의 경로 중간 링크는 예외).
+4. 민감 툴(navigate_to_url, click_element, fill_form_fields, download_images, download_files, capture_page)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다(목표 페이지 찾아가기 모드의 경로 중간 링크는 예외). 사용자가 '직접 조작할 사이트'로 정한 사이트에서는 click_element·fill_form_fields를 불러도 확장이 대신 누르거나 입력하지 않고, 대상을 화면에 표시해 사용자가 직접 하게 한다(결과에 handedOff). 이때도 평소처럼 대상을 하나씩 정해 부르고, 결과를 받으면 페이지를 다시 관측해 사용자가 한 일을 확인한다.
 5. 페이지 내용을 지어내지 않는다. 모르면 관측 후 말하거나 "확실하지 않다"고 말한다.
 6. 툴이 ok:false로 실패하거나 에러를 반환하면:
    - 같은 툴을 같은 인자로 재시도하지 않는다. 같은 호출이 같은 결과로 3번 이어지거나(화면 변화가 관측된 클릭은 제외) 한 툴이 성공 없이 3번 실패하면 확장이 도구 사용을 멈춘다.
@@ -1011,6 +1013,8 @@ export class ChatAgent {
 
         // 승인 없이 실행한 호출은 결과 카드에 표시한다.
         let autoRan = false;
+        // 직접 조작할 사이트에서 사용자에게 넘겨 마친 호출(실행하지 않는다).
+        let handoffOutcome: HandoffOutcome | null = null;
         // 이번 대화 허락(#53)으로 카드 없이 실행한 호출.
         let grantRan = false;
         // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
@@ -1044,7 +1048,7 @@ export class ChatAgent {
           if (this.isStale(turn)) return false;
           if (preview.execArgs !== undefined) execArgs = preview.execArgs;
           // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
-          const { autoApprove } = await getSettings();
+          const { autoApprove, manualSites } = await getSettings();
           if (this.isStale(turn)) return false;
           const trusted = new Set(this.approvedSites);
           if (this.turnSite) trusted.add(this.turnSite);
@@ -1058,6 +1062,9 @@ export class ChatAgent {
             }
             if (this.isStale(turn)) return false;
           }
+          // 사용자가 '직접 조작할 사이트'로 정한 사이트면 클릭·입력을 실행하지 않고 대상을 표시해 사용자에게 넘긴다(0.2.2).
+          const handOff =
+            (toolName === "click_element" || toolName === "fill_form_fields") && isManualSite(manualSites, pageUrl);
           // 클릭·입력은 지금 페이지와 링크가 사용자가 고른 사이트 안일 때만 자동 실행한다.
           // 입력값의 상대 주소는 탭 주소와, 페이지가 실제로 쓰는 기준 주소(<base href>) 모두로 풀어 본다.
           const siteBlock = (sites: ReadonlySet<string>): string | null => {
@@ -1156,7 +1163,61 @@ export class ChatAgent {
             else grantImages = got.images;
           }
           let approved: boolean;
-          if (chatGrant.covered && isChatGrantTool(toolName)) {
+          if (handOff) {
+            const ids =
+              toolName === "click_element"
+                ? [(parsedArgs as { id: string }).id]
+                : (parsedArgs as { fills: Array<{ id: string }> }).fills.map((f) => f.id);
+            let shown: HandoffSession;
+            try {
+              shown = await showHandoff(turnTab, callId, toolName === "click_element" ? "c" : "f", ids);
+            } catch (err) {
+              if (this.isStale(turn)) return false;
+              const msg = err instanceof Error ? err.message : String(err);
+              logToolFail(toolName, msg);
+              recordCancelledAction(callId, turnTab);
+              this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
+              this.history.push({
+                role: "tool",
+                tool_call_id: callId,
+                name: toolName,
+                content: this.toolContent(turnTab, { error: msg }),
+              });
+              record(toolName, argsKey, false, `error:${msg}`, msg);
+              continue;
+            }
+            if (this.isStale(turn)) {
+              void endHandoff(shown);
+              return false;
+            }
+            debugLog("tool:handoff", toolName);
+            this.send({
+              kind: "tool_pending",
+              callId,
+              toolName,
+              args: parsedArgs,
+              previewSummary:
+                toolName === "click_element"
+                  ? "페이지에 표시한 대상을 직접 눌러 주세요. 누르면 이어서 진행합니다."
+                  : `페이지에 표시한 칸에 아래 값을 직접 입력하고 "했어요"를 눌러 주세요.`,
+              previewDetails: preview.details,
+              handoff: true,
+            });
+            let by: HandoffOutcome = "confirmed";
+            const stopWatch = watchHandoff(shown, (outcome) => {
+              by = outcome;
+              this.pendingApprovals.get(callId)?.(true);
+            });
+            approved = await new Promise<boolean>((resolve) => {
+              this.pendingApprovals.set(callId, resolve);
+            });
+            stopWatch();
+            this.pendingApprovals.delete(callId);
+            void endHandoff(shown);
+            if (this.isStale(turn)) return false;
+            debugLog("tool:handoff_result", `${toolName} ${approved ? by : "cancelled"}`);
+            if (approved) handoffOutcome = by;
+          } else if (chatGrant.covered && isChatGrantTool(toolName)) {
             debugLog("tool:chat_grant_approved", toolName);
             // 선택 카드는 미리보기가 정한 후보를 고른 것으로 한다(링크 읽기는 고정한 후보 전부, 이미지 저장은 모델이 넘긴
             // 주소의 후보). 경고가 붙은 후보가 있으면 위에서 덮지 않았다.
@@ -1252,6 +1313,21 @@ export class ChatAgent {
             record(toolName, argsKey, false, "user_cancelled", "사용자가 취소했습니다.", { cancelled: true });
             continue;
           }
+        }
+
+        if (handoffOutcome && (toolName === "click_element" || toolName === "fill_form_fields")) {
+          recordHandedOffAction(callId, turnTab);
+          const note = handoffResultText(toolName, handoffOutcome);
+          this.send({ kind: "tool_result", callId, toolName, ok: true, summary: `직접 조작 · ${HANDOFF_LABELS[handoffOutcome]}` });
+          this.history.push({
+            role: "tool",
+            tool_call_id: callId,
+            name: toolName,
+            content: this.toolContent(turnTab, { result: { handedOff: true, outcome: handoffOutcome, note } }),
+          });
+          // 사용자가 한 일이라 같은 대상을 다시 넘겨도 헛돌기로 세지 않는다.
+          record(toolName, argsKey, true, `handoff:${handoffOutcome}`, note, { changed: true });
+          continue;
         }
 
         // 실행 전에 등록해야 번역 도중 중단해도 translate_stop이 이 탭에 간다.

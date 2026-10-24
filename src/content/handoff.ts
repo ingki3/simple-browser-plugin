@@ -1,0 +1,139 @@
+// 손 넘기기(직접 조작할 사이트, 0.2.2): 승인 대상(클릭할 요소·채울 칸)을 화면에 표시하고, 클릭이면 사용자가 그 요소를 실제로
+// 눌렀는지 본다. 페이지의 이벤트를 막거나 바꾸지 않고(수동 리스너), 페이지에 입력·클릭을 보내지 않는다.
+// 표시는 닫힌 shadow root 안의 고정 위치 상자(pointer-events: none)라 사용자의 조작을 가리지 않는다.
+import { approvedElement } from "./targets";
+import { proxyLabel } from "./forms";
+
+// 사용자가 오래 자리를 비워도 표시가 남지 않게 하는 상한.
+const HANDOFF_MAX_MS = 15 * 60_000;
+
+interface Handoff {
+  clicked: boolean;
+  stop: () => void;
+}
+
+const handoffs = new Map<string, Handoff>();
+
+const BOX_CSS = `
+:host { all: initial; }
+.box {
+  position: fixed;
+  box-sizing: border-box;
+  border: 3px solid #f59e0b;
+  border-radius: 6px;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.35);
+  pointer-events: none;
+  animation: sbp-pulse 1.2s ease-in-out infinite;
+}
+.badge {
+  position: absolute;
+  top: -12px;
+  left: -12px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 11px;
+  background: #f59e0b;
+  color: #111;
+  font: 600 12px/22px system-ui, sans-serif;
+  text-align: center;
+}
+@keyframes sbp-pulse { 50% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0.15); } }
+@media (prefers-reduced-motion: reduce) { .box { animation: none; } }
+`;
+
+// 화면에서 숨긴 칸은 대신 보이는 label을 표시한다.
+function shownElement(el: HTMLElement): HTMLElement {
+  if (el.getClientRects().length > 0) {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) return el;
+  }
+  return proxyLabel(el) ?? el;
+}
+
+// 대상마다 그 문서에 표시 상자를 붙인다(같은 출처 iframe 안의 대상은 그 문서에).
+function drawBoxes(targets: HTMLElement[]): () => void {
+  const hosts: HTMLElement[] = [];
+  const items: Array<{ el: HTMLElement; box: HTMLElement }> = [];
+  targets.forEach((el, i) => {
+    const doc = el.ownerDocument;
+    const host = doc.createElement("div");
+    host.style.cssText = "all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
+    const root = host.attachShadow({ mode: "closed" });
+    const style = doc.createElement("style");
+    style.textContent = BOX_CSS;
+    const box = doc.createElement("div");
+    box.className = "box";
+    if (targets.length > 1) {
+      const badge = doc.createElement("span");
+      badge.className = "badge";
+      badge.textContent = String(i + 1);
+      box.append(badge);
+    }
+    root.append(style, box);
+    (doc.body ?? doc.documentElement).append(host);
+    hosts.push(host);
+    items.push({ el: shownElement(el), box });
+  });
+  let frame = 0;
+  const place = () => {
+    for (const { el, box } of items) {
+      const r = el.isConnected ? el.getBoundingClientRect() : null;
+      if (!r || (r.width === 0 && r.height === 0)) {
+        box.style.display = "none";
+        continue;
+      }
+      box.style.display = "block";
+      box.style.left = `${r.left - 4}px`;
+      box.style.top = `${r.top - 4}px`;
+      box.style.width = `${r.width + 8}px`;
+      box.style.height = `${r.height + 8}px`;
+    }
+    frame = requestAnimationFrame(place);
+  };
+  place();
+  return () => {
+    cancelAnimationFrame(frame);
+    for (const h of hosts) h.remove();
+  };
+}
+
+// 표시를 시작한다. ids는 이 호출(callId)에서 확인한 승인 대상이어야 한다(다른 요소를 표시하지 않게).
+export function showHandoff(token: string, ids: string[], callId: string, prefix: "c" | "f"): void {
+  endHandoff(token);
+  const targets = ids.map((id) => approvedElement(id, callId, prefix));
+  if (targets.length === 0) throw new Error("표시할 대상이 없습니다.");
+  const state: Handoff = { clicked: false, stop: () => {} };
+  const removeBoxes = drawBoxes(targets);
+  const cleanups: Array<() => void> = [removeBoxes];
+  if (prefix === "c") {
+    const el = targets[0];
+    const win = el.ownerDocument.defaultView ?? window;
+    // 사용자의 실제 클릭이 표시한 대상(또는 그 안)에 닿았는지만 본다. 막거나 바꾸지 않는다.
+    const onClick = (e: MouseEvent) => {
+      if (e.isTrusted && e.composedPath().includes(el)) state.clicked = true;
+    };
+    win.addEventListener("click", onClick, { capture: true, passive: true });
+    cleanups.push(() => win.removeEventListener("click", onClick, { capture: true }));
+  }
+  const timer = setTimeout(() => endHandoff(token), HANDOFF_MAX_MS);
+  state.stop = () => {
+    clearTimeout(timer);
+    for (const c of cleanups) c();
+  };
+  handoffs.set(token, state);
+  shownElement(targets[0]).scrollIntoView({ block: "center", inline: "nearest" });
+}
+
+export function handoffStatus(token: string): { clicked: boolean } | null {
+  const state = handoffs.get(token);
+  return state ? { clicked: state.clicked } : null;
+}
+
+export function endHandoff(token: string): void {
+  const state = handoffs.get(token);
+  if (!state) return;
+  handoffs.delete(token);
+  state.stop();
+}

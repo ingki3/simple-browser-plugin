@@ -1111,3 +1111,20 @@ body,
   background: var(--primary);
   color: var(--primary-fg);
 }
+
+/* 직접 조작할 사이트 목록(0.2.2) */
+.site-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.site-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}

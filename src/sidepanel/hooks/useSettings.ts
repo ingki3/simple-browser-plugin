@@ -10,6 +10,7 @@ import {
   type Settings,
 } from "@/lib/messages";
 import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
+import { normalizeManualSites } from "@/lib/manualSites";
 
 const DEFAULTS: Settings = {
   openRouterApiKey: "",
@@ -24,6 +25,7 @@ const DEFAULTS: Settings = {
   showThinking: false,
   rememberPages: true,
   trustedInput: false,
+  manualSites: [],
 };
 
 
@@ -53,6 +55,7 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
     showThinking: raw?.showThinking === true,
     rememberPages: raw?.rememberPages !== false,
     trustedInput: raw?.trustedInput === true,
+    manualSites: normalizeManualSites(raw?.manualSites),
   };
 }
 

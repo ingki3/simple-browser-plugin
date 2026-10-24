@@ -975,6 +975,13 @@ export function peekApproved(id: string, callId: string, prefix: string): void {
   if (added) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
 }
 
+// 손 넘기기(직접 조작할 사이트)용: 이 호출에서 확인한 승인 대상이 아직 같으면 그 요소를 돌려준다. 승인을 쓰지 않고,
+// 페이지를 바꾸지 않는다(표시만 한다).
+export function approvedElement(id: string, callId: string, prefix: string): HTMLElement {
+  peekApproved(id, callId, prefix);
+  return resolve(id).el;
+}
+
 // ---------------------------------------------------------------------------
 // 클릭 결과 관찰: 클릭 전에 시작해 백그라운드가 물어볼 때까지 같은 문서 안의 변화를 센다.
 // ---------------------------------------------------------------------------

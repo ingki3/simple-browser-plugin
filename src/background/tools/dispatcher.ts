@@ -521,6 +521,11 @@ export function parseToolArgs<T extends ToolName>(
   return result.data as ToolArgs[T];
 }
 
+// 직접 조작할 사이트에서 사용자에게 넘긴 동작을 기록한다(실행하지 않음).
+export function recordHandedOffAction(callId: string, turnTab: TurnTab): void {
+  void finishAction(turnTab, callId, "handed_off");
+}
+
 // 사용자가 승인 카드에서 취소한 동작을 기록한다.
 export function recordCancelledAction(callId: string, turnTab: TurnTab): void {
   void finishAction(turnTab, callId, "cancelled");

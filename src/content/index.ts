@@ -11,6 +11,7 @@ import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
+import { endHandoff, handoffStatus, showHandoff } from "./handoff";
 import { armFrameGuard, cancelGuard, checkBeforePress, disarm, frameBlocked, guardAlive, guardResult } from "./trustedClick";
 import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
 
@@ -95,6 +96,24 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind === "trusted_click_cancel") {
     cancelGuard(msg.token, msg.reason);
+    sendResponse({ ok: true } satisfies ContentResponse);
+    return false;
+  }
+  if (msg.kind === "handoff_show") {
+    try {
+      showHandoff(msg.token, msg.ids, msg.callId, msg.prefix);
+      sendResponse({ ok: true } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
+  if (msg.kind === "handoff_status") {
+    sendResponse({ ok: true, data: handoffStatus(msg.token) } satisfies ContentResponse);
+    return false;
+  }
+  if (msg.kind === "handoff_end") {
+    endHandoff(msg.token);
     sendResponse({ ok: true } satisfies ContentResponse);
     return false;
   }

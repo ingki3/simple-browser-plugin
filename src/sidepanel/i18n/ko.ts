@@ -7,6 +7,9 @@ export const KO = {
   newChat: "새 대화",
   emptyState: "페이지에 대해 질문하거나 작업을 요청해 보세요.\n예: \"이 페이지 번역해줘\", \"빈 입력칸 채워줘\", \"이미지 다 다운받아줘\"",
   toolConfirmTitle: "도구 실행 확인",
+  // 직접 조작할 사이트의 손 넘기기 카드(0.2.2).
+  handoffTitle: "직접 해 주세요",
+  handoffDone: "했어요",
   approve: "승인",
   approveChoices: "고른 항목 읽기",
   // 저장 카드(이미지·첨부 파일, #48)의 승인 버튼.

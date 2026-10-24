@@ -72,11 +72,16 @@ export function useChatSession() {
             linkGrantOffer: msg.linkGrantOffer === true,
             chatGrantOffer: msg.chatGrantOffer === true,
             personalUrlOffer: msg.personalUrlOffer === true,
+            handoff: msg.handoff === true,
             ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit, choiceDefaults: msg.choiceDefaults } : {}),
             resolved: null,
           });
           return;
         case "tool_result":
+          // 손 넘기기 카드는 사용자가 페이지에서 대상을 누르면 백그라운드가 먼저 끝낸다. 결과가 오면 열린 카드를 닫는다.
+          if (s.messages.some((m) => m.type === "tool_pending" && m.callId === msg.callId && m.resolved === null)) {
+            s.resolveToolPending(msg.callId, "approved");
+          }
           s.addToolResult({
             id: `r${msg.callId}`,
             type: "tool_result",

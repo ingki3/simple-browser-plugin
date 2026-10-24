@@ -137,7 +137,9 @@ export type ActionOutcome =
   // 실행 중 오류 또는 반영 안 됨
   | "failed"
   // 사용자가 승인 카드에서 취소함
-  | "cancelled";
+  | "cancelled"
+  // 직접 조작할 사이트라 사용자에게 넘김(실행하지 않음)
+  | "handed_off";
 
 export interface ActionLogEntry {
   id: string;
