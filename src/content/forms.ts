@@ -1396,7 +1396,7 @@ function collectFormFields(): FormField[] {
 
 // React 등은 value/checked 속성 setter를 인스턴스에 덮어써 변경을 추적한다.
 // 요소 자신의 프로토타입(= iframe이면 그 창의 프로토타입) setter로 써야 이벤트가 반영된다.
-function setNativeProperty(el: Element, prop: "value" | "checked" | "selectedIndex", value: string | boolean | number): void {
+export function setNativeProperty(el: Element, prop: "value" | "checked" | "selectedIndex", value: string | boolean | number): void {
   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), prop)?.set;
   if (setter) setter.call(el, value);
   else (el as unknown as Record<string, unknown>)[prop] = value;
@@ -1446,7 +1446,7 @@ function clickToggle(el: HTMLInputElement, want: boolean, guard?: () => string |
 }
 
 // 같은 radio 묶음(같은 name·같은 양식, 양식 밖이면 같은 문서·shadow root)에서 체크된 다른 칸.
-function checkedInGroup(el: HTMLInputElement): HTMLInputElement | null {
+export function checkedInGroup(el: HTMLInputElement): HTMLInputElement | null {
   if (!el.name) return null;
   const scope: ParentNode = el.form ?? (el.getRootNode() as Document | ShadowRoot);
   for (const r of Array.from(scope.querySelectorAll<HTMLInputElement>('input[type="radio" i]'))) {

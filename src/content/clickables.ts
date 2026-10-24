@@ -1,4 +1,5 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
+import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
 import { getAccessibleRoots, isTag } from "./docs";
@@ -22,6 +23,8 @@ import {
   scopeSubmitUrls,
   otherDestinations,
   sensitivityOf,
+  checkedInGroup,
+  setNativeProperty,
 } from "./forms";
 import {
   closestAcross,
@@ -42,11 +45,14 @@ import {
   registeredInfo,
   scanTargets,
   startEffectWatch,
+  statesOf,
   takeApproved,
   type Relation,
   type TargetKind,
 } from "./targets";
 import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
+import type { TrustedPrepare } from "@/lib/trustedClick";
+import { armTopGuard, checkPoint, pointOf, type RecheckPhase } from "./trustedClick";
 
 const BASE_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
@@ -504,44 +510,148 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
+// trusted(가드 토큰)가 있으면 실제 입력 클릭(0.2.0)으로 준비만 한다: 누를 점을 계산하고 가드를 건 뒤 돌려주고, 누르기는
+// 백그라운드가 chrome.debugger로 한다. 실제 입력을 쓸 수 없는 대상(iframe 안, 보이는 사각형 없음, 대상 안의 다른 활성
+// 요소가 점을 받음)이면 지금처럼 스크립트로 누른다.
 export function clickElement(
   args: { id: string },
   callId: string,
-): { clicked: boolean; text: string; href: string; effectToken: string } {
+  trusted?: string,
+): { clicked: boolean; text: string; href: string; effectToken: string; trusted?: TrustedPrepare } {
   const { el, info, relation } = takeApproved(args.id, callId, CLICK_KIND.prefix);
   const text = info.modelName ?? "";
   const href = isTag(el, "a") ? el.href : "";
   const effectToken = `${callId}:${Date.now()}`;
 
+  if (trusted) {
+    scrollToCenter(el);
+    const changed = recheckApproved(CLICK_KIND, el, info, relation);
+    if (changed) {
+      startEffectWatch(effectToken, el, changed);
+      return { clicked: true, text, href, effectToken, trusted: { mode: "aborted" } };
+    }
+    const point = pointOf(el);
+    let reason: string | null = null;
+    if (el.ownerDocument !== document) reason = "iframe 안의 대상";
+    else if (!point) reason = "화면에 보이는 사각형이 없는 대상";
+    else {
+      const hit = checkPoint(el, point);
+      if (!hit.ok && !hit.inside) {
+        throw new Error(`실제 입력으로 누르지 않았습니다(${hit.reason}). 다시 관측하세요.`);
+      }
+      if (!hit.ok) reason = hit.reason;
+    }
+    if (reason || !point) {
+      const why = reason ?? "누를 점 없음";
+      setTimeout(() => scriptClick(el, info, relation, effectToken, false), 0);
+      return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
+    }
+    startEffectWatch(effectToken, el);
+    // click 단계에서 대상(또는 label의 컨트롤)이 checkbox·radio면 브라우저가 처리기보다 먼저 체크 상태를 바꿔 양식 값(제출 주소)도 달라진다.
+    // 그 변화를 잠깐 되돌린 상태로(승인 때와 같은 체크 상태에서) 확인한다.
+    // label이면 연결된 checkbox·radio(투명한 칸이 label을 덮어 실제 입력이 칸에 닿는 경우)도 같다.
+    const control = isTag(el, "label") ? (el as HTMLLabelElement).control : null;
+    const toggleEl = isToggleInput(el) ? el : control && isToggleInput(control) ? control : null;
+    const toggle = toggleEl
+      ? { checked: toggleEl.checked, indeterminate: toggleEl.indeterminate, prevRadio: toggleEl.type === "radio" ? checkedInGroup(toggleEl) : null }
+      : null;
+    // click 단계 확인은 체크 상태를 승인 때로 되돌린 채(asApproved) 하므로 "up"과 같은 기준으로 본다.
+    armTopGuard(
+      trusted,
+      el,
+      point,
+      (phase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase === "click" ? "up" : phase), relation),
+      (check) => (toggleEl && toggle ? withToggleReverted(toggleEl, toggle, check) : check()),
+    );
+    return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
+  }
+
   // Defer actual click so the content-script response can fly back to the
   // background before a potential navigation tears down this context.
-  setTimeout(() => {
-    try {
-      el.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "center" });
-    } catch {
-      try {
-        el.scrollIntoView();
-      } catch {
-        /* ignore */
-      }
+  setTimeout(() => scriptClick(el, info, relation, effectToken, true), 0);
+
+  return { clicked: true, text, href, effectToken };
+}
+
+// 실제 입력의 단계별 재확인에 쓸 승인 기술.
+// - down: 그대로(엄격).
+// - up·click: 앞 단계의 페이지 처리기가 바꾼 화면 상태(aria 펼침·눌림·선택 등)는 받아들인다. 체크 상태와 주소·양식·위험
+//   신호는 그대로 비교한다(대상 자신이 checkbox·radio인 click 단계는 withToggleReverted로 승인 때 체크 상태에서 본다).
+function phaseInfo(el: HTMLElement, info: TargetInfo, phase: RecheckPhase): TargetInfo {
+  if (phase === "down") return info;
+  const { checked: _now, ...ui } = statesOf(el) ?? {};
+  const checked = info.states?.checked;
+  const states = { ...ui, ...(checked !== undefined ? { checked } : {}) };
+  return { ...info, states: Object.keys(states).length ? states : undefined };
+}
+
+// 체크 상태를 준비 때(승인 때와 같은지 이미 확인한 상태)로 잠깐 되돌려 check를 부르고 지금 상태로 되살린다.
+// 속성 setter를 직접 써서(프레임워크의 값 추적·이벤트를 건드리지 않음) 동기로만 바꾼다. 상태가 그대로면 그냥 부른다.
+function withToggleReverted(
+  el: HTMLInputElement,
+  before: { checked: boolean; indeterminate: boolean; prevRadio: HTMLInputElement | null },
+  check: () => string | null,
+): string | null {
+  const now = { checked: el.checked, indeterminate: el.indeterminate, prev: el.type === "radio" ? checkedInGroup(el) : null };
+  if (now.checked === before.checked && now.indeterminate === before.indeterminate && now.prev === before.prevRadio) return check();
+  const restore = () => {
+    if (el.type === "radio") {
+      if (now.prev) setNativeProperty(now.prev, "checked", true);
+      else if (before.prevRadio) setNativeProperty(before.prevRadio, "checked", false);
+      setNativeProperty(el, "checked", now.checked);
+    } else {
+      setNativeProperty(el, "checked", now.checked);
+      el.indeterminate = now.indeterminate;
     }
+  };
+  try {
+    if (el.type === "radio") {
+      setNativeProperty(el, "checked", before.checked);
+      if (before.prevRadio) setNativeProperty(before.prevRadio, "checked", true);
+    } else {
+      setNativeProperty(el, "checked", before.checked);
+      el.indeterminate = before.indeterminate;
+    }
+    return check();
+  } finally {
+    restore();
+  }
+}
+
+function scrollToCenter(el: HTMLElement): void {
+  try {
+    el.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "center" });
+  } catch {
     try {
-      el.focus({ preventScroll: true });
+      el.scrollIntoView();
     } catch {
       /* ignore */
     }
-    // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
-    // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
-    const changed = recheckApproved(CLICK_KIND, el, info, relation);
-    // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
-    startEffectWatch(effectToken, el, changed);
-    if (changed) return;
-    try {
-      el.click();
-    } catch (err) {
-      console.warn("[click_element] click threw", err);
-    }
-  }, 0);
+  }
+}
 
-  return { clicked: true, text, href, effectToken };
+function scriptClick(
+  el: HTMLElement,
+  info: TargetInfo,
+  relation: Relation | null,
+  effectToken: string,
+  scroll: boolean,
+): void {
+  if (scroll) scrollToCenter(el);
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    /* ignore */
+  }
+  // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
+  // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
+  const changed = recheckApproved(CLICK_KIND, el, info, relation);
+  // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
+  startEffectWatch(effectToken, el, changed);
+  if (changed) return;
+  try {
+    el.click();
+  } catch (err) {
+    console.warn("[click_element] click threw", err);
+  }
 }

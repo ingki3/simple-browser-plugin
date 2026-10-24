@@ -23,6 +23,7 @@ const DEFAULTS: Settings = {
   autoApprove: false,
   showThinking: false,
   rememberPages: true,
+  trustedInput: false,
 };
 
 
@@ -51,6 +52,7 @@ function normalize(raw: Partial<Settings> | undefined): Settings {
     autoApprove: raw?.autoApprove === true,
     showThinking: raw?.showThinking === true,
     rememberPages: raw?.rememberPages !== false,
+    trustedInput: raw?.trustedInput === true,
   };
 }
 

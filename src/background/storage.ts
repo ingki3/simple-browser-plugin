@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoApprove: false,
   showThinking: false,
   rememberPages: true,
+  trustedInput: false,
 };
 
 export async function readSettings(): Promise<Settings> {
@@ -51,6 +52,7 @@ export async function readSettings(): Promise<Settings> {
     autoApprove: raw.autoApprove === true,
     showThinking: raw.showThinking === true,
     rememberPages: raw.rememberPages !== false,
+    trustedInput: raw.trustedInput === true,
   };
 }
 

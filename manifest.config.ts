@@ -18,7 +18,7 @@ export default defineManifest({
   manifest_version: 3,
   name: "간편 브라우저 도우미",
   description: "OpenRouter 기반 Chrome Side Panel 채팅 에이전트. 페이지 번역, 폼 자동 채우기, 이미지 일괄 다운로드.",
-  version: "0.1.22",
+  version: "0.2.0",
   action: {
     default_title: "간편 도우미 열기",
   },
@@ -52,6 +52,8 @@ export default defineManifest({
     "offscreen",
     // read_document가 리다이렉트를 따라가지 않을 때 목적지 주소를 알려 주려고 응답 헤더를 관찰한다.
     "webRequest",
+    // 실제 입력 클릭(0.2.0, 설정에서 켤 때만 사용). Chrome은 debugger를 선택 권한(optional_permissions)으로 둘 수 없다.
+    "debugger",
   ],
   host_permissions: ["<all_urls>"],
   // read_document의 문서 변환기(docling.rs-wasm)가 offscreen 문서의 Worker에서 WebAssembly를 쓴다. MV3는 'wasm-unsafe-eval'만 따로 허용할 수 있다.

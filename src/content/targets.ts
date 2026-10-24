@@ -235,7 +235,7 @@ function toggleOf(el: HTMLElement): HTMLInputElement | null {
   return null;
 }
 
-function statesOf(el: HTMLElement): Record<string, string> | undefined {
+export function statesOf(el: HTMLElement): Record<string, string> | undefined {
   const out: Record<string, string> = {};
   for (const name of STATE_ATTRS) {
     const v = el.getAttribute(`aria-${name}`);

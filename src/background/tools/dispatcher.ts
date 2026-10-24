@@ -32,6 +32,7 @@ import {
   type TurnTab,
 } from "./handlers";
 import { ClickAbortedError, settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
+import { clickWithInput, type InputClickResult, type InputSession } from "../trustedInput";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
 import { CAPTURE_LIMITS } from "@/lib/pageCapture";
@@ -533,6 +534,14 @@ export interface ExecOptions {
   viaGrant?: boolean;
   // 허락 경로의 이미지 저장: 이 호출을 위해 쿠키 없이 미리 받은 이미지(주소 → data: 주소).
   grantImages?: ReadonlyMap<string, string>;
+  // 이 대화의 실제 입력(디버거) 상태. 없으면 스크립트 클릭.
+  inputSession?: InputSession;
+}
+
+// 패널 결과 줄에 붙이는 클릭 수단(실제 입력 설정이 켜졌을 때 어느 쪽으로 눌렀는지 보이게).
+function inputLabel(data: InputClickResult): string {
+  if (data.input === "trusted") return " · 실제 입력";
+  return data.inputNote ? ` · 스크립트 클릭(${truncate(data.inputNote, 60)})` : "";
 }
 
 export async function executeTool(
@@ -861,11 +870,12 @@ async function runTool(
         newTabs.stop();
         throw err;
       }
-      let data: { clicked: boolean; text: string; href: string; effectToken: string };
+      let data: InputClickResult;
       try {
         // 관찰을 넣는 사이 사용자가 중단했거나 새 요청을 보냈으면 승인한 클릭이라도 누르지 않는다.
         if (signal?.aborted) throw new ClickAbortedError();
-        data = await callContentTool(toolName, parsedArgs, callId, turnTab);
+        // 설정이 켜져 있으면 실제 입력 클릭(0.2.0), 아니면 스크립트 클릭.
+        data = await clickWithInput(parsedArgs, callId, turnTab, signal, opts.inputSession);
       } catch (err) {
         const createdEarly = newTabs.stop();
         void readOpens();
@@ -914,7 +924,7 @@ async function runTool(
       if (popup || closed) effect.popup = { ...(popup ?? {}), ...(closed ? { closed } : {}) };
       return {
         ok: data.clicked && !effect.dom?.aborted,
-        summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}`,
+        summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}${inputLabel(data)}`,
         // 팝업 창이 열리거나 막히거나 닫혔으면 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
         data: { text: data.text, href: data.href, effect, ...(effect.popup ? { note: describeEffect(effect) } : {}) },
       };
