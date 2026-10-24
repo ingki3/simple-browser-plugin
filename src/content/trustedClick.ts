@@ -54,11 +54,23 @@ function chainTo(node: Node, el: Element): Element[] | null {
   return null;
 }
 
-// 승인한 대상이 아닌, 따로 활성화되는 요소가 사이에 있으면 그 요소. label을 승인했을 때 그 label의 컨트롤은
+// 승인한 대상이 아닌, 따로 활성화되거나 자기 동작을 선언한 요소가 사이에 있으면 그 요소. label을 승인했을 때 그 label의 컨트롤은
 // 기존 el.click()도 활성화하므로 같은 동작으로 본다.
+// 자기 동작을 속성으로 선언한 요소: 인라인 처리기(on*), htmx(hx-*·data-hx-*). 링크(a, SVG a 포함)·제출 컨트롤은
+// INDEPENDENT_SELECTOR가 본다(SVG use의 href 같은 참조는 동작이 아니라 넣지 않는다).
+// 승인 판정은 대상 요소의 선언만 보므로, 실제 입력이 이런 자식에 닿으면 승인하지 않은 동작이 될 수 있다.
+// 속성 이름(구조)으로만 판단한다. addEventListener로 건 처리기는 볼 수 없다(한계).
+function declaresAction(n: Element): boolean {
+  for (const name of n.getAttributeNames()) {
+    const a = name.toLowerCase();
+    if (a.startsWith("on") || a.startsWith("hx-") || a.startsWith("data-hx-")) return true;
+  }
+  return false;
+}
+
 function independentIn(chain: readonly Element[], el: Element): Element | null {
   for (const n of chain) {
-    if (!n.matches(INDEPENDENT_SELECTOR)) continue;
+    if (!n.matches(INDEPENDENT_SELECTOR) && !declaresAction(n)) continue;
     if (isTag(el, "label") && (el as HTMLLabelElement).control === n) continue;
     return n;
   }

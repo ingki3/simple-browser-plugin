@@ -143,7 +143,7 @@ async function subFrames(tabId: number): Promise<FrameDoc[]> {
 }
 
 // top이 아닌 모든 프레임에 가드를 건다. http(s) 문서 중 하나라도 걸지 못하면 실제 입력을 쓰지 않는다.
-async function armFrames(tabId: number, token: string): Promise<{ docs: FrameDoc[]; missing: FrameDoc | null }> {
+async function armFrames(tabId: number, token: string): Promise<{ docs: FrameDoc[]; missing: FrameDoc | null; sent: FrameDoc[] }> {
   const frames = await subFrames(tabId);
   const msg: BgToContent = { kind: "input_guard_arm", token, ms: GUARD_MS };
   const results = await Promise.all(
@@ -156,7 +156,8 @@ async function armFrames(tabId: number, token: string): Promise<{ docs: FrameDoc
   );
   const docs = results.filter((r) => r.ok).map((r) => r.f);
   const missing = results.find((r) => !r.ok && frameNeedsGuard(r.f.url))?.f ?? null;
-  return { docs, missing };
+  // 해제는 요청을 보낸 모든 문서에 보낸다(응답이 늦어 시간 초과된 프레임도 나중에 가드를 걸 수 있다).
+  return { docs, missing, sent: frames };
 }
 
 async function disarmFrames(tabId: number, token: string, docs: FrameDoc[]): Promise<number> {
@@ -211,7 +212,7 @@ export async function clickWithInput(
       return script(notAttached);
     }
     const token = crypto.randomUUID();
-    let armed: { docs: FrameDoc[]; missing: FrameDoc | null } = { docs: [], missing: null };
+    let armed: { docs: FrameDoc[]; missing: FrameDoc | null; sent: FrameDoc[] } = { docs: [], missing: null, sent: [] };
     // 프레임 가드는 걸기 시작한 때부터 GUARD_MS 안에 풀리므로, 누르기 직전 남은 시간을 이 시각으로 잰다(보수적으로 보내기 전).
     const armedAt = Date.now();
     try {
@@ -232,7 +233,7 @@ export async function clickWithInput(
       }
       return await press(tabId, token, prep, data, armed.docs, armedAt, turnTab, signal);
     } finally {
-      void disarmFrames(tabId, token, armed.docs);
+      void disarmFrames(tabId, token, armed.sent);
     }
   });
 }
