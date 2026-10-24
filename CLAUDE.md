@@ -2,9 +2,23 @@
 
 OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 README.md 참고.
 
+## 코드 그래프 (graphify, 필수)
+
+[graphify](https://github.com/Graphify-Labs/graphify)로 만든 코드 그래프가 `graphify-out/`에 있다(로컬 산출물, git에 올리지 않음).
+
+- **개발을 시작하기 전에 그래프를 먼저 본다.** `graphify-out/GRAPH_REPORT.md`(묶음·핵심 노드·연결)를 읽는다.
+  바꿀 기능은 `graphify query "<질문>"`, `graphify explain "<심볼>"`, `graphify affected "<심볼>"`(영향 범위)로
+  관련 파일과 호출 관계를 확인한 뒤 코드를 읽고 고친다. 그래프는 코드 AST 기반이라 실제 코드로 다시 확인한다.
+- **main에 머지한 뒤 반드시 그래프를 갱신한다.** 머지 후 `git checkout main && git pull`을 하면 post-merge 훅이
+  갱신하지만, 훅이 없거나 실패할 수 있으니 직접 `graphify update .`를 실행하고 GRAPH_REPORT.md의 "Built from commit"이
+  `git rev-parse HEAD`와 같은지 확인한다. 코드를 크게 지웠거나 옮겼으면 `graphify update . --force`. 묶음 이름이 빠졌으면
+  `graphify label . --backend=claude-cli --missing-only`.
+- 그래프가 없으면(새 클론) `graphify extract . --code-only` → `graphify label . --backend=claude-cli`로 만들고
+  `graphify hook install`로 git 훅을 건다(커밋·체크아웃·머지 뒤 자동 갱신).
+
 ## 개발 워크플로 (필수)
 
-1. `main`은 보호 브랜치다. feature branch에서 작업한다.
+1. `main`은 보호 브랜치다. feature branch에서 작업한다. 시작하기 전에 코드 그래프로 관련 코드를 찾는다(위 "코드 그래프").
 2. 변경 후 `npm test`, `npm run typecheck`, `npm run build`를 통과시킨다.
 3. 커밋한다. 리뷰는 커밋된 상태만 대상으로 한다.
 4. **`codex-reviewer` 에이전트로 리뷰를 받는다.** (Codex CLI, gpt-6.1-sol)
@@ -12,6 +26,7 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
    - P2/P3 권고는 반영하거나, 반영하지 않으면 PR 본문에 이유를 적는다.
    - 리뷰 후 커밋을 추가하면 그 커밋은 다시 리뷰해야 한다.
 5. PASS 후 push하고 PR을 만든다. PR 본문에 리뷰 결과(PASS, 반영한 지적 사항)를 적는다.
+6. 머지한 뒤 main을 받아 태그를 달고(아래 "버전 관리"), 코드 그래프를 갱신한다(`graphify update .`).
 
 `gh pr create` / `gh pr merge`는 `.claude/hooks/require-codex-review.py` 훅이 리뷰 통과 기록
 (`.git/codex-review-passed`)이 없는 커밋에 대해 차단한다. 훅을 우회하지 않는다.
