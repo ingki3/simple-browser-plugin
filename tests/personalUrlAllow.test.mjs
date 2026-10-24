@@ -81,25 +81,31 @@ test("mixed URLs: every personal-only URL is collected", () => {
   assert.deepEqual([...deferred.values()].sort(), [SRT, other].sort());
 });
 
-test("personalUrlKey: plain merged values may change, flagged parts may not", () => {
-  const base = personalUrlKey(SRT);
-  assert.ok(base.startsWith("key:"));
-  // 양식 값(역 이름)이 붙거나 바뀌어도 같은 열쇠.
-  assert.equal(personalUrlKey(`${SRT}&dpt=${encodeURIComponent("수서")}`), base);
-  assert.equal(personalUrlKey(`${SRT}&dpt=${encodeURIComponent("부산")}&date=20261028`), base);
-  // 걸린 값이 바뀌거나 개인정보 모양 값이 새로 붙으면 다른 열쇠.
-  assert.notEqual(personalUrlKey("https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101019999"), base);
-  assert.notEqual(personalUrlKey(`${SRT}&tel=01099998888`), base);
-  assert.notEqual(personalUrlKey(`${SRT}&memo=01099998888`), base);
-  assert.notEqual(personalUrlKey(`${SRT}&name=${encodeURIComponent("홍길동")}`), base);
-  // 다른 경로·출처·해시는 다른 열쇠.
-  assert.notEqual(personalUrlKey("https://etk.srail.kr/other.do?pageId=TK0101010000"), base);
-  assert.notEqual(personalUrlKey("https://evil.example/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000"), base);
-  assert.notEqual(personalUrlKey(`${SRT}#x`), base);
-  // 경로에 신호가 있으면 글자 그대로.
-  const pathy = "https://a.example/u/010-1234-5678?pageId=TK0101010000";
-  assert.equal(personalUrlKey(pathy), `raw:${pathy}`);
-  assert.notEqual(personalUrlKey(`${pathy}&dpt=x`), personalUrlKey(pathy));
+test("personalUrlKey: exact string, except a form submission that only appends clean fields to its action", () => {
+  const acts = [SRT];
+  assert.equal(personalUrlKey(SRT, acts), SRT);
+  // 양식 칸 값을 덧붙인 제출 주소는 그 action의 열쇠.
+  assert.equal(personalUrlKey(`${SRT}&dpt=${encodeURIComponent("수서")}`, acts), SRT);
+  assert.equal(personalUrlKey(`${SRT}&dpt=${encodeURIComponent("부산")}&date=20261028`, acts), SRT);
+  // action이 목록에 없으면(링크 주소 등) 글자 그대로 — 평범한 매개변수가 달라도 다른 열쇠(리뷰 P1: public=0 → public=1).
+  const link0 = "https://portal.example/settings?pageId=TK0101010000&public=0";
+  const link1 = "https://portal.example/settings?pageId=TK0101010000&public=1";
+  assert.notEqual(personalUrlKey(link1), personalUrlKey(link0));
+  assert.notEqual(personalUrlKey(link1, [link0]), personalUrlKey(link0, [link0]));
+  // 덧붙은 값에 개인정보 신호가 있거나, action의 매개변수를 바꾸거나 다른 경로·출처·해시면 action 열쇠가 아니다.
+  for (const u of [
+    `${SRT}&tel=01099998888`,
+    `${SRT}&memo=01099998888`,
+    `${SRT}&name=${encodeURIComponent("홍길동")}`,
+    "https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101019999&dpt=x",
+    "https://etk.srail.kr/other.do?pageId=TK0101010000&dpt=x",
+    "https://evil.example/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000&dpt=x",
+    `${SRT}&dpt=x#h`,
+  ]) {
+    assert.equal(personalUrlKey(u, acts), u, u);
+  }
+  // 덧붙지 않고 같은 길이면 action 열쇠가 아니다.
+  assert.equal(personalUrlKey(SRT.replace("TK0101010000", "TK0101010001"), acts), SRT.replace("TK0101010000", "TK0101010001"));
 });
 
 test("deferred keys merge the same form across value changes", () => {
@@ -107,8 +113,13 @@ test("deferred keys merge the same form across value changes", () => {
   const b = t({ name: "조회", submitTo: SRT, submitUrl: `${SRT}&dpt=${encodeURIComponent("수서")}` });
   const da = new Map();
   const db = new Map();
-  autoApproveBlock("click_element", [a], [], { deferPersonalUrls: da });
-  autoApproveBlock("click_element", [b], [], { deferPersonalUrls: db });
-  assert.equal(da.size, 1);
-  assert.deepEqual([...da.keys()], [...db.keys()]);
+  assert.equal(autoApproveBlock("click_element", [a], [], { deferPersonalUrls: da }), null);
+  assert.equal(autoApproveBlock("click_element", [b], [], { deferPersonalUrls: db }), null);
+  assert.deepEqual([...da.keys()], [SRT]);
+  assert.deepEqual([...db.keys()], [SRT]);
+  // 링크 주소는 action과 묶이지 않는다.
+  const link = t({ tag: "a", role: "link", name: "설정", href: `${SRT}&public=1`, aroundFormActions: [SRT] });
+  const dl = new Map();
+  autoApproveBlock("click_element", [link], [], { deferPersonalUrls: dl });
+  assert.deepEqual([...dl.keys()].sort(), [SRT, `${SRT}&public=1`].sort());
 });

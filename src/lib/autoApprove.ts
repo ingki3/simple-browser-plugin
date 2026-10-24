@@ -117,11 +117,15 @@ export function autoApproveBlock(
   values: ReadonlyArray<string | undefined> = [],
   opts: AutoApproveOptions = {},
 ): string | null {
-  const urlBlock = (url: string, deferrable: boolean): string | null => {
+  // 같은 대상의 양식 action들(제출 주소의 허용 열쇠, personalUrlKey). urlBlock을 부르기 전에 대상마다 정한다.
+  let actions: string[] = [];
+  // mode: "exact"면 주소 글자 그대로 모으고, "submission"(양식이 칸 값을 덧붙여 만든 제출 주소 — submitUrl·scopeSubmitUrls)이면
+  // 같은 대상의 action에 묶어 모을 수 있고, "never"면 모으지 않는다.
+  const urlBlock = (url: string, mode: "exact" | "submission" | "never"): string | null => {
     if (!url) return null;
-    if (deferrable && opts.deferPersonalUrls && personalOnlyUrl(url)) {
-      const key = personalUrlKey(url);
-      if (!opts.deferPersonalUrls.has(key)) opts.deferPersonalUrls.set(key, url);
+    if (mode !== "never" && opts.deferPersonalUrls && personalOnlyUrl(url)) {
+      const key = mode === "submission" ? personalUrlKey(url, actions) : url;
+      if (!opts.deferPersonalUrls.has(key)) opts.deferPersonalUrls.set(key, key);
       return null;
     }
     return sensitiveUrlReason(url);
@@ -130,6 +134,7 @@ export function autoApproveBlock(
   if (tool === "fill_form_fields") {
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
+      actions = [t.submitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
       // 숨긴 checkbox·radio를 보이는 label로 표시하는 칸(#56)은 늘 묻는다. 사용자가 보는 label과 그 주변의 위험 신호를
       // 그 위험 신호를 칸 쪽에서 빠짐없이 모으기 어렵다(구조 판정 — 더 묻는 쪽).
       if (t.proxy) return "보이지 않는 칸(보이는 라벨로 표시) 입력";
@@ -154,20 +159,17 @@ export function autoApproveBlock(
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
       // 결제·개인정보 주소를 가리키는 선택지가 있는 칸도 묻는다.
-      for (const url of [
-        t.submitTo ?? "",
-        t.submitUrl ?? "",
-        ...(t.choiceUrls ?? []),
-        ...(t.scopeSubmitUrls ?? []),
-        ...(t.scopeFormActions ?? []),
-        ...(t.aroundFormActions ?? []),
-      ]) {
-        const why = urlBlock(url, true);
+      for (const url of [t.submitTo ?? "", ...(t.choiceUrls ?? []), ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])]) {
+        const why = urlBlock(url, "exact");
+        if (why) return `${why}로 이어지는 칸 입력`;
+      }
+      for (const url of [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])]) {
+        const why = urlBlock(url, "submission");
         if (why) return `${why}로 이어지는 칸 입력`;
       }
       // 값을 바꾸거나 누르면 일으킬 htmx GET 요청의 목적지.
       for (const url of t.requestUrls ?? []) {
-        const why = urlBlock(url, false);
+        const why = urlBlock(url, "never");
         if (why) return `${why}로 이어지는 칸 입력`;
       }
     }
@@ -175,6 +177,7 @@ export function autoApproveBlock(
   }
   if (tool === "click_element") {
     for (const t of targets) {
+      actions = [t.submitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
       // 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label을 누르는 클릭(#56)은 채우기의 대리 label 칸과 같이 늘 묻는다.
       if (t.proxy) return "보이지 않는 칸을 대신 보여 주는 라벨 클릭";
       // 실제로 작동하는 바깥 버튼·링크의 글자도 본다(<button>구매 <span>확인</span></button>의 span).
@@ -195,20 +198,22 @@ export function autoApproveBlock(
         t.href,
         t.ancestorHref ?? "",
         t.submitTo ?? "",
-        t.submitUrl ?? "",
         ...(t.choiceUrls ?? []),
-        ...(t.scopeSubmitUrls ?? []),
         ...(t.scopeFormActions ?? []),
         ...(t.aroundFormActions ?? []),
         // 링크의 ping 주소(쿠키를 실은 POST)도 결제·개인정보 주소인지 본다.
         ...(t.pingUrls ?? []),
       ]) {
-        const why = urlBlock(href, true);
+        const why = urlBlock(href, "exact");
+        if (why) return `${why}로 가는 링크`;
+      }
+      for (const href of [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])]) {
+        const why = urlBlock(href, "submission");
         if (why) return `${why}로 가는 링크`;
       }
       // 누르면 일으킬 htmx GET 요청의 목적지(hx-get hx-trigger="click").
       for (const href of t.requestUrls ?? []) {
-        const why = urlBlock(href, false);
+        const why = urlBlock(href, "never");
         if (why) return `${why}로 가는 링크`;
       }
       if (t.submitsPersonal) return "개인정보가 채워진 양식 제출";
@@ -452,27 +457,36 @@ function personalParam(k: string, raw: string): boolean {
   );
 }
 
-// 사용자가 허용하는 단위(personalOnlyUrl인 주소의 열쇠): 출처·경로·해시와, 개인정보 신호가 걸린 쿼리 매개변수(이름·값)만 남긴 것.
-// 양식 제출 주소에 붙는 지금 값(역 이름 등)이 바뀌어도 같은 열쇠가 되게 한다. 걸린 매개변수를 뺀 나머지 주소에도 신호가
-// 남으면(경로의 전화번호 모양 등) 주소 글자 그대로를 열쇠로 쓴다. 새 개인정보 모양 값이 붙거나 걸린 값이 바뀌면 열쇠가 달라진다.
-export function personalUrlKey(url: string): string {
+// 사용자가 허용하는 단위(personalOnlyUrl인 주소의 열쇠)는 주소 글자 그대로다. 예외는 양식 제출 주소 하나: 같은 대상의
+// 양식 action(actions — submitTo·scopeFormActions·aroundFormActions) 주소 뒤에 칸 값(name=value)만 덧붙인 주소
+// (formSubmissionUrl)이고 덧붙은 매개변수에 개인정보 신호가 없으면 그 action의 열쇠를 쓴다. 양식이 자기 칸 값으로 만든
+// 주소라 값이 바뀌어도 같은 양식으로 본다(신호가 없는 양식의 제출처럼). 링크 주소 등 나머지는 한 글자만 달라도 다시 묻는다.
+export function personalUrlKey(url: string, actions: readonly string[] = []): string {
+  for (const action of actions) {
+    if (action && action !== url && extendsAction(url, action) && personalOnlyUrl(action)) return action;
+  }
+  return url;
+}
+
+// url이 action 주소 뒤에 매개변수만 덧붙인 것인지: 출처·경로·해시가 같고, 쿼리가 action의 매개변수 그대로로 시작한다.
+// 덧붙은 매개변수에 개인정보 신호가 있으면 false.
+function extendsAction(url: string, action: string): boolean {
   let u: URL;
+  let a: URL;
   try {
     u = new URL(url);
+    a = new URL(action);
   } catch {
-    return `raw:${url}`;
+    return false;
   }
-  const flagged: Array<[string, string]> = [];
-  const rest = new URLSearchParams();
-  for (const [k, v] of u.searchParams) {
-    if (personalParam(k, v)) flagged.push([k, v]);
-    else rest.append(k, v);
+  if (u.origin !== a.origin || u.pathname !== a.pathname || u.hash !== a.hash || u.username || u.password) return false;
+  const up = [...u.searchParams];
+  const ap = [...a.searchParams];
+  if (up.length <= ap.length) return false;
+  for (let i = 0; i < ap.length; i++) {
+    if (up[i][0] !== ap[i][0] || up[i][1] !== ap[i][1]) return false;
   }
-  const stripped = new URL(u.href);
-  stripped.search = rest.toString();
-  if (!flagged.length || sensitiveUrlReason(stripped.href) !== null) return `raw:${url}`;
-  flagged.sort((a, b) => (a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : a[0] < b[0] ? -1 : 1));
-  return `key:${JSON.stringify([u.origin, u.pathname, u.hash, flagged])}`;
+  return up.slice(ap.length).every(([k, v]) => !personalParam(k, v));
 }
 
 // first: 펼친 순서대로 처음 걸린 이유(sensitiveUrlReason). other: 개인정보 모양이 아닌 이유 중 처음. personal: 개인정보 모양이 걸렸는지.

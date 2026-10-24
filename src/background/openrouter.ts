@@ -269,8 +269,8 @@ export class ChatAgent {
   // 링크 이동 허락(linkGrant)과는 대상 도구가 겹치지 않는다: 그쪽은 페이지 상태를 바꾸는 클릭이라 한 요청에만 쓴다.
   // 그 선택지를 보여 준 카드(callId → 도구·범위)만 받아들인다.
   private chatGrants = new Map<ChatGrantTool, string>();
-  // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 출처·경로·해시와
-  // 개인정보 신호가 걸린 매개변수).
+  // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 주소 글자 그대로,
+  // 양식 제출 주소는 그 action).
   // 클릭·입력의 자동 실행 판정에서 이 주소들의 개인정보 주소 신호만 면제한다(사이트 경계·다른 신호는 그대로).
   // 대화 객체 메모리에만 두고 저장하지 않는다. 그 선택지를 보여 준 카드(callId → 턴·주소)만 받아들인다.
   private allowedPersonalUrls = new Set<string>();
