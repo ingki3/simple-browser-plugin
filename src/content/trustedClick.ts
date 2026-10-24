@@ -134,6 +134,8 @@ interface TopGuard {
   deadline: number;
   status: TrustedClickStatus;
   remove: () => void;
+  probe: () => boolean;
+  probed: boolean;
 }
 
 const topGuards = new Map<string, TopGuard>();
@@ -171,6 +173,8 @@ export function armTopGuard(token: string, el: HTMLElement, point: Point, rechec
     deadline: Date.now() + GUARD_MS,
     status: { status: "none" },
     remove: () => {},
+    probe: () => false,
+    probed: false,
   };
   const handler = (e: Event) => {
     if (!e.isTrusted) return;
@@ -214,9 +218,25 @@ export function armTopGuard(token: string, el: HTMLElement, point: Point, rechec
       setTimeout(() => guard.remove(), 0);
     }
   };
-  guard.remove = listen(window, handler, GUARD_MS, () => {
+  // 가드 리스너가 아직 붙어 있는지 확인하는 표지(document.open 등은 window의 리스너를 모두 지운다). 이름은 토큰이라
+  // 페이지가 미리 알 수 없다.
+  const probeType = `sbp-guard-${token}`;
+  const onProbe = () => {
+    guard.probed = true;
+  };
+  window.addEventListener(probeType, onProbe, true);
+  guard.probe = () => {
+    guard.probed = false;
+    window.dispatchEvent(new Event(probeType));
+    return guard.probed;
+  };
+  const removeListeners = listen(window, handler, GUARD_MS, () => {
     if (guard.status.status === "none") guard.status = { status: "blocked", reason: "확인 시간이 지남" };
   });
+  guard.remove = () => {
+    removeListeners();
+    window.removeEventListener(probeType, onProbe, true);
+  };
   topGuards.set(token, guard);
   // 결과를 읽지 않고 끝난 가드의 기록 정리.
   setTimeout(() => {
@@ -242,6 +262,17 @@ export function checkBeforePress(token: string): number {
   const hit = checkPoint(guard.el, guard.point);
   if (!hit.ok) fail(hit.reason);
   return remaining;
+}
+
+// 떼기 전 확인: 이 문서의 가드 리스너가 살아 있으면 true(떼기의 click을 가드가 판정할 수 있음).
+export function guardAlive(token: string): boolean {
+  const guard = topGuards.get(token);
+  if (!guard) return false;
+  try {
+    return guard.probe();
+  } catch {
+    return false;
+  }
 }
 
 export function guardResult(token: string): TrustedClickStatus | null {

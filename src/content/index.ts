@@ -11,7 +11,7 @@ import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
-import { armFrameGuard, cancelGuard, checkBeforePress, disarm, frameBlocked, guardResult } from "./trustedClick";
+import { armFrameGuard, cancelGuard, checkBeforePress, disarm, frameBlocked, guardAlive, guardResult } from "./trustedClick";
 import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
 
 async function execTool(toolName: ToolName, args: unknown, callId: string, trusted?: string): Promise<unknown> {
@@ -82,6 +82,11 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
     }
+    return false;
+  }
+  if (msg.kind === "trusted_click_alive") {
+    if (msg.cancel) cancelGuard(msg.token, "중단됨");
+    sendResponse({ ok: true, data: guardAlive(msg.token) } satisfies ContentResponse);
     return false;
   }
   if (msg.kind === "trusted_click_result") {

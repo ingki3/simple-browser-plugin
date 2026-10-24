@@ -260,6 +260,8 @@ export type BgToContent =
   // top이 아닌 프레임마다 그 문서에 보낸다.
   | { kind: "trusted_click_check"; token: string }
   | { kind: "trusted_click_result"; token: string }
+  // 떼기 전: 가드 리스너가 아직 이 문서에 살아 있는지(cancel이면 먼저 막힘으로 바꾼다).
+  | { kind: "trusted_click_alive"; token: string; cancel: boolean }
   | { kind: "trusted_click_cancel"; token: string; reason: string }
   | { kind: "input_guard_arm"; token: string; ms: number }
   | { kind: "input_guard_disarm"; token: string }

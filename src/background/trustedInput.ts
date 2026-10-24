@@ -96,6 +96,35 @@ export async function detachSession(session: InputSession): Promise<void> {
   );
 }
 
+// 한 탭만 뗀다(누른 뒤 상태를 확인할 수 없을 때 — 디버거를 떼면 이 확장의 입력 세션이 끝난다).
+async function dropTab(session: InputSession, tabId: number): Promise<void> {
+  if (attached.get(tabId) !== session) return;
+  attached.delete(tabId);
+  session.tabs.delete(tabId);
+  await chrome.debugger.detach({ tabId }).catch(() => {});
+  debugLog("input:detach", `tab ${tabId} · 입력 뒤 확인 실패`, "warn");
+}
+
+// CDP 입력 하나. 페이지 처리기가 멈춰 응답(입력 ACK)이 오지 않거나 중단되면 기다리지 않는다.
+const INPUT_TIMEOUT_MS = 5_000;
+async function mouse(tabId: number, params: Record<string, unknown>, signal: AbortSignal | undefined): Promise<void> {
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    if (!signal) return;
+    if (signal.aborted) return reject(new ClickAbortedError());
+    onAbort = () => reject(new ClickAbortedError());
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([
+      bounded(chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", params), INPUT_TIMEOUT_MS, "입력"),
+      aborted,
+    ]);
+  } finally {
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 // 같은 탭의 실제 입력 클릭은 하나씩.
 const tabLocks = new Map<number, Promise<unknown>>();
 async function withTabLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> {
@@ -231,7 +260,7 @@ export async function clickWithInput(
         debugLog("input:script", `tab ${tabId} · ${prep.reason}`);
         return { ...data, input: "script", inputNote: prep.reason };
       }
-      return await press(tabId, token, prep, data, armed.docs, armedAt, turnTab, signal);
+      return await press(tabId, token, prep, data, armed.docs, armedAt, turnTab, signal, session);
     } finally {
       void disarmFrames(tabId, token, armed.sent);
     }
@@ -247,12 +276,13 @@ async function press(
   armedAt: number,
   turnTab: TurnTab,
   signal: AbortSignal | undefined,
+  session: InputSession,
 ): Promise<InputClickResult> {
   // 준비한 문서에 고정한다. 문서가 바뀌었으면 그 문서에 가드 토큰이 없어 확인이 실패한다.
   const documentId = await topDocumentId(tabId);
   if (!documentId) throw fail("탭의 문서를 확인할 수 없음");
   try {
-    return await pressIn(tabId, documentId, token, point, data, armedDocs, armedAt, turnTab, signal);
+    return await pressIn(tabId, documentId, token, point, data, armedDocs, armedAt, turnTab, signal, session);
   } finally {
     // 입력을 다 보냈거나 보내지 않기로 했으니 top 가드를 뗀다(사용자의 다음 클릭을 막지 않게).
     void sendTo(tabId, documentId, { kind: "input_guard_disarm", token }, 1_000, "가드 해제").catch(() => {});
@@ -269,6 +299,7 @@ async function pressIn(
   armedAt: number,
   turnTab: TurnTab,
   signal: AbortSignal | undefined,
+  session: InputSession,
 ): Promise<InputClickResult> {
   // 가드를 막힘으로 바꿨으면 true.
   const cancel = (reason: string): Promise<boolean> =>
@@ -299,22 +330,41 @@ async function pressIn(
   }
 
   // 여기부터는 입력을 보낸다. 오류가 나도 스크립트 클릭으로 대체하지 않는다.
-  const target = { tabId };
   const base = { x: point.x, y: point.y, button: "left", clickCount: 1 };
   try {
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mousePressed", buttons: 1, ...base });
+    await mouse(tabId, { type: "mousePressed", buttons: 1, ...base }, signal);
   } catch (err) {
     await cancel("입력 전송 실패");
+    // 응답 없이 끝났으면 눌린 상태일 수 있어 떼기를 보내지 않고 디버거를 뗀다.
+    await dropTab(session, tabId);
+    if (err instanceof ClickAbortedError) throw err;
     throw new Error(`실제 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)}). 다시 관측하세요.`);
   }
-  // 누르는 사이 중단됐으면 가드를 먼저 막힘으로 바꾼 뒤 떼어(버튼 상태만 풀고) click이 일어나지 않게 한다.
-  // 가드를 막지 못했으면 떼지 않는다(떼면 click이 완성될 수 있다). 눌린 상태는 중단이 디버거를 떼면서 풀린다.
+  // 떼기 전 확인: 누르기 처리기가 문서를 바꾸거나(document.open 등으로 가드 리스너가 지워짐) 다른 문서로 옮겼으면 새 문서에
+  // 떼기를 보내지 않는다. 중단됐으면 가드를 막힘으로 바꾼 뒤에만 뗀다(떼기의 click은 가드가 막는다). 어느 쪽이든 확인하지
+  // 못하면 떼지 않고 디버거를 뗀다.
   const abortedWhilePressed = !!signal?.aborted;
-  if (abortedWhilePressed && !(await cancel("중단됨"))) throw new ClickAbortedError();
+  let alive: boolean;
   try {
-    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseReleased", buttons: 0, ...base });
+    alive = await sendTo<boolean>(tabId, documentId, { kind: "trusted_click_alive", token, cancel: abortedWhilePressed }, 1_000, "떼기 전 확인");
+  } catch (err) {
+    await dropTab(session, tabId);
+    // 누르기만으로 다른 문서로 옮겨 갔으면 결과는 observeClickEffect가 이동으로 판정한다.
+    if (!abortedWhilePressed && isMissingReceiver(err)) return { ...data, input: "trusted" };
+    if (abortedWhilePressed) throw new ClickAbortedError();
+    throw new Error("마우스를 누른 뒤 문서를 확인하지 못해 떼기 입력을 보내지 않았습니다. 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.");
+  }
+  if (!alive) {
+    await dropTab(session, tabId);
+    if (abortedWhilePressed) throw new ClickAbortedError();
+    throw new Error("마우스를 누른 뒤 페이지가 문서를 바꿔 떼기 입력을 보내지 않았습니다. 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.");
+  }
+  try {
+    // 중단돼도 떼기는 끝까지 보낸다(가드가 막힘 상태라 click은 일어나지 않는다).
+    await mouse(tabId, { type: "mouseReleased", buttons: 0, ...base }, undefined);
   } catch (err) {
     await cancel("입력 전송 실패");
+    await dropTab(session, tabId);
     throw new Error(
       `마우스를 누른 뒤 떼는 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)}). 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.`,
     );
