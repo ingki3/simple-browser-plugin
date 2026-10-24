@@ -164,6 +164,15 @@ export function armTopGuard(token: string, el: HTMLElement, point: Point, rechec
     if (!e.isTrusted) return;
     if (guard.status.status === "blocked") return block(e);
     if (guard.status.status === "clicked") return;
+    // 확인 도중 예외(페이지가 양식 속성을 가리는 이름의 칸을 넣는 등)도 막는다 — 리스너의 예외는 이벤트를 취소하지 않는다.
+    try {
+      inspect(e);
+    } catch {
+      guard.status = { status: "blocked", reason: "확인 중 오류" };
+      block(e);
+    }
+  };
+  const inspect = (e: Event) => {
     const stop = (reason: string) => {
       guard.status = { status: "blocked", reason };
       block(e);

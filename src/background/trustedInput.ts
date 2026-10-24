@@ -269,8 +269,12 @@ async function pressIn(
   turnTab: TurnTab,
   signal: AbortSignal | undefined,
 ): Promise<InputClickResult> {
-  const cancel = (reason: string) =>
-    sendTo(tabId, documentId, { kind: "trusted_click_cancel", token, reason }, 1_000, "클릭 취소").catch(() => {});
+  // 가드를 막힘으로 바꿨으면 true.
+  const cancel = (reason: string): Promise<boolean> =>
+    sendTo(tabId, documentId, { kind: "trusted_click_cancel", token, reason }, 1_000, "클릭 취소").then(
+      () => true,
+      () => false,
+    );
   try {
     if (signal?.aborted) throw new ClickAbortedError();
     // 탭으로 열린 팝업이면 아직 앞에 보이는지 다시 본다.
@@ -302,6 +306,10 @@ async function pressIn(
     await cancel("입력 전송 실패");
     throw new Error(`실제 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)}). 다시 관측하세요.`);
   }
+  // 누르는 사이 중단됐으면 가드를 먼저 막힘으로 바꾼 뒤 떼어(버튼 상태만 풀고) click이 일어나지 않게 한다.
+  // 가드를 막지 못했으면 떼지 않는다(떼면 click이 완성될 수 있다). 눌린 상태는 중단이 디버거를 떼면서 풀린다.
+  const abortedWhilePressed = !!signal?.aborted;
+  if (abortedWhilePressed && !(await cancel("중단됨"))) throw new ClickAbortedError();
   try {
     await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", { type: "mouseReleased", buttons: 0, ...base });
   } catch (err) {
@@ -310,6 +318,8 @@ async function pressIn(
       `마우스를 누른 뒤 떼는 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)}). 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.`,
     );
   }
+
+  if (abortedWhilePressed) throw new ClickAbortedError();
 
   let status: TrustedClickStatus | null = null;
   for (const wait of RESULT_POLL_MS) {
