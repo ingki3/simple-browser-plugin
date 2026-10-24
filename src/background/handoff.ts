@@ -46,7 +46,7 @@ export function watchHandoff(session: HandoffSession, onDone: (outcome: WatchOut
       // 같은 탭에서 다른 문서로 바뀌었으면(이동·다시 불러옴) 사용자가 조작한 결과로 본다.
       const now = await topDocumentId(session.tabId);
       if (now !== session.documentId) return finish("page_changed");
-      const status = await sendTo<{ clicked: boolean; expired: boolean } | null>(
+      const status = await sendTo<{ clicked: boolean; expired: boolean; frameChanged: boolean } | null>(
         session.tabId,
         session.documentId,
         { kind: "handoff_status", token: session.token },
@@ -56,6 +56,8 @@ export function watchHandoff(session: HandoffSession, onDone: (outcome: WatchOut
       // 같은 문서인데 기록이 없으면(확장이 다시 주입됨 등) 사용자가 했는지 알 수 없어 완료로 보지 않는다.
       if (!status) return finish("expired");
       if (status.clicked) return finish("clicked");
+      // 대상이 든 iframe만 이동했으면(그 안에서 제출 등) top 문서는 그대로다.
+      if (status.frameChanged) return finish("page_changed");
       if (status.expired) return finish("expired");
     } catch (err) {
       if (isMissingReceiver(err)) return finish("page_changed");

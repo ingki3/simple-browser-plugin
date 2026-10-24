@@ -11,6 +11,8 @@ interface Handoff {
   clicked: boolean;
   // 사용자가 HANDOFF_MAX_MS 동안 조작하지 않아 표시를 뗐음(문서 바뀜과 구분해 알린다).
   expired: boolean;
+  // 같은 출처 iframe 안의 대상이면 그 프레임과 표시할 때의 문서(프레임만 이동하면 top 문서는 그대로라 따로 본다).
+  frames: Array<{ el: Element; doc: Document }>;
   stop: () => void;
 }
 
@@ -102,7 +104,12 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
   endHandoff(token);
   const targets = ids.map((id) => approvedElement(id, callId, prefix));
   if (targets.length === 0) throw new Error("표시할 대상이 없습니다.");
-  const state: Handoff = { clicked: false, expired: false, stop: () => {} };
+  const frames: Handoff["frames"] = [];
+  for (const el of targets) {
+    const frameEl = el.ownerDocument.defaultView?.frameElement;
+    if (frameEl && !frames.some((f) => f.el === frameEl)) frames.push({ el: frameEl, doc: el.ownerDocument });
+  }
+  const state: Handoff = { clicked: false, expired: false, frames, stop: () => {} };
   const removeBoxes = drawBoxes(targets);
   const cleanups: Array<() => void> = [removeBoxes];
   if (prefix === "c") {
@@ -131,9 +138,14 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
   shownElement(targets[0]).scrollIntoView({ block: "center", inline: "nearest" });
 }
 
-export function handoffStatus(token: string): { clicked: boolean; expired: boolean } | null {
+export function handoffStatus(token: string): { clicked: boolean; expired: boolean; frameChanged: boolean } | null {
   const state = handoffs.get(token);
-  return state ? { clicked: state.clicked, expired: state.expired } : null;
+  if (!state) return null;
+  // 대상이 든 iframe이 다른 문서로 바뀌었거나(다른 출처로 가면 contentDocument가 null) 빠졌는지.
+  const frameChanged = state.frames.some(
+    ({ el, doc }) => !el.isConnected || (el as HTMLIFrameElement).contentDocument !== doc,
+  );
+  return { clicked: state.clicked, expired: state.expired, frameChanged };
 }
 
 export function endHandoff(token: string): void {

@@ -288,7 +288,9 @@ export function handoffFillList(items: Array<{ info: TargetInfo; value: string }
             : want === false
               ? "☐ 해제"
               : value;
-      return `${items.length > 1 ? `${i + 1}. ` : ""}${name}${row}: ${shown}`;
+      let warn = info.sensitive === "payment" ? " ⚠ 결제 정보 칸" : "";
+      if (info.hidden) warn += " ⚠ 화면에 보이지 않는 칸";
+      return `${items.length > 1 ? `${i + 1}. ` : ""}${name}${row}: ${shown}${warn}`;
     })
     .join("\n");
 }

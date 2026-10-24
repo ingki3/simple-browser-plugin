@@ -319,4 +319,5 @@ test("handoffFillList: 사용자가 직접 입력할 모든 칸과 값을 자르
   assert.equal(lines[13], "14. 동의 — 행: '약관': ☑ 체크");
   assert.doesNotMatch(list, /hunter22/);
   assert.equal(handoffFillList([{ info: { ...field, name: "출발지" }, value: "수서" }]), "출발지: 수서");
+  assert.equal(handoffFillList([{ info: { ...field, name: "카드 번호", sensitive: "payment" }, value: "1234" }]), "카드 번호: 1234 ⚠ 결제 정보 칸");
 });

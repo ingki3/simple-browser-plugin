@@ -233,7 +233,9 @@ export async function buildToolPreview(
       const destructiveFill = destructiveFillBlock(infos, fillValues);
       return {
         ...fillCardInfo,
-        handoffDetails: handoffFillList(infos.map((info, i) => ({ info, value: args.fills[i].value }))),
+        handoffDetails: `${handoffFillList(infos.map((info, i) => ({ info, value: args.fills[i].value })))}${
+          destructiveFill ? `\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` : ""
+        }`,
         ...(destructiveFill
           ? { details: `${fillCardInfo.details}\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` }
           : {}),
