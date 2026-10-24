@@ -179,7 +179,15 @@ function listen(win: Window, handler: (e: Event) => void, ms: number, onExpire: 
 }
 
 // top 문서 가드: 실제 입력이 승인한 대상(그 안의 장식 요소 포함)에만 가게 한다. 누르기 전 단계에서는 대상도 다시 확인한다.
-export function armTopGuard(token: string, el: HTMLElement, point: Point, recheck: (phase: RecheckPhase) => string | null): void {
+// asApproved: click 단계의 확인(hit test·재확인)을 승인 때 체크 상태로 잠깐 되돌린 채 부른다(대상이 checkbox·radio이거나
+// 그것을 작동시키는 label일 때 — 브라우저가 click 처리기보다 먼저 체크 상태와 그에 따른 배치를 바꾸므로).
+export function armTopGuard(
+  token: string,
+  el: HTMLElement,
+  point: Point,
+  recheck: (phase: RecheckPhase) => string | null,
+  asApproved: (check: () => string | null) => string | null = (check) => check(),
+): void {
   disarm(token);
   const guard: TopGuard = {
     el,
@@ -224,15 +232,19 @@ export function armTopGuard(token: string, el: HTMLElement, point: Point, rechec
     const chain = path.slice(0, at).filter((n): n is Element => n instanceof Element);
     const other = independentIn(chain, el);
     if (other) return stop(`대상 안의 다른 ${other.tagName.toLowerCase()} 요소에 닿음`);
-    // composedPath는 닫힌 shadow root 안을 감추므로, 입력 좌표에서 닫힌 root까지 따라 내려가 다시 본다.
-    if (e instanceof MouseEvent) {
-      const hit = checkPoint(el, { x: e.clientX, y: e.clientY });
-      if (!hit.ok) return stop(hit.reason);
-    }
-    // 단계마다 대상 기술 전체(주소·양식 관계·위험 신호 포함)를 다시 본다 — 앞 단계 처리기가 href·formaction 등을 바꿨으면
-    // 막는다. pointerdown 뒤에는 화면 상태(펼침·눌림 등, 체크 제외)의 변화만, click 단계는 브라우저가 바꾼 checkbox·radio
-    // 상태의 예상 변화만 허용한다(clickables의 phaseInfo).
-    const changed = recheck(e.type === "click" ? "click" : e.type === "pointerdown" ? "down" : "up");
+    const phase: RecheckPhase = e.type === "click" ? "click" : e.type === "pointerdown" ? "down" : "up";
+    const verify = (): string | null => {
+      // composedPath는 닫힌 shadow root 안을 감추므로, 입력 좌표에서 닫힌 root까지 따라 내려가 다시 본다.
+      if (e instanceof MouseEvent) {
+        const hit = checkPoint(el, { x: e.clientX, y: e.clientY });
+        if (!hit.ok) return hit.reason;
+      }
+      // 단계마다 대상 기술 전체(주소·양식 관계·위험 신호 포함)를 다시 본다 — 앞 단계 처리기가 href·formaction 등을 바꿨으면
+      // 막는다. pointerdown 뒤에는 화면 상태(펼침·눌림 등, 체크 제외)의 변화만 허용한다(clickables의 phaseInfo).
+      return recheck(phase);
+    };
+    // click 단계는 브라우저가 먼저 바꾼 체크 상태(와 그에 따른 배치)를 승인 때로 되돌린 채 본다.
+    const changed = phase === "click" ? asApproved(verify) : verify();
     if (changed) return stop(changed);
     if (e.type === "click") {
       guard.status = { status: "clicked" };

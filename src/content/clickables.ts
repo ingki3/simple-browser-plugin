@@ -555,9 +555,13 @@ export function clickElement(
     const toggle = toggleEl
       ? { checked: toggleEl.checked, indeterminate: toggleEl.indeterminate, prevRadio: toggleEl.type === "radio" ? checkedInGroup(toggleEl) : null }
       : null;
-    const recheck = (phase: RecheckPhase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase), relation);
-    armTopGuard(trusted, el, point, (phase) =>
-      phase === "click" && toggleEl && toggle ? withToggleReverted(toggleEl, toggle, () => recheck("up")) : recheck(phase),
+    // click 단계 확인은 체크 상태를 승인 때로 되돌린 채(asApproved) 하므로 "up"과 같은 기준으로 본다.
+    armTopGuard(
+      trusted,
+      el,
+      point,
+      (phase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase === "click" ? "up" : phase), relation),
+      (check) => (toggleEl && toggle ? withToggleReverted(toggleEl, toggle, check) : check()),
     );
     return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
   }
