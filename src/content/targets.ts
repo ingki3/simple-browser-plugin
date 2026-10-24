@@ -190,7 +190,8 @@ function inFlightSubstitute(
     const { option } = picked;
     if (select.selectedOptions.length !== 1 || select.selectedOptions[0] !== option) return;
     if (option.value !== picked.value || select.value !== picked.value) return;
-    if (norm(combo.textContent) !== norm(option.label)) return;
+    // 선택지 이름도 쓴 직후 그대로여야 하고(처리기가 이름을 바꿨으면 그대로 비교), 콤보박스가 그 이름을 보여 줘야 한다.
+    if (option.label !== picked.label || norm(combo.textContent) !== norm(picked.label)) return;
     raw.set(combo, before[i].raw);
     model.set(combo, before[i].model);
   });
@@ -729,7 +730,7 @@ const writtenByCall = new Map<string, Map<Element, string>>();
 // 이번 호출의 select 쓰기 구간(값을 쓴 때부터 그 칸의 input·change 처리기가 끝날 때까지) 안에서 바뀐 문서 주소.
 interface SelectWrites {
   // 고른 선택지 요소와 쓴 직후의 그 값(처리기가 같은 요소의 value만 바꾸는 것도 알아채게).
-  options: Map<HTMLSelectElement, { option: HTMLOptionElement; value: string }>;
+  options: Map<HTMLSelectElement, { option: HTMLOptionElement; value: string; label: string }>;
   // [바뀌기 전, 바뀐 뒤] 주소. 해시 경로가 같고 해시 쿼리만 바뀐 것만 담는다(필터 값 반영).
   hashSteps: Array<[string, string]>;
 }
@@ -753,7 +754,7 @@ function selectWritesOf(callId: string): SelectWrites {
 export function noteChosenOption(callId: string, select: HTMLSelectElement): void {
   const w = selectWritesOf(callId);
   const option = select.selectedOptions[0];
-  if (option && select.selectedOptions.length === 1) w.options.set(select, { option, value: option.value });
+  if (option && select.selectedOptions.length === 1) w.options.set(select, { option, value: option.value, label: option.label });
   else w.options.delete(select);
 }
 
@@ -762,7 +763,8 @@ export function noteChosenOption(callId: string, select: HTMLSelectElement): voi
 export function noteSelectHashStep(callId: string, before: string, after: string): void {
   if (before === after || !sameHashPath(before, after)) return;
   const steps = selectWritesOf(callId).hashSteps;
-  if (!steps.some(([b, a]) => b === before && a === after)) steps.push([before, after]);
+  // 순서대로 둔다(같은 변화가 다시 일어나도 기록 — A→B→A→C를 시간순으로 따라가야 한다).
+  if (steps.length < 200) steps.push([before, after]);
 }
 
 function hashParts(url: string): { base: string; path: string } {
@@ -787,14 +789,12 @@ function hashExplainedBySelectWrites(callId: string | undefined, from: string, t
   if (from === to) return true;
   const steps = callId ? selectWritesByCall.get(callId)?.hashSteps : undefined;
   if (!steps?.length) return false;
+  // 기록을 시간순으로 따라가며, 지금 주소에서 출발하는 변화만 이어 붙인다(다른 칸의 쓰기 구간 기록은 건너뛴다).
   let cur = from;
-  for (let i = 0; i <= steps.length; i++) {
-    const next = steps.find(([b]) => b === cur);
-    if (!next) return false;
-    cur = next[1];
-    if (cur === to) return true;
+  for (const [b, a] of steps) {
+    if (b === cur) cur = a;
   }
-  return false;
+  return cur === to;
 }
 
 export function noteWritten(callId: string, el: Element, value: string): void {
