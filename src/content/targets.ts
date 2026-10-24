@@ -149,6 +149,26 @@ function textOf(el: Element, exclude: Element[] = [], substitute?: ReadonlyMap<E
   return raw.replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
 }
 
+// 승인 때 본 select 요소(proxyTexts의 ref로 찾는다). 요소 참조라 같은 글자의 다른 행 위젯과 구분한다. 콤보박스는 페이지가
+// 다시 그릴 수 있어(select2는 고를 때마다 감싼 요소를 새로 만든다) select에 붙은 지금 대리 위젯(selectProxyOf)으로 본다.
+const proxyRefs = new Map<string, WeakRef<HTMLSelectElement>>();
+const proxyRefIds = new WeakMap<HTMLSelectElement, string>();
+let proxyRefSeq = 0;
+
+function proxyRef(select: HTMLSelectElement): string {
+  const known = proxyRefIds.get(select);
+  if (known && proxyRefs.get(known)?.deref() === select) return known;
+  const id = `p${++proxyRefSeq}`;
+  proxyRefs.set(id, new WeakRef(select));
+  proxyRefIds.set(select, id);
+  while (proxyRefs.size > 500) {
+    const oldest = proxyRefs.keys().next().value;
+    if (oldest === undefined) break;
+    proxyRefs.delete(oldest);
+  }
+  return id;
+}
+
 // el 안의 숨긴 select와 그 대리 콤보박스(#88, 문서 순서).
 function proxyPairsIn(el: Element): Array<{ select: HTMLSelectElement; combo: Element }> {
   const out: Array<{ select: HTMLSelectElement; combo: Element }> = [];
@@ -183,6 +203,8 @@ function inFlightSubstitute(
   const model = new Map<Element, string>();
   const chosen = selectWritesByCall.get(info.consentCall ?? "")?.options;
   pairs.forEach(({ select, combo }, i) => {
+    // 승인 때 이 행의 바로 그 select여야 한다(다른 행의 select·위젯을 옮겨 온 것이면 되돌리지 않는다).
+    if (proxyRefs.get(before[i].ref)?.deref() !== select) return;
     // 이번 호출이 고른 바로 그 선택지가 지금도 골라져 있고(같은 value의 다른 선택지가 아니라), 콤보박스가 그 선택지의
     // 보이는 이름(label 속성이 있으면 그것)을 보여 줄 때만.
     const picked = chosen?.get(select);
@@ -191,7 +213,8 @@ function inFlightSubstitute(
     if (select.selectedOptions.length !== 1 || select.selectedOptions[0] !== option) return;
     if (option.value !== picked.value || select.value !== picked.value) return;
     // 선택지 이름도 쓴 직후 그대로여야 하고(처리기가 이름을 바꿨으면 그대로 비교), 콤보박스가 그 이름을 보여 줘야 한다.
-    if (option.label !== picked.label || norm(combo.textContent) !== norm(picked.label)) return;
+    // 콤보박스의 보이는 글자(aria-hidden인 해제 아이콘 등은 뺀 것)가 그 이름이어야 한다.
+    if (option.label !== picked.label || norm(subtreeText(combo, MODEL_CONTEXT_MAX)) !== norm(picked.label)) return;
     raw.set(combo, before[i].raw);
     model.set(combo, before[i].model);
   });
@@ -331,7 +354,13 @@ function baseInfo(
   }
   // 행에 숨긴 select의 대리 콤보박스가 있으면 그 글자를 기록한다(#88 — 입력 도중 비교에서 이번 호출이 쓴 것만 되돌린다).
   const pairs = row ? proxyPairsIn(row.row) : [];
-  if (pairs.length) detail.proxyTexts = pairs.map(({ combo }) => ({ raw: combo.textContent ?? "", model: subtreeText(combo, MODEL_CONTEXT_MAX) }));
+  if (pairs.length) {
+    detail.proxyTexts = pairs.map(({ select, combo }) => ({
+      raw: combo.textContent ?? "",
+      model: subtreeText(combo, MODEL_CONTEXT_MAX),
+      ref: proxyRef(select),
+    }));
+  }
   if (kind.detail) {
     const states = statesOf(el);
     if (states) detail.states = states;
@@ -774,6 +803,9 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
   // 이번 호출이 선택 칸에 쓴 상태는 쓰는 순간 기록한다(noteChoiceWritten). 승인 때 지난 기록이 있으면 지운다.
   consentDeleteChoices.delete(callId);
+  // 같은 호출 id가 다시 쓰여도(모델이 같은 id를 돌려줌) 이전 실행의 쓰기·선택 기록을 이번 승인의 예외로 쓰지 않는다.
+  writtenByCall.delete(callId);
+  selectWritesByCall.delete(callId);
   // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
   // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
   // 칸 단서가 없어도 입력할 값이 개인정보(이메일·전화 등)면 승인 카드가 뜨므로 개인정보 묶음으로 본다.
