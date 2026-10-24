@@ -547,12 +547,17 @@ export function clickElement(
       return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
     }
     startEffectWatch(effectToken, el);
-    // click 단계에서 대상 자신이 checkbox·radio면 브라우저가 처리기보다 먼저 체크 상태를 바꿔 양식 값(제출 주소)도 달라진다.
+    // click 단계에서 대상(또는 label의 컨트롤)이 checkbox·radio면 브라우저가 처리기보다 먼저 체크 상태를 바꿔 양식 값(제출 주소)도 달라진다.
     // 그 변화를 잠깐 되돌린 상태로(승인 때와 같은 체크 상태에서) 확인한다.
-    const toggle = isToggleInput(el) ? { checked: el.checked, indeterminate: el.indeterminate, prevRadio: el.type === "radio" ? checkedInGroup(el) : null } : null;
+    // label이면 연결된 checkbox·radio(투명한 칸이 label을 덮어 실제 입력이 칸에 닿는 경우)도 같다.
+    const control = isTag(el, "label") ? (el as HTMLLabelElement).control : null;
+    const toggleEl = isToggleInput(el) ? el : control && isToggleInput(control) ? control : null;
+    const toggle = toggleEl
+      ? { checked: toggleEl.checked, indeterminate: toggleEl.indeterminate, prevRadio: toggleEl.type === "radio" ? checkedInGroup(toggleEl) : null }
+      : null;
     const recheck = (phase: RecheckPhase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase), relation);
     armTopGuard(trusted, el, point, (phase) =>
-      phase === "click" && toggle && isToggleInput(el) ? withToggleReverted(el, toggle, () => recheck("up")) : recheck(phase),
+      phase === "click" && toggleEl && toggle ? withToggleReverted(toggleEl, toggle, () => recheck("up")) : recheck(phase),
     );
     return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
   }

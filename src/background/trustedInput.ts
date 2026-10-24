@@ -5,6 +5,7 @@ import type { BgToContent, ContentResponse } from "@/lib/messages";
 import {
   FRAME_ARM_TIMEOUT_MS,
   frameNeedsGuard,
+  guardTimeLeft,
   unguardedFrame,
   GUARD_MIN_REMAINING_MS,
   GUARD_MS,
@@ -211,6 +212,8 @@ export async function clickWithInput(
     }
     const token = crypto.randomUUID();
     let armed: { docs: FrameDoc[]; missing: FrameDoc | null } = { docs: [], missing: null };
+    // 프레임 가드는 걸기 시작한 때부터 GUARD_MS 안에 풀리므로, 누르기 직전 남은 시간을 이 시각으로 잰다(보수적으로 보내기 전).
+    const armedAt = Date.now();
     try {
       armed = await armFrames(tabId, token);
       if (armed.missing) {
@@ -227,7 +230,7 @@ export async function clickWithInput(
         debugLog("input:script", `tab ${tabId} · ${prep.reason}`);
         return { ...data, input: "script", inputNote: prep.reason };
       }
-      return await press(tabId, token, prep, data, armed.docs, turnTab, signal);
+      return await press(tabId, token, prep, data, armed.docs, armedAt, turnTab, signal);
     } finally {
       void disarmFrames(tabId, token, armed.docs);
     }
@@ -240,6 +243,7 @@ async function press(
   point: { x: number; y: number },
   data: ClickData,
   armedDocs: FrameDoc[],
+  armedAt: number,
   turnTab: TurnTab,
   signal: AbortSignal | undefined,
 ): Promise<InputClickResult> {
@@ -247,7 +251,7 @@ async function press(
   const documentId = await topDocumentId(tabId);
   if (!documentId) throw fail("탭의 문서를 확인할 수 없음");
   try {
-    return await pressIn(tabId, documentId, token, point, data, armedDocs, turnTab, signal);
+    return await pressIn(tabId, documentId, token, point, data, armedDocs, armedAt, turnTab, signal);
   } finally {
     // 입력을 다 보냈거나 보내지 않기로 했으니 top 가드를 뗀다(사용자의 다음 클릭을 막지 않게).
     void sendTo(tabId, documentId, { kind: "input_guard_disarm", token }, 1_000, "가드 해제").catch(() => {});
@@ -261,6 +265,7 @@ async function pressIn(
   point: { x: number; y: number },
   data: ClickData,
   armedDocs: FrameDoc[],
+  armedAt: number,
   turnTab: TurnTab,
   signal: AbortSignal | undefined,
 ): Promise<InputClickResult> {
@@ -280,7 +285,8 @@ async function pressIn(
     } catch (err) {
       throw fail(err instanceof Error ? err.message : String(err));
     }
-    if (remaining < GUARD_MIN_REMAINING_MS) throw fail("확인 시간이 모자람");
+    // top 가드와 다른 프레임 가드 모두 누르는 동안 살아 있어야 한다.
+    if (remaining < GUARD_MIN_REMAINING_MS || !guardTimeLeft(armedAt, Date.now())) throw fail("확인 시간이 모자람");
     if (signal?.aborted) throw new ClickAbortedError();
   } catch (err) {
     await cancel(err instanceof Error ? err.message : String(err));

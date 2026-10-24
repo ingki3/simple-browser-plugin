@@ -78,3 +78,8 @@ export function unguardedFrame<T extends { documentId: string; url: string }>(
 ): T | null {
   return frames.find((f) => frameNeedsGuard(f.url) && !guarded.has(f.documentId)) ?? null;
 }
+
+// 가드를 걸기 시작한 시각(armedAt)부터 재어, 지금 누르기 시작해도 가드가 GUARD_MIN_REMAINING_MS 넘게 남는지.
+export function guardTimeLeft(armedAt: number, now: number): boolean {
+  return armedAt + GUARD_MS - now >= GUARD_MIN_REMAINING_MS;
+}

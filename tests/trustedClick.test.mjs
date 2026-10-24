@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { clickPoint, frameNeedsGuard, unguardedFrame } from "../src/lib/trustedClick.ts";
+import { clickPoint, frameNeedsGuard, guardTimeLeft, GUARD_MS, GUARD_MIN_REMAINING_MS, unguardedFrame } from "../src/lib/trustedClick.ts";
 
 const VIEW = { width: 800, height: 600 };
 
@@ -46,4 +46,11 @@ test("unguardedFrame: a reloaded frame (same frameId, new document) is not guard
   ];
   assert.equal(unguardedFrame(frames, new Set(["D3-old"]))?.documentId, "D3-new");
   assert.equal(unguardedFrame(frames, new Set(["D3-new"])), null);
+});
+
+test("guardTimeLeft: frame guards armed too long ago are not trusted", () => {
+  assert.equal(guardTimeLeft(1000, 1000), true);
+  assert.equal(guardTimeLeft(1000, 1000 + GUARD_MS - GUARD_MIN_REMAINING_MS), true);
+  assert.equal(guardTimeLeft(1000, 1001 + GUARD_MS - GUARD_MIN_REMAINING_MS), false);
+  assert.equal(guardTimeLeft(1000, 1000 + GUARD_MS + 5000), false);
 });
