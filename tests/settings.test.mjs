@@ -33,3 +33,40 @@ test("normalizeMaxToolHops: 버전 표시 없는 예전 기본값 8은 새 기�
   assert.equal(normalizeMaxToolHops({ maxToolHops: 0.5 }), 1);
   assert.equal(normalizeMaxToolHops({ maxToolHops: "8" }), 16);
 });
+
+import { DEFAULT_SETTINGS, normalizeSettings, settingsForStorage } from "../src/lib/settings.ts";
+
+test("normalizeSettings: 비거나 형식이 틀린 값은 기본값, 켜짐 기본은 false일 때만 끈다", () => {
+  assert.deepEqual(normalizeSettings(undefined), DEFAULT_SETTINGS);
+  assert.deepEqual(normalizeSettings(null), DEFAULT_SETTINGS);
+  const s = normalizeSettings({
+    openRouterApiKey: 42,
+    translationTargetLang: "k",
+    downloadFolderPrefix: null,
+    actionLogEnabled: "no",
+    rememberPages: false,
+    autoApprove: "true",
+    trustedInput: true,
+    manualSites: ["https://a.example", "https://a.example/x", 3],
+    systemPrompt: "x".repeat(5000),
+  });
+  assert.equal(s.openRouterApiKey, "");
+  assert.equal(s.translationTargetLang, "ko");
+  assert.equal(s.downloadFolderPrefix, DEFAULT_SETTINGS.downloadFolderPrefix);
+  assert.equal(s.actionLogEnabled, true);
+  assert.equal(s.rememberPages, false);
+  assert.equal(s.autoApprove, false);
+  assert.equal(s.trustedInput, true);
+  assert.deepEqual(s.manualSites, ["https://a.example"]);
+  assert.equal(s.systemPrompt.length, 4000);
+});
+
+test("settingsForStorage: 한도 표시를 붙이고 목록·숫자를 정리한다", () => {
+  const out = settingsForStorage({ ...DEFAULT_SETTINGS, maxToolHops: 8, csvMaxChars: 5, manualSites: ["https://a.example", "https://a.example"] });
+  assert.equal(out.maxToolHopsVersion, MAX_TOOL_HOPS_VERSION);
+  assert.equal(out.maxToolHops, 8);
+  assert.equal(out.csvMaxChars, MIN_CSV_MAX_CHARS);
+  assert.deepEqual(out.manualSites, ["https://a.example"]);
+  // 저장한 값을 다시 읽으면 사용자가 고른 8을 그대로 둔다.
+  assert.equal(normalizeSettings(out).maxToolHops, 8);
+});

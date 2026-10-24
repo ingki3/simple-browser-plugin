@@ -4,47 +4,25 @@ import { AutoApproveField } from "@/sidepanel/components/AutoApproveField";
 import { RememberPagesField } from "@/sidepanel/components/RememberPagesField";
 import { TrustedInputField } from "@/sidepanel/components/TrustedInputField";
 import { ManualSitesField } from "@/sidepanel/components/ManualSitesField";
-import { normalizeManualSites } from "@/lib/manualSites";
+import { DEFAULT_SETTINGS, normalizeSettings, settingsForStorage } from "@/lib/settings";
 import { ShowThinkingField } from "@/sidepanel/components/ShowThinkingField";
 import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
 import {
-  DEFAULT_MODEL,
   MODEL_IDS,
   MODEL_LABELS,
   agentReasoningConfig,
-  normalizeModelId,
 } from "@/lib/models";
 import {
-  DEFAULT_CSV_MAX_CHARS,
-  DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
-  MAX_TOOL_HOPS_VERSION,
   MIN_MAX_TOOL_HOPS,
   SETTINGS_KEY,
-  normalizeCsvMaxChars,
-  normalizeMaxToolHops,
   type Settings,
 } from "@/lib/messages";
 
-const DEFAULTS: Settings = {
-  openRouterApiKey: "",
-  model: DEFAULT_MODEL,
-  systemPrompt: "",
-  translationTargetLang: "ko",
-  downloadFolderPrefix: "simple-browser-plugin",
-  maxToolHops: DEFAULT_MAX_TOOL_HOPS,
-  actionLogEnabled: true,
-  csvMaxChars: DEFAULT_CSV_MAX_CHARS,
-  autoApprove: false,
-  showThinking: false,
-  rememberPages: true,
-  trustedInput: false,
-  manualSites: [],
-};
 
 export function Options() {
-  const [draft, setDraft] = useState<Settings>(DEFAULTS);
+  const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -52,36 +30,12 @@ export function Options() {
 
   useEffect(() => {
     chrome.storage.local.get(SETTINGS_KEY).then((obj) => {
-      const raw = (obj[SETTINGS_KEY] ?? {}) as Partial<Settings>;
-      setDraft({
-        openRouterApiKey: raw.openRouterApiKey ?? DEFAULTS.openRouterApiKey,
-        model: normalizeModelId(raw.model),
-        systemPrompt:
-          typeof raw.systemPrompt === "string"
-            ? raw.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH)
-            : DEFAULTS.systemPrompt,
-        translationTargetLang: raw.translationTargetLang ?? DEFAULTS.translationTargetLang,
-        downloadFolderPrefix: raw.downloadFolderPrefix ?? DEFAULTS.downloadFolderPrefix,
-        maxToolHops: normalizeMaxToolHops(raw),
-        actionLogEnabled: raw.actionLogEnabled !== false,
-        csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
-        autoApprove: raw.autoApprove === true,
-        showThinking: raw.showThinking === true,
-        rememberPages: raw.rememberPages !== false,
-        trustedInput: raw.trustedInput === true,
-        manualSites: normalizeManualSites(raw.manualSites),
-      });
+      setDraft(normalizeSettings(obj[SETTINGS_KEY] as Partial<Settings> | undefined));
     });
   }, []);
 
   const save = async () => {
-    const normalized: Settings = {
-      ...draft,
-      systemPrompt: draft.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
-      csvMaxChars: normalizeCsvMaxChars(draft.csvMaxChars),
-      maxToolHops: normalizeMaxToolHops({ ...draft, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }),
-      maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
-    };
+    const normalized = settingsForStorage(draft);
     setDraft(normalized);
     await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
     await chrome.runtime.sendMessage({ kind: "settings_updated" }).catch(() => {
