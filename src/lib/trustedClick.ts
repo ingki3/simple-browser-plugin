@@ -51,6 +51,28 @@ export function clickPoint(rects: readonly Rect[], viewport: { width: number; he
   return null;
 }
 
+// 누를 후보 점(#89): 화면과 겹치는 사각형마다 겹친 부분의 가운데, 그다음 가장자리에서 안쪽으로 들어간 네 점(가로·세로 25%·75%).
+// 가운데가 고정 바·작은 배지에 가려져도 대상의 다른 자리를 누를 수 있게 한다. 겹친 부분이 1px보다 작은 사각형은 쓰지 않는다.
+export function clickPoints(rects: readonly Rect[], viewport: { width: number; height: number }): Point[] {
+  const out: Point[] = [];
+  const round = (v: number) => Math.round(v * 100) / 100;
+  for (const r of rects) {
+    const left = Math.max(0, r.left);
+    const top = Math.max(0, r.top);
+    const right = Math.min(viewport.width, r.left + r.width);
+    const bottom = Math.min(viewport.height, r.top + r.height);
+    if (right - left < 1 || bottom - top < 1) continue;
+    const w = right - left;
+    const h = bottom - top;
+    out.push({ x: round(left + w / 2), y: round(top + h / 2) });
+    for (const [fx, fy] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]] as const) {
+      const p = { x: round(left + w * fx), y: round(top + h * fy) };
+      if (!out.some((q) => q.x === p.x && q.y === p.y)) out.push(p);
+    }
+  }
+  return out;
+}
+
 // 가드가 기록한 결과. clicked: 승인한 대상에 click까지 갔음. blocked: 가드가 막음(이유). none: 실제 입력이 오지 않음.
 export type TrustedClickStatus =
   | { status: "clicked" }

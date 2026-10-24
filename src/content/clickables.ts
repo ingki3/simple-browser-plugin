@@ -52,7 +52,7 @@ import {
 } from "./targets";
 import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
 import type { TrustedPrepare } from "@/lib/trustedClick";
-import { armTopGuard, checkPoint, pointOf, type RecheckPhase } from "./trustedClick";
+import { armTopGuard, choosePoint, type RecheckPhase } from "./trustedClick";
 
 const BASE_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
@@ -532,16 +532,16 @@ export function clickElement(
       startEffectWatch(effectToken, el, changed);
       return { clicked: true, text, href, effectToken, trusted: { mode: "aborted" } };
     }
-    const point = pointOf(el);
+    // 대상에 닿는 점을 고른다(#89 — 가운데가 고정 바 등에 덮였으면 다른 자리). 모든 점이 덮였거나 대상 안의 다른 활성 요소가
+    // 받으면 실제 입력 대신 스크립트 클릭으로 누른다(사용자 결정 — 설정을 켜기 전과 같은 동작, 결과 줄에 이유).
+    let point: { x: number; y: number } | null = null;
     let reason: string | null = null;
     if (el.ownerDocument !== document) reason = "iframe 안의 대상";
-    else if (!point) reason = "화면에 보이는 사각형이 없는 대상";
     else {
-      const hit = checkPoint(el, point);
-      if (!hit.ok && !hit.inside) {
-        throw new Error(`실제 입력으로 누르지 않았습니다(${hit.reason}). 다시 관측하세요.`);
-      }
-      if (!hit.ok) reason = hit.reason;
+      const chosen = choosePoint(el);
+      if (!chosen) reason = "화면에 보이는 사각형이 없는 대상";
+      else if (!chosen.ok) reason = chosen.reason;
+      else point = chosen.point;
     }
     if (reason || !point) {
       const why = reason ?? "누를 점 없음";
