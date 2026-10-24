@@ -2,13 +2,15 @@
 // 눌렀는지 본다. 페이지의 이벤트를 막거나 바꾸지 않고(수동 리스너), 페이지에 입력·클릭을 보내지 않는다.
 // 표시는 닫힌 shadow root 안의 고정 위치 상자(pointer-events: none)라 사용자의 조작을 가리지 않는다.
 import { approvedElement } from "./targets";
-import { proxyLabel } from "./forms";
+import { visibleProxy } from "./forms";
 
 // 사용자가 오래 자리를 비워도 표시가 남지 않게 하는 상한.
 const HANDOFF_MAX_MS = 15 * 60_000;
 
 interface Handoff {
   clicked: boolean;
+  // 사용자가 HANDOFF_MAX_MS 동안 조작하지 않아 표시를 뗐음(문서 바뀜과 구분해 알린다).
+  expired: boolean;
   stop: () => void;
 }
 
@@ -43,13 +45,9 @@ const BOX_CSS = `
 @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
 `;
 
-// 화면에서 숨긴 칸은 대신 보이는 label을 표시한다.
+// 화면에서 숨긴 칸(크기 0·투명 등)은 찾기 결과와 같은 기준으로 대신 보이는 label을 표시한다.
 function shownElement(el: HTMLElement): HTMLElement {
-  if (el.getClientRects().length > 0) {
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) return el;
-  }
-  return proxyLabel(el) ?? el;
+  return visibleProxy(el) ?? el;
 }
 
 // 대상마다 그 문서에 표시 상자를 붙인다(같은 출처 iframe 안의 대상은 그 문서에).
@@ -104,7 +102,7 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
   endHandoff(token);
   const targets = ids.map((id) => approvedElement(id, callId, prefix));
   if (targets.length === 0) throw new Error("표시할 대상이 없습니다.");
-  const state: Handoff = { clicked: false, stop: () => {} };
+  const state: Handoff = { clicked: false, expired: false, stop: () => {} };
   const removeBoxes = drawBoxes(targets);
   const cleanups: Array<() => void> = [removeBoxes];
   if (prefix === "c") {
@@ -117,8 +115,15 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
     win.addEventListener("click", onClick, { capture: true, passive: true });
     cleanups.push(() => win.removeEventListener("click", onClick, { capture: true }));
   }
-  const timer = setTimeout(() => endHandoff(token), HANDOFF_MAX_MS);
+  // 만료되면 표시만 떼고 기록은 남긴다(백그라운드가 만료를 읽고 끝낸다).
+  const timer = setTimeout(() => {
+    state.expired = true;
+    state.stop();
+  }, HANDOFF_MAX_MS);
+  let stopped = false;
   state.stop = () => {
+    if (stopped) return;
+    stopped = true;
     clearTimeout(timer);
     for (const c of cleanups) c();
   };
@@ -126,9 +131,9 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
   shownElement(targets[0]).scrollIntoView({ block: "center", inline: "nearest" });
 }
 
-export function handoffStatus(token: string): { clicked: boolean } | null {
+export function handoffStatus(token: string): { clicked: boolean; expired: boolean } | null {
   const state = handoffs.get(token);
-  return state ? { clicked: state.clicked } : null;
+  return state ? { clicked: state.clicked, expired: state.expired } : null;
 }
 
 export function endHandoff(token: string): void {

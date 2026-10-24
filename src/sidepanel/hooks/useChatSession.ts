@@ -80,7 +80,7 @@ export function useChatSession() {
         case "tool_result":
           // 손 넘기기 카드는 사용자가 페이지에서 대상을 누르면 백그라운드가 먼저 끝낸다. 결과가 오면 열린 카드를 닫는다.
           if (s.messages.some((m) => m.type === "tool_pending" && m.callId === msg.callId && m.resolved === null)) {
-            s.resolveToolPending(msg.callId, "approved");
+            s.resolveToolPending(msg.callId, msg.ok ? "approved" : "cancelled");
           }
           s.addToolResult({
             id: `r${msg.callId}`,

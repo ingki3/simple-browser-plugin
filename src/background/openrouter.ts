@@ -1200,13 +1200,16 @@ export class ChatAgent {
                 toolName === "click_element"
                   ? "페이지에 표시한 대상을 직접 눌러 주세요. 누르면 이어서 진행합니다."
                   : `페이지에 표시한 칸에 아래 값을 직접 입력하고 "했어요"를 눌러 주세요.`,
-              previewDetails: preview.details,
+              // 사용자가 직접 입력하므로 값을 자르지 않은 전체 목록을 보인다(승인 카드 요약은 10칸·80자까지).
+              previewDetails: preview.handoffDetails ?? preview.details,
               handoff: true,
             });
             let by: HandoffOutcome = "confirmed";
+            let expired = false;
             const stopWatch = watchHandoff(shown, (outcome) => {
-              by = outcome;
-              this.pendingApprovals.get(callId)?.(true);
+              if (outcome === "expired") expired = true;
+              else by = outcome;
+              this.pendingApprovals.get(callId)?.(!expired);
             });
             approved = await new Promise<boolean>((resolve) => {
               this.pendingApprovals.set(callId, resolve);
@@ -1215,7 +1218,20 @@ export class ChatAgent {
             this.pendingApprovals.delete(callId);
             void endHandoff(shown);
             if (this.isStale(turn)) return false;
-            debugLog("tool:handoff_result", `${toolName} ${approved ? by : "cancelled"}`);
+            debugLog("tool:handoff_result", `${toolName} ${approved ? by : expired ? "expired" : "cancelled"}`);
+            if (expired) {
+              const msg = "사용자가 표시한 대상을 오래 조작하지 않아 직접 조작 안내를 끝냈습니다. 사용자에게 계속할지 물으세요.";
+              recordCancelledAction(callId, turnTab);
+              this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
+              this.history.push({
+                role: "tool",
+                tool_call_id: callId,
+                name: toolName,
+                content: this.toolContent(turnTab, { error: msg }),
+              });
+              record(toolName, argsKey, false, `error:${msg}`, msg);
+              continue;
+            }
             if (approved) handoffOutcome = by;
           } else if (chatGrant.covered && isChatGrantTool(toolName)) {
             debugLog("tool:chat_grant_approved", toolName);

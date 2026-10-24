@@ -29,10 +29,13 @@ export async function showHandoff(
 }
 
 // 사용자가 표시한 대상을 눌렀는지, 문서가 바뀌었는지 살핀다. 끝나면 onDone을 한 번 부른다. 돌려준 함수로 멈춘다.
-export function watchHandoff(session: HandoffSession, onDone: (outcome: Exclude<HandoffOutcome, "confirmed">) => void): () => void {
+// expired: 사용자가 오래 조작하지 않아 표시가 만료됐거나 표시 기록을 잃음(완료로 보지 않는다).
+export type WatchOutcome = Exclude<HandoffOutcome, "confirmed"> | "expired";
+
+export function watchHandoff(session: HandoffSession, onDone: (outcome: WatchOutcome) => void): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const finish = (outcome: Exclude<HandoffOutcome, "confirmed">) => {
+  const finish = (outcome: WatchOutcome) => {
     if (stopped) return;
     stopped = true;
     onDone(outcome);
@@ -43,15 +46,17 @@ export function watchHandoff(session: HandoffSession, onDone: (outcome: Exclude<
       // 같은 탭에서 다른 문서로 바뀌었으면(이동·다시 불러옴) 사용자가 조작한 결과로 본다.
       const now = await topDocumentId(session.tabId);
       if (now !== session.documentId) return finish("page_changed");
-      const status = await sendTo<{ clicked: boolean } | null>(
+      const status = await sendTo<{ clicked: boolean; expired: boolean } | null>(
         session.tabId,
         session.documentId,
         { kind: "handoff_status", token: session.token },
         2_000,
         "직접 조작 확인",
       );
-      if (!status) return finish("page_changed");
+      // 같은 문서인데 기록이 없으면(확장이 다시 주입됨 등) 사용자가 했는지 알 수 없어 완료로 보지 않는다.
+      if (!status) return finish("expired");
       if (status.clicked) return finish("clicked");
+      if (status.expired) return finish("expired");
     } catch (err) {
       if (isMissingReceiver(err)) return finish("page_changed");
       // 탭이 닫혔으면 문서를 읽지 못한다(topDocumentId가 null → 위에서 page_changed). 그 밖의 일시 오류는 다음에 다시 본다.

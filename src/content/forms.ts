@@ -65,6 +65,11 @@ export function proxyLabel(el: Element): HTMLLabelElement | null {
   return null;
 }
 
+// 숨긴 칸을 대신 보여 주는 label(칸이 보이면 null). 손 넘기기 표시가 찾기 결과와 같은 기준으로 보이는 쪽을 가리키게.
+export function visibleProxy(el: HTMLElement): HTMLLabelElement | null {
+  return isVisible(el) ? null : proxyLabel(el);
+}
+
 // 숨긴 칸을 보이는 label로 바꾸는 칸인지(보이는 칸은 지금처럼 칸 자신에 쓴다).
 function proxied(el: HTMLElement): boolean {
   return !isVisible(el) && proxyLabel(el) !== null;
