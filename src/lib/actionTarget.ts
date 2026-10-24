@@ -22,6 +22,9 @@ export interface TargetInfo {
   sensitive: "password" | "payment" | null;
   // 대상이 든 목록 항목(행)의 글자. 목록 밖이면 "". 같은 버튼 노드를 다른 행에 다시 쓰는 목록에서 행이 바뀐 것을 잡는다.
   context: string;
+  // 행에 숨긴 select의 대리 위젯(#88)이 있을 때, 그 표시 글자(선택값)를 뺀 원문 행 글자·모델용 행 문맥. 입력 도중 비교만 쓴다.
+  contextSansProxy?: string;
+  modelContextSansProxy?: string;
   // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상과 입력 칸(#56).
   // 모델의 선택 근거라 비교한다.
   modelContext?: string;
@@ -137,10 +140,14 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
 // 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게).
 // 문구를 바꿔 보여 주는 것(A 문구를 숨기고 B 문구를 보임)은 다른 대상이다. 승인 카드·실행 직전 비교는 sameApproved.
 // 자동완성 입력 칸의 행에 새로 붙은 팝업 목록은 content 쪽에서 원문 행 글자에서 빼고 넘긴다(src/content/targets.ts pinnedRowOf).
+// 숨긴 select의 대리 위젯 글자(선택값, #88)는 입력 도중 비교에서 뺀다 — 같은 입력 호출이 그 select에 쓴 값이 대리 위젯에
+// 보이는 것을 행 변화로 보지 않게. 승인·실행 직전(sameApproved)은 그 글자까지 비교한다.
 export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
-  if (now.context !== approved.context) return false;
-  if (!onlyAdded(approved.modelContext ?? "", now.modelContext ?? "")) return false;
-  return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
+  if ((now.contextSansProxy ?? now.context) !== (approved.contextSansProxy ?? approved.context)) return false;
+  if (!onlyAdded(approved.modelContextSansProxy ?? approved.modelContext ?? "", now.modelContextSansProxy ?? now.modelContext ?? "")) {
+    return false;
+  }
+  return sameApproved({ ...now, context: approved.context, modelContext: approved.modelContext }, approved);
 }
 
 // after가 before에 글자를 더하기만 한 것인지: before의 낱말(공백 기준)이 after 안에 같은 순서로 모두 남아 있어야 한다.

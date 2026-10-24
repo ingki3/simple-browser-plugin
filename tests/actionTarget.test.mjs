@@ -321,3 +321,14 @@ test("handoffFillList: 사용자가 직접 입력할 모든 칸과 값을 자르
   assert.equal(handoffFillList([{ info: { ...field, name: "출발지" }, value: "수서" }]), "출발지: 수서");
   assert.equal(handoffFillList([{ info: { ...field, name: "카드 번호", sensitive: "payment" }, value: "1234" }]), "카드 번호: 1234 ⚠ 결제 정보 칸");
 });
+
+test("sameApprovedInFlight: 대리 위젯 글자(선택값)만 바뀐 행은 입력 도중에만 같게 본다(#88)", () => {
+  const base = { ...link, tag: "select", role: "combobox", href: "", fieldType: "select" };
+  const approved = { ...base, context: "연식 최소 ~ 최대", modelContext: "연식 최소 ~ 최대", contextSansProxy: "연식 ~", modelContextSansProxy: "연식 ~" };
+  const now = { ...base, context: "연식 2023년 ~ 최대", modelContext: "연식 2023년 ~ 최대", contextSansProxy: "연식 ~", modelContextSansProxy: "연식 ~" };
+  assert.equal(sameApprovedInFlight(now, approved), true);
+  // 승인·실행 직전의 엄격한 비교는 선택값 변화를 본다(승인 뒤 페이지가 선택을 바꾸면 멈춤).
+  assert.equal(sameApproved(now, approved), false);
+  // 대리 위젯 밖의 글자가 바뀌면 입력 도중에도 다르다.
+  assert.equal(sameApprovedInFlight({ ...now, contextSansProxy: "연식 (필수) ~" }, approved), false);
+});

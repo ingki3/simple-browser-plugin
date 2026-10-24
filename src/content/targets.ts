@@ -122,9 +122,7 @@ const CONTEXT_MAX = 2000;
 
 // exclude: 글자에서 뺄 하위 요소(입력 도중 확인에서 승인 뒤 새로 붙은 자동완성 목록, pinnedRowOf). 빼는 것이 없으면
 // textContent 그대로다.
-function textOf(el: Element, extra: Element[] = []): string {
-  // 숨긴 select의 대리 위젯(#88) 글자는 select의 지금 값이라 늘 뺀다(우리 입력으로 바뀌는 글자를 행 내용 변화로 보지 않게).
-  const exclude = [...extra, ...selectProxiesIn(el)];
+function textOf(el: Element, exclude: Element[] = []): string {
   let raw: string;
   if (!exclude.length) raw = el.textContent ?? "";
   else {
@@ -189,9 +187,9 @@ const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role='heading'], caption, leg
 
 // 모델에 돌려주는 묶음 문맥: 행 글자를 modelText로(입력 칸·편집 영역·숨은 글자 제외) 만들고, 묶음의 접근성 이름이나
 // 묶음 안 첫 표제가 있으면 앞에 둔다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼을 구분하게).
-function modelContextOf(row: Element | null): string {
+function modelContextOf(row: Element | null, opts: { skipSelectProxies?: boolean } = {}): string {
   if (!row) return "";
-  const text = modelText(row, MODEL_CONTEXT_MAX);
+  const text = modelText(row, MODEL_CONTEXT_MAX, opts);
   if (!text) return "";
   const heading = groupHeading(row);
   return cleanModelText(heading && !text.startsWith(heading) ? `${heading} · ${text}` : text, MODEL_CONTEXT_MAX);
@@ -271,6 +269,13 @@ function baseInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | nul
   if (kind.detail || kind.rowContext) {
     const modelContext = modelContextOf(row?.row ?? null);
     if (modelContext) detail.modelContext = modelContext;
+  }
+  // 행에 숨긴 select의 대리 위젯이 있으면 그 표시 글자를 뺀 행 글자도 둔다(#88). 입력 도중 비교(sameApprovedInFlight)만
+  // 이것을 쓰고, 승인·실행 직전의 엄격한 비교는 대리 위젯 글자(선택값)까지 본다 — 승인 뒤 페이지가 선택을 바꾸면 멈춘다.
+  const proxies = row ? selectProxiesIn(row.row) : [];
+  if (row && proxies.length) {
+    detail.contextSansProxy = textOf(row.row, [...(pinnedRow?.exclude ?? []), ...proxies]);
+    if (kind.detail || kind.rowContext) detail.modelContextSansProxy = modelContextOf(row.row, { skipSelectProxies: true });
   }
   if (kind.detail) {
     const states = statesOf(el);
@@ -895,6 +900,7 @@ const ROW_TEXT_NODES_MAX = 500;
 function rowTextNodes(row: Element): Array<{ node: WeakRef<Text>; value: string }> | null {
   const walker = row.ownerDocument.createTreeWalker(row, NodeFilter.SHOW_TEXT);
   const out: Array<{ node: WeakRef<Text>; value: string }> = [];
+  // 고정한 행 글자 노드는 입력 도중 비교에만 쓰므로, 숨긴 select의 대리 위젯 글자(우리 입력으로 바뀜, #88)는 담지 않는다.
   const proxies = selectProxiesIn(row);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!(node.nodeValue ?? "").trim()) continue;

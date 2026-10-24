@@ -119,9 +119,9 @@ function inlineDisplay(display: string | null): boolean {
 
 // root 아래의 글자(합성 트리 순서: 열린 shadow root와 슬롯에 배치된 노드 포함). 보호 요소의 하위 트리는 뺀다.
 // 슬롯은 평탄화하지 않고 한 단계씩 따라간다(안쪽 슬롯 자신의 보호 속성도 검사하게).
-export function modelText(root: Element, max: number): string {
+export function modelText(root: Element, max: number, opts: { skipSelectProxies?: boolean } = {}): string {
   if (inProtectedArea(root)) return "";
-  return subtreeText(root, max);
+  return subtreeTextInfo(root, max, opts).text;
 }
 
 // root 아래 글자만 모은다(root 자신과 조상의 보호 판정은 부르는 쪽이 한다 — select 안의 선택지처럼 조상이 값 컨트롤인 경우).
@@ -130,7 +130,13 @@ export function subtreeText(root: Element, max: number): string {
 }
 
 // cut: 순회 한도에 걸려 끝까지 모으지 못했는지(그 글자로 대상을 식별하면 안 된다).
-export function subtreeTextInfo(root: Element, max: number): { text: string; cut: boolean } {
+// skipSelectProxies: 숨긴 select의 대리 위젯(selectProxyOf) 글자를 뺀다 — 입력 도중 비교에서 우리 입력으로 바뀌는 표시 글자를
+// 행 변화로 보지 않으려고(#88). 승인·실행 직전의 엄격한 비교와 모델에 보내는 글자에는 넣는다.
+export function subtreeTextInfo(
+  root: Element,
+  max: number,
+  opts: { skipSelectProxies?: boolean } = {},
+): { text: string; cut: boolean } {
   const limit = max * 4;
   let out = "";
   const childrenOf = (node: Node): Node[] => {
@@ -159,9 +165,8 @@ export function subtreeTextInfo(root: Element, max: number): { text: string; cut
     if (node.nodeType !== Node.ELEMENT_NODE) continue;
     const facts = factsOf(node as Element);
     if (protectedReason(facts) !== null) continue;
-    // 숨긴 select의 대리 위젯 글자는 select의 지금 값이라 묶음 글자에 넣지 않는다(#88 — 입력하면 바뀌는 글자라 승인한 대상의
-    // 문맥 비교가 우리 입력으로 깨진다). 어느 칸인지는 칸의 선택지(첫 선택지 "최소"·"최대" 등)로 구분한다.
-    if (isSelectProxy(node as Element)) continue;
+    // 입력 도중 비교용: 숨긴 select의 대리 위젯 글자(select의 지금 값)는 뺀다(#88).
+    if (opts.skipSelectProxies && isSelectProxy(node as Element)) continue;
     // 블록 경계의 글자만 띄운다(줄 안 요소 경계는 붙인다).
     const block = !inlineDisplay(facts.display) || facts.tag === "br";
     if (block) {
