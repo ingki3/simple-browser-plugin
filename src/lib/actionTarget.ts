@@ -146,41 +146,6 @@ export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boo
   return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
 }
 
-// 입력 도중 문서 주소의 해시만 바뀐 것이 이번 입력의 결과인지(#88 — 값을 고르면 #!?…&regiDay=2023,2023처럼 해시 쿼리에
-// 반영하는 페이지). 해시의 '?' 앞(경로)은 같아야 하고, 바뀌거나 새로 생긴 해시 쿼리 값은 쉼표로 나눈 조각이 모두 전에 있던
-// 조각이거나 이번 호출이 써 넣은 값이어야 한다. 해시 밖(출처·경로·쿼리)이 바뀌었거나 #/records/A → #/records/B처럼 경로가
-// 바뀌면 거짓. 해시가 없던 주소에 식별 글자 없는 경로(#!?…)로 해시 쿼리가 처음 생긴 것은 같은 경로로 본다.
-export function hashChangeFromWrites(before: string, after: string, written: ReadonlySet<string>): boolean {
-  const split = (url: string) => {
-    const i = url.indexOf("#");
-    return i < 0 ? { base: url, hash: "" } : { base: url.slice(0, i), hash: url.slice(i + 1) };
-  };
-  const b = split(before);
-  const a = split(after);
-  if (b.base !== a.base) return false;
-  if (b.hash === a.hash) return true;
-  const part = (hash: string) => {
-    const q = hash.indexOf("?");
-    return q < 0 ? { path: hash, query: new URLSearchParams() } : { path: hash.slice(0, q), query: new URLSearchParams(hash.slice(q + 1)) };
-  };
-  const hb = part(b.hash);
-  const ha = part(a.hash);
-  // 해시가 없던 페이지에 값을 고르며 #!?…·#?…가 처음 생기는 경우: 새 경로가 식별 글자 없이 '!'·'/'뿐일 때만 같은 경로로 본다.
-  const freshEmptyPath = b.hash === "" && /^[!/]*$/.test(ha.path);
-  if (hb.path !== ha.path && !freshEmptyPath) return false;
-  const keys = new Set([...hb.query.keys(), ...ha.query.keys()]);
-  for (const k of keys) {
-    const was = hb.query.getAll(k).join(",");
-    const now = ha.query.getAll(k).join(",");
-    if (was === now) continue;
-    // 지워진 키는 이번 입력의 결과인지 알 수 없다.
-    if (!ha.query.has(k)) return false;
-    const old = new Set(was.split(","));
-    if (!now.split(",").every((piece) => piece === "" || old.has(piece) || written.has(piece))) return false;
-  }
-  return true;
-}
-
 // after가 before에 글자를 더하기만 한 것인지: before의 낱말(공백 기준)이 after 안에 같은 순서로 모두 남아 있어야 한다.
 // 하나라도 사라지거나 순서가 바뀌면 거짓(상한 200자 때문에 뒤가 밀려 잘린 경우도 거짓 — 더 막는 쪽).
 export function onlyAdded(before: string, after: string): boolean {

@@ -14,7 +14,6 @@ import {
   rowDriftDiag,
   sameApproved,
   sameApprovedInFlight,
-  hashChangeFromWrites,
   sameBase,
 } from "../src/lib/actionTarget.ts";
 
@@ -321,24 +320,4 @@ test("handoffFillList: 사용자가 직접 입력할 모든 칸과 값을 자르
   assert.doesNotMatch(list, /hunter22/);
   assert.equal(handoffFillList([{ info: { ...field, name: "출발지" }, value: "수서" }]), "출발지: 수서");
   assert.equal(handoffFillList([{ info: { ...field, name: "카드 번호", sensitive: "payment" }, value: "1234" }]), "카드 번호: 1234 ⚠ 결제 정보 칸");
-});
-
-test("hashChangeFromWrites: 해시 경로가 같고 바뀐 해시 쿼리 값이 이번 호출이 쓴 값일 때만(#88)", () => {
-  const base = "https://kb.example/search/main.kbc";
-  const w = new Set(["2023"]);
-  assert.equal(hashChangeFromWrites(`${base}#!?page=1&makerCode=107`, `${base}#!?page=1&makerCode=107&regiDay=2023,`, w), true);
-  assert.equal(hashChangeFromWrites(`${base}#!?page=1&regiDay=2023,`, `${base}#!?page=1&regiDay=2023,2023`, w), true);
-  assert.equal(hashChangeFromWrites(`${base}#!?page=1&regiDay=2020,2020`, `${base}#!?page=1&regiDay=2023,2020`, w), true);
-  // 이번 호출이 쓰지 않은 값으로 바뀜.
-  assert.equal(hashChangeFromWrites(`${base}#!?id=A`, `${base}#!?id=B`, w), false);
-  // 해시 경로가 바뀜(다른 레코드).
-  assert.equal(hashChangeFromWrites(`${base}#/records/A`, `${base}#/records/B`, new Set(["B"])), false);
-  // 해시 밖이 바뀜.
-  assert.equal(hashChangeFromWrites(`${base}?x=1#a`, `${base}?x=2#a`, w), false);
-  // 지워진 키.
-  assert.equal(hashChangeFromWrites(`${base}#!?a=1&b=2`, `${base}#!?a=1`, w), false);
-  assert.equal(hashChangeFromWrites(`${base}#x`, `${base}#x`, new Set()), true);
-  // 해시가 없던 페이지에 #!?y=2023,가 처음 생김(식별 글자 없는 경로)은 허용, #/records/B로 처음 생기면 막음.
-  assert.equal(hashChangeFromWrites(base, `${base}#!?y=2023,`, w), true);
-  assert.equal(hashChangeFromWrites(base, `${base}#/records/B`, new Set(["B"])), false);
 });

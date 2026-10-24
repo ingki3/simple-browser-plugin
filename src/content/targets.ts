@@ -19,7 +19,6 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { hashChangeFromWrites } from "@/lib/actionTarget";
 import { groupLabel, modelText, selectProxyOf, subtreeText } from "./modelText";
 
 export interface TargetKind {
@@ -182,9 +181,13 @@ function inFlightSubstitute(
   if (pairs.length !== before.length) return undefined;
   const raw = new Map<Element, string>();
   const model = new Map<Element, string>();
+  const chosen = writtenOptionByCall.get(info.consentCall ?? "");
   pairs.forEach(({ select, combo }, i) => {
-    if (written.get(select) !== select.value) return;
-    if (norm(combo.textContent) !== norm(select.selectedOptions[0]?.text)) return;
+    // 이번 호출이 고른 바로 그 선택지가 지금도 골라져 있고(같은 value의 다른 선택지가 아니라), 콤보박스가 그 선택지의
+    // 보이는 이름(label 속성이 있으면 그것)을 보여 줄 때만.
+    const option = chosen?.get(select);
+    if (!option || select.selectedOptions.length !== 1 || select.selectedOptions[0] !== option) return;
+    if (norm(combo.textContent) !== norm(option.label)) return;
     raw.set(combo, before[i].raw);
     model.set(combo, before[i].model);
   });
@@ -719,7 +722,26 @@ export function noteChoiceWritten(callId: string, el: Element): void {
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
+// 이번 호출이 select에 고른 선택지 요소(#88 — 입력 도중 대리 콤보박스 비교는 value가 아니라 이 요소로 확인한다).
+const writtenOptionByCall = new Map<string, Map<HTMLSelectElement, HTMLOptionElement>>();
+
 export function noteWritten(callId: string, el: Element, value: string): void {
+  if (el.localName === "select") {
+    const select = el as HTMLSelectElement;
+    const option = select.selectedOptions[0];
+    let chosen = writtenOptionByCall.get(callId);
+    if (!chosen) {
+      chosen = new Map();
+      writtenOptionByCall.set(callId, chosen);
+      while (writtenOptionByCall.size > 50) {
+        const oldest = writtenOptionByCall.keys().next().value;
+        if (oldest === undefined) break;
+        writtenOptionByCall.delete(oldest);
+      }
+    }
+    if (option && select.selectedOptions.length === 1 && option.value === value) chosen.set(select, option);
+    else chosen.delete(select);
+  }
   let m = writtenByCall.get(callId);
   if (!m) {
     m = new Map();
@@ -910,14 +932,14 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, inFlight
   // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
   // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
   const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
-  // 입력 도중에는 해시 쿼리가 이번 호출이 쓴 값으로만 바뀐 것(값을 고르면 #!?…&regiDay=2023,2023으로 반영하는 페이지)을
-  // 그 입력의 결과로 보고 넘어간다(#88, hashChangeFromWrites). 해시 경로(#/records/A → B)나 쓰지 않은 값으로 바뀌면 멈춘다.
-  // 첫 실행 전·승인 카드의 확인은 해시까지 그대로 비교한다.
-  const writtenValues = new Set(info.consentCall ? (writtenByCall.get(info.consentCall)?.values() ?? []) : []);
-  const sameBase = inFlight
-    ? hashChangeFromWrites(info.baseUri ?? "", now.baseUri ?? "", writtenValues)
-    : (now.baseUri ?? "") === (info.baseUri ?? "");
-  if (!toggleField && !sameBase) return "문서 기준 주소가 바뀜";
+  // select도 넣는 것이 정해진 선택지라 기준 주소로 풀리지 않고, 고르면 해시에 반영하는 필터 화면(#!?…&regiDay=2023)이 흔하다
+  // (#88). 다만 입력 도중(같은 호출의 앞 칸을 쓴 뒤·입력 뒤 확인)에 해시만 바뀐 경우로 한정한다. 승인 카드·첫 실행 전 확인과
+  // 글자 칸은 해시까지 비교한다(승인 뒤 #/records/B로 바뀌었으면 멈춤).
+  const selectField = kind.prefix === "f" && info.fieldType === "select";
+  const nowBase = now.baseUri ?? "";
+  const approvedBase = info.baseUri ?? "";
+  const hashOnly = inFlight && selectField && nowBase.split("#")[0] === approvedBase.split("#")[0];
+  if (!toggleField && !hashOnly && nowBase !== approvedBase) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
 }
