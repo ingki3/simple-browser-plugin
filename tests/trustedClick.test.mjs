@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { clickPoint, frameNeedsGuard, guardTimeLeft, GUARD_MS, GUARD_MIN_REMAINING_MS, unguardedFrame } from "../src/lib/trustedClick.ts";
+import { clickPoint, describeMissedClick, frameNeedsGuard, guardTimeLeft, GUARD_MS, GUARD_MIN_REMAINING_MS, unguardedFrame } from "../src/lib/trustedClick.ts";
 
 const VIEW = { width: 800, height: 600 };
 
@@ -53,4 +53,20 @@ test("guardTimeLeft: frame guards armed too long ago are not trusted", () => {
   assert.equal(guardTimeLeft(1000, 1000 + GUARD_MS - GUARD_MIN_REMAINING_MS), true);
   assert.equal(guardTimeLeft(1000, 1001 + GUARD_MS - GUARD_MIN_REMAINING_MS), false);
   assert.equal(guardTimeLeft(1000, 1000 + GUARD_MS + 5000), false);
+});
+
+test("describeMissedClick: 다른 프레임이 막은 입력·화면 밖 점·받은 입력을 알린다", () => {
+  const viewport = { width: 1000, height: 800 };
+  assert.equal(
+    describeMissedClick({ seen: [], viewport, point: { x: 10, y: 10 }, frameBlocked: 3 }),
+    "그 자리의 다른 프레임이 입력 3개를 받아 막음; 이 문서에 입력이 오지 않음",
+  );
+  assert.equal(
+    describeMissedClick({ seen: [], viewport, point: { x: 10, y: 900 }, frameBlocked: 0 }),
+    "누른 점(10, 900)이 화면(1000×800) 밖; 이 문서에 입력이 오지 않음",
+  );
+  assert.equal(
+    describeMissedClick({ seen: ["pointerdown", "mousedown", "pointerup"], viewport, point: { x: 10, y: 10 }, frameBlocked: 0 }),
+    "이 문서가 받은 입력: pointerdown, mousedown, pointerup — click이 생기지 않음",
+  );
 });
