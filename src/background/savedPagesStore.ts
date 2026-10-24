@@ -152,7 +152,7 @@ function parseDraft(text: string, offer: PageOffer): LinkDraft | null {
     return null;
   }
   const choices: ParamChoice[] = offer.params.map(() => ({ mode: "keep" }));
-  const hints: Record<string, string> = {};
+  const hints: Record<string, string> = Object.create(null);
   if (Array.isArray(raw.slots)) {
     for (const s of raw.slots as Array<{ index?: unknown; slot?: unknown; hint?: unknown }>) {
       if (typeof s?.index !== "number" || !Number.isInteger(s.index) || s.index < 0 || s.index >= choices.length) continue;
@@ -168,6 +168,15 @@ function parseDraft(text: string, offer: PageOffer): LinkDraft | null {
     choices,
     hints,
   };
+}
+
+// 자리 이름이 constructor·toString 같아도 상속 속성을 읽지 않게, 자기 속성인 문자열만 쓴다.
+function ownString(obj: Record<string, unknown>, key: string): string | null {
+  return Object.prototype.hasOwnProperty.call(obj, key) && typeof obj[key] === "string" ? (obj[key] as string) : null;
+}
+
+function cleanHint(h: string | null): string {
+  return (h ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_SLOT_HINT);
 }
 
 export interface SaveRequest {
@@ -194,7 +203,7 @@ export async function savePage(req: SaveRequest): Promise<{ evicted: string | nu
     name: normalizeName(req.name) || offer.title,
     purpose: normalizePurpose(req.purpose),
     template,
-    slots: slots.map((key) => ({ key, hint: (req.hints[key] ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_SLOT_HINT) })),
+    slots: slots.map((key) => ({ key, hint: cleanHint(ownString(req.hints, key)) })),
     site: offer.site,
     savedAt: now,
     lastUsedAt: now,
@@ -236,7 +245,8 @@ export async function updateLink(id: string, patch: { name?: unknown; purpose?: 
     if (patch.hints && typeof patch.hints === "object") {
       const hints = patch.hints as Record<string, unknown>;
       for (const s of hit.slots) {
-        if (typeof hints[s.key] === "string") s.hint = (hints[s.key] as string).replace(/\s+/g, " ").trim().slice(0, MAX_SLOT_HINT);
+        const h = ownString(hints, s.key);
+        if (h !== null) s.hint = cleanHint(h);
       }
     }
     await store(list);

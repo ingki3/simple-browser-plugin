@@ -278,7 +278,7 @@ function parseChoices(raw: unknown): ParamChoice[] {
 }
 
 function parseHints(raw: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null);
   if (!raw || typeof raw !== "object") return out;
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (typeof v === "string") out[k] = v;
   return out;
