@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { makeTemplate, MAX_PURPOSE, MAX_SLOT_KEY, templateText, type ParamChoice } from "@/lib/savedPages";
 import type { ChatMessage } from "../state/chatStore";
 
@@ -27,6 +27,9 @@ export function PageOfferCard({ offer }: Props) {
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
   const [evicted, setEvicted] = useState<string | null>(null);
+  // 초안을 기다리는 사이 사용자가 고친 칸은 늦게 온 초안으로 덮지 않는다. 카드를 닫았다 다시 열면 이전 요청의 응답은 버린다.
+  const touched = useRef({ name: false, purpose: false, params: false, hints: new Set<string>() });
+  const draftSeq = useRef(0);
 
   const choices: ParamChoice[] = modes.map((m, i) => (m === "slot" ? { mode: "slot", slot: slots[i] } : { mode: m }));
   let preview = "";
@@ -42,24 +45,37 @@ export function PageOfferCard({ offer }: Props) {
     setOpen(true);
     // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(사용자가 직접 정한다).
     if (offer.warning) return;
+    const seq = ++draftSeq.current;
     setDrafting(true);
     try {
       const res = (await chrome.runtime.sendMessage({ kind: "saved_link_draft", offerId: offer.offerId })) as
         | { ok: boolean; data?: Draft | null }
         | undefined;
       const d = res?.ok ? res.data : null;
-      if (d) {
-        setName(d.name || offer.title);
-        setPurpose(d.purpose);
-        setModes(d.choices.map((c) => c.mode));
-        setSlots(d.choices.map((c) => (c.mode === "slot" ? c.slot : "")));
-        setHints(d.hints);
+      if (d && seq === draftSeq.current) {
+        const t = touched.current;
+        if (!t.name) setName(d.name || offer.title);
+        if (!t.purpose) setPurpose(d.purpose);
+        if (!t.params && d.choices.length === offer.params.length) {
+          setModes(d.choices.map((c) => c.mode));
+          setSlots(d.choices.map((c) => (c.mode === "slot" ? c.slot : "")));
+        }
+        setHints((cur) => {
+          const next = { ...cur };
+          for (const [k, v] of Object.entries(d.hints)) if (!t.hints.has(k)) next[k] = v;
+          return next;
+        });
       }
     } catch {
       /* 초안 없이 직접 정한다 */
     } finally {
-      setDrafting(false);
+      if (seq === draftSeq.current) setDrafting(false);
     }
+  };
+  const close = () => {
+    draftSeq.current++;
+    setDrafting(false);
+    setOpen(false);
   };
 
   const save = async () => {
@@ -108,7 +124,14 @@ export function PageOfferCard({ offer }: Props) {
       {drafting && <span className="field-help">이름·용도·입력 자리 초안을 만드는 중…</span>}
       <label className="field">
         <span className="field-label">이름</span>
-        <input value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+        <input
+          value={name}
+          maxLength={80}
+          onChange={(e) => {
+            touched.current.name = true;
+            setName(e.target.value);
+          }}
+        />
       </label>
       <label className="field">
         <span className="field-label">용도</span>
@@ -116,7 +139,10 @@ export function PageOfferCard({ offer }: Props) {
           value={purpose}
           maxLength={MAX_PURPOSE}
           placeholder="예: 쇼핑을 위한 가격 비교 검색"
-          onChange={(e) => setPurpose(e.target.value)}
+          onChange={(e) => {
+            touched.current.purpose = true;
+            setPurpose(e.target.value);
+          }}
         />
       </label>
       {offer.params.length > 0 && (
@@ -129,7 +155,10 @@ export function PageOfferCard({ offer }: Props) {
                 <span className="offer-param-value">{p.value}</span>
                 <select
                   value={modes[i]}
-                  onChange={(e) => setModes((cur) => cur.map((m, j) => (j === i ? (e.target.value as Mode) : m)))}
+                  onChange={(e) => {
+                    touched.current.params = true;
+                    setModes((cur) => cur.map((m, j) => (j === i ? (e.target.value as Mode) : m)));
+                  }}
                 >
                   <option value="keep">고정</option>
                   <option value="slot">입력 자리</option>
@@ -141,7 +170,10 @@ export function PageOfferCard({ offer }: Props) {
                     value={slots[i]}
                     maxLength={MAX_SLOT_KEY}
                     placeholder="자리 이름(예: 상품명)"
-                    onChange={(e) => setSlots((cur) => cur.map((s, j) => (j === i ? e.target.value : s)))}
+                    onChange={(e) => {
+                      touched.current.params = true;
+                      setSlots((cur) => cur.map((s, j) => (j === i ? e.target.value : s)));
+                    }}
                   />
                 )}
               </li>
@@ -156,7 +188,10 @@ export function PageOfferCard({ offer }: Props) {
             value={hints[k] ?? ""}
             maxLength={100}
             placeholder="예: 검색할 상품 이름"
-            onChange={(e) => setHints((cur) => ({ ...cur, [k]: e.target.value }))}
+            onChange={(e) => {
+              touched.current.hints.add(k);
+              setHints((cur) => ({ ...cur, [k]: e.target.value }));
+            }}
           />
         </label>
       ))}
@@ -167,7 +202,7 @@ export function PageOfferCard({ offer }: Props) {
           <span>⚠ 이 주소에 {offer.warning} 단서가 있어 보입니다. 그 값을 고정으로 남겨도 저장합니다.</span>
         </label>
       )}
-      {offer.evicts && (
+      {offer.evicts && !previewError && !offer.savedTemplates.includes(preview) && (
         <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{offer.evicts}'이(가) 지워집니다.</span>
       )}
       <span className="field-help">
@@ -176,7 +211,7 @@ export function PageOfferCard({ offer }: Props) {
       </span>
       {state === "error" && <span className="field-help error-text">{error}</span>}
       <div className="page-offer-actions">
-        <button type="button" className="btn-cancel" onClick={() => setOpen(false)}>
+        <button type="button" className="btn-cancel" onClick={close}>
           취소
         </button>
         <button

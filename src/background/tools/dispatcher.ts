@@ -587,10 +587,16 @@ function inputLabel(data: InputClickResult): string {
 }
 
 // 원래 탭을 웹 주소로 이동한다(navigate_to_url·open_saved_link). 팝업을 따라가던 중이면 따라가기를 끝낸다.
-async function navigateOriginalTab(url: string, turnTab: TurnTab): Promise<{ leftPopup: boolean; note: string }> {
+// 탭을 바꾸기 직전에 중단·새 요청을 확인한다(저장소·탭 조회를 기다리는 사이 턴이 끝났으면 이동하지 않는다).
+async function navigateOriginalTab(
+  url: string,
+  turnTab: TurnTab,
+  signal: AbortSignal | undefined,
+): Promise<{ leftPopup: boolean; note: string }> {
   // 새 탭·설정 같은 내부 페이지에서도 웹 주소로는 이동할 수 있다(normalizeNavigationUrl이 http(s)만 통과시킨다).
   // 이동은 늘 원래 탭에서 한다. 팝업 창을 따라가던 중이면 따라가기를 끝낸다(팝업 창은 열린 채로 둔다).
   const tabId = await resolveTurnTab(turnTab, { allowInternal: true, originalTab: true });
+  if (signal?.aborted) throw new Error("중단되어 이동하지 않았습니다.");
   // 탭으로 열린 팝업을 따라가던 중이면 원래 탭은 그 탭 뒤에 가려 있다. 이동하는 원래 탭을 앞으로 띄워 사용자가 보게 한다.
   const fromTabPopup = followingTabPopup(turnTab);
   const leftPopup = stopFollowingPopups(turnTab);
@@ -888,7 +894,7 @@ async function runTool(
     case "navigate_to_url": {
       const args = parsedArgs as ToolArgs["navigate_to_url"];
       const url = normalizeNavigationUrl(args.url);
-      const { leftPopup, note } = await navigateOriginalTab(url, turnTab);
+      const { leftPopup, note } = await navigateOriginalTab(url, turnTab, signal);
       return {
         ok: true,
         summary: `${leftPopup ? "팝업 창 따라가기를 멈추고 원래 탭 " : "현재 탭 "}이동 시작: ${truncate(url, 100)}`,
@@ -900,7 +906,8 @@ async function runTool(
       const args = parsedArgs as ToolArgs["open_saved_link"] & { url?: string };
       if (!args.url) throw new Error("저장한 링크 주소를 만들지 못했습니다.");
       const link = await savedLinkById(args.id);
-      const { leftPopup, note } = await navigateOriginalTab(args.url, turnTab);
+      if (signal?.aborted) throw new Error("중단되어 저장한 링크를 열지 않았습니다.");
+      const { leftPopup, note } = await navigateOriginalTab(args.url, turnTab, signal);
       await markUsed(link.id).catch(() => {});
       return {
         ok: true,

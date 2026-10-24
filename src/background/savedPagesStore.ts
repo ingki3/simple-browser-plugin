@@ -2,7 +2,7 @@ import {
   addLink,
   candidatesFor,
   candidatesText,
-  evictionPreview,
+  leastRecentlyUsed,
   makeTemplate,
   MAX_LINKS,
   MAX_SLOT_HINT,
@@ -12,6 +12,7 @@ import {
   parseSaved,
   splitUrl,
   fixedPartsUrl,
+  templateText,
   type ParamChoice,
   type SavedLink,
 } from "@/lib/savedPages";
@@ -38,8 +39,10 @@ export interface PageOffer {
   warning: string | null;
   // 쿼리 값(카드에서 고정·자리·빼기를 고른다).
   params: Array<{ key: string; value: string }>;
-  // 저장 링크가 가득 차 있으면, 새 링크를 저장할 때 지워질 링크 이름(같은 링크를 바꾸면 지우지 않음).
+  // 저장 링크가 가득 차 있으면, 새 링크를 저장할 때 지워질 링크 이름(같은 템플릿을 바꾸면 지우지 않음).
   evicts: string | null;
+  // 이미 저장한 템플릿(보이기용 문자열). 카드가 최종 템플릿이 그중 하나면 지우지 않는다고 판단한다.
+  savedTemplates: string[];
 }
 
 const offers = new Map<string, PageOffer>();
@@ -68,15 +71,18 @@ export async function makeOffer(tabId: number, startUrl: string | null): Promise
   const site = siteOf(url);
   if (!parts || !site) return null;
   const list = await load();
-  const lru = list.length >= MAX_LINKS ? evictionPreview(list, { base: parts.base, params: parts.params, hash: parts.hash }) : null;
+  // 저장 링크가 가득 차 있으면 가장 오래 쓰지 않은 링크. 카드가 최종 템플릿이 이미 저장된 것인지(savedTemplates) 보고
+  // 지워질지 알린다(자리를 고르면 템플릿이 바뀌므로 카드에서 다시 판단한다).
+  const lru = list.length >= MAX_LINKS ? leastRecentlyUsed(list) : null;
   const offer: PageOffer = {
     offerId: crypto.randomUUID(),
     url,
     title: normalizeName(tab.title ?? "") || url,
     site,
     warning: sensitiveUrlReason(url),
-    params: parts.params,
+    params: parts.params.map((p) => ({ key: p.key, value: p.value })),
     evicts: lru?.name ?? null,
+    savedTemplates: list.map((l) => templateText(l.template)),
   };
   offers.set(offer.offerId, offer);
   while (offers.size > MAX_OFFERS) {

@@ -270,6 +270,7 @@ export interface PageOfferData {
   warning: string | null;
   params: Array<{ key: string; value: string }>;
   evicts: string | null;
+  savedTemplates: string[];
 }
 
 export type BgToContent =

@@ -3,12 +3,15 @@
 // (이번 검색어)은 저장하지 않는다. 사이트와 관계없이 모델에 후보로 주고, 모델은 open_saved_link로 자리 값만 넣어 연다.
 // 출처·경로·고정 쿼리는 사용자가 저장한 그대로이고 모델이 바꿀 수 없다.
 
+// key·value는 주소에 적힌 그대로(퍼센트 인코딩 포함)다. 다시 인코딩하지 않아 UTF-8이 아닌 값(EUC-KR 등)도 보존한다.
 export interface TemplateParam {
   key: string;
-  // 고정 값(그대로 보냄). slot이 있으면 없다.
+  // 고정 값(주소에 적힌 그대로 보냄). slot이 있으면 없다.
   value?: string;
   // 입력 자리 이름. 열 때 모델이 준 값으로 채운다.
   slot?: string;
+  // "=" 없이 이름만 적힌 고정 값(?flag). 그대로 이름만 다시 쓴다.
+  bare?: true;
 }
 
 export interface LinkTemplate {
@@ -65,8 +68,28 @@ export function normalizeSlotKey(key: string): string | null {
   return k || null;
 }
 
-// 주소를 출처+경로, 쿼리 값 목록, 해시로 나눈다. http(s)가 아니면 null.
-export function splitUrl(url: string): { base: string; params: Array<{ key: string; value: string }>; hash: string } | null {
+// 주소에 적힌 쿼리 조각을 사람이 읽을 글자로(+는 공백). 풀 수 없으면(UTF-8이 아닌 인코딩) 적힌 그대로.
+export function decodeQueryPart(raw: string): string {
+  try {
+    return decodeURIComponent(raw.replace(/\+/g, " "));
+  } catch {
+    return raw;
+  }
+}
+
+export interface UrlParam {
+  // 주소에 적힌 그대로(저장·다시 만들 때).
+  rawKey: string;
+  rawValue: string;
+  // "=" 없이 이름만 적힘.
+  bare: boolean;
+  // 읽을 글자(카드·초안 요청에 보일 때).
+  key: string;
+  value: string;
+}
+
+// 주소를 출처+경로, 쿼리 값 목록, 해시로 나눈다. http(s)가 아니거나 계정 정보가 있으면 null.
+export function splitUrl(url: string): { base: string; params: UrlParam[]; hash: string } | null {
   let u: URL;
   try {
     u = new URL(url);
@@ -74,11 +97,17 @@ export function splitUrl(url: string): { base: string; params: Array<{ key: stri
     return null;
   }
   if (!/^https?:$/.test(u.protocol) || u.username || u.password) return null;
-  return {
-    base: `${u.origin}${u.pathname}`,
-    params: [...u.searchParams.entries()].map(([key, value]) => ({ key, value })),
-    hash: u.hash,
-  };
+  const params = u.search
+    .slice(1)
+    .split("&")
+    .filter(Boolean)
+    .map((part) => {
+      const eq = part.indexOf("=");
+      const rawKey = eq < 0 ? part : part.slice(0, eq);
+      const rawValue = eq < 0 ? "" : part.slice(eq + 1);
+      return { rawKey, rawValue, bare: eq < 0, key: decodeQueryPart(rawKey), value: decodeQueryPart(rawValue) };
+    });
+  return { base: `${u.origin}${u.pathname}`, params, hash: u.hash };
 }
 
 export type ParamChoice = { mode: "keep" } | { mode: "drop" } | { mode: "slot"; slot: string };
@@ -94,31 +123,32 @@ export function makeTemplate(url: string, choices: readonly ParamChoice[]): { te
     const c = choices[i];
     if (c.mode === "drop") return;
     if (c.mode === "keep") {
-      params.push({ key: p.key, value: p.value });
+      params.push(p.bare ? { key: p.rawKey, value: "", bare: true } : { key: p.rawKey, value: p.rawValue });
       return;
     }
     const slot = normalizeSlotKey(c.slot);
     if (!slot) throw new Error(`'${p.key}' 값의 자리 이름을 적어 주세요.`);
-    params.push({ key: p.key, slot });
+    params.push({ key: p.rawKey, slot });
     if (!slots.includes(slot)) slots.push(slot);
   });
   if (slots.length > MAX_SLOTS) throw new Error(`입력 자리는 ${MAX_SLOTS}개까지입니다.`);
   return { template: { base: parts.base, params, hash: parts.hash }, slots };
 }
 
-function enc(s: string): string {
-  return encodeURIComponent(s);
+
+function fixedPart(p: TemplateParam): string {
+  return p.bare ? p.key : `${p.key}=${p.value ?? ""}`;
 }
 
 // 보이기용 문자열(자리는 {이름}). 같은 템플릿인지 비교하는 키로도 쓴다.
 export function templateText(t: LinkTemplate): string {
-  const q = t.params.map((p) => `${enc(p.key)}=${p.slot !== undefined ? `{${p.slot}}` : enc(p.value ?? "")}`).join("&");
+  const q = t.params.map((p) => (p.slot !== undefined ? `${p.key}={${p.slot}}` : fixedPart(p))).join("&");
   return `${t.base}${q ? `?${q}` : ""}${t.hash}`;
 }
 
 // 고정 부분만 담은 주소(자리는 빈 값). 저장 때 결제·개인정보 단서를 고정으로 남긴 값에서만 보려고(자리 이름 글자는 보지 않음).
 export function fixedPartsUrl(t: LinkTemplate): string {
-  const q = t.params.map((p) => `${enc(p.key)}=${p.slot !== undefined ? "" : enc(p.value ?? "")}`).join("&");
+  const q = t.params.map((p) => (p.slot !== undefined ? `${p.key}=` : fixedPart(p))).join("&");
   return `${t.base}${q ? `?${q}` : ""}${t.hash}`;
 }
 
@@ -137,7 +167,7 @@ export function fillLink(link: SavedLink, values: Record<string, unknown> | unde
     filled.set(k, v.trim());
   }
   const q = link.template.params
-    .map((p) => `${enc(p.key)}=${enc(p.slot !== undefined ? (filled.get(p.slot) ?? "") : (p.value ?? ""))}`)
+    .map((p) => (p.slot !== undefined ? `${p.key}=${encodeURIComponent(filled.get(p.slot) ?? "")}` : fixedPart(p)))
     .join("&");
   return `${link.template.base}${q ? `?${q}` : ""}${link.template.hash}`;
 }
@@ -157,7 +187,7 @@ export function addLink(list: readonly SavedLink[], entry: SavedLink): { list: S
   return { list: evicted ? next.filter((l) => l !== evicted) : next, evicted };
 }
 
-function leastRecentlyUsed(list: readonly SavedLink[]): SavedLink | null {
+export function leastRecentlyUsed(list: readonly SavedLink[]): SavedLink | null {
   let oldest: SavedLink | null = null;
   for (const l of list) if (!oldest || l.lastUsedAt < oldest.lastUsedAt) oldest = l;
   return oldest;
@@ -204,7 +234,11 @@ function parseLink(raw: unknown): SavedLink | null {
       id: legacyId(r.url),
       name: r.name,
       purpose: "",
-      template: { base: parts.base, params: parts.params.map((p) => ({ key: p.key, value: p.value })), hash: parts.hash },
+      template: {
+        base: parts.base,
+        params: parts.params.map((p): TemplateParam => (p.bare ? { key: p.rawKey, value: "", bare: true } : { key: p.rawKey, value: p.rawValue })),
+        hash: parts.hash,
+      },
       slots: [],
       site: r.site,
       savedAt: r.savedAt,
@@ -243,7 +277,13 @@ function parseLink(raw: unknown): SavedLink | null {
     id: r.id,
     name: r.name,
     purpose: r.purpose,
-    template: { base: t.base, params: t.params.map((p) => (p.slot !== undefined ? { key: p.key, slot: p.slot } : { key: p.key, value: p.value })), hash: t.hash },
+    template: {
+      base: t.base,
+      params: t.params.map((p): TemplateParam =>
+        p.slot !== undefined ? { key: p.key, slot: p.slot } : p.bare === true ? { key: p.key, value: "", bare: true } : { key: p.key, value: p.value },
+      ),
+      hash: t.hash,
+    },
     slots: slots.map((s) => ({ key: s.key, hint: s.hint })),
     site: r.site,
     savedAt: r.savedAt,

@@ -39,10 +39,14 @@ const link = (over = {}) => {
 test("splitUrl: 출처+경로·쿼리 값(디코드)·해시로 나누고, 웹 주소가 아니거나 계정 정보가 있으면 null", () => {
   const p = splitUrl(NAVER);
   assert.equal(p.base, "https://search.shopping.naver.com/search/all");
-  assert.deepEqual(p.params, [
-    { key: "query", value: "맥북에어 15인치" },
-    { key: "sort", value: "rel" },
-  ]);
+  assert.deepEqual(
+    p.params.map(({ key, value }) => ({ key, value })),
+    [
+      { key: "query", value: "맥북에어 15인치" },
+      { key: "sort", value: "rel" },
+    ],
+  );
+  assert.equal(p.params[0].rawValue, "%EB%A7%A5%EB%B6%81%EC%97%90%EC%96%B4%2015%EC%9D%B8%EC%B9%98");
   assert.equal(p.hash, "#top");
   assert.equal(splitUrl("chrome://settings"), null);
   assert.equal(splitUrl("https://u:p@a.com/"), null);
@@ -141,4 +145,15 @@ test("입력 자리는 MAX_SLOTS개까지(open_saved_link가 받는 값 수와 �
 test("fixedPartsUrl: 자리는 빈 값으로, 자리 이름 글자는 담지 않는다(저장 경고는 고정 값만 본다)", () => {
   const { template } = makeTemplate("https://a.example/s?q=123&sort=rel", [{ mode: "slot", slot: "주문번호" }, { mode: "keep" }]);
   assert.equal(fixedPartsUrl(template), "https://a.example/s?q=&sort=rel");
+});
+
+test("고정 값은 주소에 적힌 그대로 보존한다(UTF-8이 아닌 인코딩, + 공백)", () => {
+  const url = "https://old.example/search?q=%B0%A1&mode=a+b&flag";
+  const [l] = parseSaved([{ name: "옛 검색", url, site: "https://old.example", savedAt: 1, uses: 0 }]);
+  assert.equal(fillLink(l, {}), "https://old.example/search?q=%B0%A1&mode=a+b&flag");
+  const p = splitUrl(url);
+  assert.equal(p.params[0].value, "%B0%A1");
+  assert.equal(p.params[1].value, "a b");
+  const { template } = makeTemplate(url, [{ mode: "keep" }, { mode: "slot", slot: "모드" }, { mode: "keep" }]);
+  assert.equal(templateText(template), "https://old.example/search?q=%B0%A1&mode={모드}&flag");
 });
