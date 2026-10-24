@@ -1333,7 +1333,7 @@ function fieldForModel(el: FieldElement, id: string): FormField {
   // 칸 자신이 편집 영역·숨은 영역 안이면 이름·선택지도 돌려주지 않는다. 다만 aria-hidden으로 숨기고 바로 옆의 대리 위젯
   // (select2 등)으로 보여 주는 select는 칸 자신의 aria-hidden을 숨김으로 보지 않는다(조상은 그대로 본다, #88).
   const proxied = isTag(el, "select") && !!selectProxyOf(el);
-  const area = proxied ? !el.parentElement || inProtectedArea(el.parentElement) : inProtectedArea(el, true);
+  const area = inProtectedArea(el, true, proxied);
   // 행 문맥은 등록한 기술의 것(비교에 고정된 글자)을 그대로 돌려준다.
   const context = registeredInfo(id)?.modelContext;
   const field: FormField = {

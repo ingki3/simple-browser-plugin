@@ -71,7 +71,9 @@ export function optionHidden(o: Element): boolean {
 // el이 보호 영역 안인지. 위로 올라가며 DOM 부모, shadow root의 host, 슬롯에 배치된 노드의 슬롯 쪽 조상,
 // 같은 출처 iframe의 frame 요소까지 본다. selfIsControl이면 시작 요소 자신(값 컨트롤)의 '컨트롤' 사유는 빼고 본다
 // (컨트롤의 공개 이름은 계산하고 값만 읽지 않는다). 그때도 컨트롤 자신의 숨김·편집 속성은 본다.
-export function inProtectedArea(el: Element, selfIsControl = false): boolean {
+// ignoreSelfAriaHidden: 시작 요소 자신의 aria-hidden만 보지 않는다(대리 콤보박스로 보여 주는 숨긴 select, #88). 그 밖의 보호
+// 조건(편집 영역·hidden·display·슬롯·조상)은 그대로 본다.
+export function inProtectedArea(el: Element, selfIsControl = false, ignoreSelfAriaHidden = false): boolean {
   const seen = new Set<Element>();
   const queue: Element[] = [el];
   let visited = 0;
@@ -81,7 +83,8 @@ export function inProtectedArea(el: Element, selfIsControl = false): boolean {
     seen.add(cur);
     // 끝까지 보지 못하면 보호 영역으로 본다(덜 보내는 쪽).
     if (++visited > MAX_ANCESTORS) return true;
-    const facts = factsOf(cur);
+    const raw = factsOf(cur);
+    const facts = cur === el && ignoreSelfAriaHidden ? { ...raw, ariaHidden: false } : raw;
     // 시작 요소가 값 컨트롤이면 '컨트롤'이라는 사유만 빼고(이름은 계산한다) 자신의 숨김·편집 여부는 그대로 본다.
     const selfControl = cur === el && selfIsControl && VALUE_CONTROL_TAGS.has(cur.localName);
     const reason = protectedReason(selfControl ? { ...facts, tag: "" } : facts);
