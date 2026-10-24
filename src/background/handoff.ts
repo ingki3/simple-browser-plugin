@@ -24,7 +24,15 @@ export async function showHandoff(
   const documentId = await topDocumentId(tabId);
   if (!documentId) throw new Error("탭의 문서를 확인할 수 없습니다. 다시 관측하세요.");
   const token = crypto.randomUUID();
-  await sendTo(tabId, documentId, { kind: "handoff_show", token, ids, callId, prefix }, 3_000, "대상 표시");
+  try {
+    await sendTo(tabId, documentId, { kind: "handoff_show", token, ids, callId, prefix }, 3_000, "대상 표시");
+  } catch (err) {
+    // 응답만 늦었으면 페이지에는 표시가 생길 수 있다. 이 토큰의 표시를 지금과 조금 뒤에 뗀다.
+    const end = () => void sendTo(tabId, documentId, { kind: "handoff_end", token }, 1_000, "표시 해제").catch(() => {});
+    end();
+    setTimeout(end, 5_000);
+    throw err;
+  }
   return { tabId, documentId, token };
 }
 

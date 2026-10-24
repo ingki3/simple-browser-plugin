@@ -72,7 +72,14 @@ function drawBoxes(targets: HTMLElement[]): () => void {
       box.append(badge);
     }
     root.append(style, box);
-    (doc.body ?? doc.documentElement).append(host);
+    // 모달 대화상자·팝오버 안의 대상은 그 최상위 레이어 요소 안에 붙여야 가려지지 않는다.
+    let layer: Element | null = null;
+    try {
+      layer = el.closest("dialog:modal, :popover-open");
+    } catch {
+      layer = null;
+    }
+    (layer ?? doc.body ?? doc.documentElement).append(host);
     hosts.push(host);
     items.push({ el: shownElement(el), box });
   });
