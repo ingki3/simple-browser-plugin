@@ -726,20 +726,17 @@ export function noteChoiceWritten(callId: string, el: Element): void {
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
-// 이번 호출이 select에 고른 선택지 요소(#88 — 입력 도중 대리 콤보박스 비교는 value가 아니라 이 요소로 확인한다)와,
-// 이번 호출의 select 쓰기 구간(값을 쓴 때부터 그 칸의 input·change 처리기가 끝날 때까지) 안에서 바뀐 문서 주소.
+// 이번 호출이 select에 고른 선택지 요소(#88 — 입력 도중 대리 콤보박스 비교는 value가 아니라 이 요소로 확인한다).
 interface SelectWrites {
   // 고른 선택지 요소와 쓴 직후의 그 값(처리기가 같은 요소의 value만 바꾸는 것도 알아채게).
   options: Map<HTMLSelectElement, { option: HTMLOptionElement; value: string; label: string }>;
-  // [바뀌기 전, 바뀐 뒤] 주소. 해시 경로가 같고 해시 쿼리만 바뀐 것만 담는다(필터 값 반영).
-  hashSteps: Array<[string, string]>;
 }
 const selectWritesByCall = new Map<string, SelectWrites>();
 
 function selectWritesOf(callId: string): SelectWrites {
   let w = selectWritesByCall.get(callId);
   if (!w) {
-    w = { options: new Map(), hashSteps: [] };
+    w = { options: new Map() };
     selectWritesByCall.set(callId, w);
     while (selectWritesByCall.size > 50) {
       const oldest = selectWritesByCall.keys().next().value;
@@ -756,45 +753,6 @@ export function noteChosenOption(callId: string, select: HTMLSelectElement): voi
   const option = select.selectedOptions[0];
   if (option && select.selectedOptions.length === 1) w.options.set(select, { option, value: option.value, label: option.label });
   else w.options.delete(select);
-}
-
-// select 쓰기 구간 안에서 문서 주소가 before에서 after로 바뀌었다(그 칸의 처리기가 바꾼 것). 해시 경로가 같고 해시 쿼리만
-// 바뀐 경우만 기록한다 — #/records/A → #/records/B 같은 경로 변화는 기록하지 않아 그대로 멈춘다.
-export function noteSelectHashStep(callId: string, before: string, after: string): void {
-  if (before === after || !sameHashPath(before, after)) return;
-  const steps = selectWritesOf(callId).hashSteps;
-  // 순서대로 둔다(같은 변화가 다시 일어나도 기록 — A→B→A→C를 시간순으로 따라가야 한다).
-  if (steps.length < 200) steps.push([before, after]);
-}
-
-function hashParts(url: string): { base: string; path: string } {
-  const i = url.indexOf("#");
-  const base = i < 0 ? url : url.slice(0, i);
-  const hash = i < 0 ? "" : url.slice(i + 1);
-  const q = hash.indexOf("?");
-  return { base, path: q < 0 ? hash : hash.slice(0, q) };
-}
-
-// 출처·경로·쿼리(해시 앞)와 해시 경로('?' 앞)가 같은지. 해시가 없던 주소에 식별 글자 없는 경로(#!?…)가 처음 생긴 것도 같게 본다.
-function sameHashPath(a: string, b: string): boolean {
-  const pa = hashParts(a);
-  const pb = hashParts(b);
-  if (pa.base !== pb.base) return false;
-  if (pa.path === pb.path) return true;
-  return !a.includes("#") && /^[!/]*$/.test(pb.path);
-}
-
-// 승인 때 주소에서 지금 주소까지가 이번 호출의 select 쓰기 구간에서 기록한 변화로만 이어지는지.
-function hashExplainedBySelectWrites(callId: string | undefined, from: string, to: string): boolean {
-  if (from === to) return true;
-  const steps = callId ? selectWritesByCall.get(callId)?.hashSteps : undefined;
-  if (!steps?.length) return false;
-  // 기록을 시간순으로 따라가며, 지금 주소에서 출발하는 변화만 이어 붙인다(다른 칸의 쓰기 구간 기록은 건너뛴다).
-  let cur = from;
-  for (const [b, a] of steps) {
-    if (b === cur) cur = a;
-  }
-  return cur === to;
 }
 
 export function noteWritten(callId: string, el: Element, value: string): void {
@@ -910,10 +868,10 @@ export function takeApproved(
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
     // (묶음 입력의 남은 칸도 멈춘다).
     if ((now.sensitive ?? null) !== (approved.info.sensitive ?? null)) throw new RiskAddedError(msg);
-    if (riskAdded(entry.kind, el, approved.info, inFlight)) throw new RiskAddedError(msg);
+    if (riskAdded(entry.kind, el, approved.info)) throw new RiskAddedError(msg);
     throw new Error(msg);
   }
-  const added = riskAdded(entry.kind, el, approved.info, inFlight) ?? triggerRiskAdded(entry.kind, approved.relation, approved.info);
+  const added = riskAdded(entry.kind, el, approved.info) ?? triggerRiskAdded(entry.kind, approved.relation, approved.info);
   if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
   const relationMoved = relationChanged(entry.kind, el, approved.relation);
   if (relationMoved) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${relationMoved}). 다시 찾으세요.`);
@@ -923,8 +881,8 @@ export function takeApproved(
 
 // 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
 // 자동 완성·페이지 스크립트가 승인 뒤에 칸을 채우면, 자동 실행이든 사람이 승인한 카드든 그대로 실행하지 않는다.
-// inFlight: 같은 입력 호출의 앞 칸을 쓴 뒤의 확인(해시만 바뀐 기준 주소는 그 입력의 결과로 본다).
-function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, inFlight = false): string | null {
+// afterWrite: 실행이 끝난 뒤 반영을 확인하는 보고용 검사(해시만 바뀐 기준 주소는 같게 본다).
+function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, afterWrite = false): string | null {
   const now = kind.risk?.(el);
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
@@ -988,14 +946,12 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, inFlight
   // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
   // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
   const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
-  // select는 넣는 것이 정해진 선택지라 기준 주소로 풀리지 않고, 고르면 해시 쿼리에 반영하는 필터 화면(#!?…&regiDay=2023)이
-  // 흔하다(#88). 입력 도중 확인에서, 이번 호출의 select 쓰기 구간 안에서 해시 경로는 그대로 해시 쿼리만 바뀐 변화
-  // (noteSelectHashStep)로 설명되는 주소 변화만 넘어간다. 해시 경로 변화(#/records/A → B)·쓰기 구간 밖의 변화·글자 칸·
-  // 승인 카드·첫 실행 전 확인은 해시까지 비교한다.
-  const selectField = kind.prefix === "f" && info.fieldType === "select";
+  // 해시까지 비교한다(#88 — 해시 쿼리의 id 등으로 조작 대상이 바뀌어도 구조로는 알 수 없다). 앞 칸 입력으로 해시가 바뀌면
+  // 남은 칸은 쓰지 않고 멈추고, 모델이 다시 찾아 새 승인으로 이어 채운다. 실행이 끝난 뒤의 반영 확인(afterWrite — 무엇을
+  // 실행할지 정하지 않는 보고)에서만 해시만 바뀐 것을 같게 본다.
   const nowBase = now.baseUri ?? "";
   const approvedBase = info.baseUri ?? "";
-  const hashOnly = inFlight && selectField && hashExplainedBySelectWrites(info.consentCall, approvedBase, nowBase);
+  const hashOnly = afterWrite && nowBase.split("#")[0] === approvedBase.split("#")[0];
   if (!toggleField && !hashOnly && nowBase !== approvedBase) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
@@ -1108,13 +1064,15 @@ export function recheckApproved(
   info: TargetInfo,
   relation: Relation | null = null,
   inFlight = false,
+  // 실행이 끝난 뒤 반영을 확인하는 보고(무엇을 실행할지 정하지 않음). 해시만 바뀐 기준 주소는 같게 본다(#88).
+  afterWrite = false,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const pinned = inFlight ? pinnedRowOf(el) : null;
   const now = fullInfo(kind, el, pinned, inFlight ? inFlightSubstitute(el, info, pinned) : undefined);
   const sameNow = inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info);
   if (!sameNow) return describeDifference(info, now);
-  const added = riskAdded(kind, el, info, inFlight) ?? triggerRiskAdded(kind, relation, info);
+  const added = riskAdded(kind, el, info, afterWrite) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
   const relationMoved = relationChanged(kind, el, relation);
   if (relationMoved) return relationMoved;

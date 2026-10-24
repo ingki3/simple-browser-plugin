@@ -21,7 +21,6 @@ import {
   RiskAddedError,
   noteChoiceWritten,
   noteChosenOption,
-  noteSelectHashStep,
   noteWritten,
   peekApproved,
   recheckApproved,
@@ -1705,19 +1704,8 @@ export async function fillFormFields(
     }
     // change를 보내기 전 재검사에서 이 칸 자신이 쓴 값이 '승인 뒤 채워진 개인정보'로 보이지 않게 먼저 기록한다.
     noteWritten(callId, el, expectedSig ?? intended);
-    // select 쓰기 구간(값 쓰기~그 칸의 처리기) 안에서 바뀐 주소를 기록한다(#88 — 고르면 해시 쿼리에 반영하는 필터 화면).
-    const isSelect = isTag(el, "select");
-    // 마지막으로 본 주소에서 지금 주소로의 변화를 차례로 기록한다(input이 A→B, change가 B→C로 바꾸면 A→B→C).
-    let lastSeen = el.baseURI;
-    const noteHash = () => {
-      if (!isSelect) return;
-      const now = el.baseURI;
-      noteSelectHashStep(callId, lastSeen, now);
-      lastSeen = now;
-    };
     // input 처리기가 action·숨은 값·대상을 바꿨으면 change(제출로 이어질 수 있다)를 보내지 않는다.
     const guard = (): string | null => {
-      noteHash();
       const changed = recheckApproved(FIELD_KIND, el, info, null, true);
       if (changed) return `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${changed}). 다시 찾으세요.`;
       return driftReason();
@@ -1750,8 +1738,7 @@ export async function fillFormFields(
       halted = true;
       continue;
     }
-    // change 처리기까지 끝난 뒤의 주소 변화도 이 select 쓰기 구간의 것이다.
-    noteHash();
+
     if (!filled) {
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
@@ -1778,8 +1765,9 @@ export async function fillFormFields(
       result.note = "입력 뒤 페이지가 칸을 새로 그려 값이 남았는지 확인하지 못했습니다";
       continue;
     }
-    // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다.
-    const changed = recheckApproved(FIELD_KIND, el, info, null, true);
+    // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다. 이 확인은 실행이 끝난 뒤의
+    // 보고라 해시만 바뀐 기준 주소(고르면 해시에 반영하는 필터 화면)는 같게 본다(#88). 남은 칸을 쓰기 전 확인은 해시까지 본다.
+    const changed = recheckApproved(FIELD_KIND, el, info, null, true, true);
     if (changed) {
       result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
     } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual && sameIgnoringSpace(actual, value))) {
