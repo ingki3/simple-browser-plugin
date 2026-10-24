@@ -146,14 +146,16 @@ function block(e: Event): void {
   e.stopImmediatePropagation();
 }
 
-function listen(win: Window, handler: (e: Event) => void, ms: number, onExpire: () => void): () => void {
-  for (const type of GUARDED_EVENTS) win.addEventListener(type, handler, true);
+// extra: 같은 handler로 함께 붙이고 떼는 이벤트 이름(가드 생존 표지). 지울 때는 늘 함께 지워진다.
+function listen(win: Window, handler: (e: Event) => void, ms: number, onExpire: () => void, extra: readonly string[] = []): () => void {
+  const types = [...GUARDED_EVENTS, ...extra];
+  for (const type of types) win.addEventListener(type, handler, true);
   let removed = false;
   const remove = () => {
     if (removed) return;
     removed = true;
     clearTimeout(timer);
-    for (const type of GUARDED_EVENTS) win.removeEventListener(type, handler, true);
+    for (const type of types) win.removeEventListener(type, handler, true);
   };
   // 만료 뒤에도 잠깐 더 막다가 푼다(만료 시점과 누르기가 겹쳐도 확인 없이 통과하지 않게).
   const timer = setTimeout(() => {
@@ -176,7 +178,14 @@ export function armTopGuard(token: string, el: HTMLElement, point: Point, rechec
     probe: () => false,
     probed: false,
   };
+  // 가드 리스너가 아직 붙어 있는지 확인하는 표지(document.open·만료 정리는 리스너를 지운다). 입력을 막는 같은 handler에
+  // 붙여, 입력 리스너가 지워지면 표지도 함께 사라진다. 이름은 토큰이라 페이지가 미리 알 수 없다.
+  const probeType = `sbp-guard-${token}`;
   const handler = (e: Event) => {
+    if (e.type === probeType) {
+      guard.probed = true;
+      return;
+    }
     if (!e.isTrusted) return;
     if (guard.status.status === "blocked") return block(e);
     if (guard.status.status === "clicked") return;
@@ -218,25 +227,20 @@ export function armTopGuard(token: string, el: HTMLElement, point: Point, rechec
       setTimeout(() => guard.remove(), 0);
     }
   };
-  // 가드 리스너가 아직 붙어 있는지 확인하는 표지(document.open 등은 window의 리스너를 모두 지운다). 이름은 토큰이라
-  // 페이지가 미리 알 수 없다.
-  const probeType = `sbp-guard-${token}`;
-  const onProbe = () => {
-    guard.probed = true;
-  };
-  window.addEventListener(probeType, onProbe, true);
   guard.probe = () => {
     guard.probed = false;
     window.dispatchEvent(new Event(probeType));
-    return guard.probed;
+    return guard.probed && Date.now() <= guard.deadline;
   };
-  const removeListeners = listen(window, handler, GUARD_MS, () => {
-    if (guard.status.status === "none") guard.status = { status: "blocked", reason: "확인 시간이 지남" };
-  });
-  guard.remove = () => {
-    removeListeners();
-    window.removeEventListener(probeType, onProbe, true);
-  };
+  guard.remove = listen(
+    window,
+    handler,
+    GUARD_MS,
+    () => {
+      if (guard.status.status === "none") guard.status = { status: "blocked", reason: "확인 시간이 지남" };
+    },
+    [probeType],
+  );
   topGuards.set(token, guard);
   // 결과를 읽지 않고 끝난 가드의 기록 정리.
   setTimeout(() => {
@@ -254,6 +258,8 @@ export function checkBeforePress(token: string): number {
     throw new Error(reason);
   };
   if (guard.status.status !== "none") fail("이미 처리된 클릭");
+  // 준비 뒤 페이지가 리스너를 지웠으면(document.open 등) 가드 없이 누르게 되므로 누르지 않는다.
+  if (!guard.probe()) fail("확인 장치가 페이지에서 지워짐");
   const remaining = guard.deadline - Date.now();
   const changed = guard.recheck("down");
   if (changed) fail(changed);
