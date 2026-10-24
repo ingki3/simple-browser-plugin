@@ -359,6 +359,15 @@ async function pressIn(
     if (abortedWhilePressed) throw new ClickAbortedError();
     throw new Error("마우스를 누른 뒤 페이지가 문서를 바꿔 떼기 입력을 보내지 않았습니다. 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.");
   }
+  // 확인을 기다리는 사이 중단됐으면 가드를 막힘으로 바꾼 것을 확인한 뒤에만 뗀다. 이 확인과 떼기 사이에는 await가 없다.
+  let canceled = abortedWhilePressed;
+  if (!canceled && signal?.aborted) {
+    if (!(await cancel("중단됨"))) {
+      await dropTab(session, tabId);
+      throw new ClickAbortedError();
+    }
+    canceled = true;
+  }
   try {
     // 중단돼도 떼기는 끝까지 보낸다(가드가 막힘 상태라 click은 일어나지 않는다).
     await mouse(tabId, { type: "mouseReleased", buttons: 0, ...base }, undefined);
@@ -370,7 +379,7 @@ async function pressIn(
     );
   }
 
-  if (abortedWhilePressed) throw new ClickAbortedError();
+  if (canceled) throw new ClickAbortedError();
 
   let status: TrustedClickStatus | null = null;
   for (const wait of RESULT_POLL_MS) {
