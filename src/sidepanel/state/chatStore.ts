@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { DebugEvent, ToolName } from "@/lib/messages";
+import type { DebugEvent, PageOfferData, ToolName } from "@/lib/messages";
 
 const DEBUG_BUFFER_MAX = 500;
 
@@ -50,7 +50,7 @@ export type ChatMessage =
   | {
       id: string;
       type: "page_offer";
-      offer: { offerId: string; url: string; title: string; site: string; warning: string | null };
+      offer: PageOfferData;
     }
   | { id: string; type: "error"; message: string }
   | { id: string; type: "info"; title: string; message: string };

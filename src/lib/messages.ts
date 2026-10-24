@@ -17,6 +17,8 @@ export type ToolName =
   | "capture_page"
   | "query_dom"
   | "navigate_to_url"
+  // 사용자가 저장한 링크(템플릿)에 자리 값을 넣어 연다(#86).
+  | "open_saved_link"
   | "find_clickables"
   | "click_element"
   | "google_sheets_list"
@@ -38,6 +40,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   // 보고 있는 페이지를 캡처해 저장한다(#49). 전체 캡처는 스크롤·스타일을 잠시 바꾸므로 늘 묻는다.
   "capture_page",
   "navigate_to_url",
+  // 저장한 링크를 연다(#86). 모델이 만든 자리 값이 그 사이트로 전송된다. 자동 실행이 켜져 있으면 카드 없이(보호 중·개인정보 모양은 묻기).
+  "open_saved_link",
   "click_element",
   // 모델이 고른 URL로 쿠키를 실어 GET을 보낸다. 프롬프트 주입이 쿼리에 대화 내용을 담아 외부로 보낼 수 있다.
   "read_document",
@@ -253,8 +257,21 @@ export type BgToPanel =
   | { kind: "error"; message: string }
   | { kind: "info"; title: string; message: string }
   // 턴을 마친 뒤 탭이 다른 화면에 있으면 "이 페이지 기억하기" 제안(저장은 사용자가 이름을 확인하고 누를 때만).
-  | { kind: "page_save_offer"; offer: { offerId: string; url: string; title: string; site: string; warning: string | null } }
+  | { kind: "page_save_offer"; offer: PageOfferData }
   | { kind: "settings_warning"; message: string };
+
+// "이 페이지 기억하기" 카드(#30·#86). params: 주소의 쿼리 값(카드에서 고정·자리·빼기를 고른다). evicts: 저장 링크가 가득 차
+// 새 링크를 저장하면 지워질 링크 이름.
+export interface PageOfferData {
+  offerId: string;
+  url: string;
+  title: string;
+  site: string;
+  warning: string | null;
+  params: Array<{ key: string; value: string }>;
+  evicts: string | null;
+  savedTemplates: string[];
+}
 
 export type BgToContent =
   // trusted: click_element를 실제 입력 클릭으로 준비만 하라는 가드 토큰(0.2.0). 모델 인자가 아니라 백그라운드가 붙인다.

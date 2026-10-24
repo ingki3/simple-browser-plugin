@@ -1,7 +1,8 @@
 import { PORT_NAME, type PanelToBg } from "@/lib/messages";
 import { ChatAgent } from "./openrouter";
 import { invalidateSettingsCache } from "./storage";
-import { deletePages, listPages, savePage } from "./savedPagesStore";
+import { deletePages, draftLink, listPages, savePage, updateLink } from "./savedPagesStore";
+import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
 import { registerDebugSink, debugLog } from "./debug";
@@ -93,18 +94,43 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
 
   // 저장한 페이지: 이 확장의 화면(패널·설정, 탭으로 연 경우 포함)에서만 받는다. content script가 보낸 메시지는
   // 발신 주소가 웹 페이지라 거절된다.
-  if (m.kind === "save_page" || m.kind === "saved_pages_list" || m.kind === "saved_pages_delete") {
+  if (
+    m.kind === "save_page" ||
+    m.kind === "saved_pages_list" ||
+    m.kind === "saved_pages_delete" ||
+    m.kind === "saved_link_draft" ||
+    m.kind === "saved_link_update"
+  ) {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
     }
-    const p = msg as { offerId?: unknown; name?: unknown; confirmedWarning?: unknown; url?: unknown };
-    const job =
+    const p = msg as {
+      offerId?: unknown;
+      name?: unknown;
+      purpose?: unknown;
+      choices?: unknown;
+      hints?: unknown;
+      confirmedWarning?: unknown;
+      id?: unknown;
+    };
+    const job: Promise<unknown> =
       m.kind === "save_page"
-        ? savePage(String(p.offerId ?? ""), String(p.name ?? ""), p.confirmedWarning === true).then(() => null)
-        : m.kind === "saved_pages_delete"
-          ? deletePages(typeof p.url === "string" ? p.url : null).then(() => listPages())
-          : listPages();
+        ? savePage({
+            offerId: String(p.offerId ?? ""),
+            name: String(p.name ?? ""),
+            purpose: String(p.purpose ?? ""),
+            choices: parseChoices(p.choices),
+            hints: parseHints(p.hints),
+            confirmedWarning: p.confirmedWarning === true,
+          })
+        : m.kind === "saved_link_draft"
+          ? draftLink(String(p.offerId ?? ""))
+          : m.kind === "saved_link_update"
+            ? updateLink(String(p.id ?? ""), { name: p.name, purpose: p.purpose, hints: p.hints }).then(() => listPages())
+            : m.kind === "saved_pages_delete"
+              ? deletePages(typeof p.id === "string" ? p.id : null).then(() => listPages())
+              : listPages();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
@@ -239,3 +265,21 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
 
   return false;
 });
+
+// 저장 카드의 쿼리 값 선택(패널에서 온 값이라 형태를 다시 본다).
+function parseChoices(raw: unknown): ParamChoice[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((c): ParamChoice => {
+    const x = c as { mode?: unknown; slot?: unknown };
+    if (x?.mode === "drop") return { mode: "drop" };
+    if (x?.mode === "slot") return { mode: "slot", slot: typeof x.slot === "string" ? x.slot : "" };
+    return { mode: "keep" };
+  });
+}
+
+function parseHints(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = Object.create(null);
+  if (!raw || typeof raw !== "object") return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (typeof v === "string") out[k] = v;
+  return out;
+}
