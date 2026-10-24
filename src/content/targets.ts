@@ -19,7 +19,7 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { groupLabel, modelText } from "./modelText";
+import { groupLabel, isSelectProxy, modelText, selectProxyOf } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -122,7 +122,9 @@ const CONTEXT_MAX = 2000;
 
 // exclude: 글자에서 뺄 하위 요소(입력 도중 확인에서 승인 뒤 새로 붙은 자동완성 목록, pinnedRowOf). 빼는 것이 없으면
 // textContent 그대로다.
-function textOf(el: Element, exclude: Element[] = []): string {
+function textOf(el: Element, extra: Element[] = []): string {
+  // 숨긴 select의 대리 위젯(#88) 글자는 select의 지금 값이라 늘 뺀다(우리 입력으로 바뀌는 글자를 행 내용 변화로 보지 않게).
+  const exclude = [...extra, ...selectProxiesIn(el)];
   let raw: string;
   if (!exclude.length) raw = el.textContent ?? "";
   else {
@@ -135,6 +137,17 @@ function textOf(el: Element, exclude: Element[] = []): string {
     }
   }
   return raw.replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
+}
+
+// el 안(el 자신 포함)의 숨긴 select 대리 위젯.
+function selectProxiesIn(el: Element): Element[] {
+  const out: Element[] = [];
+  for (const sel of el.querySelectorAll("select")) {
+    const proxy = selectProxyOf(sel);
+    if (proxy) out.push(proxy);
+  }
+  if (el.localName !== "select" && isSelectProxy(el)) out.push(el);
+  return out;
 }
 
 function repeated(cur: Element): boolean {
@@ -837,9 +850,15 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
   // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
   const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
-  if (!toggleField && (now.baseUri ?? "") !== (info.baseUri ?? "")) return "문서 기준 주소가 바뀜";
+  // 해시만 바뀐 것(해시로 화면을 바꾸는 페이지 — #!?page=…)은 입력값(상대 주소)을 푸는 사이트·경로에 영향이 없어 보지 않는다(#88).
+  if (!toggleField && withoutHash(now.baseUri ?? "") !== withoutHash(info.baseUri ?? "")) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
+}
+
+function withoutHash(url: string): string {
+  const i = url.indexOf("#");
+  return i < 0 ? url : url.slice(0, i);
 }
 
 // 승인 때 찾은 대상의 행 요소. 입력 도중 확인은 아래가 모두 구조로 확인될 때만 승인 때의 행을 기준으로 삼는다
@@ -876,8 +895,10 @@ const ROW_TEXT_NODES_MAX = 500;
 function rowTextNodes(row: Element): Array<{ node: WeakRef<Text>; value: string }> | null {
   const walker = row.ownerDocument.createTreeWalker(row, NodeFilter.SHOW_TEXT);
   const out: Array<{ node: WeakRef<Text>; value: string }> = [];
+  const proxies = selectProxiesIn(row);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!(node.nodeValue ?? "").trim()) continue;
+    if (proxies.some((p) => p.contains(node))) continue;
     if (out.length >= ROW_TEXT_NODES_MAX) return null;
     out.push({ node: new WeakRef(node as Text), value: node.nodeValue ?? "" });
   }
