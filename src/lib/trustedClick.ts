@@ -57,6 +57,30 @@ export type TrustedClickStatus =
   | { status: "blocked"; reason: string }
   | { status: "none" };
 
+// 백그라운드가 읽는 가드 기록: 결과와, 결과가 none일 때 원인을 좁히는 진단(이 문서가 받은 실제 입력 종류·화면 크기).
+export type TrustedClickReport = TrustedClickStatus & {
+  seen: string[];
+  viewport: { width: number; height: number };
+};
+
+// 실제 입력이 대상에 오지 않았을 때(none) 원인을 좁히는 설명. frameBlocked: 다른 프레임 가드가 막은 입력 수.
+export function describeMissedClick(r: {
+  seen: readonly string[];
+  viewport: { width: number; height: number };
+  point: Point;
+  frameBlocked: number;
+}): string {
+  const parts: string[] = [];
+  if (r.frameBlocked > 0) parts.push(`그 자리의 다른 프레임이 입력 ${r.frameBlocked}개를 받아 막음`);
+  const { x, y } = r.point;
+  if (x < 0 || y < 0 || x >= r.viewport.width || y >= r.viewport.height) {
+    parts.push(`누른 점(${x}, ${y})이 화면(${r.viewport.width}×${r.viewport.height}) 밖`);
+  }
+  if (r.seen.length === 0) parts.push("이 문서에 입력이 오지 않음");
+  else parts.push(`이 문서가 받은 입력: ${r.seen.join(", ")} — click이 생기지 않음`);
+  return parts.join("; ");
+}
+
 // content script가 click_element를 실제 입력으로 준비한 결과(tool_exec 응답의 trusted).
 export type TrustedPrepare =
   | { mode: "trusted"; x: number; y: number }

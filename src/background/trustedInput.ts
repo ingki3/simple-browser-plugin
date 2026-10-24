@@ -3,13 +3,14 @@
 // 사람처럼 보이게 하는 기능(궤적·무작위 지연)이나 자동화 흔적 숨기기는 넣지 않는다. 디버깅 막대도 숨기지 않는다.
 import type { BgToContent, ContentResponse } from "@/lib/messages";
 import {
+  describeMissedClick,
   FRAME_ARM_TIMEOUT_MS,
   frameNeedsGuard,
   guardTimeLeft,
   unguardedFrame,
   GUARD_MIN_REMAINING_MS,
   GUARD_MS,
-  type TrustedClickStatus,
+  type TrustedClickReport,
   type TrustedPrepare,
 } from "@/lib/trustedClick";
 import { debugLog } from "./debug";
@@ -189,12 +190,21 @@ async function armFrames(tabId: number, token: string): Promise<{ docs: FrameDoc
   return { docs, missing, sent: frames };
 }
 
-async function disarmFrames(tabId: number, token: string, docs: FrameDoc[]): Promise<number> {
+// 가드를 떼고, 입력을 막은 프레임(그 수)을 돌려준다.
+async function disarmFrames(tabId: number, token: string, docs: FrameDoc[]): Promise<{ doc: FrameDoc; blocked: number }[]> {
   const msg: BgToContent = { kind: "input_guard_disarm", token };
   const counts = await Promise.all(
     docs.map((f) => sendTo<number>(tabId, f.documentId, msg, FRAME_ARM_TIMEOUT_MS, "프레임 가드 해제").catch(() => 0)),
   );
-  return counts.reduce((a, b) => a + (b || 0), 0);
+  return docs.map((doc, i) => ({ doc, blocked: counts[i] || 0 })).filter((r) => r.blocked > 0);
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url.slice(0, 40);
+  }
 }
 
 export interface ClickData {
@@ -381,11 +391,11 @@ async function pressIn(
 
   if (canceled) throw new ClickAbortedError();
 
-  let status: TrustedClickStatus | null = null;
+  let status: TrustedClickReport | null = null;
   for (const wait of RESULT_POLL_MS) {
     if (wait) await new Promise((r) => setTimeout(r, wait));
     try {
-      status = await sendTo<TrustedClickStatus | null>(tabId, documentId, { kind: "trusted_click_result", token }, 1_500, "클릭 결과");
+      status = await sendTo<TrustedClickReport | null>(tabId, documentId, { kind: "trusted_click_result", token }, 1_500, "클릭 결과");
     } catch (err) {
       // 누른 뒤 문서가 바뀌었으면(누르기만으로 이동하는 사이트 포함) 결과는 observeClickEffect가 이동으로 판정한다.
       if (isMissingReceiver(err)) return { ...data, input: "trusted" };
@@ -401,5 +411,19 @@ async function pressIn(
     );
   }
   await cancel("입력이 도착하지 않음");
-  throw new Error("실제 입력 클릭이 대상에 도착하지 않았습니다. 다시 관측하세요.");
+  // 원인을 좁힌다: 다른 프레임이 받았는지(가드를 떼며 막은 수를 읽는다), 점이 화면 밖인지, 이 문서가 무엇을 받았는지.
+  const blockedBy = await disarmFrames(tabId, token, armedDocs);
+  const why = describeMissedClick({
+    seen: status.seen ?? [],
+    viewport: status.viewport ?? { width: Infinity, height: Infinity },
+    point,
+    frameBlocked: blockedBy.reduce((a, r) => a + r.blocked, 0),
+  });
+  const frames = blockedBy.map((r) => `frame ${r.doc.frameId} ${originOf(r.doc.url)} ×${r.blocked}`).join(", ");
+  debugLog(
+    "input:none",
+    `tab ${tabId} · 점 (${point.x}, ${point.y}) · 화면 ${status.viewport?.width}×${status.viewport?.height} · ${why}${frames ? ` · ${frames}` : ""}`,
+    "warn",
+  );
+  throw new Error(`실제 입력 클릭이 대상에 도착하지 않았습니다(${why}). 다시 관측하세요.`);
 }

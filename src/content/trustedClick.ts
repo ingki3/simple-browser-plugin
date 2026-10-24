@@ -1,6 +1,13 @@
 // 실제 입력 클릭(0.2.0)의 content script 쪽: 누를 점 계산, 누르기 직전 확인, 들어온 실제 입력을 보고 막는 가드.
 // 보안 모델과 한계는 src/lib/trustedClick.ts 머리말.
-import { clickPoint, GUARDED_EVENTS, GUARD_MS, type Point, type TrustedClickStatus } from "@/lib/trustedClick";
+import {
+  clickPoint,
+  GUARDED_EVENTS,
+  GUARD_MS,
+  type Point,
+  type TrustedClickReport,
+  type TrustedClickStatus,
+} from "@/lib/trustedClick";
 import { isTag } from "./docs";
 
 // 승인한 대상 안에 있어도 따로 활성화되는 요소(링크·버튼·입력·프레임 등). 실제 입력이 이것에 닿으면 승인한 대상이 아닌
@@ -146,6 +153,8 @@ interface TopGuard {
   recheck: (phase: RecheckPhase) => string | null;
   deadline: number;
   status: TrustedClickStatus;
+  // 받은 실제 입력 종류(진단용, 앞의 몇 개만).
+  seen: string[];
   remove: () => void;
   probe: () => boolean;
   probed: boolean;
@@ -195,6 +204,7 @@ export function armTopGuard(
     recheck,
     deadline: Date.now() + GUARD_MS,
     status: { status: "none" },
+    seen: [],
     remove: () => {},
     probe: () => false,
     probed: false,
@@ -208,6 +218,7 @@ export function armTopGuard(
       return;
     }
     if (!e.isTrusted) return;
+    if (guard.seen.length < 12) guard.seen.push(e.type);
     if (guard.status.status === "blocked") return block(e);
     if (guard.status.status === "clicked") return;
     // 확인 도중 예외(페이지가 양식 속성을 가리는 이름의 칸을 넣는 등)도 막는다 — 리스너의 예외는 이벤트를 취소하지 않는다.
@@ -306,8 +317,10 @@ export function guardAlive(token: string): boolean {
   }
 }
 
-export function guardResult(token: string): TrustedClickStatus | null {
-  return topGuards.get(token)?.status ?? null;
+export function guardResult(token: string): TrustedClickReport | null {
+  const guard = topGuards.get(token);
+  if (!guard) return null;
+  return { ...guard.status, seen: [...guard.seen], viewport: { width: window.innerWidth, height: window.innerHeight } };
 }
 
 // 누르지 않기로 했으면 막힘으로 바꾼다(늦게 도착한 입력도 막도록 가드는 만료까지 둔다).
