@@ -1707,9 +1707,13 @@ export async function fillFormFields(
     noteWritten(callId, el, expectedSig ?? intended);
     // select 쓰기 구간(값 쓰기~그 칸의 처리기) 안에서 바뀐 주소를 기록한다(#88 — 고르면 해시 쿼리에 반영하는 필터 화면).
     const isSelect = isTag(el, "select");
-    const baseBefore = el.baseURI;
+    // 마지막으로 본 주소에서 지금 주소로의 변화를 차례로 기록한다(input이 A→B, change가 B→C로 바꾸면 A→B→C).
+    let lastSeen = el.baseURI;
     const noteHash = () => {
-      if (isSelect) noteSelectHashStep(callId, baseBefore, el.baseURI);
+      if (!isSelect) return;
+      const now = el.baseURI;
+      noteSelectHashStep(callId, lastSeen, now);
+      lastSeen = now;
     };
     // input 처리기가 action·숨은 값·대상을 바꿨으면 change(제출로 이어질 수 있다)를 보내지 않는다.
     const guard = (): string | null => {

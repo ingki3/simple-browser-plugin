@@ -185,8 +185,11 @@ function inFlightSubstitute(
   pairs.forEach(({ select, combo }, i) => {
     // 이번 호출이 고른 바로 그 선택지가 지금도 골라져 있고(같은 value의 다른 선택지가 아니라), 콤보박스가 그 선택지의
     // 보이는 이름(label 속성이 있으면 그것)을 보여 줄 때만.
-    const option = chosen?.get(select);
-    if (!option || select.selectedOptions.length !== 1 || select.selectedOptions[0] !== option) return;
+    const picked = chosen?.get(select);
+    if (!picked) return;
+    const { option } = picked;
+    if (select.selectedOptions.length !== 1 || select.selectedOptions[0] !== option) return;
+    if (option.value !== picked.value || select.value !== picked.value) return;
     if (norm(combo.textContent) !== norm(option.label)) return;
     raw.set(combo, before[i].raw);
     model.set(combo, before[i].model);
@@ -725,7 +728,8 @@ const writtenByCall = new Map<string, Map<Element, string>>();
 // 이번 호출이 select에 고른 선택지 요소(#88 — 입력 도중 대리 콤보박스 비교는 value가 아니라 이 요소로 확인한다)와,
 // 이번 호출의 select 쓰기 구간(값을 쓴 때부터 그 칸의 input·change 처리기가 끝날 때까지) 안에서 바뀐 문서 주소.
 interface SelectWrites {
-  options: Map<HTMLSelectElement, HTMLOptionElement>;
+  // 고른 선택지 요소와 쓴 직후의 그 값(처리기가 같은 요소의 value만 바꾸는 것도 알아채게).
+  options: Map<HTMLSelectElement, { option: HTMLOptionElement; value: string }>;
   // [바뀌기 전, 바뀐 뒤] 주소. 해시 경로가 같고 해시 쿼리만 바뀐 것만 담는다(필터 값 반영).
   hashSteps: Array<[string, string]>;
 }
@@ -749,7 +753,7 @@ function selectWritesOf(callId: string): SelectWrites {
 export function noteChosenOption(callId: string, select: HTMLSelectElement): void {
   const w = selectWritesOf(callId);
   const option = select.selectedOptions[0];
-  if (option && select.selectedOptions.length === 1) w.options.set(select, option);
+  if (option && select.selectedOptions.length === 1) w.options.set(select, { option, value: option.value });
   else w.options.delete(select);
 }
 
