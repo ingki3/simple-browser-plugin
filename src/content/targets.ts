@@ -181,7 +181,7 @@ function inFlightSubstitute(
   if (pairs.length !== before.length) return undefined;
   const raw = new Map<Element, string>();
   const model = new Map<Element, string>();
-  const chosen = writtenOptionByCall.get(info.consentCall ?? "");
+  const chosen = selectWritesByCall.get(info.consentCall ?? "")?.options;
   pairs.forEach(({ select, combo }, i) => {
     // 이번 호출이 고른 바로 그 선택지가 지금도 골라져 있고(같은 value의 다른 선택지가 아니라), 콤보박스가 그 선택지의
     // 보이는 이름(label 속성이 있으면 그것)을 보여 줄 때만.
@@ -722,26 +722,78 @@ export function noteChoiceWritten(callId: string, el: Element): void {
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
-// 이번 호출이 select에 고른 선택지 요소(#88 — 입력 도중 대리 콤보박스 비교는 value가 아니라 이 요소로 확인한다).
-const writtenOptionByCall = new Map<string, Map<HTMLSelectElement, HTMLOptionElement>>();
+// 이번 호출이 select에 고른 선택지 요소(#88 — 입력 도중 대리 콤보박스 비교는 value가 아니라 이 요소로 확인한다)와,
+// 이번 호출의 select 쓰기 구간(값을 쓴 때부터 그 칸의 input·change 처리기가 끝날 때까지) 안에서 바뀐 문서 주소.
+interface SelectWrites {
+  options: Map<HTMLSelectElement, HTMLOptionElement>;
+  // [바뀌기 전, 바뀐 뒤] 주소. 해시 경로가 같고 해시 쿼리만 바뀐 것만 담는다(필터 값 반영).
+  hashSteps: Array<[string, string]>;
+}
+const selectWritesByCall = new Map<string, SelectWrites>();
+
+function selectWritesOf(callId: string): SelectWrites {
+  let w = selectWritesByCall.get(callId);
+  if (!w) {
+    w = { options: new Map(), hashSteps: [] };
+    selectWritesByCall.set(callId, w);
+    while (selectWritesByCall.size > 50) {
+      const oldest = selectWritesByCall.keys().next().value;
+      if (oldest === undefined) break;
+      selectWritesByCall.delete(oldest);
+    }
+  }
+  return w;
+}
+
+// select에 값을 쓴 직후, 페이지 처리기가 돌기 전에 부른다: 지금 골라진 선택지가 이번 호출이 고른 것이다.
+export function noteChosenOption(callId: string, select: HTMLSelectElement): void {
+  const w = selectWritesOf(callId);
+  const option = select.selectedOptions[0];
+  if (option && select.selectedOptions.length === 1) w.options.set(select, option);
+  else w.options.delete(select);
+}
+
+// select 쓰기 구간 안에서 문서 주소가 before에서 after로 바뀌었다(그 칸의 처리기가 바꾼 것). 해시 경로가 같고 해시 쿼리만
+// 바뀐 경우만 기록한다 — #/records/A → #/records/B 같은 경로 변화는 기록하지 않아 그대로 멈춘다.
+export function noteSelectHashStep(callId: string, before: string, after: string): void {
+  if (before === after || !sameHashPath(before, after)) return;
+  const steps = selectWritesOf(callId).hashSteps;
+  if (!steps.some(([b, a]) => b === before && a === after)) steps.push([before, after]);
+}
+
+function hashParts(url: string): { base: string; path: string } {
+  const i = url.indexOf("#");
+  const base = i < 0 ? url : url.slice(0, i);
+  const hash = i < 0 ? "" : url.slice(i + 1);
+  const q = hash.indexOf("?");
+  return { base, path: q < 0 ? hash : hash.slice(0, q) };
+}
+
+// 출처·경로·쿼리(해시 앞)와 해시 경로('?' 앞)가 같은지. 해시가 없던 주소에 식별 글자 없는 경로(#!?…)가 처음 생긴 것도 같게 본다.
+function sameHashPath(a: string, b: string): boolean {
+  const pa = hashParts(a);
+  const pb = hashParts(b);
+  if (pa.base !== pb.base) return false;
+  if (pa.path === pb.path) return true;
+  return !a.includes("#") && /^[!/]*$/.test(pb.path);
+}
+
+// 승인 때 주소에서 지금 주소까지가 이번 호출의 select 쓰기 구간에서 기록한 변화로만 이어지는지.
+function hashExplainedBySelectWrites(callId: string | undefined, from: string, to: string): boolean {
+  if (from === to) return true;
+  const steps = callId ? selectWritesByCall.get(callId)?.hashSteps : undefined;
+  if (!steps?.length) return false;
+  let cur = from;
+  for (let i = 0; i <= steps.length; i++) {
+    const next = steps.find(([b]) => b === cur);
+    if (!next) return false;
+    cur = next[1];
+    if (cur === to) return true;
+  }
+  return false;
+}
 
 export function noteWritten(callId: string, el: Element, value: string): void {
-  if (el.localName === "select") {
-    const select = el as HTMLSelectElement;
-    const option = select.selectedOptions[0];
-    let chosen = writtenOptionByCall.get(callId);
-    if (!chosen) {
-      chosen = new Map();
-      writtenOptionByCall.set(callId, chosen);
-      while (writtenOptionByCall.size > 50) {
-        const oldest = writtenOptionByCall.keys().next().value;
-        if (oldest === undefined) break;
-        writtenOptionByCall.delete(oldest);
-      }
-    }
-    if (option && select.selectedOptions.length === 1 && option.value === value) chosen.set(select, option);
-    else chosen.delete(select);
-  }
   let m = writtenByCall.get(callId);
   if (!m) {
     m = new Map();
@@ -932,13 +984,14 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, inFlight
   // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
   // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
   const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
-  // select도 넣는 것이 정해진 선택지라 기준 주소로 풀리지 않고, 고르면 해시에 반영하는 필터 화면(#!?…&regiDay=2023)이 흔하다
-  // (#88). 다만 입력 도중(같은 호출의 앞 칸을 쓴 뒤·입력 뒤 확인)에 해시만 바뀐 경우로 한정한다. 승인 카드·첫 실행 전 확인과
-  // 글자 칸은 해시까지 비교한다(승인 뒤 #/records/B로 바뀌었으면 멈춤).
+  // select는 넣는 것이 정해진 선택지라 기준 주소로 풀리지 않고, 고르면 해시 쿼리에 반영하는 필터 화면(#!?…&regiDay=2023)이
+  // 흔하다(#88). 입력 도중 확인에서, 이번 호출의 select 쓰기 구간 안에서 해시 경로는 그대로 해시 쿼리만 바뀐 변화
+  // (noteSelectHashStep)로 설명되는 주소 변화만 넘어간다. 해시 경로 변화(#/records/A → B)·쓰기 구간 밖의 변화·글자 칸·
+  // 승인 카드·첫 실행 전 확인은 해시까지 비교한다.
   const selectField = kind.prefix === "f" && info.fieldType === "select";
   const nowBase = now.baseUri ?? "";
   const approvedBase = info.baseUri ?? "";
-  const hashOnly = inFlight && selectField && nowBase.split("#")[0] === approvedBase.split("#")[0];
+  const hashOnly = inFlight && selectField && hashExplainedBySelectWrites(info.consentCall, approvedBase, nowBase);
   if (!toggleField && !hashOnly && nowBase !== approvedBase) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
