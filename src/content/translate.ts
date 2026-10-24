@@ -46,7 +46,8 @@ function isMeaningfulText(s: string): boolean {
   return true;
 }
 
-function isVisible(el: Element | null): boolean {
+// 번역할 글자의 요소가 스타일로 숨겨지지 않았는지(display·visibility·hidden). 크기는 보지 않는다(줄 안 요소의 글자).
+function styleVisible(el: Element | null): boolean {
   if (!el) return false;
   const win = el.ownerDocument.defaultView ?? window;
   const style = win.getComputedStyle(el);
@@ -95,7 +96,7 @@ function collectTextNodes(root: Node, seen = new Set<Text>()): Text[] {
       if (!parent) return NodeFilter.FILTER_REJECT;
       if (parent.closest(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
       if (parent.closest("[aria-hidden='true']")) return NodeFilter.FILTER_REJECT;
-      if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
+      if (!styleVisible(parent)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });

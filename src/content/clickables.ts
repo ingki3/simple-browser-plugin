@@ -71,7 +71,9 @@ function isToggleInput(el: Element): el is HTMLInputElement {
   return isTag(el, "input") && (el.type === "checkbox" || el.type === "radio");
 }
 
-function isVisible(el: HTMLElement): boolean {
+// 사용자에게 드러난 클릭 대상인지: 레이아웃상 보이고(크기·display·visibility·opacity) aria-hidden 영역 안이 아니다.
+// 입력 칸의 보임(forms.ts layoutVisible)과 달리 aria-hidden 안의 요소는 클릭 후보로 내지 않는다.
+function shownToUser(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   const style = el.ownerDocument.defaultView?.getComputedStyle(el);
@@ -215,7 +217,7 @@ function labelControl(el: HTMLElement): HTMLElement | null {
 
 const CLICK_KIND: TargetKind = {
   prefix: "c",
-  visible: isVisible,
+  visible: shownToUser,
   requireVisible: true,
   name: clickText,
   modelName: (el) => modelName(el),
@@ -249,7 +251,7 @@ function toggleBehind(el: HTMLElement): HTMLInputElement | null {
 
 function hiddenToggleBehind(el: HTMLElement): HTMLInputElement | null {
   const t = toggleBehind(el);
-  return t && !isVisible(t) ? t : null;
+  return t && !shownToUser(t) ? t : null;
 }
 
 // label 등을 눌러 다른 checkbox·radio가 작동하면, 누르는 자리의 신호에 더해 그 칸 자신의 자리 신호(칸이 든 결제 대화상자·
@@ -445,9 +447,9 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       // 값(value)은 보내지 않는다 — 이름은 modelName(label 글자), 상태는 checked뿐이다(#43). 비활성 칸은 뺀다.
       const toggle = isToggleInput(node) ? node : null;
       if (toggle?.disabled) continue;
-      const el: HTMLElement | null = toggle ? (isVisible(toggle) ? toggle : proxyLabel(toggle)) : node;
+      const el: HTMLElement | null = toggle ? (shownToUser(toggle) ? toggle : proxyLabel(toggle)) : node;
       if (!el || seen.has(el)) continue;
-      if (!isVisible(el)) continue;
+      if (!shownToUser(el)) continue;
       // 역할로만 잡힌 새 대상에서 값 컨트롤·편집 영역은 뺀다(편집형 combobox의 입력값이 클릭 대상 글자로 나가지 않게;
       // 그런 칸은 find_form_fields의 값 미전송 계약을 따른다). checkbox·radio는 값을 보내지 않으므로 편집 영역만 뺀다.
       const roleOnly = !el.matches(BASE_SELECTOR);

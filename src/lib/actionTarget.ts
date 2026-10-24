@@ -22,6 +22,10 @@ export interface TargetInfo {
   sensitive: "password" | "payment" | null;
   // 대상이 든 목록 항목(행)의 글자. 목록 밖이면 "". 같은 버튼 노드를 다른 행에 다시 쓰는 목록에서 행이 바뀐 것을 잡는다.
   context: string;
+  // 행 안 숨긴 select의 대리 콤보박스(#88) 글자(행 안 순서). 입력 도중 확인에서 이번 호출이 쓴 select의 콤보박스가
+  // 그 선택을 보여 주면 이 글자로 되돌려 행 글자를 비교한다(우리 입력이 바꾼 표시만 빼고 나머지는 그대로 본다).
+  // ref: content script가 그 select·콤보박스 요소를 기억하는 키(입력 도중 비교는 같은 요소일 때만 되돌린다).
+  proxyTexts?: Array<{ raw: string; model: string; ref: string }>;
   // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상과 입력 칸(#56).
   // 모델의 선택 근거라 비교한다.
   modelContext?: string;

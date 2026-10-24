@@ -19,7 +19,7 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { groupLabel, modelText } from "./modelText";
+import { groupLabel, modelText, selectProxyOf, subtreeText, subtreeTextInfo } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -122,19 +122,110 @@ const CONTEXT_MAX = 2000;
 
 // exclude: 글자에서 뺄 하위 요소(입력 도중 확인에서 승인 뒤 새로 붙은 자동완성 목록, pinnedRowOf). 빼는 것이 없으면
 // textContent 그대로다.
-function textOf(el: Element, exclude: Element[] = []): string {
+// substitute: 이 요소 안의 글자 대신 주어진 글자를 넣는다(입력 도중 비교 — 이번 호출이 쓴 select의 대리 콤보박스, #88).
+function textOf(el: Element, exclude: Element[] = [], substitute?: ReadonlyMap<Element, string>): string {
   let raw: string;
-  if (!exclude.length) raw = el.textContent ?? "";
+  if (!exclude.length && !substitute?.size) raw = el.textContent ?? "";
   else {
-    const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    raw = "";
-    // textContent와 같게 끝까지 모은다(중간에 끊으면 긴 공백 뒤에 덧붙인 글자를 놓친다). 자르기는 공백 정리 뒤에 한다.
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (exclude.some((x) => x.contains(node))) continue;
-      raw += node.nodeValue ?? "";
+    // textContent와 같은 순서로 끝까지 모은다(중간에 끊으면 긴 공백 뒤에 덧붙인 글자를 놓친다). 자르기는 공백 정리 뒤에 한다.
+    // 바꿔 넣을 요소는 그 자리에서 주어진 글자를 넣고 안을 보지 않는다(글자 노드가 없는 빈 요소도 같은 자리에 넣는다).
+    const parts: string[] = [];
+    const stack: Node[] = [el];
+    while (stack.length) {
+      const node = stack.pop()!;
+      if (node.nodeType === Node.TEXT_NODE) {
+        parts.push(node.nodeValue ?? "");
+        continue;
+      }
+      if (node !== el && node.nodeType === Node.ELEMENT_NODE) {
+        if (exclude.includes(node as Element)) continue;
+        const swapped = substitute?.get(node as Element);
+        if (swapped !== undefined) {
+          parts.push(swapped);
+          continue;
+        }
+      }
+      const kids = node.childNodes;
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
     }
+    raw = parts.join("");
   }
   return raw.replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
+}
+
+// 승인 때 본 select 요소(proxyTexts의 ref로 찾는다). 요소 참조라 같은 글자의 다른 행 위젯과 구분한다. 콤보박스는 페이지가
+// 다시 그릴 수 있어(select2는 고를 때마다 감싼 요소를 새로 만든다) select에 붙은 지금 대리 위젯(selectProxyOf)으로 본다.
+const proxyRefs = new Map<string, WeakRef<HTMLSelectElement>>();
+const proxyRefIds = new WeakMap<HTMLSelectElement, string>();
+let proxyRefSeq = 0;
+
+function proxyRef(select: HTMLSelectElement): string {
+  const known = proxyRefIds.get(select);
+  if (known && proxyRefs.get(known)?.deref() === select) return known;
+  const id = `p${++proxyRefSeq}`;
+  proxyRefs.set(id, new WeakRef(select));
+  proxyRefIds.set(select, id);
+  while (proxyRefs.size > 500) {
+    const oldest = proxyRefs.keys().next().value;
+    if (oldest === undefined) break;
+    proxyRefs.delete(oldest);
+  }
+  return id;
+}
+
+// el 안의 숨긴 select와 그 대리 콤보박스(#88, 문서 순서).
+function proxyPairsIn(el: Element): Array<{ select: HTMLSelectElement; combo: Element }> {
+  const out: Array<{ select: HTMLSelectElement; combo: Element }> = [];
+  for (const select of el.querySelectorAll("select")) {
+    const combo = selectProxyOf(select);
+    if (combo) out.push({ select, combo });
+  }
+  return out;
+}
+
+function selectProxiesIn(el: Element): Element[] {
+  return proxyPairsIn(el).map((p) => p.combo);
+}
+
+const norm = (t: string | null | undefined) => (t ?? "").replace(/\s+/g, " ").trim();
+
+// 입력 도중 비교에서 승인 때 글자로 되돌릴 대리 콤보박스: 이번 호출(consentCall)이 써 넣었고 지금도 그 값인 select의
+// 콤보박스가 지금 그 선택지 글자를 보여 줄 때만. 그 밖의 글자 변화(쓰지 않은 select의 선택, 콤보박스 밖 글자)는 그대로 본다.
+function inFlightSubstitute(
+  el: HTMLElement,
+  info: TargetInfo,
+  pinned: PinnedRow | null,
+): { raw: Map<Element, string>; model: Map<Element, string> } | undefined {
+  const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
+  const before = info.proxyTexts;
+  if (!written || !before) return undefined;
+  const row = pinned?.row ?? rowElement(el)?.row;
+  if (!row) return undefined;
+  const pairs = proxyPairsIn(row);
+  if (pairs.length !== before.length) return undefined;
+  const raw = new Map<Element, string>();
+  const model = new Map<Element, string>();
+  const chosen = selectWritesByCall.get(info.consentCall ?? "")?.options;
+  pairs.forEach(({ select, combo }, i) => {
+    // 승인 때 이 행의 바로 그 select여야 한다(다른 행의 select·위젯을 옮겨 온 것이면 되돌리지 않는다).
+    if (proxyRefs.get(before[i].ref)?.deref() !== select) return;
+    // 이번 호출이 고른 바로 그 선택지가 지금도 골라져 있고(같은 value의 다른 선택지가 아니라), 콤보박스가 그 선택지의
+    // 보이는 이름(label 속성이 있으면 그것)을 보여 줄 때만.
+    const picked = chosen?.get(select);
+    if (!picked) return;
+    const { option } = picked;
+    if (select.selectedOptions.length !== 1 || select.selectedOptions[0] !== option) return;
+    if (option.value !== picked.value || select.value !== picked.value) return;
+    // 선택지 이름도 쓴 직후 그대로여야 하고(처리기가 이름을 바꿨으면 그대로 비교), 콤보박스가 그 이름을 보여 줘야 한다.
+    // 콤보박스의 보이는 글자(aria-hidden인 해제 아이콘 등은 뺀 것)가 끝까지 모은 그대로 그 이름이어야 한다(잘렸으면 뒤에 숨은
+    // 글자가 있을 수 있어 되돌리지 않는다).
+    if (option.label !== picked.label) return;
+    const shown = subtreeTextInfo(combo, MODEL_CONTEXT_MAX);
+    if (shown.cut || norm(shown.text) !== norm(picked.label)) return;
+    raw.set(combo, before[i].raw);
+    model.set(combo, before[i].model);
+  });
+  return raw.size ? { raw, model } : undefined;
 }
 
 function repeated(cur: Element): boolean {
@@ -176,9 +267,9 @@ const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role='heading'], caption, leg
 
 // 모델에 돌려주는 묶음 문맥: 행 글자를 modelText로(입력 칸·편집 영역·숨은 글자 제외) 만들고, 묶음의 접근성 이름이나
 // 묶음 안 첫 표제가 있으면 앞에 둔다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼을 구분하게).
-function modelContextOf(row: Element | null): string {
+function modelContextOf(row: Element | null, opts: { substitute?: ReadonlyMap<Element, string> } = {}): string {
   if (!row) return "";
-  const text = modelText(row, MODEL_CONTEXT_MAX);
+  const text = modelText(row, MODEL_CONTEXT_MAX, opts);
   if (!text) return "";
   const heading = groupHeading(row);
   return cleanModelText(heading && !text.startsWith(heading) ? `${heading} · ${text}` : text, MODEL_CONTEXT_MAX);
@@ -252,12 +343,30 @@ export function statesOf(el: HTMLElement): Record<string, string> | undefined {
 
 // pinnedRow: 입력 도중 확인에서 승인 때 찾은 행 요소(아래 approvedRows)와 그 글자에서 뺄 새 자동완성 목록. 구조가
 // 그대로임을 확인한 경우에만 주어지며, 다시 찾지 않고 그 행의 글자를 쓴다.
-function baseInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | null): TargetInfo {
-  const row = pinnedRow ? { row: pinnedRow.row, text: textOf(pinnedRow.row, pinnedRow.exclude) } : rowElement(el);
+// substitute: 입력 도중 비교에서 승인 때 글자로 되돌릴 대리 콤보박스(inFlightSubstitute).
+function baseInfo(
+  kind: TargetKind,
+  el: HTMLElement,
+  pinnedRow?: PinnedRow | null,
+  substitute?: { raw: Map<Element, string>; model: Map<Element, string> },
+): TargetInfo {
+  const found = pinnedRow ? { row: pinnedRow.row } : rowElement(el);
+  const row = found
+    ? { row: found.row, text: substitute || pinnedRow ? textOf(found.row, pinnedRow?.exclude ?? [], substitute?.raw) : (found as { text: string }).text }
+    : null;
   const detail: Partial<TargetInfo> = {};
   if (kind.detail || kind.rowContext) {
-    const modelContext = modelContextOf(row?.row ?? null);
+    const modelContext = modelContextOf(row?.row ?? null, { substitute: substitute?.model });
     if (modelContext) detail.modelContext = modelContext;
+  }
+  // 행에 숨긴 select의 대리 콤보박스가 있으면 그 글자를 기록한다(#88 — 입력 도중 비교에서 이번 호출이 쓴 것만 되돌린다).
+  const pairs = row ? proxyPairsIn(row.row) : [];
+  if (pairs.length) {
+    detail.proxyTexts = pairs.map(({ select, combo }) => ({
+      raw: combo.textContent ?? "",
+      model: subtreeText(combo, MODEL_CONTEXT_MAX),
+      ref: proxyRef(select),
+    }));
   }
   if (kind.detail) {
     const states = statesOf(el);
@@ -330,8 +439,13 @@ function listPosition(el: HTMLElement): TargetInfo["list"] {
   return null;
 }
 
-function fullInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | null): TargetInfo {
-  return { ...baseInfo(kind, el, pinnedRow), list: listPosition(el) };
+function fullInfo(
+  kind: TargetKind,
+  el: HTMLElement,
+  pinnedRow?: PinnedRow | null,
+  substitute?: { raw: Map<Element, string>; model: Map<Element, string> },
+): TargetInfo {
+  return { ...baseInfo(kind, el, pinnedRow, substitute), list: listPosition(el) };
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +762,35 @@ export function noteChoiceWritten(callId: string, el: Element): void {
 // 이 호출이 실제로 써 넣은 칸과 값(처리기가 돌기 전에 정한 값). 그 칸이 지금도 그 값이면 승인한 변화로 본다.
 const writtenByCall = new Map<string, Map<Element, string>>();
 
+// 이번 호출이 select에 고른 선택지 요소(#88 — 입력 도중 대리 콤보박스 비교는 value가 아니라 이 요소로 확인한다).
+interface SelectWrites {
+  // 고른 선택지 요소와 쓴 직후의 그 값(처리기가 같은 요소의 value만 바꾸는 것도 알아채게).
+  options: Map<HTMLSelectElement, { option: HTMLOptionElement; value: string; label: string }>;
+}
+const selectWritesByCall = new Map<string, SelectWrites>();
+
+function selectWritesOf(callId: string): SelectWrites {
+  let w = selectWritesByCall.get(callId);
+  if (!w) {
+    w = { options: new Map() };
+    selectWritesByCall.set(callId, w);
+    while (selectWritesByCall.size > 50) {
+      const oldest = selectWritesByCall.keys().next().value;
+      if (oldest === undefined) break;
+      selectWritesByCall.delete(oldest);
+    }
+  }
+  return w;
+}
+
+// select에 값을 쓴 직후, 페이지 처리기가 돌기 전에 부른다: 지금 골라진 선택지가 이번 호출이 고른 것이다.
+export function noteChosenOption(callId: string, select: HTMLSelectElement): void {
+  const w = selectWritesOf(callId);
+  const option = select.selectedOptions[0];
+  if (option && select.selectedOptions.length === 1) w.options.set(select, { option, value: option.value, label: option.label });
+  else w.options.delete(select);
+}
+
 export function noteWritten(callId: string, el: Element, value: string): void {
   let m = writtenByCall.get(callId);
   if (!m) {
@@ -667,6 +810,9 @@ export function inspectTargets(ids: string[], callId: string, prefix: string, va
   const infos = ids.map((id) => inspectTarget(id, callId, prefix));
   // 이번 호출이 선택 칸에 쓴 상태는 쓰는 순간 기록한다(noteChoiceWritten). 승인 때 지난 기록이 있으면 지운다.
   consentDeleteChoices.delete(callId);
+  // 같은 호출 id가 다시 쓰여도(모델이 같은 id를 돌려줌) 이전 실행의 쓰기·선택 기록을 이번 승인의 예외로 쓰지 않는다.
+  writtenByCall.delete(callId);
+  selectWritesByCall.delete(callId);
   // 승인 때 이미 값이 채워져 있던 개인정보·비밀 칸을 기억해 둔다. 실행 직전에 이 목록 밖의 칸이 채워져 있으면
   // (자동 완성된 비밀번호 등) 양식에 원래 개인정보가 있었든 없었든 멈춘다.
   // 칸 단서가 없어도 입력할 값이 개인정보(이메일·전화 등)면 승인 카드가 뜨므로 개인정보 묶음으로 본다.
@@ -754,8 +900,9 @@ export function takeApproved(
   // 묶음의 앞 칸 입력이 이 칸의 형제 묶음 틀을 바꿔(자동완성 목록이 붙음) 행이 다른 요소로 잡힐 수 있어, 입력 도중이면
   // 승인 때의 행을 구조가 그대로일 때만 다시 쓴다(pinnedRowOf).
   const pinned = inFlight ? pinnedRowOf(el) : null;
-  const now = fullInfo(entry.kind, el, pinned);
-  if (!(inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info))) {
+  const now = fullInfo(entry.kind, el, pinned, inFlight ? inFlightSubstitute(el, approved.info, pinned) : undefined);
+  const sameNow = inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info);
+  if (!sameNow) {
     const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
     // (묶음 입력의 남은 칸도 멈춘다).
@@ -773,7 +920,8 @@ export function takeApproved(
 
 // 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
 // 자동 완성·페이지 스크립트가 승인 뒤에 칸을 채우면, 자동 실행이든 사람이 승인한 카드든 그대로 실행하지 않는다.
-function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string | null {
+// afterWrite: 실행이 끝난 뒤 반영을 확인하는 보고용 검사(해시만 바뀐 기준 주소는 같게 본다).
+function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, afterWrite = false): string | null {
   const now = kind.risk?.(el);
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
@@ -837,7 +985,13 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
   // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
   const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
-  if (!toggleField && (now.baseUri ?? "") !== (info.baseUri ?? "")) return "문서 기준 주소가 바뀜";
+  // 해시까지 비교한다(#88 — 해시 쿼리의 id 등으로 조작 대상이 바뀌어도 구조로는 알 수 없다). 앞 칸 입력으로 해시가 바뀌면
+  // 남은 칸은 쓰지 않고 멈추고, 모델이 다시 찾아 새 승인으로 이어 채운다. 실행이 끝난 뒤의 반영 확인(afterWrite — 무엇을
+  // 실행할지 정하지 않는 보고)에서만 해시만 바뀐 것을 같게 본다.
+  const nowBase = now.baseUri ?? "";
+  const approvedBase = info.baseUri ?? "";
+  const hashOnly = afterWrite && nowBase.split("#")[0] === approvedBase.split("#")[0];
+  if (!toggleField && !hashOnly && nowBase !== approvedBase) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
 }
@@ -876,8 +1030,11 @@ const ROW_TEXT_NODES_MAX = 500;
 function rowTextNodes(row: Element): Array<{ node: WeakRef<Text>; value: string }> | null {
   const walker = row.ownerDocument.createTreeWalker(row, NodeFilter.SHOW_TEXT);
   const out: Array<{ node: WeakRef<Text>; value: string }> = [];
+  // 고정한 행 글자 노드는 입력 도중 비교에만 쓰므로, 숨긴 select의 대리 위젯 글자(우리 입력으로 바뀜, #88)는 담지 않는다.
+  const proxies = selectProxiesIn(row);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!(node.nodeValue ?? "").trim()) continue;
+    if (proxies.some((p) => p.contains(node))) continue;
     if (out.length >= ROW_TEXT_NODES_MAX) return null;
     out.push({ node: new WeakRef(node as Text), value: node.nodeValue ?? "" });
   }
@@ -946,12 +1103,15 @@ export function recheckApproved(
   info: TargetInfo,
   relation: Relation | null = null,
   inFlight = false,
+  // 실행이 끝난 뒤 반영을 확인하는 보고(무엇을 실행할지 정하지 않음). 해시만 바뀐 기준 주소는 같게 본다(#88).
+  afterWrite = false,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const pinned = inFlight ? pinnedRowOf(el) : null;
-  const now = fullInfo(kind, el, pinned);
-  if (!(inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info))) return describeDifference(info, now);
-  const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
+  const now = fullInfo(kind, el, pinned, inFlight ? inFlightSubstitute(el, info, pinned) : undefined);
+  const sameNow = inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info);
+  if (!sameNow) return describeDifference(info, now);
+  const added = riskAdded(kind, el, info, afterWrite) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
   const relationMoved = relationChanged(kind, el, relation);
   if (relationMoved) return relationMoved;

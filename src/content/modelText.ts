@@ -29,6 +29,34 @@ function factsOf(el: Element): ProtectFacts {
 
 const MAX_ANCESTORS = 400;
 
+const PROXY_WIDGET_SELECTOR = "[role='combobox' i], [aria-haspopup='listbox' i]";
+
+// 숨긴 select를 대신 보여 주는 콤보박스(#88 — select2 등의 커스텀 선택 상자). 구조로만 정한다(클래스·라이브러리 이름은 보지 않음):
+// - select 자신은 aria-hidden="true"만으로 숨겨져 있다(hidden 속성·display:none·visibility:hidden이 아님 — 그런 select는
+//   대리 위젯이 있어도 숨긴 칸이다).
+// - 바로 다음 형제 요소가 보이고(숨김·편집 영역 아님), 그 요소가 role=combobox·aria-haspopup=listbox이거나 그 안에 그런
+//   요소가 정확히 하나 있다. 돌려주는 것은 그 콤보박스 요소 자신이다(형제 안의 다른 글자는 대리 표시가 아니다).
+// 이런 select의 선택지는 콤보박스를 열면 화면에 보이는 글자다. 조상의 보호 여부는 부르는 쪽이 따로 본다.
+export function selectProxyOf(select: Element): Element | null {
+  if (select.localName !== "select") return null;
+  const own = factsOf(select);
+  if (!own.ariaHidden || own.hidden || own.display === "none" || own.visibility === "hidden" || own.visibility === "collapse") {
+    return null;
+  }
+  const next = select.nextElementSibling;
+  if (!next || protectedReason(factsOf(next)) !== null) return null;
+  let combo: Element | null = null;
+  if (next.matches(PROXY_WIDGET_SELECTOR)) combo = next;
+  else {
+    const inner = next.querySelectorAll(PROXY_WIDGET_SELECTOR);
+    if (inner.length === 1) combo = inner[0];
+  }
+  if (!combo || inProtectedArea(combo)) return null;
+  const rect = combo.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  return combo;
+}
+
 // select의 선택지가 숨겨졌는지: 선택지에서 select까지의 모든 요소(optgroup, 커스텀 select의 감싼 요소 포함) 중
 // hidden·aria-hidden·display:none·편집 영역이 있으면 숨긴 것. select 자신은 값 컨트롤이라 inProtectedArea로 볼 수
 // 없어 따로 본다(선택지의 계산 스타일에는 조상의 display:none이 드러나지 않는다).
@@ -43,7 +71,9 @@ export function optionHidden(o: Element): boolean {
 // el이 보호 영역 안인지. 위로 올라가며 DOM 부모, shadow root의 host, 슬롯에 배치된 노드의 슬롯 쪽 조상,
 // 같은 출처 iframe의 frame 요소까지 본다. selfIsControl이면 시작 요소 자신(값 컨트롤)의 '컨트롤' 사유는 빼고 본다
 // (컨트롤의 공개 이름은 계산하고 값만 읽지 않는다). 그때도 컨트롤 자신의 숨김·편집 속성은 본다.
-export function inProtectedArea(el: Element, selfIsControl = false): boolean {
+// ignoreSelfAriaHidden: 시작 요소 자신의 aria-hidden만 보지 않는다(대리 콤보박스로 보여 주는 숨긴 select, #88). 그 밖의 보호
+// 조건(편집 영역·hidden·display·슬롯·조상)은 그대로 본다.
+export function inProtectedArea(el: Element, selfIsControl = false, ignoreSelfAriaHidden = false): boolean {
   const seen = new Set<Element>();
   const queue: Element[] = [el];
   let visited = 0;
@@ -53,7 +83,8 @@ export function inProtectedArea(el: Element, selfIsControl = false): boolean {
     seen.add(cur);
     // 끝까지 보지 못하면 보호 영역으로 본다(덜 보내는 쪽).
     if (++visited > MAX_ANCESTORS) return true;
-    const facts = factsOf(cur);
+    const raw = factsOf(cur);
+    const facts = cur === el && ignoreSelfAriaHidden ? { ...raw, ariaHidden: false } : raw;
     // 시작 요소가 값 컨트롤이면 '컨트롤'이라는 사유만 빼고(이름은 계산한다) 자신의 숨김·편집 여부는 그대로 본다.
     const selfControl = cur === el && selfIsControl && VALUE_CONTROL_TAGS.has(cur.localName);
     const reason = protectedReason(selfControl ? { ...facts, tag: "" } : facts);
@@ -88,9 +119,9 @@ function inlineDisplay(display: string | null): boolean {
 
 // root 아래의 글자(합성 트리 순서: 열린 shadow root와 슬롯에 배치된 노드 포함). 보호 요소의 하위 트리는 뺀다.
 // 슬롯은 평탄화하지 않고 한 단계씩 따라간다(안쪽 슬롯 자신의 보호 속성도 검사하게).
-export function modelText(root: Element, max: number): string {
+export function modelText(root: Element, max: number, opts: { substitute?: ReadonlyMap<Element, string> } = {}): string {
   if (inProtectedArea(root)) return "";
-  return subtreeText(root, max);
+  return subtreeTextInfo(root, max, opts).text;
 }
 
 // root 아래 글자만 모은다(root 자신과 조상의 보호 판정은 부르는 쪽이 한다 — select 안의 선택지처럼 조상이 값 컨트롤인 경우).
@@ -99,7 +130,13 @@ export function subtreeText(root: Element, max: number): string {
 }
 
 // cut: 순회 한도에 걸려 끝까지 모으지 못했는지(그 글자로 대상을 식별하면 안 된다).
-export function subtreeTextInfo(root: Element, max: number): { text: string; cut: boolean } {
+// substitute: 이 요소들의 글자 대신 주어진 글자를 넣는다(입력 도중 비교에서 이번 호출이 쓴 select의 대리 콤보박스를 승인 때
+// 글자로 되돌리려고, #88). 모델에 보내는 글자에는 쓰지 않는다.
+export function subtreeTextInfo(
+  root: Element,
+  max: number,
+  opts: { substitute?: ReadonlyMap<Element, string> } = {},
+): { text: string; cut: boolean } {
   const limit = max * 4;
   let out = "";
   const childrenOf = (node: Node): Node[] => {
@@ -128,8 +165,15 @@ export function subtreeTextInfo(root: Element, max: number): { text: string; cut
     if (node.nodeType !== Node.ELEMENT_NODE) continue;
     const facts = factsOf(node as Element);
     if (protectedReason(facts) !== null) continue;
+    // 입력 도중 비교용: 이번 호출이 쓴 select의 대리 콤보박스 글자는 승인 때 글자로 바꿔 넣는다(#88).
     // 블록 경계의 글자만 띄운다(줄 안 요소 경계는 붙인다).
     const block = !inlineDisplay(facts.display) || facts.tag === "br";
+    // 입력 도중 비교용: 이번 호출이 쓴 select의 대리 콤보박스 글자는 승인 때 글자로 바꿔 넣는다(#88). 경계 공백은 원래 순회와 같게.
+    const swapped = opts.substitute?.get(node as Element);
+    if (swapped !== undefined) {
+      out += block ? ` ${swapped} ` : swapped;
+      continue;
+    }
     if (block) {
       out += " ";
       stack.push(" ");

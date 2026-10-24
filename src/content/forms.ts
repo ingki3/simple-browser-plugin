@@ -16,10 +16,11 @@ import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedCon
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { clickRiskOf } from "./clickables";
-import { inProtectedArea, modelName, optionHidden, subtreeTextInfo } from "./modelText";
+import { inProtectedArea, modelName, optionHidden, selectProxyOf, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
   noteChoiceWritten,
+  noteChosenOption,
   noteWritten,
   peekApproved,
   recheckApproved,
@@ -38,7 +39,9 @@ function isFieldElement(el: Element): el is FieldElement {
   return isTag(el, "input") || isTag(el, "textarea") || isTag(el, "select");
 }
 
-function isVisible(el: HTMLElement): boolean {
+// 레이아웃 기준의 보임: 크기가 있고 display·visibility·opacity로 숨기지 않았다. aria-hidden은 보지 않는다
+// (보조 기술에서만 숨긴 칸도 화면에는 있다 — 숨긴 영역의 글자를 보내지 않는 판정은 inProtectedArea, 대리 위젯은 selectProxyOf).
+function layoutVisible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   const style = el.ownerDocument.defaultView?.getComputedStyle(el);
@@ -58,7 +61,7 @@ export function proxyLabel(el: Element): HTMLLabelElement | null {
   if (!isTag(el, "input") || (el.type !== "checkbox" && el.type !== "radio")) return null;
   for (const label of Array.from(el.labels ?? [])) {
     if (label.control !== el) continue;
-    if (!isVisible(label) || inProtectedArea(label)) continue;
+    if (!layoutVisible(label) || inProtectedArea(label)) continue;
     if (closestAcross(label, PROXY_BLOCKERS)) continue;
     return label;
   }
@@ -67,12 +70,12 @@ export function proxyLabel(el: Element): HTMLLabelElement | null {
 
 // 숨긴 칸을 대신 보여 주는 label(칸이 보이면 null). 손 넘기기 표시가 찾기 결과와 같은 기준으로 보이는 쪽을 가리키게.
 export function visibleProxy(el: HTMLElement): HTMLLabelElement | null {
-  return isVisible(el) ? null : proxyLabel(el);
+  return layoutVisible(el) ? null : proxyLabel(el);
 }
 
 // 숨긴 칸을 보이는 label로 바꾸는 칸인지(보이는 칸은 지금처럼 칸 자신에 쓴다).
 function proxied(el: HTMLElement): boolean {
-  return !isVisible(el) && proxyLabel(el) !== null;
+  return !layoutVisible(el) && proxyLabel(el) !== null;
 }
 
 // 모델에 돌려주는 칸 이름. 숨긴 칸 자신에서 이름을 얻지 못하면(display:none·aria-hidden인 칸은 modelName이 비운다)
@@ -1006,7 +1009,7 @@ export function personalValuedElements(
 
 const FIELD_KIND: TargetKind = {
   prefix: "f",
-  visible: isVisible,
+  visible: layoutVisible,
   requireVisible: false,
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
   modelName: fieldModelName,
@@ -1327,8 +1330,10 @@ function requestProblem(el: FieldElement, value: string): string | null {
 
 // 모델에 돌려줄 칸 하나(#43): 사용자가 입력한 값은 담지 않는다.
 function fieldForModel(el: FieldElement, id: string): FormField {
-  // 칸 자신이 편집 영역·숨은 영역 안이면 이름·선택지도 돌려주지 않는다.
-  const area = inProtectedArea(el, true);
+  // 칸 자신이 편집 영역·숨은 영역 안이면 이름·선택지도 돌려주지 않는다. 다만 aria-hidden으로 숨기고 바로 옆의 대리 위젯
+  // (select2 등)으로 보여 주는 select는 칸 자신의 aria-hidden을 숨김으로 보지 않는다(조상은 그대로 본다, #88).
+  const proxied = isTag(el, "select") && !!selectProxyOf(el);
+  const area = inProtectedArea(el, true, proxied);
   // 행 문맥은 등록한 기술의 것(비교에 고정된 글자)을 그대로 돌려준다.
   const context = registeredInfo(id)?.modelContext;
   const field: FormField = {
@@ -1388,7 +1393,7 @@ function collectFormFields(): FormField[] {
     root.querySelectorAll("input, textarea, select").forEach((el) => {
       if (!isFieldElement(el)) return;
       if (isTag(el, "input") && SKIP_INPUT_TYPES.has(el.type)) return;
-      if (!isVisible(el) && !proxyLabel(el)) return;
+      if (!layoutVisible(el) && !proxyLabel(el)) return;
       if (el.disabled) return;
       if (!isTag(el, "select") && el.readOnly) return;
 
@@ -1721,7 +1726,11 @@ export async function fillFormFields(
           if (!expectedSig) noteWritten(callId, el, v);
         },
         guard,
-        () => noteChoiceWritten(callId, el),
+        () => {
+          noteChoiceWritten(callId, el);
+          // 고른 선택지는 값을 쓴 직후·페이지 처리기 전에만 기록한다(처리기가 바꾼 선택지를 이번 호출의 것으로 덮지 않게, #88).
+          if (isTag(el, "select")) noteChosenOption(callId, el);
+        },
       );
     } catch (err) {
       if (!(err instanceof ChangeBlocked)) throw err;
@@ -1729,6 +1738,7 @@ export async function fillFormFields(
       halted = true;
       continue;
     }
+
     if (!filled) {
       results.push({ id: f.id, label, applied: false, note: "맞는 선택지가 없거나 이 값으로 고를 수 없습니다" });
       continue;
@@ -1755,8 +1765,9 @@ export async function fillFormFields(
       result.note = "입력 뒤 페이지가 칸을 새로 그려 값이 남았는지 확인하지 못했습니다";
       continue;
     }
-    // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다.
-    const changed = recheckApproved(FIELD_KIND, el, info, null, true);
+    // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다. 이 확인은 실행이 끝난 뒤의
+    // 보고라 해시만 바뀐 기준 주소(고르면 해시에 반영하는 필터 화면)는 같게 본다(#88). 남은 칸을 쓰기 전 확인은 해시까지 본다.
+    const changed = recheckApproved(FIELD_KIND, el, info, null, true, true);
     if (changed) {
       result.note = `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;
     } else if (appliedValue(el, value) || (actual !== undefined && el.value === actual && sameIgnoringSpace(actual, value))) {
