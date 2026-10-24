@@ -2,6 +2,7 @@
 // 보안 모델과 한계는 src/lib/trustedClick.ts 머리말.
 import {
   clickPoint,
+  clickPoints,
   GUARDED_EVENTS,
   GUARD_MS,
   type Point,
@@ -125,17 +126,51 @@ export function checkPoint(el: HTMLElement, p: Point): PointCheck {
   const hit = hitAt(el.ownerDocument, p);
   if (!hit) return { ok: false, reason: "누를 자리에 요소가 없음", inside: false };
   const chain = chainTo(hit, el);
-  if (!chain) return { ok: false, reason: "다른 요소가 대상을 덮고 있음", inside: false };
+  if (!chain) {
+    // 덮은 요소의 태그·역할만 알린다(글자는 담지 않는다).
+    const role = hit.getAttribute("role");
+    return { ok: false, reason: `다른 요소(${hit.localName}${role ? ` role=${role.slice(0, 20)}` : ""})가 대상을 덮고 있음`, inside: false };
+  }
   const other = independentIn(chain, el);
   if (other) return { ok: false, reason: `대상 안의 다른 ${other.tagName.toLowerCase()} 요소가 받음`, inside: true };
   return { ok: true };
 }
 
+function rectsOf(el: HTMLElement) {
+  return Array.from(el.getClientRects()).map((r) => ({ left: r.left, top: r.top, width: r.width, height: r.height }));
+}
+
 // 대상의 누를 점(top 문서 viewport 기준 CSS px). top 문서의 대상만 다룬다.
 export function pointOf(el: HTMLElement): Point | null {
   if (el.ownerDocument !== document) return null;
-  const rects = Array.from(el.getClientRects()).map((r) => ({ left: r.left, top: r.top, width: r.width, height: r.height }));
-  return clickPoint(rects, { width: window.innerWidth, height: window.innerHeight });
+  return clickPoint(rectsOf(el), { width: window.innerWidth, height: window.innerHeight });
+}
+
+export type PointChoice =
+  | { ok: true; point: Point }
+  | { ok: false; reason: string; inside: boolean };
+
+// 대상에 닿는 첫 후보 점(#89). 가운데가 덮였으면 다른 점을 본다. 모두 실패하면 대상 안의 다른 활성 요소가 받는 이유를
+// 덮개보다 먼저 돌려준다(inside — 스크립트 클릭으로 대체할 이유).
+export function choosePoint(el: HTMLElement): PointChoice | null {
+  if (el.ownerDocument !== document) return null;
+  const points = clickPoints(rectsOf(el), { width: window.innerWidth, height: window.innerHeight });
+  if (!points.length) return null;
+  let inside: string | null = null;
+  let covered: string | null = null;
+  for (const p of points) {
+    const hit = checkPoint(el, p);
+    if (hit.ok) return { ok: true, point: p };
+    if (hit.inside) inside ??= hit.reason;
+    else covered ??= hit.reason;
+  }
+  return inside ? { ok: false, reason: inside, inside: true } : { ok: false, reason: covered ?? "다른 요소가 대상을 덮고 있음", inside: false };
+}
+
+// 대상의 첫 사각형(위치가 바뀌었는지 보려고). 누를 점이 가운데가 아닐 수 있어 점 대신 상자를 비교한다.
+export function boxOf(el: HTMLElement): { left: number; top: number; width: number; height: number } | null {
+  const r = el.getClientRects()[0];
+  return r ? { left: r.left, top: r.top, width: r.width, height: r.height } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +184,8 @@ export type RecheckPhase = "down" | "up" | "click";
 interface TopGuard {
   el: HTMLElement;
   point: Point;
+  // 준비 때 대상의 첫 사각형(누르기 직전 위치가 그대로인지 본다 — 누를 점이 가운데가 아닐 수 있어 상자로 비교).
+  box: { left: number; top: number; width: number; height: number } | null;
   // 승인한 대상이 아직 같은지(clickables의 recheckApproved). 바뀌었으면 이유.
   recheck: (phase: RecheckPhase) => string | null;
   deadline: number;
@@ -201,6 +238,7 @@ export function armTopGuard(
   const guard: TopGuard = {
     el,
     point,
+    box: boxOf(el),
     recheck,
     deadline: Date.now() + GUARD_MS,
     status: { status: "none" },
@@ -299,8 +337,16 @@ export function checkBeforePress(token: string): number {
   const remaining = guard.deadline - Date.now();
   const changed = guard.recheck("down");
   if (changed) fail(changed);
-  const now = pointOf(guard.el);
-  if (!now || Math.abs(now.x - guard.point.x) > 1 || Math.abs(now.y - guard.point.y) > 1) fail("대상의 위치가 바뀜");
+  const now = boxOf(guard.el);
+  const was = guard.box;
+  const moved =
+    !now ||
+    !was ||
+    Math.abs(now.left - was.left) > 1 ||
+    Math.abs(now.top - was.top) > 1 ||
+    Math.abs(now.width - was.width) > 1 ||
+    Math.abs(now.height - was.height) > 1;
+  if (moved) fail("대상의 위치가 바뀜");
   const hit = checkPoint(guard.el, guard.point);
   if (!hit.ok) fail(hit.reason);
   return remaining;

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { clickPoint, describeMissedClick, frameNeedsGuard, guardTimeLeft, GUARD_MS, GUARD_MIN_REMAINING_MS, unguardedFrame } from "../src/lib/trustedClick.ts";
+import { clickPoint, clickPoints, describeMissedClick, frameNeedsGuard, guardTimeLeft, GUARD_MS, GUARD_MIN_REMAINING_MS, unguardedFrame } from "../src/lib/trustedClick.ts";
 
 const VIEW = { width: 800, height: 600 };
 
@@ -69,4 +69,19 @@ test("describeMissedClick: 다른 프레임이 막은 입력·화면 밖 점·�
     describeMissedClick({ seen: ["pointerdown", "mousedown", "pointerup"], viewport, point: { x: 10, y: 10 }, frameBlocked: 0 }),
     "이 문서가 받은 입력: pointerdown, mousedown, pointerup — click이 생기지 않음",
   );
+});
+
+test("clickPoints: 가운데 다음 안쪽 네 점, 화면 밖 사각형은 건너뜀(#89)", () => {
+  const pts = clickPoints([{ left: -500, top: 0, width: 100, height: 100 }, { left: 0, top: 0, width: 200, height: 40 }], VIEW);
+  assert.deepEqual(pts[0], { x: 100, y: 20 });
+  assert.deepEqual(pts.slice(1), [
+    { x: 50, y: 10 },
+    { x: 150, y: 10 },
+    { x: 50, y: 30 },
+    { x: 150, y: 30 },
+  ]);
+  assert.deepEqual(clickPoints([], VIEW), []);
+  // 첫 후보는 clickPoint와 같다.
+  const r = [{ left: 10, top: 20, width: 100, height: 40 }];
+  assert.deepEqual(clickPoints(r, VIEW)[0], clickPoint(r, VIEW));
 });
