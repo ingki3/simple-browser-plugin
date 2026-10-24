@@ -332,3 +332,13 @@ test("sameApprovedInFlight: 대리 위젯 글자(선택값)만 바뀐 행은 입
   // 대리 위젯 밖의 글자가 바뀌면 입력 도중에도 다르다.
   assert.equal(sameApprovedInFlight({ ...now, contextSansProxy: "연식 (필수) ~" }, approved), false);
 });
+
+test("sameApprovedInFlight: 이번 호출이 쓰지 않은 대리 위젯 select의 선택 변화는 막는다(#88)", () => {
+  const base = { ...link, tag: "button", role: "button", href: "", context: "x", modelContext: "x", contextSansProxy: "y", modelContextSansProxy: "y" };
+  const approved = { ...base, proxySelected: ["0", "0"] };
+  // 첫 select만 이번 호출이 썼다.
+  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["3", "0"] }, approved, new Set([0])), true);
+  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["0", "2"] }, approved, new Set([0])), false);
+  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["3", "0"] }, approved), false);
+  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["0"] }, approved, new Set([0, 1])), false);
+});

@@ -25,6 +25,9 @@ export interface TargetInfo {
   // 행에 숨긴 select의 대리 위젯(#88)이 있을 때, 그 표시 글자(선택값)를 뺀 원문 행 글자·모델용 행 문맥. 입력 도중 비교만 쓴다.
   contextSansProxy?: string;
   modelContextSansProxy?: string;
+  // 행 안 대리 위젯이 있는 select들의 선택 위치(행 안 순서대로). 입력 도중 비교에서 대리 위젯 글자를 뺀 대신, 이번 호출이 쓰지
+  // 않은 select의 선택이 바뀌었는지는 이것으로 본다.
+  proxySelected?: string[];
   // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상과 입력 칸(#56).
   // 모델의 선택 근거라 비교한다.
   modelContext?: string;
@@ -142,7 +145,16 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
 // 자동완성 입력 칸의 행에 새로 붙은 팝업 목록은 content 쪽에서 원문 행 글자에서 빼고 넘긴다(src/content/targets.ts pinnedRowOf).
 // 숨긴 select의 대리 위젯 글자(선택값, #88)는 입력 도중 비교에서 뺀다 — 같은 입력 호출이 그 select에 쓴 값이 대리 위젯에
 // 보이는 것을 행 변화로 보지 않게. 승인·실행 직전(sameApproved)은 그 글자까지 비교한다.
-export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
+// writtenProxies: 행 안 대리 위젯 select 중 이번 입력 호출이 써 넣었고 지금도 그 값인 것의 순서(그 선택 변화만 허용).
+export function sameApprovedInFlight(
+  now: TargetInfo,
+  approved: TargetInfo,
+  writtenProxies: ReadonlySet<number> = new Set(),
+): boolean {
+  const before = approved.proxySelected ?? [];
+  const after = now.proxySelected ?? [];
+  if (before.length !== after.length) return false;
+  if (before.some((v, i) => v !== after[i] && !writtenProxies.has(i))) return false;
   if ((now.contextSansProxy ?? now.context) !== (approved.contextSansProxy ?? approved.context)) return false;
   if (!onlyAdded(approved.modelContextSansProxy ?? approved.modelContext ?? "", now.modelContextSansProxy ?? now.modelContext ?? "")) {
     return false;

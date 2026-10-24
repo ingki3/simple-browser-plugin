@@ -137,6 +137,24 @@ function textOf(el: Element, exclude: Element[] = []): string {
   return raw.replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
 }
 
+// el 안의 대리 위젯이 있는 select(문서 순서).
+function proxiedSelectsIn(el: Element): HTMLSelectElement[] {
+  return Array.from(el.querySelectorAll("select")).filter((s) => !!selectProxyOf(s));
+}
+
+// 입력 도중 비교에서 선택 변화를 허용할 대리 위젯 select의 순서: 이번 호출(consentCall)이 써 넣었고 지금도 그 값인 것.
+function writtenProxyIndexes(el: HTMLElement, info: TargetInfo, pinned: PinnedRow | null): Set<number> {
+  const out = new Set<number>();
+  const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
+  if (!written) return out;
+  const row = pinned?.row ?? rowElement(el)?.row;
+  if (!row) return out;
+  proxiedSelectsIn(row).forEach((s, i) => {
+    if (written.has(s) && written.get(s) === s.value) out.add(i);
+  });
+  return out;
+}
+
 // el 안(el 자신 포함)의 숨긴 select 대리 위젯.
 function selectProxiesIn(el: Element): Element[] {
   const out: Element[] = [];
@@ -275,6 +293,7 @@ function baseInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | nul
   const proxies = row ? selectProxiesIn(row.row) : [];
   if (row && proxies.length) {
     detail.contextSansProxy = textOf(row.row, [...(pinnedRow?.exclude ?? []), ...proxies]);
+    detail.proxySelected = proxiedSelectsIn(row.row).map((s) => String(s.selectedIndex));
     if (kind.detail || kind.rowContext) detail.modelContextSansProxy = modelContextOf(row.row, { skipSelectProxies: true });
   }
   if (kind.detail) {
@@ -773,15 +792,18 @@ export function takeApproved(
   // 승인 때의 행을 구조가 그대로일 때만 다시 쓴다(pinnedRowOf).
   const pinned = inFlight ? pinnedRowOf(el) : null;
   const now = fullInfo(entry.kind, el, pinned);
-  if (!(inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info))) {
+  const sameNow = inFlight
+    ? sameApprovedInFlight(now, approved.info, writtenProxyIndexes(el, approved.info, pinned))
+    : sameApproved(now, approved.info);
+  if (!sameNow) {
     const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
     // (묶음 입력의 남은 칸도 멈춘다).
     if ((now.sensitive ?? null) !== (approved.info.sensitive ?? null)) throw new RiskAddedError(msg);
-    if (riskAdded(entry.kind, el, approved.info)) throw new RiskAddedError(msg);
+    if (riskAdded(entry.kind, el, approved.info, inFlight)) throw new RiskAddedError(msg);
     throw new Error(msg);
   }
-  const added = riskAdded(entry.kind, el, approved.info) ?? triggerRiskAdded(entry.kind, approved.relation, approved.info);
+  const added = riskAdded(entry.kind, el, approved.info, inFlight) ?? triggerRiskAdded(entry.kind, approved.relation, approved.info);
   if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
   const relationMoved = relationChanged(entry.kind, el, approved.relation);
   if (relationMoved) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${relationMoved}). 다시 찾으세요.`);
@@ -791,7 +813,8 @@ export function takeApproved(
 
 // 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
 // 자동 완성·페이지 스크립트가 승인 뒤에 칸을 채우면, 자동 실행이든 사람이 승인한 카드든 그대로 실행하지 않는다.
-function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string | null {
+// inFlight: 같은 입력 호출의 앞 칸을 쓴 뒤의 확인(해시만 바뀐 기준 주소는 그 입력의 결과로 본다).
+function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, inFlight = false): string | null {
   const now = kind.risk?.(el);
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
@@ -855,8 +878,12 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo): string 
   // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
   // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
   const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
-  // 해시만 바뀐 것(해시로 화면을 바꾸는 페이지 — #!?page=…)은 입력값(상대 주소)을 푸는 사이트·경로에 영향이 없어 보지 않는다(#88).
-  if (!toggleField && withoutHash(now.baseUri ?? "") !== withoutHash(info.baseUri ?? "")) return "문서 기준 주소가 바뀜";
+  // 입력 도중에는 해시만 바뀐 것(앞 칸 입력으로 해시 라우트가 바뀌는 페이지 — #!?page=…&regiDay=…)을 그 입력의 결과로 보고
+  // 넘어간다(#88). 첫 실행 전·승인 카드의 확인은 해시까지 본다(승인 뒤 다른 레코드 화면 #/records/B로 바뀌었으면 멈춤).
+  const sameBase = inFlight
+    ? withoutHash(now.baseUri ?? "") === withoutHash(info.baseUri ?? "")
+    : (now.baseUri ?? "") === (info.baseUri ?? "");
+  if (!toggleField && !sameBase) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
 }
@@ -977,8 +1004,9 @@ export function recheckApproved(
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const pinned = inFlight ? pinnedRowOf(el) : null;
   const now = fullInfo(kind, el, pinned);
-  if (!(inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info))) return describeDifference(info, now);
-  const added = riskAdded(kind, el, info) ?? triggerRiskAdded(kind, relation, info);
+  const sameNow = inFlight ? sameApprovedInFlight(now, info, writtenProxyIndexes(el, info, pinned)) : sameApproved(now, info);
+  if (!sameNow) return describeDifference(info, now);
+  const added = riskAdded(kind, el, info, inFlight) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
   const relationMoved = relationChanged(kind, el, relation);
   if (relationMoved) return relationMoved;
