@@ -36,12 +36,25 @@ const INDEPENDENT_SELECTOR = [
 ].join(", ");
 
 // 평평한 트리(slot 배치 포함)에서 부모. shadow root면 host로 올라간다.
+// 닫힌 shadow root에 배치된 요소는 assignedSlot이 null이라(DOM 표준), 부모 host의 닫힌 root에서 그 노드를 받은 slot을
+// 직접 찾는다(그 안의 제출 버튼 등을 건너뛰지 않게).
 function flatParent(node: Node): Node | null {
-  const slot = (node as Element).assignedSlot;
+  const slot = (node as Element).assignedSlot ?? closedSlotOf(node);
   if (slot) return slot;
   const parent = node.parentNode;
   if (parent && parent.nodeType === Node.DOCUMENT_FRAGMENT_NODE && (parent as ShadowRoot).host) return (parent as ShadowRoot).host;
   return parent;
+}
+
+function closedSlotOf(node: Node): HTMLSlotElement | null {
+  const host = node.parentNode;
+  if (!host || host.nodeType !== Node.ELEMENT_NODE || (host as Element).shadowRoot) return null;
+  const root = shadowOf(host as Element);
+  if (!root) return null;
+  for (const slot of Array.from(root.querySelectorAll("slot"))) {
+    if (slot.assignedNodes().includes(node as ChildNode)) return slot;
+  }
+  return null;
 }
 
 // node에서 el까지(el 제외) 올라가며 거친 요소. el 안이 아니면 null.
