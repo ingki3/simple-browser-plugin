@@ -1,4 +1,6 @@
-import { autoApproveBlock, destructiveClickBlock, destructiveFillBlock } from "@/lib/autoApprove";
+import { autoApproveBlock, destructiveClickBlock, destructiveFillBlock, looksPersonalValue, sensitiveUrlReason } from "@/lib/autoApprove";
+import { fillLink } from "@/lib/savedPages";
+import { markUsed, savedLinkById } from "../savedPagesStore";
 import { downloadScope, imageDownloadSources } from "@/lib/chatGrant";
 import { DOWNLOAD_LIMITS } from "@/lib/downloadPick";
 import { snapshotDownloads, takeChosenDownloads } from "../downloadChoices";
@@ -392,6 +394,22 @@ export async function buildToolPreview(
         details: `${target.url}\n\n${warning}`,
       };
     }
+    case "open_saved_link": {
+      const args = parsedArgs as ToolArgs["open_saved_link"];
+      const link = await savedLinkById(args.id);
+      const url = normalizeNavigationUrl(fillLink(link, args.values));
+      const host = new URL(url).hostname;
+      const values = Object.values(args.values ?? {});
+      // 사용자가 저장한 출처·경로라 자동 실행은 구조로 허용한다(#86 사용자 결정). 모델이 넣은 값이 개인정보 모양이거나
+      // 완성한 주소에 결제·개인정보 단서가 보이면 묻는다(더 묻는 쪽으로만 쓰는 신호).
+      const personal = values.some((v) => looksPersonalValue(v)) ? "자리 값이 개인정보처럼 보임" : null;
+      return {
+        summary: `${followingPopup(turnTab) ? "팝업 창 따라가기를 멈추고 원래 탭에서 " : ""}저장한 링크 '${truncate(link.name, 60)}'을(를) 엽니다(${host}).`,
+        details: `${link.purpose ? `용도: ${link.purpose}\n` : ""}${url}`,
+        autoBlock: personal ?? sensitiveUrlReason(url),
+        execArgs: { ...args, url },
+      };
+    }
     case "navigate_to_url": {
       const args = parsedArgs as ToolArgs["navigate_to_url"];
       const url = normalizeNavigationUrl(args.url);
@@ -553,6 +571,26 @@ export interface ExecOptions {
 function inputLabel(data: InputClickResult): string {
   if (data.input === "trusted") return " · 실제 입력";
   return data.inputNote ? ` · 스크립트 클릭(${truncate(data.inputNote, 60)})` : "";
+}
+
+// 원래 탭을 웹 주소로 이동한다(navigate_to_url·open_saved_link). 팝업을 따라가던 중이면 따라가기를 끝낸다.
+async function navigateOriginalTab(url: string, turnTab: TurnTab): Promise<{ leftPopup: boolean; note: string }> {
+  // 새 탭·설정 같은 내부 페이지에서도 웹 주소로는 이동할 수 있다(normalizeNavigationUrl이 http(s)만 통과시킨다).
+  // 이동은 늘 원래 탭에서 한다. 팝업 창을 따라가던 중이면 따라가기를 끝낸다(팝업 창은 열린 채로 둔다).
+  const tabId = await resolveTurnTab(turnTab, { allowInternal: true, originalTab: true });
+  // 탭으로 열린 팝업을 따라가던 중이면 원래 탭은 그 탭 뒤에 가려 있다. 이동하는 원래 탭을 앞으로 띄워 사용자가 보게 한다.
+  const fromTabPopup = followingTabPopup(turnTab);
+  const leftPopup = stopFollowingPopups(turnTab);
+  markOptimisticNavigation(tabId);
+  const moved = await chrome.tabs.update(tabId, fromTabPopup ? { url, active: true } : { url });
+  // 탭 팝업 위에 팝업 창이 떠 있었으면 그 창이 포커스를 갖고 있다. 원래 탭의 창도 앞으로 가져온다.
+  if (fromTabPopup && moved?.windowId !== undefined) {
+    await chrome.windows.update(moved.windowId, { focused: true }).catch(() => {});
+  }
+  const note = fromTabPopup
+    ? "팝업으로 열린 탭 따라가기를 멈추고 원래 탭을 앞으로 띄워 이동했습니다(팝업 탭은 열린 채로 둡니다). 이제 도구는 원래 탭에서 동작합니다."
+    : "팝업 창 따라가기를 멈추고 원래 탭을 이동했습니다. 이제 도구는 원래 탭에서 동작합니다.";
+  return { leftPopup, note };
 }
 
 export async function executeTool(
@@ -837,25 +875,24 @@ async function runTool(
     case "navigate_to_url": {
       const args = parsedArgs as ToolArgs["navigate_to_url"];
       const url = normalizeNavigationUrl(args.url);
-      // 새 탭·설정 같은 내부 페이지에서도 웹 주소로는 이동할 수 있다(normalizeNavigationUrl이 http(s)만 통과시킨다).
-      // 이동은 늘 원래 탭에서 한다. 팝업 창을 따라가던 중이면 따라가기를 끝낸다(팝업 창은 열린 채로 둔다).
-      const tabId = await resolveTurnTab(turnTab, { allowInternal: true, originalTab: true });
-      // 탭으로 열린 팝업을 따라가던 중이면 원래 탭은 그 탭 뒤에 가려 있다. 이동하는 원래 탭을 앞으로 띄워 사용자가 보게 한다.
-      const fromTabPopup = followingTabPopup(turnTab);
-      const leftPopup = stopFollowingPopups(turnTab);
-      markOptimisticNavigation(tabId);
-      const moved = await chrome.tabs.update(tabId, fromTabPopup ? { url, active: true } : { url });
-      // 탭 팝업 위에 팝업 창이 떠 있었으면 그 창이 포커스를 갖고 있다. 원래 탭의 창도 앞으로 가져온다.
-      if (fromTabPopup && moved?.windowId !== undefined) {
-        await chrome.windows.update(moved.windowId, { focused: true }).catch(() => {});
-      }
-      const note = fromTabPopup
-        ? "팝업으로 열린 탭 따라가기를 멈추고 원래 탭을 앞으로 띄워 이동했습니다(팝업 탭은 열린 채로 둡니다). 이제 도구는 원래 탭에서 동작합니다."
-        : "팝업 창 따라가기를 멈추고 원래 탭을 이동했습니다. 이제 도구는 원래 탭에서 동작합니다.";
+      const { leftPopup, note } = await navigateOriginalTab(url, turnTab);
       return {
         ok: true,
         summary: `${leftPopup ? "팝업 창 따라가기를 멈추고 원래 탭 " : "현재 탭 "}이동 시작: ${truncate(url, 100)}`,
         data: leftPopup ? { url, note } : { url },
+      };
+    }
+    case "open_saved_link": {
+      // 미리보기가 저장 링크로 만든 주소(execArgs.url)만 쓴다. 승인 카드에 보인 주소와 같다.
+      const args = parsedArgs as ToolArgs["open_saved_link"] & { url?: string };
+      if (!args.url) throw new Error("저장한 링크 주소를 만들지 못했습니다.");
+      const link = await savedLinkById(args.id);
+      const { leftPopup, note } = await navigateOriginalTab(args.url, turnTab);
+      await markUsed(link.id).catch(() => {});
+      return {
+        ok: true,
+        summary: `저장한 링크 '${truncate(link.name, 40)}' 열기 시작: ${truncate(args.url, 100)}`,
+        data: leftPopup ? { url: args.url, link: link.name, note } : { url: args.url, link: link.name },
       };
     }
     case "find_clickables": {

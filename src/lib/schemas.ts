@@ -107,6 +107,15 @@ export const queryDomArgs = z
   })
   .strict();
 
+// 저장한 링크 열기(#86): id와 자리 값. 값의 개수·길이는 여기서 한 번, 자리 이름과의 대응은 저장 링크를 읽어 다시 본다.
+export const openSavedLinkArgs = z
+  .object({
+    id: z.string().trim().min(1).max(100),
+    values: z.record(z.string(), z.string().max(200)).optional(),
+  })
+  .strict()
+  .refine((a) => Object.keys(a.values ?? {}).length <= 10, "자리 값은 10개까지입니다.");
+
 export const navigateToUrlArgs = z
   .object({
     url: z
@@ -222,6 +231,7 @@ export const toolArgsSchemas = {
   capture_page: capturePageArgs,
   query_dom: queryDomArgs,
   navigate_to_url: navigateToUrlArgs,
+  open_saved_link: openSavedLinkArgs,
   find_clickables: findClickablesArgs,
   click_element: clickElementArgs,
   google_sheets_list: googleSheetsListArgs,

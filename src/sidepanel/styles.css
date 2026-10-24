@@ -1128,3 +1128,54 @@ body,
   overflow-wrap: anywhere;
   font-size: 12px;
 }
+
+/* 저장 링크 템플릿(#86) */
+.offer-params {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.offer-params li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.offer-param-key {
+  font-family: ui-monospace, monospace;
+}
+
+.offer-param-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.offer-slot-name {
+  flex-basis: 100%;
+}
+
+.saved-purpose {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.saved-pages .saved-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: 4px;
+}
+
+.saved-pages li.saved-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

@@ -30,6 +30,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   fill_form_fields: ACTION,
   click_element: ACTION,
   navigate_to_url: ACTION,
+  // 모델이 만든 자리 값을 저장한 링크의 사이트로 보낸다(외부 본문 보호 중에는 늘 묻는다).
+  open_saved_link: ACTION,
   download_images: ACTION,
   // 페이지 캡처(#49): 전체 캡처는 스크롤·스타일을 잠시 바꾼다. 결과에는 확장이 정한 이름·크기만 싣는다.
   capture_page: ACTION,

@@ -270,6 +270,23 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "open_saved_link",
+    description:
+      "사용자가 저장한 링크(요청에 붙은 [저장한 링크 후보 데이터]의 id)를 현재 탭에서 연다. 사용자의 요청이 저장 링크의 용도(purpose·name)에 맞으면 사이트를 찾아가거나 검색창을 채우지 말고 이것을 먼저 쓴다. 링크의 slots마다 values에 값을 넣는다(예: 쇼핑 검색 링크면 상품명). 주소는 사용자가 저장한 그대로이고 자리 값만 바뀐다. 연 뒤에는 평소처럼 관측한다.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "후보 데이터의 id" },
+        values: {
+          type: "object",
+          description: "자리 이름(slots의 key) → 넣을 값(200자까지). 자리가 없는 링크면 생략.",
+          additionalProperties: { type: "string" },
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
     name: "find_clickables",
     description:
       "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link, 그리고 목록에서 고르는 위젯의 role=option·menuitem*·tab·combobox·aria-haspopup=listbox 트리거, 체크 위젯 role=checkbox·switch·radio, 진짜 checkbox·radio — 화면에서 숨긴 칸은 연결된 보이는 label을 tag=label로 — 와 그 role)를 문서 순서로 반환한다. 필터 대화상자의 선택지(경유·항공사 등)도 여기서 찾아 click_element로 누른다. 글자가 같아도 요소마다 따로 반환하며, context(대상이 든 묶음의 화면 글자)와 states(selected·checked·expanded 등)로 구분한다. 펼친 트리거가 여럿이라 어느 위젯의 것인지 정할 수 없는 선택지는 반환하지 않는다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다.",
