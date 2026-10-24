@@ -1,4 +1,5 @@
 import type { ClickableElement, PageRegion } from "@/lib/messages";
+import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
 import { getAccessibleRoots, isTag } from "./docs";
@@ -47,6 +48,8 @@ import {
   type TargetKind,
 } from "./targets";
 import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
+import type { TrustedPrepare } from "@/lib/trustedClick";
+import { armTopGuard, checkPoint, pointOf } from "./trustedClick";
 
 const BASE_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
@@ -504,44 +507,88 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
+// trusted(가드 토큰)가 있으면 실제 입력 클릭(0.2.0)으로 준비만 한다: 누를 점을 계산하고 가드를 건 뒤 돌려주고, 누르기는
+// 백그라운드가 chrome.debugger로 한다. 실제 입력을 쓸 수 없는 대상(iframe 안, 보이는 사각형 없음, 대상 안의 다른 활성
+// 요소가 점을 받음)이면 지금처럼 스크립트로 누른다.
 export function clickElement(
   args: { id: string },
   callId: string,
-): { clicked: boolean; text: string; href: string; effectToken: string } {
+  trusted?: string,
+): { clicked: boolean; text: string; href: string; effectToken: string; trusted?: TrustedPrepare } {
   const { el, info, relation } = takeApproved(args.id, callId, CLICK_KIND.prefix);
   const text = info.modelName ?? "";
   const href = isTag(el, "a") ? el.href : "";
   const effectToken = `${callId}:${Date.now()}`;
 
+  if (trusted) {
+    scrollToCenter(el);
+    const changed = recheckApproved(CLICK_KIND, el, info, relation);
+    if (changed) {
+      startEffectWatch(effectToken, el, changed);
+      return { clicked: true, text, href, effectToken, trusted: { mode: "aborted" } };
+    }
+    const point = pointOf(el);
+    let reason: string | null = null;
+    if (el.ownerDocument !== document) reason = "iframe 안의 대상";
+    else if (!point) reason = "화면에 보이는 사각형이 없는 대상";
+    else {
+      const hit = checkPoint(el, point);
+      if (!hit.ok && !hit.inside) {
+        throw new Error(`실제 입력으로 누르지 않았습니다(${hit.reason}). 다시 관측하세요.`);
+      }
+      if (!hit.ok) reason = hit.reason;
+    }
+    if (reason || !point) {
+      const why = reason ?? "누를 점 없음";
+      setTimeout(() => scriptClick(el, info, relation, effectToken, false), 0);
+      return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
+    }
+    startEffectWatch(effectToken, el);
+    armTopGuard(trusted, el, point, () => recheckApproved(CLICK_KIND, el, info, relation));
+    return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
+  }
+
   // Defer actual click so the content-script response can fly back to the
   // background before a potential navigation tears down this context.
-  setTimeout(() => {
+  setTimeout(() => scriptClick(el, info, relation, effectToken, true), 0);
+
+  return { clicked: true, text, href, effectToken };
+}
+
+function scrollToCenter(el: HTMLElement): void {
+  try {
+    el.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "center" });
+  } catch {
     try {
-      el.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "center" });
-    } catch {
-      try {
-        el.scrollIntoView();
-      } catch {
-        /* ignore */
-      }
-    }
-    try {
-      el.focus({ preventScroll: true });
+      el.scrollIntoView();
     } catch {
       /* ignore */
     }
-    // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
-    // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
-    const changed = recheckApproved(CLICK_KIND, el, info, relation);
-    // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
-    startEffectWatch(effectToken, el, changed);
-    if (changed) return;
-    try {
-      el.click();
-    } catch (err) {
-      console.warn("[click_element] click threw", err);
-    }
-  }, 0);
+  }
+}
 
-  return { clicked: true, text, href, effectToken };
+function scriptClick(
+  el: HTMLElement,
+  info: TargetInfo,
+  relation: Relation | null,
+  effectToken: string,
+  scroll: boolean,
+): void {
+  if (scroll) scrollToCenter(el);
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    /* ignore */
+  }
+  // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
+  // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
+  const changed = recheckApproved(CLICK_KIND, el, info, relation);
+  // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
+  startEffectWatch(effectToken, el, changed);
+  if (changed) return;
+  try {
+    el.click();
+  } catch (err) {
+    console.warn("[click_element] click threw", err);
+  }
 }

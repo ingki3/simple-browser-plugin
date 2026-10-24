@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ActionLogField } from "@/sidepanel/components/ActionLogField";
 import { AutoApproveField } from "@/sidepanel/components/AutoApproveField";
 import { RememberPagesField } from "@/sidepanel/components/RememberPagesField";
+import { TrustedInputField } from "@/sidepanel/components/TrustedInputField";
 import { ShowThinkingField } from "@/sidepanel/components/ShowThinkingField";
 import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
 import {
@@ -36,6 +37,7 @@ const DEFAULTS: Settings = {
   autoApprove: false,
   showThinking: false,
   rememberPages: true,
+  trustedInput: false,
 };
 
 export function Options() {
@@ -63,6 +65,7 @@ export function Options() {
         autoApprove: raw.autoApprove === true,
         showThinking: raw.showThinking === true,
         rememberPages: raw.rememberPages !== false,
+        trustedInput: raw.trustedInput === true,
       });
     });
   }, []);
@@ -243,6 +246,11 @@ export function Options() {
       <RememberPagesField
         enabled={draft.rememberPages}
         onToggle={(rememberPages) => setDraft({ ...draft, rememberPages })}
+      />
+
+      <TrustedInputField
+        enabled={draft.trustedInput}
+        onToggle={(trustedInput) => setDraft({ ...draft, trustedInput })}
       />
 
       <ActionLogField

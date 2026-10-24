@@ -27,6 +27,7 @@ import {
 } from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction } from "./tools/dispatcher";
+import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
 import { getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
@@ -286,6 +287,8 @@ export class ChatAgent {
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
   // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
   private translatedTabs = new Set<number>();
+  // 실제 입력 클릭(0.2.0)의 디버거 상태. 턴이 끝나면 떼고, 새 대화면 새로 만든다(디버깅 취소 선택도 그때 풀린다).
+  private inputSession = new InputSession();
 
   constructor(private readonly port: chrome.runtime.Port) {}
 
@@ -293,6 +296,7 @@ export class ChatAgent {
     this.currentTurn += 1;
     this.cancelInFlight();
     this.stopTranslations();
+    void detachSession(this.inputSession);
   }
 
   private cancelInFlight(): void {
@@ -398,6 +402,8 @@ export class ChatAgent {
     this.allowedPersonalUrls.clear();
     this.externalContent = false;
     this.savedNavTarget = null;
+    void detachSession(this.inputSession);
+    this.inputSession = new InputSession();
   }
 
   // 도구 결과 메시지 내용. 팝업 창이 닫혀 원래 탭으로 돌아간 것처럼 도구가 동작하는 탭이 바뀌었으면 그 안내(tab)를
@@ -667,6 +673,8 @@ export class ChatAgent {
       endTurn("fail");
       this.send({ kind: "error", message: msg });
     } finally {
+      // 이 턴이 붙인 디버거를 뗀다. 새 턴에 밀렸으면 그 턴이 끝날 때 뗀다(같은 대화 상태를 쓰므로).
+      if (!this.isStale(turn)) void detachSession(this.inputSession);
       endKeepalive();
     }
   }
@@ -1266,6 +1274,7 @@ export class ChatAgent {
           const result = await executeTool(toolName, execArgs, callId, turnTab, toolAbort.signal, {
             viaGrant: grantRan,
             ...(grantRan && grantImages ? { grantImages } : {}),
+            inputSession: this.inputSession,
           });
           if (this.isStale(turn)) return false;
           debugLog(

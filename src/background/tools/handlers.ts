@@ -370,6 +370,8 @@ export async function callContentTool<T = unknown>(
   args: unknown,
   callId: string,
   turnTab: TurnTab,
+  // 실제 입력 클릭 준비(click_element만). 모델 인자와 따로 메시지에 싣는다.
+  trusted?: string,
 ): Promise<T> {
   const endCall = timeSpan(`tool:${toolName}`);
   const tabId = await resolveTurnTab(turnTab);
@@ -379,7 +381,7 @@ export async function callContentTool<T = unknown>(
   await waitForNavigationSettle(tabId, 10_000);
   const navWait = Date.now() - navStart;
   if (navWait > 50) debugLog("navigation:settled", `${navWait}ms`);
-  const msg: BgToContent = { kind: "tool_exec", toolName, args, callId };
+  const msg: BgToContent = { kind: "tool_exec", toolName, args, callId, ...(trusted ? { trusted } : {}) };
   const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
 
   const send = async (): Promise<ContentResponse<T>> => {

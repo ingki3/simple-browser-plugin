@@ -11,9 +11,10 @@ import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
+import { armFrameGuard, cancelGuard, checkBeforePress, disarm, frameBlocked, guardResult } from "./trustedClick";
 import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
 
-async function execTool(toolName: ToolName, args: unknown, callId: string): Promise<unknown> {
+async function execTool(toolName: ToolName, args: unknown, callId: string, trusted?: string): Promise<unknown> {
   switch (toolName) {
     case "describe_page":
       return describePage();
@@ -38,7 +39,7 @@ async function execTool(toolName: ToolName, args: unknown, callId: string): Prom
     case "find_clickables":
       return findClickables((args ?? {}) as { query?: string; limit?: number });
     case "click_element":
-      return clickElement(args as { id: string }, callId);
+      return clickElement(args as { id: string }, callId, trusted);
     case "capture_page":
       // 캡처 자체는 백그라운드가 하고, 여기서는 문서를 재고 전체 캡처의 세션을 연다(#49).
       {
@@ -73,6 +74,39 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
         ...(err instanceof TargetDriftError ? { diag: err.diag } : {}),
       } satisfies ContentResponse);
     }
+    return false;
+  }
+  if (msg.kind === "trusted_click_check") {
+    try {
+      sendResponse({ ok: true, data: checkBeforePress(msg.token) } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
+  if (msg.kind === "trusted_click_result") {
+    sendResponse({ ok: true, data: guardResult(msg.token) } satisfies ContentResponse);
+    return false;
+  }
+  if (msg.kind === "trusted_click_cancel") {
+    cancelGuard(msg.token, msg.reason);
+    sendResponse({ ok: true } satisfies ContentResponse);
+    return false;
+  }
+  if (msg.kind === "input_guard_arm") {
+    // top 문서의 가드는 click_element 준비가 건다. 다른 프레임만 받는다.
+    if (window === window.top) {
+      sendResponse({ ok: false, error: "top 문서" } satisfies ContentResponse);
+      return false;
+    }
+    armFrameGuard(msg.token, msg.ms);
+    sendResponse({ ok: true } satisfies ContentResponse);
+    return false;
+  }
+  if (msg.kind === "input_guard_disarm") {
+    const blocked = frameBlocked(msg.token);
+    disarm(msg.token);
+    sendResponse({ ok: true, data: blocked } satisfies ContentResponse);
     return false;
   }
   if (msg.kind === "action_effect") {
@@ -131,7 +165,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind !== "tool_exec") return false;
 
-  execTool(msg.toolName, msg.args, msg.callId)
+  execTool(msg.toolName, msg.args, msg.callId, msg.trusted)
     .then((data) => {
       const response: ContentResponse = { ok: true, data };
       sendResponse(response);

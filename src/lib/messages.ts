@@ -254,7 +254,15 @@ export type BgToPanel =
   | { kind: "settings_warning"; message: string };
 
 export type BgToContent =
-  | { kind: "tool_exec"; toolName: ToolName; args: unknown; callId: string }
+  // trusted: click_element를 실제 입력 클릭으로 준비만 하라는 가드 토큰(0.2.0). 모델 인자가 아니라 백그라운드가 붙인다.
+  | { kind: "tool_exec"; toolName: ToolName; args: unknown; callId: string; trusted?: string }
+  // 실제 입력 클릭의 단계(src/lib/trustedClick.ts). check·result·cancel은 준비한 top 문서에만, guard_arm·guard_disarm은
+  // top이 아닌 프레임마다 그 문서에 보낸다.
+  | { kind: "trusted_click_check"; token: string }
+  | { kind: "trusted_click_result"; token: string }
+  | { kind: "trusted_click_cancel"; token: string; reason: string }
+  | { kind: "input_guard_arm"; token: string; ms: number }
+  | { kind: "input_guard_disarm"; token: string }
   | { kind: "translate_batch"; texts: string[]; targetLang: string }
   | { kind: "translate_stop" }
   // 승인 카드용: id들이 find_* 때와 같은 요소인지 확인하고 이 호출의 승인 대상으로 남긴다.
@@ -310,6 +318,8 @@ export interface Settings {
   showThinking: boolean;
   // "이 페이지 기억하기": 사용자가 저장한 페이지를 같은 사이트에서 모델에 이동 후보로 준다(#30).
   rememberPages: boolean;
+  // 클릭을 chrome.debugger의 실제 마우스 입력으로 보낼지(0.2.0). 끄면(기본) 페이지 스크립트로 누른다.
+  trustedInput: boolean;
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;
