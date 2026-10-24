@@ -1,5 +1,6 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
-import { waitForNavigationSettle } from "../navigation";
+import { navigationError, waitForNavigationSettle } from "../navigation";
+import { describeNavigationError } from "@/lib/navError";
 import { debugLog, timeSpan } from "../debug";
 import { isBrowserInternalUrl } from "@/lib/siteTrust";
 
@@ -406,6 +407,9 @@ export async function callContentTool<T = unknown>(
       await injectContentScript(tabId);
     } catch (injectErr) {
       endCall("inject_fail");
+      // 주소가 열리지 않아 Chrome 오류 화면이 떠 있으면 그 이유(오류 코드)를 알려, 모델이 주소를 짐작해 거듭 이동하지 않게 한다.
+      const navErr = await navigationError(tabId);
+      if (navErr) throw new Error(describeNavigationError(navErr));
       const baseMsg = injectErr instanceof Error ? injectErr.message : String(injectErr);
       throw new Error(`이 탭에 확장을 주입할 수 없습니다: ${baseMsg}`);
     }
