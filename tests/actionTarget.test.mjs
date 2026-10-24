@@ -14,6 +14,7 @@ import {
   rowDriftDiag,
   sameApproved,
   sameApprovedInFlight,
+  hashChangeFromWrites,
   sameBase,
 } from "../src/lib/actionTarget.ts";
 
@@ -322,23 +323,22 @@ test("handoffFillList: 사용자가 직접 입력할 모든 칸과 값을 자르
   assert.equal(handoffFillList([{ info: { ...field, name: "카드 번호", sensitive: "payment" }, value: "1234" }]), "카드 번호: 1234 ⚠ 결제 정보 칸");
 });
 
-test("sameApprovedInFlight: 대리 위젯 글자(선택값)만 바뀐 행은 입력 도중에만 같게 본다(#88)", () => {
-  const base = { ...link, tag: "select", role: "combobox", href: "", fieldType: "select" };
-  const approved = { ...base, context: "연식 최소 ~ 최대", modelContext: "연식 최소 ~ 최대", contextSansProxy: "연식 ~", modelContextSansProxy: "연식 ~" };
-  const now = { ...base, context: "연식 2023년 ~ 최대", modelContext: "연식 2023년 ~ 최대", contextSansProxy: "연식 ~", modelContextSansProxy: "연식 ~" };
-  assert.equal(sameApprovedInFlight(now, approved), true);
-  // 승인·실행 직전의 엄격한 비교는 선택값 변화를 본다(승인 뒤 페이지가 선택을 바꾸면 멈춤).
-  assert.equal(sameApproved(now, approved), false);
-  // 대리 위젯 밖의 글자가 바뀌면 입력 도중에도 다르다.
-  assert.equal(sameApprovedInFlight({ ...now, contextSansProxy: "연식 (필수) ~" }, approved), false);
-});
-
-test("sameApprovedInFlight: 이번 호출이 쓰지 않은 대리 위젯 select의 선택 변화는 막는다(#88)", () => {
-  const base = { ...link, tag: "button", role: "button", href: "", context: "x", modelContext: "x", contextSansProxy: "y", modelContextSansProxy: "y" };
-  const approved = { ...base, proxySelected: ["0", "0"] };
-  // 첫 select만 이번 호출이 썼다.
-  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["3", "0"] }, approved, new Set([0])), true);
-  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["0", "2"] }, approved, new Set([0])), false);
-  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["3", "0"] }, approved), false);
-  assert.equal(sameApprovedInFlight({ ...base, proxySelected: ["0"] }, approved, new Set([0, 1])), false);
+test("hashChangeFromWrites: 해시 경로가 같고 바뀐 해시 쿼리 값이 이번 호출이 쓴 값일 때만(#88)", () => {
+  const base = "https://kb.example/search/main.kbc";
+  const w = new Set(["2023"]);
+  assert.equal(hashChangeFromWrites(`${base}#!?page=1&makerCode=107`, `${base}#!?page=1&makerCode=107&regiDay=2023,`, w), true);
+  assert.equal(hashChangeFromWrites(`${base}#!?page=1&regiDay=2023,`, `${base}#!?page=1&regiDay=2023,2023`, w), true);
+  assert.equal(hashChangeFromWrites(`${base}#!?page=1&regiDay=2020,2020`, `${base}#!?page=1&regiDay=2023,2020`, w), true);
+  // 이번 호출이 쓰지 않은 값으로 바뀜.
+  assert.equal(hashChangeFromWrites(`${base}#!?id=A`, `${base}#!?id=B`, w), false);
+  // 해시 경로가 바뀜(다른 레코드).
+  assert.equal(hashChangeFromWrites(`${base}#/records/A`, `${base}#/records/B`, new Set(["B"])), false);
+  // 해시 밖이 바뀜.
+  assert.equal(hashChangeFromWrites(`${base}?x=1#a`, `${base}?x=2#a`, w), false);
+  // 지워진 키.
+  assert.equal(hashChangeFromWrites(`${base}#!?a=1&b=2`, `${base}#!?a=1`, w), false);
+  assert.equal(hashChangeFromWrites(`${base}#x`, `${base}#x`, new Set()), true);
+  // 해시가 없던 페이지에 #!?y=2023,가 처음 생김(식별 글자 없는 경로)은 허용, #/records/B로 처음 생기면 막음.
+  assert.equal(hashChangeFromWrites(base, `${base}#!?y=2023,`, w), true);
+  assert.equal(hashChangeFromWrites(base, `${base}#/records/B`, new Set(["B"])), false);
 });

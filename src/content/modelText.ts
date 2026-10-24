@@ -31,13 +31,12 @@ const MAX_ANCESTORS = 400;
 
 const PROXY_WIDGET_SELECTOR = "[role='combobox' i], [aria-haspopup='listbox' i]";
 
-// 숨긴 select를 대신 보여 주는 위젯(#88 — select2 등의 커스텀 선택 상자). 구조로만 정한다(클래스·라이브러리 이름은 보지 않음):
+// 숨긴 select를 대신 보여 주는 콤보박스(#88 — select2 등의 커스텀 선택 상자). 구조로만 정한다(클래스·라이브러리 이름은 보지 않음):
 // - select 자신은 aria-hidden="true"만으로 숨겨져 있다(hidden 속성·display:none·visibility:hidden이 아님 — 그런 select는
 //   대리 위젯이 있어도 숨긴 칸이다).
-// - 바로 다음 형제 요소가 보이고(크기 있음, 숨김·편집 영역 아님), 그 요소나 그 안에 role=combobox 또는
-//   aria-haspopup=listbox가 있다.
-// 이런 select의 선택지는 대리 위젯을 열면 화면에 보이는 글자이고, 대리 위젯의 표시 글자는 select의 지금 값(우리 입력으로
-// 바뀌는 글자)이다. 조상의 보호 여부는 부르는 쪽이 따로 본다.
+// - 바로 다음 형제 요소가 보이고(숨김·편집 영역 아님), 그 요소가 role=combobox·aria-haspopup=listbox이거나 그 안에 그런
+//   요소가 정확히 하나 있다. 돌려주는 것은 그 콤보박스 요소 자신이다(형제 안의 다른 글자는 대리 표시가 아니다).
+// 이런 select의 선택지는 콤보박스를 열면 화면에 보이는 글자다. 조상의 보호 여부는 부르는 쪽이 따로 본다.
 export function selectProxyOf(select: Element): Element | null {
   if (select.localName !== "select") return null;
   const own = factsOf(select);
@@ -45,19 +44,17 @@ export function selectProxyOf(select: Element): Element | null {
     return null;
   }
   const next = select.nextElementSibling;
-  if (!next) return null;
-  const facts = factsOf(next);
-  if (protectedReason(facts) !== null) return null;
-  const rect = next.getBoundingClientRect();
+  if (!next || protectedReason(factsOf(next)) !== null) return null;
+  let combo: Element | null = null;
+  if (next.matches(PROXY_WIDGET_SELECTOR)) combo = next;
+  else {
+    const inner = next.querySelectorAll(PROXY_WIDGET_SELECTOR);
+    if (inner.length === 1) combo = inner[0];
+  }
+  if (!combo || inProtectedArea(combo)) return null;
+  const rect = combo.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  if (!next.matches(PROXY_WIDGET_SELECTOR) && !next.querySelector(PROXY_WIDGET_SELECTOR)) return null;
-  return next;
-}
-
-// el이 숨긴 select의 대리 위젯인지(selectProxyOf의 반대 방향).
-export function isSelectProxy(el: Element): boolean {
-  const prev = el.previousElementSibling;
-  return !!prev && prev.localName === "select" && selectProxyOf(prev) === el;
+  return combo;
 }
 
 // select의 선택지가 숨겨졌는지: 선택지에서 select까지의 모든 요소(optgroup, 커스텀 select의 감싼 요소 포함) 중
@@ -119,7 +116,7 @@ function inlineDisplay(display: string | null): boolean {
 
 // root 아래의 글자(합성 트리 순서: 열린 shadow root와 슬롯에 배치된 노드 포함). 보호 요소의 하위 트리는 뺀다.
 // 슬롯은 평탄화하지 않고 한 단계씩 따라간다(안쪽 슬롯 자신의 보호 속성도 검사하게).
-export function modelText(root: Element, max: number, opts: { skipSelectProxies?: boolean } = {}): string {
+export function modelText(root: Element, max: number, opts: { substitute?: ReadonlyMap<Element, string> } = {}): string {
   if (inProtectedArea(root)) return "";
   return subtreeTextInfo(root, max, opts).text;
 }
@@ -130,12 +127,12 @@ export function subtreeText(root: Element, max: number): string {
 }
 
 // cut: 순회 한도에 걸려 끝까지 모으지 못했는지(그 글자로 대상을 식별하면 안 된다).
-// skipSelectProxies: 숨긴 select의 대리 위젯(selectProxyOf) 글자를 뺀다 — 입력 도중 비교에서 우리 입력으로 바뀌는 표시 글자를
-// 행 변화로 보지 않으려고(#88). 승인·실행 직전의 엄격한 비교와 모델에 보내는 글자에는 넣는다.
+// substitute: 이 요소들의 글자 대신 주어진 글자를 넣는다(입력 도중 비교에서 이번 호출이 쓴 select의 대리 콤보박스를 승인 때
+// 글자로 되돌리려고, #88). 모델에 보내는 글자에는 쓰지 않는다.
 export function subtreeTextInfo(
   root: Element,
   max: number,
-  opts: { skipSelectProxies?: boolean } = {},
+  opts: { substitute?: ReadonlyMap<Element, string> } = {},
 ): { text: string; cut: boolean } {
   const limit = max * 4;
   let out = "";
@@ -165,10 +162,15 @@ export function subtreeTextInfo(
     if (node.nodeType !== Node.ELEMENT_NODE) continue;
     const facts = factsOf(node as Element);
     if (protectedReason(facts) !== null) continue;
-    // 입력 도중 비교용: 숨긴 select의 대리 위젯 글자(select의 지금 값)는 뺀다(#88).
-    if (opts.skipSelectProxies && isSelectProxy(node as Element)) continue;
+    // 입력 도중 비교용: 이번 호출이 쓴 select의 대리 콤보박스 글자는 승인 때 글자로 바꿔 넣는다(#88).
     // 블록 경계의 글자만 띄운다(줄 안 요소 경계는 붙인다).
     const block = !inlineDisplay(facts.display) || facts.tag === "br";
+    // 입력 도중 비교용: 이번 호출이 쓴 select의 대리 콤보박스 글자는 승인 때 글자로 바꿔 넣는다(#88). 경계 공백은 원래 순회와 같게.
+    const swapped = opts.substitute?.get(node as Element);
+    if (swapped !== undefined) {
+      out += block ? ` ${swapped} ` : swapped;
+      continue;
+    }
     if (block) {
       out += " ";
       stack.push(" ");

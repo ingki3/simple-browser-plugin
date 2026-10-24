@@ -22,12 +22,9 @@ export interface TargetInfo {
   sensitive: "password" | "payment" | null;
   // 대상이 든 목록 항목(행)의 글자. 목록 밖이면 "". 같은 버튼 노드를 다른 행에 다시 쓰는 목록에서 행이 바뀐 것을 잡는다.
   context: string;
-  // 행에 숨긴 select의 대리 위젯(#88)이 있을 때, 그 표시 글자(선택값)를 뺀 원문 행 글자·모델용 행 문맥. 입력 도중 비교만 쓴다.
-  contextSansProxy?: string;
-  modelContextSansProxy?: string;
-  // 행 안 대리 위젯이 있는 select들의 선택 위치(행 안 순서대로). 입력 도중 비교에서 대리 위젯 글자를 뺀 대신, 이번 호출이 쓰지
-  // 않은 select의 선택이 바뀌었는지는 이것으로 본다.
-  proxySelected?: string[];
+  // 행 안 숨긴 select의 대리 콤보박스(#88) 글자(행 안 순서). 입력 도중 확인에서 이번 호출이 쓴 select의 콤보박스가
+  // 그 선택을 보여 주면 이 글자로 되돌려 행 글자를 비교한다(우리 입력이 바꾼 표시만 빼고 나머지는 그대로 본다).
+  proxyTexts?: Array<{ raw: string; model: string }>;
   // 모델에 돌려준 묶음 문맥(행 글자를 modelText로 만든 것, 구조로 찾은 표제를 앞에). 클릭 대상과 입력 칸(#56).
   // 모델의 선택 근거라 비교한다.
   modelContext?: string;
@@ -143,23 +140,45 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
 // 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게).
 // 문구를 바꿔 보여 주는 것(A 문구를 숨기고 B 문구를 보임)은 다른 대상이다. 승인 카드·실행 직전 비교는 sameApproved.
 // 자동완성 입력 칸의 행에 새로 붙은 팝업 목록은 content 쪽에서 원문 행 글자에서 빼고 넘긴다(src/content/targets.ts pinnedRowOf).
-// 숨긴 select의 대리 위젯 글자(선택값, #88)는 입력 도중 비교에서 뺀다 — 같은 입력 호출이 그 select에 쓴 값이 대리 위젯에
-// 보이는 것을 행 변화로 보지 않게. 승인·실행 직전(sameApproved)은 그 글자까지 비교한다.
-// writtenProxies: 행 안 대리 위젯 select 중 이번 입력 호출이 써 넣었고 지금도 그 값인 것의 순서(그 선택 변화만 허용).
-export function sameApprovedInFlight(
-  now: TargetInfo,
-  approved: TargetInfo,
-  writtenProxies: ReadonlySet<number> = new Set(),
-): boolean {
-  const before = approved.proxySelected ?? [];
-  const after = now.proxySelected ?? [];
-  if (before.length !== after.length) return false;
-  if (before.some((v, i) => v !== after[i] && !writtenProxies.has(i))) return false;
-  if ((now.contextSansProxy ?? now.context) !== (approved.contextSansProxy ?? approved.context)) return false;
-  if (!onlyAdded(approved.modelContextSansProxy ?? approved.modelContext ?? "", now.modelContextSansProxy ?? now.modelContext ?? "")) {
-    return false;
+export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
+  if (now.context !== approved.context) return false;
+  if (!onlyAdded(approved.modelContext ?? "", now.modelContext ?? "")) return false;
+  return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
+}
+
+// 입력 도중 문서 주소의 해시만 바뀐 것이 이번 입력의 결과인지(#88 — 값을 고르면 #!?…&regiDay=2023,2023처럼 해시 쿼리에
+// 반영하는 페이지). 해시의 '?' 앞(경로)은 같아야 하고, 바뀌거나 새로 생긴 해시 쿼리 값은 쉼표로 나눈 조각이 모두 전에 있던
+// 조각이거나 이번 호출이 써 넣은 값이어야 한다. 해시 밖(출처·경로·쿼리)이 바뀌었거나 #/records/A → #/records/B처럼 경로가
+// 바뀌면 거짓. 해시가 없던 주소에 식별 글자 없는 경로(#!?…)로 해시 쿼리가 처음 생긴 것은 같은 경로로 본다.
+export function hashChangeFromWrites(before: string, after: string, written: ReadonlySet<string>): boolean {
+  const split = (url: string) => {
+    const i = url.indexOf("#");
+    return i < 0 ? { base: url, hash: "" } : { base: url.slice(0, i), hash: url.slice(i + 1) };
+  };
+  const b = split(before);
+  const a = split(after);
+  if (b.base !== a.base) return false;
+  if (b.hash === a.hash) return true;
+  const part = (hash: string) => {
+    const q = hash.indexOf("?");
+    return q < 0 ? { path: hash, query: new URLSearchParams() } : { path: hash.slice(0, q), query: new URLSearchParams(hash.slice(q + 1)) };
+  };
+  const hb = part(b.hash);
+  const ha = part(a.hash);
+  // 해시가 없던 페이지에 값을 고르며 #!?…·#?…가 처음 생기는 경우: 새 경로가 식별 글자 없이 '!'·'/'뿐일 때만 같은 경로로 본다.
+  const freshEmptyPath = b.hash === "" && /^[!/]*$/.test(ha.path);
+  if (hb.path !== ha.path && !freshEmptyPath) return false;
+  const keys = new Set([...hb.query.keys(), ...ha.query.keys()]);
+  for (const k of keys) {
+    const was = hb.query.getAll(k).join(",");
+    const now = ha.query.getAll(k).join(",");
+    if (was === now) continue;
+    // 지워진 키는 이번 입력의 결과인지 알 수 없다.
+    if (!ha.query.has(k)) return false;
+    const old = new Set(was.split(","));
+    if (!now.split(",").every((piece) => piece === "" || old.has(piece) || written.has(piece))) return false;
   }
-  return sameApproved({ ...now, context: approved.context, modelContext: approved.modelContext }, approved);
+  return true;
 }
 
 // after가 before에 글자를 더하기만 한 것인지: before의 낱말(공백 기준)이 after 안에 같은 순서로 모두 남아 있어야 한다.

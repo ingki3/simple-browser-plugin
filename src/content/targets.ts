@@ -19,7 +19,8 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { groupLabel, isSelectProxy, modelText, selectProxyOf } from "./modelText";
+import { hashChangeFromWrites } from "@/lib/actionTarget";
+import { groupLabel, modelText, selectProxyOf, subtreeText } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -122,48 +123,72 @@ const CONTEXT_MAX = 2000;
 
 // exclude: 글자에서 뺄 하위 요소(입력 도중 확인에서 승인 뒤 새로 붙은 자동완성 목록, pinnedRowOf). 빼는 것이 없으면
 // textContent 그대로다.
-function textOf(el: Element, exclude: Element[] = []): string {
+// substitute: 이 요소 안의 글자 대신 주어진 글자를 넣는다(입력 도중 비교 — 이번 호출이 쓴 select의 대리 콤보박스, #88).
+function textOf(el: Element, exclude: Element[] = [], substitute?: ReadonlyMap<Element, string>): string {
   let raw: string;
-  if (!exclude.length) raw = el.textContent ?? "";
+  if (!exclude.length && !substitute?.size) raw = el.textContent ?? "";
   else {
     const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     raw = "";
+    const emitted = new Set<Element>();
     // textContent와 같게 끝까지 모은다(중간에 끊으면 긴 공백 뒤에 덧붙인 글자를 놓친다). 자르기는 공백 정리 뒤에 한다.
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (exclude.some((x) => x.contains(node))) continue;
-      raw += node.nodeValue ?? "";
+      let swapped = false;
+      for (const [box, text] of substitute ?? []) {
+        if (!box.contains(node)) continue;
+        if (!emitted.has(box)) {
+          emitted.add(box);
+          raw += text;
+        }
+        swapped = true;
+        break;
+      }
+      if (!swapped) raw += node.nodeValue ?? "";
     }
   }
   return raw.replace(/\s+/g, " ").trim().slice(0, CONTEXT_MAX);
 }
 
-// el 안의 대리 위젯이 있는 select(문서 순서).
-function proxiedSelectsIn(el: Element): HTMLSelectElement[] {
-  return Array.from(el.querySelectorAll("select")).filter((s) => !!selectProxyOf(s));
-}
-
-// 입력 도중 비교에서 선택 변화를 허용할 대리 위젯 select의 순서: 이번 호출(consentCall)이 써 넣었고 지금도 그 값인 것.
-function writtenProxyIndexes(el: HTMLElement, info: TargetInfo, pinned: PinnedRow | null): Set<number> {
-  const out = new Set<number>();
-  const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
-  if (!written) return out;
-  const row = pinned?.row ?? rowElement(el)?.row;
-  if (!row) return out;
-  proxiedSelectsIn(row).forEach((s, i) => {
-    if (written.has(s) && written.get(s) === s.value) out.add(i);
-  });
-  return out;
-}
-
-// el 안(el 자신 포함)의 숨긴 select 대리 위젯.
-function selectProxiesIn(el: Element): Element[] {
-  const out: Element[] = [];
-  for (const sel of el.querySelectorAll("select")) {
-    const proxy = selectProxyOf(sel);
-    if (proxy) out.push(proxy);
+// el 안의 숨긴 select와 그 대리 콤보박스(#88, 문서 순서).
+function proxyPairsIn(el: Element): Array<{ select: HTMLSelectElement; combo: Element }> {
+  const out: Array<{ select: HTMLSelectElement; combo: Element }> = [];
+  for (const select of el.querySelectorAll("select")) {
+    const combo = selectProxyOf(select);
+    if (combo) out.push({ select, combo });
   }
-  if (el.localName !== "select" && isSelectProxy(el)) out.push(el);
   return out;
+}
+
+function selectProxiesIn(el: Element): Element[] {
+  return proxyPairsIn(el).map((p) => p.combo);
+}
+
+const norm = (t: string | null | undefined) => (t ?? "").replace(/\s+/g, " ").trim();
+
+// 입력 도중 비교에서 승인 때 글자로 되돌릴 대리 콤보박스: 이번 호출(consentCall)이 써 넣었고 지금도 그 값인 select의
+// 콤보박스가 지금 그 선택지 글자를 보여 줄 때만. 그 밖의 글자 변화(쓰지 않은 select의 선택, 콤보박스 밖 글자)는 그대로 본다.
+function inFlightSubstitute(
+  el: HTMLElement,
+  info: TargetInfo,
+  pinned: PinnedRow | null,
+): { raw: Map<Element, string>; model: Map<Element, string> } | undefined {
+  const written = info.consentCall ? writtenByCall.get(info.consentCall) : undefined;
+  const before = info.proxyTexts;
+  if (!written || !before) return undefined;
+  const row = pinned?.row ?? rowElement(el)?.row;
+  if (!row) return undefined;
+  const pairs = proxyPairsIn(row);
+  if (pairs.length !== before.length) return undefined;
+  const raw = new Map<Element, string>();
+  const model = new Map<Element, string>();
+  pairs.forEach(({ select, combo }, i) => {
+    if (written.get(select) !== select.value) return;
+    if (norm(combo.textContent) !== norm(select.selectedOptions[0]?.text)) return;
+    raw.set(combo, before[i].raw);
+    model.set(combo, before[i].model);
+  });
+  return raw.size ? { raw, model } : undefined;
 }
 
 function repeated(cur: Element): boolean {
@@ -205,7 +230,7 @@ const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role='heading'], caption, leg
 
 // 모델에 돌려주는 묶음 문맥: 행 글자를 modelText로(입력 칸·편집 영역·숨은 글자 제외) 만들고, 묶음의 접근성 이름이나
 // 묶음 안 첫 표제가 있으면 앞에 둔다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼을 구분하게).
-function modelContextOf(row: Element | null, opts: { skipSelectProxies?: boolean } = {}): string {
+function modelContextOf(row: Element | null, opts: { substitute?: ReadonlyMap<Element, string> } = {}): string {
   if (!row) return "";
   const text = modelText(row, MODEL_CONTEXT_MAX, opts);
   if (!text) return "";
@@ -281,21 +306,25 @@ export function statesOf(el: HTMLElement): Record<string, string> | undefined {
 
 // pinnedRow: 입력 도중 확인에서 승인 때 찾은 행 요소(아래 approvedRows)와 그 글자에서 뺄 새 자동완성 목록. 구조가
 // 그대로임을 확인한 경우에만 주어지며, 다시 찾지 않고 그 행의 글자를 쓴다.
-function baseInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | null): TargetInfo {
-  const row = pinnedRow ? { row: pinnedRow.row, text: textOf(pinnedRow.row, pinnedRow.exclude) } : rowElement(el);
+// substitute: 입력 도중 비교에서 승인 때 글자로 되돌릴 대리 콤보박스(inFlightSubstitute).
+function baseInfo(
+  kind: TargetKind,
+  el: HTMLElement,
+  pinnedRow?: PinnedRow | null,
+  substitute?: { raw: Map<Element, string>; model: Map<Element, string> },
+): TargetInfo {
+  const found = pinnedRow ? { row: pinnedRow.row } : rowElement(el);
+  const row = found
+    ? { row: found.row, text: substitute || pinnedRow ? textOf(found.row, pinnedRow?.exclude ?? [], substitute?.raw) : (found as { text: string }).text }
+    : null;
   const detail: Partial<TargetInfo> = {};
   if (kind.detail || kind.rowContext) {
-    const modelContext = modelContextOf(row?.row ?? null);
+    const modelContext = modelContextOf(row?.row ?? null, { substitute: substitute?.model });
     if (modelContext) detail.modelContext = modelContext;
   }
-  // 행에 숨긴 select의 대리 위젯이 있으면 그 표시 글자를 뺀 행 글자도 둔다(#88). 입력 도중 비교(sameApprovedInFlight)만
-  // 이것을 쓰고, 승인·실행 직전의 엄격한 비교는 대리 위젯 글자(선택값)까지 본다 — 승인 뒤 페이지가 선택을 바꾸면 멈춘다.
-  const proxies = row ? selectProxiesIn(row.row) : [];
-  if (row && proxies.length) {
-    detail.contextSansProxy = textOf(row.row, [...(pinnedRow?.exclude ?? []), ...proxies]);
-    detail.proxySelected = proxiedSelectsIn(row.row).map((s) => String(s.selectedIndex));
-    if (kind.detail || kind.rowContext) detail.modelContextSansProxy = modelContextOf(row.row, { skipSelectProxies: true });
-  }
+  // 행에 숨긴 select의 대리 콤보박스가 있으면 그 글자를 기록한다(#88 — 입력 도중 비교에서 이번 호출이 쓴 것만 되돌린다).
+  const pairs = row ? proxyPairsIn(row.row) : [];
+  if (pairs.length) detail.proxyTexts = pairs.map(({ combo }) => ({ raw: combo.textContent ?? "", model: subtreeText(combo, MODEL_CONTEXT_MAX) }));
   if (kind.detail) {
     const states = statesOf(el);
     if (states) detail.states = states;
@@ -367,8 +396,13 @@ function listPosition(el: HTMLElement): TargetInfo["list"] {
   return null;
 }
 
-function fullInfo(kind: TargetKind, el: HTMLElement, pinnedRow?: PinnedRow | null): TargetInfo {
-  return { ...baseInfo(kind, el, pinnedRow), list: listPosition(el) };
+function fullInfo(
+  kind: TargetKind,
+  el: HTMLElement,
+  pinnedRow?: PinnedRow | null,
+  substitute?: { raw: Map<Element, string>; model: Map<Element, string> },
+): TargetInfo {
+  return { ...baseInfo(kind, el, pinnedRow, substitute), list: listPosition(el) };
 }
 
 // ---------------------------------------------------------------------------
@@ -791,10 +825,8 @@ export function takeApproved(
   // 묶음의 앞 칸 입력이 이 칸의 형제 묶음 틀을 바꿔(자동완성 목록이 붙음) 행이 다른 요소로 잡힐 수 있어, 입력 도중이면
   // 승인 때의 행을 구조가 그대로일 때만 다시 쓴다(pinnedRowOf).
   const pinned = inFlight ? pinnedRowOf(el) : null;
-  const now = fullInfo(entry.kind, el, pinned);
-  const sameNow = inFlight
-    ? sameApprovedInFlight(now, approved.info, writtenProxyIndexes(el, approved.info, pinned))
-    : sameApproved(now, approved.info);
+  const now = fullInfo(entry.kind, el, pinned, inFlight ? inFlightSubstitute(el, approved.info, pinned) : undefined);
+  const sameNow = inFlight ? sameApprovedInFlight(now, approved.info) : sameApproved(now, approved.info);
   if (!sameNow) {
     const msg = `승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${describeDifference(approved.info, now)}). 다시 찾으세요.`;
     // 민감한 칸(비밀번호·결제·인증번호)이나 개인정보 칸으로 바뀐 것, 그 밖의 위험이 생긴 것은 위험 변화다
@@ -878,19 +910,16 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, inFlight
   // 넣는 것의 뜻이 바뀌지 않고, 채우기가 실제 클릭이라 click 처리기가 주소를 바꾸는 페이지(필터 선택 등)가 흔해 보지 않는다
   // (주소로 풀리는 신호 — 감싼 링크·제출 주소·선택지 주소 — 는 따로 비교한다).
   const toggleField = kind.prefix === "f" && (info.fieldType === "checkbox" || info.fieldType === "radio");
-  // 입력 도중에는 해시만 바뀐 것(앞 칸 입력으로 해시 라우트가 바뀌는 페이지 — #!?page=…&regiDay=…)을 그 입력의 결과로 보고
-  // 넘어간다(#88). 첫 실행 전·승인 카드의 확인은 해시까지 본다(승인 뒤 다른 레코드 화면 #/records/B로 바뀌었으면 멈춤).
+  // 입력 도중에는 해시 쿼리가 이번 호출이 쓴 값으로만 바뀐 것(값을 고르면 #!?…&regiDay=2023,2023으로 반영하는 페이지)을
+  // 그 입력의 결과로 보고 넘어간다(#88, hashChangeFromWrites). 해시 경로(#/records/A → B)나 쓰지 않은 값으로 바뀌면 멈춘다.
+  // 첫 실행 전·승인 카드의 확인은 해시까지 그대로 비교한다.
+  const writtenValues = new Set(info.consentCall ? (writtenByCall.get(info.consentCall)?.values() ?? []) : []);
   const sameBase = inFlight
-    ? withoutHash(now.baseUri ?? "") === withoutHash(info.baseUri ?? "")
+    ? hashChangeFromWrites(info.baseUri ?? "", now.baseUri ?? "", writtenValues)
     : (now.baseUri ?? "") === (info.baseUri ?? "");
   if (!toggleField && !sameBase) return "문서 기준 주소가 바뀜";
   if ((now.pingUrls ?? []).join(" ") !== (info.pingUrls ?? []).join(" ")) return "링크의 ping 주소가 바뀜";
   return null;
-}
-
-function withoutHash(url: string): string {
-  const i = url.indexOf("#");
-  return i < 0 ? url : url.slice(0, i);
 }
 
 // 승인 때 찾은 대상의 행 요소. 입력 도중 확인은 아래가 모두 구조로 확인될 때만 승인 때의 행을 기준으로 삼는다
@@ -1003,8 +1032,8 @@ export function recheckApproved(
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const pinned = inFlight ? pinnedRowOf(el) : null;
-  const now = fullInfo(kind, el, pinned);
-  const sameNow = inFlight ? sameApprovedInFlight(now, info, writtenProxyIndexes(el, info, pinned)) : sameApproved(now, info);
+  const now = fullInfo(kind, el, pinned, inFlight ? inFlightSubstitute(el, info, pinned) : undefined);
+  const sameNow = inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info);
   if (!sameNow) return describeDifference(info, now);
   const added = riskAdded(kind, el, info, inFlight) ?? triggerRiskAdded(kind, relation, info);
   if (added) return added;
