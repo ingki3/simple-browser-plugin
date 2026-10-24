@@ -1,75 +1,15 @@
-import { normalizeManualSites } from "@/lib/manualSites";
-import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
-import {
-  DEFAULT_CSV_MAX_CHARS,
-  DEFAULT_MAX_TOOL_HOPS,
-  FLAGS_KEY,
-  MAX_TOOL_HOPS_VERSION,
-  MAX_SYSTEM_PROMPT_LENGTH,
-  SETTINGS_KEY,
-  normalizeCsvMaxChars,
-  normalizeMaxToolHops,
-  type Flags,
-  type Settings,
-} from "@/lib/messages";
+import { FLAGS_KEY, SETTINGS_KEY, type Flags, type Settings } from "@/lib/messages";
+import { normalizeSettings, settingsForStorage } from "@/lib/settings";
 
-export const DEFAULT_SETTINGS: Settings = {
-  openRouterApiKey: "",
-  model: DEFAULT_MODEL,
-  systemPrompt: "",
-  translationTargetLang: "ko",
-  downloadFolderPrefix: "simple-browser-plugin",
-  maxToolHops: DEFAULT_MAX_TOOL_HOPS,
-  actionLogEnabled: true,
-  csvMaxChars: DEFAULT_CSV_MAX_CHARS,
-  autoApprove: false,
-  showThinking: false,
-  rememberPages: true,
-  trustedInput: false,
-  manualSites: [],
-};
+export { DEFAULT_SETTINGS } from "@/lib/settings";
 
 export async function readSettings(): Promise<Settings> {
   const obj = await chrome.storage.local.get(SETTINGS_KEY);
-  const raw = (obj[SETTINGS_KEY] ?? {}) as Partial<Settings>;
-  return {
-    openRouterApiKey:
-      typeof raw.openRouterApiKey === "string" ? raw.openRouterApiKey : "",
-    model: normalizeModelId(raw.model),
-    systemPrompt:
-      typeof raw.systemPrompt === "string"
-        ? raw.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH)
-        : DEFAULT_SETTINGS.systemPrompt,
-    translationTargetLang:
-      typeof raw.translationTargetLang === "string" && raw.translationTargetLang.length >= 2
-        ? raw.translationTargetLang
-        : DEFAULT_SETTINGS.translationTargetLang,
-    downloadFolderPrefix:
-      typeof raw.downloadFolderPrefix === "string"
-        ? raw.downloadFolderPrefix
-        : DEFAULT_SETTINGS.downloadFolderPrefix,
-    maxToolHops: normalizeMaxToolHops(raw),
-    actionLogEnabled: raw.actionLogEnabled !== false,
-    csvMaxChars: normalizeCsvMaxChars(raw.csvMaxChars),
-    autoApprove: raw.autoApprove === true,
-    showThinking: raw.showThinking === true,
-    rememberPages: raw.rememberPages !== false,
-    trustedInput: raw.trustedInput === true,
-    manualSites: normalizeManualSites(raw.manualSites),
-  };
+  return normalizeSettings(obj[SETTINGS_KEY] as Partial<Settings> | undefined);
 }
 
 export async function writeSettings(next: Settings): Promise<void> {
-  await chrome.storage.local.set({
-    [SETTINGS_KEY]: {
-      ...next,
-      systemPrompt: next.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH),
-      maxToolHops: normalizeMaxToolHops({ ...next, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }),
-      maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
-      csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
-      manualSites: normalizeManualSites(next.manualSites),
-    },
-  });
+  await chrome.storage.local.set({ [SETTINGS_KEY]: settingsForStorage(next) });
 }
 
 let cache: Settings | null = null;

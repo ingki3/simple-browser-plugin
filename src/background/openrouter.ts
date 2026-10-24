@@ -951,6 +951,13 @@ export class ChatAgent {
         if (this.isStale(turn)) return false;
         const toolName = fc.function.name as ToolName;
         const callId = fc.id;
+        // 이 호출을 실패로 끝낸다: 패널 결과 줄, 대화 기록(모델이 보는 오류), 헛돌기 감지 기록을 함께 남긴다.
+        // panelSummary: 패널에만 다르게 보일 문구(허락으로 실행한 호출 등).
+        const failCall = (msg: string, key: string, panelSummary = msg): void => {
+          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: panelSummary });
+          this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
+          record(toolName, key, false, `error:${msg}`, msg);
+        };
 
         let parsedArgs: unknown;
         try {
@@ -958,36 +965,20 @@ export class ChatAgent {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logToolFail(toolName, msg);
-          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-          this.history.push({
-            role: "tool",
-            tool_call_id: callId,
-            name: toolName,
-            content: this.toolContent(turnTab, { error: msg }),
-          });
-          record(toolName, fc.function.arguments, false, `error:${msg}`, msg);
+          failCall(msg, fc.function.arguments);
           continue;
         }
         const argsKey = canonicalJson(parsedArgs);
 
         if (toolName === "read_other_tabs" && ++otherTabReads > MAX_OTHER_TAB_READS_PER_TURN) {
           const msg = `한 요청에서 다른 탭 읽기는 최대 ${MAX_OTHER_TAB_READS_PER_TURN}번입니다. 지금까지 읽은 내용으로 답하세요.`;
-          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-          this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
-          record(toolName, argsKey, false, `error:${msg}`, msg);
+          failCall(msg, argsKey);
           continue;
         }
 
         if (toolName === "read_document" && ++documentReads > MAX_DOCUMENT_READS_PER_TURN) {
           const msg = `한 요청에서 파일은 최대 ${MAX_DOCUMENT_READS_PER_TURN}개까지 읽을 수 있습니다. 지금까지 읽은 내용으로 답하고, 더 필요하면 사용자에게 다음 요청으로 나눠 달라고 하세요.`;
-          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-          this.history.push({
-            role: "tool",
-            tool_call_id: callId,
-            name: toolName,
-            content: this.toolContent(turnTab, { error: msg }),
-          });
-          record(toolName, argsKey, false, `error:${msg}`, msg);
+          failCall(msg, argsKey);
           continue;
         }
 
@@ -1014,14 +1005,7 @@ export class ChatAgent {
             if (this.isStale(turn)) return false;
             const msg = err instanceof Error ? err.message : String(err);
             logToolFail(toolName, msg);
-            this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-            this.history.push({
-              role: "tool",
-              tool_call_id: callId,
-              name: toolName,
-              content: this.toolContent(turnTab, { error: msg }),
-            });
-            record(toolName, argsKey, false, `error:${msg}`, msg);
+            failCall(msg, argsKey);
             continue;
           }
           // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
@@ -1156,14 +1140,7 @@ export class ChatAgent {
               const msg = err instanceof Error ? err.message : String(err);
               logToolFail(toolName, msg);
               recordCancelledAction(callId, turnTab);
-              this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-              this.history.push({
-                role: "tool",
-                tool_call_id: callId,
-                name: toolName,
-                content: this.toolContent(turnTab, { error: msg }),
-              });
-              record(toolName, argsKey, false, `error:${msg}`, msg);
+              failCall(msg, argsKey);
               continue;
             }
             if (this.isStale(turn)) {
@@ -1202,14 +1179,7 @@ export class ChatAgent {
             if (expired) {
               const msg = "사용자가 표시한 대상을 오래 조작하지 않아 직접 조작 안내를 끝냈습니다. 사용자에게 계속할지 물으세요.";
               recordCancelledAction(callId, turnTab);
-              this.send({ kind: "tool_result", callId, toolName, ok: false, summary: msg });
-              this.history.push({
-                role: "tool",
-                tool_call_id: callId,
-                name: toolName,
-                content: this.toolContent(turnTab, { error: msg }),
-              });
-              record(toolName, argsKey, false, `error:${msg}`, msg);
+              failCall(msg, argsKey);
               continue;
             }
             if (approved) handoffOutcome = by;
@@ -1390,14 +1360,7 @@ export class ChatAgent {
           const msg = err instanceof Error ? err.message : String(err);
           // 턴 탭 해석(내부 페이지·닫힌 탭) 등 실행 전 단계에서 실패해도 결과 줄을 남긴다(#54).
           logToolFail(toolName, msg);
-          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: grantRan ? `이번 대화 허락으로 실행 · ${msg}` : msg });
-          this.history.push({
-            role: "tool",
-            tool_call_id: callId,
-            name: toolName,
-            content: this.toolContent(turnTab, { error: msg }),
-          });
-          record(toolName, argsKey, false, `error:${msg}`, msg);
+          failCall(msg, argsKey, grantRan ? `이번 대화 허락으로 실행 · ${msg}` : msg);
         } finally {
           if (this.activeTool === toolAbort) this.activeTool = null;
         }
