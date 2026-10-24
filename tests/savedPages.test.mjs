@@ -9,6 +9,8 @@ import {
   makeTemplate,
   MAX_LINKS,
   MAX_SLOT_VALUE,
+  MAX_SLOTS,
+  fixedPartsUrl,
   normalizeName,
   normalizeSlotKey,
   parseSaved,
@@ -127,4 +129,16 @@ test("candidates: 사이트와 관계없이 많이 쓴 순, 주소 대신 출처
 test("names are trimmed and bounded", () => {
   assert.equal(normalizeName("  주문   배송 조회 \n"), "주문 배송 조회");
   assert.equal(normalizeName("x".repeat(200)).length, 80);
+});
+
+test("입력 자리는 MAX_SLOTS개까지(open_saved_link가 받는 값 수와 같게)", () => {
+  const url = "https://a.example/s?" + Array.from({ length: MAX_SLOTS + 1 }, (_, i) => `k${i}=v`).join("&");
+  const all = Array.from({ length: MAX_SLOTS + 1 }, (_, i) => ({ mode: "slot", slot: `s${i}` }));
+  assert.throws(() => makeTemplate(url, all), /까지입니다/);
+  assert.equal(makeTemplate(url, all.map((c, i) => (i === 0 ? { mode: "keep" } : c))).slots.length, MAX_SLOTS);
+});
+
+test("fixedPartsUrl: 자리는 빈 값으로, 자리 이름 글자는 담지 않는다(저장 경고는 고정 값만 본다)", () => {
+  const { template } = makeTemplate("https://a.example/s?q=123&sort=rel", [{ mode: "slot", slot: "주문번호" }, { mode: "keep" }]);
+  assert.equal(fixedPartsUrl(template), "https://a.example/s?q=&sort=rel");
 });

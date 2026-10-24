@@ -1,4 +1,13 @@
-import { autoApproveBlock, destructiveClickBlock, destructiveFillBlock, looksPersonalValue, sensitiveUrlReason } from "@/lib/autoApprove";
+import {
+  autoApproveBlock,
+  decodeDeepText,
+  DESTRUCTIVE_REASON,
+  destructiveClickBlock,
+  destructiveFillBlock,
+  destructiveRoute,
+  looksPersonalValue,
+} from "@/lib/autoApprove";
+import { navigateAutoBlock } from "@/lib/siteTrust";
 import { fillLink } from "@/lib/savedPages";
 import { markUsed, savedLinkById } from "../savedPagesStore";
 import { downloadScope, imageDownloadSources } from "@/lib/chatGrant";
@@ -400,13 +409,17 @@ export async function buildToolPreview(
       const url = normalizeNavigationUrl(fillLink(link, args.values));
       const host = new URL(url).hostname;
       const values = Object.values(args.values ?? {});
-      // 사용자가 저장한 출처·경로라 자동 실행은 구조로 허용한다(#86 사용자 결정). 모델이 넣은 값이 개인정보 모양이거나
-      // 완성한 주소에 결제·개인정보 단서가 보이면 묻는다(더 묻는 쪽으로만 쓰는 신호).
-      const personal = values.some((v) => looksPersonalValue(v)) ? "자리 값이 개인정보처럼 보임" : null;
+      // 사용자가 저장한 출처·경로라 자동 실행은 구조로 허용한다(#86 사용자 결정). 다만 자리 값은 모델이 만든 값이라
+      // navigate_to_url과 같은 경계를 저장한 출처 하나를 신뢰 사이트로 두고 본다: 값에 실린 다른 사이트 주소(리다이렉트
+      // 매개변수 등, 내장 주소 풀기)·결제·개인정보 주소·삭제 경로면 묻는다. 값이 개인정보 모양이어도 묻는다.
+      const personal = values.some((v) => looksPersonalValue(decodeDeepText(v))) ? "자리 값이 개인정보처럼 보임" : null;
+      const destructive = destructiveRoute(url) ? DESTRUCTIVE_REASON : null;
       return {
         summary: `${followingPopup(turnTab) ? "팝업 창 따라가기를 멈추고 원래 탭에서 " : ""}저장한 링크 '${truncate(link.name, 60)}'을(를) 엽니다(${host}).`,
-        details: `${link.purpose ? `용도: ${link.purpose}\n` : ""}${url}`,
-        autoBlock: personal ?? sensitiveUrlReason(url),
+        details: `${link.purpose ? `용도: ${link.purpose}\n` : ""}${url}${destructive ? `\n⚠ ${destructive}일 수 있습니다. 여는 주소를 확인하세요.` : ""}`,
+        autoBlock: personal ?? navigateAutoBlock(new Set([link.site]), url),
+        // 되돌리기 어려운 동작은 어떤 허락으로도 건너뛰지 않고 묻는다(#62).
+        alwaysAsk: destructive,
         execArgs: { ...args, url },
       };
     }

@@ -48,6 +48,8 @@ export const MAX_SLOT_KEY = 30;
 export const MAX_SLOT_HINT = 100;
 // 자리 하나에 넣을 수 있는 값의 길이.
 export const MAX_SLOT_VALUE = 200;
+// 링크 하나의 입력 자리 수(open_saved_link가 받는 값 수와 같다).
+export const MAX_SLOTS = 10;
 
 export function normalizeName(name: string): string {
   return name.replace(/\s+/g, " ").trim().slice(0, MAX_NAME);
@@ -100,6 +102,7 @@ export function makeTemplate(url: string, choices: readonly ParamChoice[]): { te
     params.push({ key: p.key, slot });
     if (!slots.includes(slot)) slots.push(slot);
   });
+  if (slots.length > MAX_SLOTS) throw new Error(`입력 자리는 ${MAX_SLOTS}개까지입니다.`);
   return { template: { base: parts.base, params, hash: parts.hash }, slots };
 }
 
@@ -110,6 +113,12 @@ function enc(s: string): string {
 // 보이기용 문자열(자리는 {이름}). 같은 템플릿인지 비교하는 키로도 쓴다.
 export function templateText(t: LinkTemplate): string {
   const q = t.params.map((p) => `${enc(p.key)}=${p.slot !== undefined ? `{${p.slot}}` : enc(p.value ?? "")}`).join("&");
+  return `${t.base}${q ? `?${q}` : ""}${t.hash}`;
+}
+
+// 고정 부분만 담은 주소(자리는 빈 값). 저장 때 결제·개인정보 단서를 고정으로 남긴 값에서만 보려고(자리 이름 글자는 보지 않음).
+export function fixedPartsUrl(t: LinkTemplate): string {
+  const q = t.params.map((p) => `${enc(p.key)}=${p.slot !== undefined ? "" : enc(p.value ?? "")}`).join("&");
   return `${t.base}${q ? `?${q}` : ""}${t.hash}`;
 }
 
@@ -223,6 +232,7 @@ function parseLink(raw: unknown): SavedLink | null {
   // 템플릿의 자리와 자리 목록이 같아야 한다(어긋나면 쓰지 않는다).
   const inTemplate = [...new Set(t.params.filter((p) => p.slot !== undefined).map((p) => p.slot as string))];
   if (inTemplate.length !== slots.length || !inTemplate.every((k) => slots.some((s) => s.key === k))) return null;
+  if (slots.length > MAX_SLOTS) return null;
   try {
     const base = new URL(t.base);
     if (!/^https?:$/.test(base.protocol) || base.username || base.password || base.search || base.hash) return null;

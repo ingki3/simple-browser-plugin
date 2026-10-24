@@ -11,7 +11,7 @@ import {
   normalizeSlotKey,
   parseSaved,
   splitUrl,
-  templateText,
+  fixedPartsUrl,
   type ParamChoice,
   type SavedLink,
 } from "@/lib/savedPages";
@@ -179,7 +179,7 @@ export async function savePage(req: SaveRequest): Promise<{ evicted: string | nu
   if (!(await getSettings()).rememberPages) throw new Error("페이지 기억하기가 꺼져 있습니다.");
   const { template, slots } = makeTemplate(offer.url, req.choices);
   // 고정으로 남긴 값에 결제·개인정보 단서가 있으면 확인을 받는다(자리로 바꾼 값은 저장하지 않는다).
-  if (sensitiveUrlReason(templateText(template)) && !req.confirmedWarning) {
+  if (sensitiveUrlReason(fixedPartsUrl(template)) && !req.confirmedWarning) {
     throw new Error("주소의 경고를 확인해야 저장할 수 있습니다.");
   }
   const now = Date.now();
