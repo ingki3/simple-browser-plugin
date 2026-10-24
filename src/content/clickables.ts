@@ -23,6 +23,8 @@ import {
   scopeSubmitUrls,
   otherDestinations,
   sensitivityOf,
+  checkedInGroup,
+  setNativeProperty,
 } from "./forms";
 import {
   closestAcross,
@@ -545,7 +547,13 @@ export function clickElement(
       return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
     }
     startEffectWatch(effectToken, el);
-    armTopGuard(trusted, el, point, (phase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase), relation));
+    // click 단계에서 대상 자신이 checkbox·radio면 브라우저가 처리기보다 먼저 체크 상태를 바꿔 양식 값(제출 주소)도 달라진다.
+    // 그 변화를 잠깐 되돌린 상태로(승인 때와 같은 체크 상태에서) 확인한다.
+    const toggle = isToggleInput(el) ? { checked: el.checked, indeterminate: el.indeterminate, prevRadio: el.type === "radio" ? checkedInGroup(el) : null } : null;
+    const recheck = (phase: RecheckPhase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase), relation);
+    armTopGuard(trusted, el, point, (phase) =>
+      phase === "click" && toggle && isToggleInput(el) ? withToggleReverted(el, toggle, () => recheck("up")) : recheck(phase),
+    );
     return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
   }
 
@@ -558,18 +566,47 @@ export function clickElement(
 
 // 실제 입력의 단계별 재확인에 쓸 승인 기술.
 // - down: 그대로(엄격).
-// - up·click: 앞 단계의 페이지 처리기가 바꾼 화면 상태(aria 펼침·눌림·선택 등)는 받아들인다. 체크 상태는 그대로 고정하되,
-//   click 단계에서 대상 자신이 checkbox·radio면 브라우저가 click 처리기보다 먼저 바꾼 예상 상태(checkbox는 반대, radio는
-//   체크)로 본다. label은 컨트롤의 click이 따로 오므로 그대로. 주소·양식·위험 신호는 어느 단계든 그대로 비교한다.
+// - up·click: 앞 단계의 페이지 처리기가 바꾼 화면 상태(aria 펼침·눌림·선택 등)는 받아들인다. 체크 상태와 주소·양식·위험
+//   신호는 그대로 비교한다(대상 자신이 checkbox·radio인 click 단계는 withToggleReverted로 승인 때 체크 상태에서 본다).
 function phaseInfo(el: HTMLElement, info: TargetInfo, phase: RecheckPhase): TargetInfo {
   if (phase === "down") return info;
   const { checked: _now, ...ui } = statesOf(el) ?? {};
-  let checked = info.states?.checked;
-  if (phase === "click" && isToggleInput(el) && checked !== undefined) {
-    checked = el.type === "radio" ? "true" : checked === "true" ? "false" : checked === "false" ? "true" : String(el.checked);
-  }
+  const checked = info.states?.checked;
   const states = { ...ui, ...(checked !== undefined ? { checked } : {}) };
   return { ...info, states: Object.keys(states).length ? states : undefined };
+}
+
+// 체크 상태를 준비 때(승인 때와 같은지 이미 확인한 상태)로 잠깐 되돌려 check를 부르고 지금 상태로 되살린다.
+// 속성 setter를 직접 써서(프레임워크의 값 추적·이벤트를 건드리지 않음) 동기로만 바꾼다. 상태가 그대로면 그냥 부른다.
+function withToggleReverted(
+  el: HTMLInputElement,
+  before: { checked: boolean; indeterminate: boolean; prevRadio: HTMLInputElement | null },
+  check: () => string | null,
+): string | null {
+  const now = { checked: el.checked, indeterminate: el.indeterminate, prev: el.type === "radio" ? checkedInGroup(el) : null };
+  if (now.checked === before.checked && now.indeterminate === before.indeterminate && now.prev === before.prevRadio) return check();
+  const restore = () => {
+    if (el.type === "radio") {
+      if (now.prev) setNativeProperty(now.prev, "checked", true);
+      else if (before.prevRadio) setNativeProperty(before.prevRadio, "checked", false);
+      setNativeProperty(el, "checked", now.checked);
+    } else {
+      setNativeProperty(el, "checked", now.checked);
+      el.indeterminate = now.indeterminate;
+    }
+  };
+  try {
+    if (el.type === "radio") {
+      setNativeProperty(el, "checked", before.checked);
+      if (before.prevRadio) setNativeProperty(before.prevRadio, "checked", true);
+    } else {
+      setNativeProperty(el, "checked", before.checked);
+      el.indeterminate = before.indeterminate;
+    }
+    return check();
+  } finally {
+    restore();
+  }
 }
 
 function scrollToCenter(el: HTMLElement): void {

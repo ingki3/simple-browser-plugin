@@ -5,8 +5,9 @@ import { isTag } from "./docs";
 
 // 승인한 대상 안에 있어도 따로 활성화되는 요소(링크·버튼·입력·프레임 등). 실제 입력이 이것에 닿으면 승인한 대상이 아닌
 // 그 요소가 동작하므로(기존 el.click()과 다름) 누르지 않는다. 구조(요소 종류·역할)로만 정한다.
+// a는 href 유무·이름공간과 관계없이(SVG의 xlink:href 링크 포함) 링크로 본다.
 const INDEPENDENT_SELECTOR = [
-  "a[href]",
+  "a",
   "area[href]",
   "button",
   "input",
