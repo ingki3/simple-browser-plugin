@@ -18,6 +18,13 @@ test("personalOnlyUrl: only a personal-looking signal, nothing else", () => {
   assert.equal(personalOnlyUrl(account), false);
   assert.equal(personalOnlyUrl("https://etk.srail.kr/checkout?pageId=TK0101010000"), false);
   assert.equal(personalOnlyUrl("about:undecodable"), false);
+  // 여러 번 인코딩해 끝까지 풀지 못한 감싼 주소(리뷰 P1)도 허용 대상이 아니다.
+  let wrapped = "https://portal.example/%63heckout";
+  for (let i = 0; i < 5; i++) wrapped = encodeURIComponent(wrapped);
+  const deep = `https://portal.example/go?pageId=TK0101010000&next=${wrapped}`;
+  assert.equal(sensitiveUrlReason(deep), PERSONAL_URL_REASON);
+  assert.equal(personalOnlyUrl(deep), false);
+  assert.ok(autoApproveBlock("click_element", [t({ name: "조회", scopeFormActions: [deep] })], [], { deferPersonalUrls: new Map() }));
 });
 
 test("sensitiveUrlReason keeps reporting the first reason in order", () => {

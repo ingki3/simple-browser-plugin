@@ -496,6 +496,9 @@ function urlReasons(
 ): { first: string | null; other: string | null; personal: boolean } {
   let first: string | null = null;
   let personalHit = false;
+  // 펼친 주소 중 끝까지 풀지 못한 표시(about:undecodable 등). 사이트 경계 판정이 따로 막으므로 first(sensitiveUrlReason)는
+  // 바꾸지 않고, 사용자 허용(personalOnlyUrl)에서만 면제할 수 없는 이유로 쓴다.
+  let unverified: string | null = null;
   const other = (why: string) => ({ first: first ?? why, other: why, personal: personalHit });
   // content script가 넣는 "끝까지 보지 못함" 표시(about:too-many-…, about:undecodable).
   if (/^about:(too-many|undecodable|over-budget)/.test(url)) return other("끝까지 확인하지 못한 주소");
@@ -503,6 +506,10 @@ function urlReasons(
   const { urls, overflow } = expandUrls(url);
   if (overflow) return other("끝까지 확인하지 못한 복잡한 주소");
   for (const u of urls) {
+    if (u.protocol === "about:" && /^(too-many|undecodable|over-budget)/.test(u.pathname)) {
+      unverified ??= "끝까지 확인하지 못한 주소";
+      continue;
+    }
     // 경로·쿼리·해시를 따로 풀어 본다(한 부분의 잘못된 인코딩이 다른 부분 해석을 막지 않게).
     const route = [u.pathname, u.search, u.hash].map(decodeDeepText).join("");
     // 이어 붙인 표기(pay_now, confirm_order, placeOrder)도 낱말로 나눠 보고, 버튼 문구와 같은 금전 단서
@@ -537,7 +544,7 @@ function urlReasons(
       personalHit = true;
     }
   }
-  return { first, other: null, personal: personalHit };
+  return { first, other: unverified, personal: personalHit };
 }
 
 // 승인 카드에서 "이번 요청 동안 링크 이동은 묻지 않기"를 고른 뒤 카드 없이 누를 수 있는 링크인지.
