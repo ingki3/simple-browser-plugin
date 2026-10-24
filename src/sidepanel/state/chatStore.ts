@@ -26,6 +26,7 @@ export type ChatMessage =
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;
       choiceDefaults?: string[];
+      handoff?: boolean;
       resolved: "approved" | "cancelled" | null;
     }
   | {

@@ -149,7 +149,7 @@ function bounded<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function sendTo<T>(tabId: number, documentId: string, msg: BgToContent, ms: number, label: string): Promise<T> {
+export async function sendTo<T>(tabId: number, documentId: string, msg: BgToContent, ms: number, label: string): Promise<T> {
   const res = (await bounded(
     chrome.tabs.sendMessage(tabId, msg, { documentId }) as Promise<ContentResponse<T>>,
     ms,

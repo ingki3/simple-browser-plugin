@@ -1,3 +1,4 @@
+import { normalizeManualSites } from "@/lib/manualSites";
 import { DEFAULT_MODEL, normalizeModelId } from "@/lib/models";
 import {
   DEFAULT_CSV_MAX_CHARS,
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showThinking: false,
   rememberPages: true,
   trustedInput: false,
+  manualSites: [],
 };
 
 export async function readSettings(): Promise<Settings> {
@@ -53,6 +55,7 @@ export async function readSettings(): Promise<Settings> {
     showThinking: raw.showThinking === true,
     rememberPages: raw.rememberPages !== false,
     trustedInput: raw.trustedInput === true,
+    manualSites: normalizeManualSites(raw.manualSites),
   };
 }
 
@@ -64,6 +67,7 @@ export async function writeSettings(next: Settings): Promise<void> {
       maxToolHops: normalizeMaxToolHops({ ...next, maxToolHopsVersion: MAX_TOOL_HOPS_VERSION }),
       maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
       csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
+      manualSites: normalizeManualSites(next.manualSites),
     },
   });
 }

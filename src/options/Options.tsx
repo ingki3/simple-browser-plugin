@@ -3,6 +3,8 @@ import { ActionLogField } from "@/sidepanel/components/ActionLogField";
 import { AutoApproveField } from "@/sidepanel/components/AutoApproveField";
 import { RememberPagesField } from "@/sidepanel/components/RememberPagesField";
 import { TrustedInputField } from "@/sidepanel/components/TrustedInputField";
+import { ManualSitesField } from "@/sidepanel/components/ManualSitesField";
+import { normalizeManualSites } from "@/lib/manualSites";
 import { ShowThinkingField } from "@/sidepanel/components/ShowThinkingField";
 import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
 import {
@@ -38,6 +40,7 @@ const DEFAULTS: Settings = {
   showThinking: false,
   rememberPages: true,
   trustedInput: false,
+  manualSites: [],
 };
 
 export function Options() {
@@ -66,6 +69,7 @@ export function Options() {
         showThinking: raw.showThinking === true,
         rememberPages: raw.rememberPages !== false,
         trustedInput: raw.trustedInput === true,
+        manualSites: normalizeManualSites(raw.manualSites),
       });
     });
   }, []);
@@ -251,6 +255,11 @@ export function Options() {
       <TrustedInputField
         enabled={draft.trustedInput}
         onToggle={(trustedInput) => setDraft({ ...draft, trustedInput })}
+      />
+
+      <ManualSitesField
+        sites={draft.manualSites}
+        onChange={(manualSites) => setDraft({ ...draft, manualSites })}
       />
 
       <ActionLogField

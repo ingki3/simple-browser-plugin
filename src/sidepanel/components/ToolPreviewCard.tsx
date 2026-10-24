@@ -14,7 +14,7 @@ type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
 };
 
 export function ToolPreviewCard(props: Props) {
-  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, chatGrantOffer, personalUrlOffer, choices, choiceLimit, choiceDefaults, resolved, onApprove, onCancel } =
+  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, chatGrantOffer, personalUrlOffer, choices, choiceLimit, choiceDefaults, handoff, resolved, onApprove, onCancel } =
     props;
   const disabled = resolved !== null;
   // 선택 카드(다른 탭·링크 고르기): choiceDefaults만 체크한 상태에서 시작하고, 고른 id만 승인으로 보낸다.
@@ -26,7 +26,7 @@ export function ToolPreviewCard(props: Props) {
   return (
     <div className={`tool-card tool-pending${disabled ? " resolved" : ""}`}>
       <div className="tool-card-header">
-        <span className="tool-card-title">{KO.toolConfirmTitle}</span>
+        <span className="tool-card-title">{handoff ? KO.handoffTitle : KO.toolConfirmTitle}</span>
         <span className="tool-card-badge">{toolName}</span>
       </div>
       <div className="tool-card-body">
@@ -54,7 +54,7 @@ export function ToolPreviewCard(props: Props) {
         )}
       </div>
       <div className="tool-card-actions">
-        {resolved === "approved" && <span className="resolved-label">✓ 승인됨</span>}
+        {resolved === "approved" && <span className="resolved-label">{handoff ? "✓ 완료" : "✓ 승인됨"}</span>}
         {resolved === "cancelled" && <span className="resolved-label">✕ 취소됨</span>}
         {!disabled && (
           <>
@@ -89,7 +89,11 @@ export function ToolPreviewCard(props: Props) {
                 {KO.approveToolThisChat}
               </button>
             )}
-            {choices ? (
+            {handoff ? (
+              <button className="btn-approve" onClick={() => onApprove(callId)}>
+                {KO.handoffDone}
+              </button>
+            ) : choices ? (
               <button className="btn-approve" disabled={picked.length === 0} onClick={() => onApprove(callId, false, picked)}>
                 {toolName === "download_images" || toolName === "download_files" ? KO.approveChoicesSave : KO.approveChoices}
               </button>

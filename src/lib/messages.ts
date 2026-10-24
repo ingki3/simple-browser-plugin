@@ -237,6 +237,9 @@ export type BgToPanel =
       choiceLimit?: number;
       // 처음부터 체크해 둘 후보(경고가 붙은 후보는 빼서 사용자가 직접 고르게).
       choiceDefaults?: string[];
+      // 직접 조작할 사이트의 손 넘기기 카드(0.2.2): 사용자가 페이지에서 직접 하고 "했어요"(approve_tool)를 누른다.
+      // 표시한 대상을 사용자가 누르면 백그라운드가 카드 없이 이어 간다(결과 줄이 오면 카드를 닫는다).
+      handoff?: boolean;
     }
   | {
       kind: "tool_result";
@@ -265,6 +268,11 @@ export type BgToContent =
   | { kind: "trusted_click_cancel"; token: string; reason: string }
   | { kind: "input_guard_arm"; token: string; ms: number }
   | { kind: "input_guard_disarm"; token: string }
+  // 손 넘기기(직접 조작할 사이트, 0.2.2): 승인 대상을 표시하고(show), 사용자가 표시한 대상을 눌렀는지 묻고(status), 표시를
+  // 뗀다(end). 표시한 top 문서에만 보낸다.
+  | { kind: "handoff_show"; token: string; ids: string[]; callId: string; prefix: "c" | "f" }
+  | { kind: "handoff_status"; token: string }
+  | { kind: "handoff_end"; token: string }
   | { kind: "translate_batch"; texts: string[]; targetLang: string }
   | { kind: "translate_stop" }
   // 승인 카드용: id들이 find_* 때와 같은 요소인지 확인하고 이 호출의 승인 대상으로 남긴다.
@@ -322,6 +330,8 @@ export interface Settings {
   rememberPages: boolean;
   // 클릭을 chrome.debugger의 실제 마우스 입력으로 보낼지(0.2.0). 끄면(기본) 페이지 스크립트로 누른다.
   trustedInput: boolean;
+  // 직접 조작할 사이트(출처 목록, 0.2.2). 이 사이트에서는 클릭·입력을 대신하지 않고 대상을 표시해 사용자가 직접 한다.
+  manualSites: string[];
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;

@@ -41,6 +41,7 @@ import {
   clickCard,
   describeEffect,
   fillCard,
+  handoffFillList,
   navKind,
   type ClickEffect,
   type DomEffect,
@@ -81,6 +82,8 @@ export interface ToolExecResult {
 export interface ToolPreview {
   summary: string;
   details?: unknown;
+  // 직접 조작할 사이트의 손 넘기기 카드에 보일 내용(입력할 칸과 값 전체). 없으면 details.
+  handoffDetails?: string;
   // 자동 실행을 켰을 때도 승인을 받아야 하는 이유(결제·개인정보 제출). 없으면 null. 대상을 보지 않는 도구는 비워 둔다.
   autoBlock?: string | null;
   // 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않고 늘 카드로 묻는 이유
@@ -230,6 +233,9 @@ export async function buildToolPreview(
       const destructiveFill = destructiveFillBlock(infos, fillValues);
       return {
         ...fillCardInfo,
+        handoffDetails: `${handoffFillList(infos.map((info, i) => ({ info, value: args.fills[i].value })))}${
+          destructiveFill ? `\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` : ""
+        }`,
         ...(destructiveFill
           ? { details: `${fillCardInfo.details}\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` }
           : {}),
@@ -519,6 +525,11 @@ export function parseToolArgs<T extends ToolName>(
     throw new Error(`도구 '${toolName}' 인자 검증 실패: ${result.error.message}`);
   }
   return result.data as ToolArgs[T];
+}
+
+// 직접 조작할 사이트에서 사용자에게 넘긴 동작을 기록한다(실행하지 않음).
+export function recordHandedOffAction(callId: string, turnTab: TurnTab): void {
+  void finishAction(turnTab, callId, "handed_off");
 }
 
 // 사용자가 승인 카드에서 취소한 동작을 기록한다.

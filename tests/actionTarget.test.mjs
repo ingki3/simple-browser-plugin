@@ -6,6 +6,7 @@ import {
   describeDifference,
   describeEffect,
   fillCard,
+  handoffFillList,
   navKind,
   onlyAdded,
   onlyRowDiffers,
@@ -302,4 +303,21 @@ test("rowDriftDiag: 글자 없이 종류·길이만 남긴다", () => {
   assert.equal(rowDriftDiag(row, { ...row, modelContext: "운임 349,000원" }), "visible len 11→11 digits-only");
   assert.equal(rowDriftDiag(row, { ...row, context: "남은 시간 04:58 운임" }), "hidden-only len 14→14 digits-only");
   assert.equal(rowDriftDiag(row, { ...row, modelContext: "매진" }), "visible len 11→2");
+});
+
+test("handoffFillList: 사용자가 직접 입력할 모든 칸과 값을 자르지 않고 번호와 함께", () => {
+  const field = { ...link, tag: "input", role: "textbox", href: "", fieldType: "text" };
+  const long = "가".repeat(200);
+  const items = Array.from({ length: 12 }, (_, i) => ({ info: { ...field, name: `칸${i}` }, value: i === 0 ? long : "v" }));
+  items.push({ info: { ...field, name: "비밀번호", fieldType: "password", sensitive: "password" }, value: "hunter22" });
+  items.push({ info: { ...field, name: "동의", fieldType: "checkbox", modelContext: "약관" }, value: "true" });
+  const list = handoffFillList(items);
+  const lines = list.split("\n");
+  assert.equal(lines.length, 14);
+  assert.equal(lines[0], `1. 칸0: ${long}`);
+  assert.equal(lines[12], "13. 비밀번호: (비밀번호 — 직접 입력)");
+  assert.equal(lines[13], "14. 동의 — 행: '약관': ☑ 체크");
+  assert.doesNotMatch(list, /hunter22/);
+  assert.equal(handoffFillList([{ info: { ...field, name: "출발지" }, value: "수서" }]), "출발지: 수서");
+  assert.equal(handoffFillList([{ info: { ...field, name: "카드 번호", sensitive: "payment" }, value: "1234" }]), "카드 번호: 1234 ⚠ 결제 정보 칸");
 });

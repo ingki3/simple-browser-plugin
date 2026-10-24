@@ -269,6 +269,32 @@ export function parseCheckedRequest(value: string): boolean | null {
   return null;
 }
 
+// 직접 조작할 사이트의 입력 안내(0.2.2): 사용자가 직접 입력하므로 모든 칸과 값을 자르지 않고 보인다. 번호는 페이지에
+// 표시한 번호와 같다. 비밀번호 칸은 승인 카드처럼 값을 가린다(사용자가 아는 값을 직접 넣는다).
+export function handoffFillList(items: Array<{ info: TargetInfo; value: string }>): string {
+  return items
+    .map(({ info, value }, i) => {
+      const name = info.name || "(이름 없는 칸)";
+      const row = info.modelContext && (!info.name || info.fieldType === "checkbox" || info.fieldType === "radio")
+        ? ` — 행: '${clip(info.modelContext, 60)}'`
+        : "";
+      const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
+      const want = toggle ? parseCheckedRequest(value) : null;
+      const shown =
+        info.sensitive === "password"
+          ? "(비밀번호 — 직접 입력)"
+          : want === true
+            ? "☑ 체크"
+            : want === false
+              ? "☐ 해제"
+              : value;
+      let warn = info.sensitive === "payment" ? " ⚠ 결제 정보 칸" : "";
+      if (info.hidden) warn += " ⚠ 화면에 보이지 않는 칸";
+      return `${items.length > 1 ? `${i + 1}. ` : ""}${name}${row}: ${shown}${warn}`;
+    })
+    .join("\n");
+}
+
 // 입력 승인 카드. 비밀번호 칸은 값을 가리고 글자 수만 보여 준다.
 // checkbox·radio(메일 목록의 행 체크박스 — 모두 같은 이름일 수 있다), 이름 없는 칸, 묶음 안에서 이름이 겹치는 칸은
 // 행 문맥을 함께 보여 준다(#56). 한 칸만 채워도 어느 행인지 알 수 있게 이름 중복만으로 정하지 않는다.

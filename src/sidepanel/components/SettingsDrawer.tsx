@@ -3,6 +3,7 @@ import { ActionLogField } from "./ActionLogField";
 import { AutoApproveField } from "./AutoApproveField";
 import { RememberPagesField } from "./RememberPagesField";
 import { TrustedInputField } from "./TrustedInputField";
+import { ManualSitesField } from "./ManualSitesField";
 import { ShowThinkingField } from "./ShowThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
@@ -296,6 +297,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <TrustedInputField
             enabled={draft.trustedInput}
             onToggle={(trustedInput) => setDraft({ ...draft, trustedInput })}
+          />
+
+          <ManualSitesField
+            sites={draft.manualSites}
+            onChange={(manualSites) => setDraft({ ...draft, manualSites })} currentTabButton
           />
 
           <ActionLogField
