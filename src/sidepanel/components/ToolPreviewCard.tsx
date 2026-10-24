@@ -3,12 +3,18 @@ import { KO } from "../i18n/ko";
 import type { ChatMessage } from "../state/chatStore";
 
 type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
-  onApprove: (callId: string, allowLinksThisTurn?: boolean, choiceIds?: string[], allowToolThisChat?: boolean) => void;
+  onApprove: (
+    callId: string,
+    allowLinksThisTurn?: boolean,
+    choiceIds?: string[],
+    allowToolThisChat?: boolean,
+    allowUrlsThisChat?: boolean,
+  ) => void;
   onCancel: (callId: string) => void;
 };
 
 export function ToolPreviewCard(props: Props) {
-  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, chatGrantOffer, choices, choiceLimit, choiceDefaults, resolved, onApprove, onCancel } =
+  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, chatGrantOffer, personalUrlOffer, choices, choiceLimit, choiceDefaults, resolved, onApprove, onCancel } =
     props;
   const disabled = resolved !== null;
   // 선택 카드(다른 탭·링크 고르기): choiceDefaults만 체크한 상태에서 시작하고, 고른 id만 승인으로 보낸다.
@@ -62,6 +68,15 @@ export function ToolPreviewCard(props: Props) {
                 onClick={() => onApprove(callId, true)}
               >
                 {KO.approveLinksThisTurn}
+              </button>
+            )}
+            {personalUrlOffer && (
+              <button
+                className="btn-approve-urls"
+                title={KO.approveUrlsThisChatHelp}
+                onClick={() => onApprove(callId, false, undefined, false, true)}
+              >
+                {KO.approveUrlsThisChat}
               </button>
             )}
             {chatGrantOffer && (

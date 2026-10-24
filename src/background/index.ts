@@ -57,6 +57,7 @@ chrome.runtime.onConnect.addListener((port) => {
           msg.allowLinksThisTurn === true,
           Array.isArray(msg.choiceIds) ? msg.choiceIds.filter((x): x is string => typeof x === "string") : undefined,
           msg.allowToolThisChat === true,
+          msg.allowUrlsThisChat === true,
         );
         return;
       case "revoke_chat_grant":

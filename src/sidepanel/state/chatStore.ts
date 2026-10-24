@@ -22,6 +22,7 @@ export type ChatMessage =
       previewDetails?: unknown;
       linkGrantOffer?: boolean;
       chatGrantOffer?: boolean;
+      personalUrlOffer?: boolean;
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;
       choiceDefaults?: string[];

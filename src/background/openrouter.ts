@@ -269,6 +269,12 @@ export class ChatAgent {
   // 링크 이동 허락(linkGrant)과는 대상 도구가 겹치지 않는다: 그쪽은 페이지 상태를 바꾸는 클릭이라 한 요청에만 쓴다.
   // 그 선택지를 보여 준 카드(callId → 도구·범위)만 받아들인다.
   private chatGrants = new Map<ChatGrantTool, string>();
+  // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 출처·경로·해시와
+  // 개인정보 신호가 걸린 매개변수).
+  // 클릭·입력의 자동 실행 판정에서 이 주소들의 개인정보 주소 신호만 면제한다(사이트 경계·다른 신호는 그대로).
+  // 대화 객체 메모리에만 두고 저장하지 않는다. 그 선택지를 보여 준 카드(callId → 턴·주소)만 받아들인다.
+  private allowedPersonalUrls = new Set<string>();
+  private personalUrlOffers = new Map<string, { turn: number; keys: string[] }>();
   private chatGrantOffers = new Map<string, { tool: ChatGrantTool; scope: string }>();
   // 외부 본문 보호: 파일·Google 문서·PDF처럼 외부 유래 데이터가 이 대화의 모델 문맥에 들어오면 켠다(새 대화까지).
   // 켜진 동안은 관측 전용 도구(TOOL_POLICY.observeOnly) 밖의 모든 도구를 자동 실행·링크 허락 없이 승인 카드로 묻는다
@@ -298,6 +304,7 @@ export class ChatAgent {
     this.pendingApprovals.clear();
     this.linkGrantOffers.clear();
     this.chatGrantOffers.clear();
+    this.personalUrlOffers.clear();
   }
 
   private isStale(turn: number): boolean {
@@ -335,7 +342,13 @@ export class ChatAgent {
     this.translatedTabs.clear();
   }
 
-  approveTool(callId: string, allowLinksThisTurn = false, choiceIds?: string[], allowToolThisChat = false): void {
+  approveTool(
+    callId: string,
+    allowLinksThisTurn = false,
+    choiceIds?: string[],
+    allowToolThisChat = false,
+    allowUrlsThisChat = false,
+  ): void {
     // 선택 카드의 선택은 백그라운드가 고정한 후보의 부분집합만 남긴다(otherTabs.setChosen).
     if (choiceIds && this.pendingApprovals.has(callId)) {
       setChosenTabs(callId, choiceIds);
@@ -346,6 +359,11 @@ export class ChatAgent {
     if (allowLinksThisTurn && this.pendingApprovals.has(callId) && offer?.turn === this.currentTurn) {
       this.linkGrant = offer;
       debugLog("tool:link_grant", `turn ${offer.turn}`);
+    }
+    const urlOffer = this.personalUrlOffers.get(callId);
+    if (allowUrlsThisChat && this.pendingApprovals.has(callId) && urlOffer?.turn === this.currentTurn) {
+      for (const k of urlOffer.keys) this.allowedPersonalUrls.add(k);
+      debugLog("tool:url_allow", `${urlOffer.keys.length}개 주소`);
     }
     const chatOffer = this.chatGrantOffers.get(callId);
     if (allowToolThisChat && this.pendingApprovals.has(callId) && chatOffer) {
@@ -377,6 +395,7 @@ export class ChatAgent {
     this.approvedSites.clear();
     this.linkGrant = null;
     this.chatGrants.clear();
+    this.allowedPersonalUrls.clear();
     this.externalContent = false;
     this.savedNavTarget = null;
   }
@@ -1064,6 +1083,10 @@ export class ChatAgent {
           // 자동 실행한다(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이 끼어들 수 없다.
           const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(turnTab));
           if (this.isStale(turn)) return false;
+          // 개인정보 모양만 걸린 주소를 모두 사용자가 이번 대화에서 허용했으면 그 신호를 뺀 판정을 쓴다.
+          const personalUrlKeys = preview.personalUrlKeys ?? [];
+          const urlsAllowed =
+            personalUrlKeys.length > 0 && personalUrlKeys.every((k) => this.allowedPersonalUrls.has(k));
           // 되돌리기 어려운 동작(#62)은 링크 이동 허락이 있어도 늘 묻는다.
           let block = preview.alwaysAsk
             ? preview.alwaysAsk
@@ -1074,12 +1097,25 @@ export class ChatAgent {
                   ? internalNavigateAutoBlock(trusted, this.turnNamedSites, String(preview.details ?? ""))
                   : navigateAutoBlock(trusted, String(preview.details ?? ""))
                 : preview.autoBlock !== undefined
-                  ? preview.autoBlock
+                  ? urlsAllowed && preview.autoBlockIfUrlsAllowed !== undefined
+                    ? preview.autoBlockIfUrlsAllowed
+                    : preview.autoBlock
                   : autoApproveBlock(toolName, []);
           // 링크 허락으로 실행하는 클릭은 위에서 지금 페이지의 사이트 안인지 이미 봤다.
           if (autoMode && !linkGranted && !block && (toolName === "click_element" || toolName === "fill_form_fields")) {
             block = siteBlock(trusted);
           }
+          // 카드가 뜨는 이유가 개인정보 모양 주소뿐이면(그 주소들을 허용하면 자동 실행되는 호출) 그 주소를 이번 대화에서
+          // 다시 묻지 않는 선택지를 함께 보인다. 자동 실행이 꺼져 있거나 보호 중이면 어차피 묻으므로 제안하지 않는다.
+          const urlOffer =
+            autoMode &&
+            !linkGranted &&
+            !preview.alwaysAsk &&
+            !urlsAllowed &&
+            personalUrlKeys.length > 0 &&
+            preview.autoBlockIfUrlsAllowed === null &&
+            (toolName === "click_element" || toolName === "fill_form_fields") &&
+            siteBlock(trusted) === null;
           // 이번 대화 동안 묻지 않기(#53): 대상 도구이고, 이 호출에 경고가 없고(grantBlock), 범위가 같으면 카드 없이 실행한다.
           // 외부 전송 도구는 외부 본문 보호 중에 허락을 쓰지 않는다(src/lib/chatGrant.ts).
           let chatGrant = chatGrantDecision(this.chatGrants, {
@@ -1149,14 +1185,18 @@ export class ChatAgent {
                   : autoMode
                     ? `${preview.summary} (자동 실행 예외: ${block})`
                     : preview.summary,
-              previewDetails: preview.details,
+              previewDetails: urlOffer
+                ? `${typeof preview.details === "string" && preview.details ? `${preview.details}\n` : ""}개인정보 모양이 걸린 주소:\n${(preview.personalUrls ?? []).map((u) => `- ${u}`).join("\n")}`
+                : preview.details,
               ...(linkOffer ? { linkGrantOffer: true } : {}),
+              ...(urlOffer ? { personalUrlOffer: true } : {}),
               ...(chatGrant.offer ? { chatGrantOffer: true } : {}),
               ...(preview.choices
                 ? { choices: preview.choices, choiceLimit: preview.choiceLimit, choiceDefaults: preview.choiceDefaults }
                 : {}),
             });
             if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
+            if (urlOffer) this.personalUrlOffers.set(callId, { turn, keys: personalUrlKeys });
             if (chatGrant.offer && isChatGrantTool(toolName)) {
               this.chatGrantOffers.set(callId, { tool: toolName, scope: preview.grantScope ?? "" });
             }
@@ -1166,6 +1206,7 @@ export class ChatAgent {
             this.pendingApprovals.delete(callId);
             this.linkGrantOffers.delete(callId);
             this.chatGrantOffers.delete(callId);
+            this.personalUrlOffers.delete(callId);
             if (this.isStale(turn)) return false;
             debugLog(
               "tool:approval_result",

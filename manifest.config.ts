@@ -18,7 +18,7 @@ export default defineManifest({
   manifest_version: 3,
   name: "간편 브라우저 도우미",
   description: "OpenRouter 기반 Chrome Side Panel 채팅 에이전트. 페이지 번역, 폼 자동 채우기, 이미지 일괄 다운로드.",
-  version: "0.1.21",
+  version: "0.1.22",
   action: {
     default_title: "간편 도우미 열기",
   },

@@ -104,8 +104,26 @@ export interface ToolPreview {
   // 이번 대화 허락으로 카드 없이 실행할 때 고른 것으로 할 후보 id(read_linked_pages는 후보 전부, download_images는
   // 모델이 넘긴 주소의 후보 — 선택 해제로 함께 보인 페이지의 다른 이미지는 받지 않는다).
   grantChoiceIds?: string[];
+  // 개인정보 모양만 걸린 주소(autoApproveBlock의 deferPersonalUrls)와, 사용자가 그 주소를 모두 허용했을 때의 자동 실행 판정.
+  // 승인 카드에 "이 주소는 이번 대화에서 다시 묻지 않기"를 제안하고 허용한 주소면 autoBlock 대신 쓴다. 모델에는 보내지 않는다.
+  // personalUrlKeys는 허용 판정에 쓰는 열쇠(personalUrlKey), personalUrls는 카드에 보일 주소(열쇠마다 하나).
+  personalUrlKeys?: string[];
+  personalUrls?: string[];
+  autoBlockIfUrlsAllowed?: string | null;
   // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
   execArgs?: unknown;
+}
+
+function personalUrlFields(
+  tool: "click_element" | "fill_form_fields",
+  targets: TargetInfo[],
+  values: ReadonlyArray<string | undefined> = [],
+): Pick<ToolPreview, "personalUrlKeys" | "personalUrls" | "autoBlockIfUrlsAllowed"> {
+  const deferred = new Map<string, string>();
+  const block = autoApproveBlock(tool, targets, values, { deferPersonalUrls: deferred });
+  return deferred.size
+    ? { personalUrlKeys: [...deferred.keys()], personalUrls: [...deferred.values()], autoBlockIfUrlsAllowed: block }
+    : {};
 }
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
@@ -215,6 +233,7 @@ export async function buildToolPreview(
           ? { details: `${fillCardInfo.details}\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` }
           : {}),
         autoBlock: autoApproveBlock("fill_form_fields", infos, fillValues),
+        ...personalUrlFields("fill_form_fields", infos, fillValues),
         alwaysAsk: destructiveFill,
         // 양식 제출 주소(기존 값 포함)와 선택지 주소. 입력할 값은 fillValues로 따로 본다.
         linkHrefs: infos
@@ -306,6 +325,7 @@ export async function buildToolPreview(
         ...card,
         ...(destructive ? { details: `${card.details}\n⚠ ${destructive}입니다. 누르기 전에 대상을 확인하세요.` } : {}),
         autoBlock: autoApproveBlock("click_element", sides),
+        ...personalUrlFields("click_element", sides),
         alwaysAsk: destructive,
         // 트리거가 있는 선택지는 링크 이동 허락(grantableLink) 대상이 아니다.
         ...(info.trigger ? {} : { clickTarget: info }),

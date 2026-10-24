@@ -71,6 +71,7 @@ export function useChatSession() {
             previewDetails: msg.previewDetails,
             linkGrantOffer: msg.linkGrantOffer === true,
             chatGrantOffer: msg.chatGrantOffer === true,
+            personalUrlOffer: msg.personalUrlOffer === true,
             ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit, choiceDefaults: msg.choiceDefaults } : {}),
             resolved: null,
           });
@@ -216,15 +217,22 @@ export function useChatSession() {
     send({ kind: "user_msg", text, conversationId });
   };
 
-  const approveTool = (callId: string, allowLinksThisTurn = false, choiceIds?: string[], allowToolThisChat = false) => {
+  const approveTool = (
+    callId: string,
+    allowLinksThisTurn = false,
+    choiceIds?: string[],
+    allowToolThisChat = false,
+    allowUrlsThisChat = false,
+  ) => {
     useChatStore.getState().resolveToolPending(callId, "approved");
-    localDebug("approve_tool", `${callId}${allowLinksThisTurn ? " +links" : ""}${allowToolThisChat ? " +chat" : ""}`);
+    localDebug("approve_tool", `${callId}${allowLinksThisTurn ? " +links" : ""}${allowToolThisChat ? " +chat" : ""}${allowUrlsThisChat ? " +urls" : ""}`);
     send({
       kind: "approve_tool",
       callId,
       ...(allowLinksThisTurn ? { allowLinksThisTurn: true } : {}),
       ...(choiceIds ? { choiceIds } : {}),
       ...(allowToolThisChat ? { allowToolThisChat: true } : {}),
+      ...(allowUrlsThisChat ? { allowUrlsThisChat: true } : {}),
     });
   };
 

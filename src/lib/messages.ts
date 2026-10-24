@@ -176,7 +176,15 @@ export type PanelToBg =
   // allowLinksThisTurn: 카드가 제안했을 때만 유효. 이번 요청 동안 같은 사이트 안의 일반 링크 이동은 묻지 않는다.
   // choiceIds: 선택 카드(choices)에서 고른 후보 id. 백그라운드가 고정한 후보의 부분집합만 받아들인다.
   // allowToolThisChat: 카드가 제안했을 때만 유효(chatGrantOffer). 이번 대화 동안 이 도구는 같은 조건이면 묻지 않는다(#53).
-  | { kind: "approve_tool"; callId: string; allowLinksThisTurn?: boolean; choiceIds?: string[]; allowToolThisChat?: boolean }
+  // allowUrlsThisChat: 카드가 제안했을 때만 유효(personalUrlOffer). 카드에 보인 개인정보 모양 주소를 이번 대화에서 다시 묻지 않는다.
+  | {
+      kind: "approve_tool";
+      callId: string;
+      allowLinksThisTurn?: boolean;
+      choiceIds?: string[];
+      allowToolThisChat?: boolean;
+      allowUrlsThisChat?: boolean;
+    }
   | { kind: "cancel_tool"; callId: string }
   // 이 대화에서 허락한 도구를 취소한다(#53).
   | { kind: "revoke_chat_grant"; tool: string }
@@ -222,6 +230,8 @@ export type BgToPanel =
       // 이번 대화 허락 대상 도구(src/lib/chatGrant.ts)이고 허락으로 덮을 수 있는 호출이면 true:
       // "승인 + 이번 대화 동안 이 도구 묻지 않기"를 함께 보여 준다(#53).
       chatGrantOffer?: boolean;
+      // 카드가 뜬 이유가 개인정보 모양 주소뿐이면 true: "승인 + 이 주소는 이번 대화에서 다시 묻지 않기"를 함께 보여 준다.
+      personalUrlOffer?: boolean;
       // 선택 카드(다른 탭 고르기): 후보와 최대 선택 수. 고른 id만 승인 메시지로 돌려준다.
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;

@@ -15,6 +15,9 @@ export const KO = {
   approveLinksThisTurnHelp:
     "이번 요청이 끝날 때까지 같은 사이트 안의 일반 링크(다른 페이지로 가는 <a> 링크)는 묻지 않고 누릅니다. 버튼·양식 제출·다른 사이트로 가는 링크·개인정보가 채워진 양식은 계속 묻습니다.",
   approveToolThisChat: "승인 + 이번 대화 동안 이 도구 묻지 않기",
+  approveUrlsThisChat: "승인 + 이 주소는 이번 대화에서 다시 묻지 않기",
+  approveUrlsThisChatHelp:
+    "카드에 보인 주소(글자 그대로)가 전화번호 같은 개인정보 모양으로 걸려 묻는 경우, 이번 대화에서는 그 주소 때문에 다시 묻지 않습니다. 다른 주소·결제·비밀번호·개인정보 칸·다른 사이트·되돌리기 어려운 동작은 계속 묻습니다.",
   // 도구별 허락 범위 설명(버튼 title). 대상 밖 도구에는 제안이 뜨지 않는다(#53).
   chatGrantHelp: {
     read_linked_pages:

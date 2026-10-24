@@ -410,6 +410,7 @@ body,
 }
 
 .btn-approve-links,
+.btn-approve-urls,
 .btn-approve-chat {
   padding: 6px 10px;
   border-radius: 6px;
