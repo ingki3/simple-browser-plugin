@@ -9,7 +9,7 @@ import {
   translationReasoningConfig,
 } from "../src/lib/models.ts";
 import { readOpenRouterStream } from "../src/lib/openrouter.ts";
-import { appendCustomSystemPrompt } from "../src/lib/systemPrompt.ts";
+import { appendCustomSystemPrompt, nowNote } from "../src/lib/systemPrompt.ts";
 import {
   parseTranslationResponse,
   translationResponseFormat,
@@ -20,6 +20,17 @@ test("custom system prompt is appended after the built-in prompt", () => {
   assert.match(result, /^내부 규칙/);
   assert.match(result, /사용자 지정 기본 지침:\n출력은 한글로/);
   assert.match(result, /절대 규칙.*우선하지 않는다/);
+});
+
+test("nowNote: 날짜·요일·시각·시간대·UTC 오프셋을 사용자 글이 아닌 안내로", () => {
+  const now = new Date(2026, 9, 25, 13, 5);
+  const note = nowNote(now, "Asia/Seoul");
+  const off = -now.getTimezoneOffset();
+  const pad = (n) => String(n).padStart(2, "0");
+  const utc = `UTC${off < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
+  assert.ok(note.startsWith("[확장 안내 — 사용자 글 아님] 현재 시각: 2026-10-25(일) 13:05, 시간대 Asia/Seoul "), note);
+  assert.ok(note.includes(`(${utc})`), note);
+  assert.match(nowNote(now, ""), /시간대 \(UTC[+-]\d\d:\d\d\)/);
 });
 
 test("Gemini 3 models receive an explicit reasoning effort", () => {

@@ -1,5 +1,5 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
-import { appendCustomSystemPrompt } from "@/lib/systemPrompt";
+import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { popupWhere } from "@/lib/actionTarget";
 import type { ModelId } from "@/lib/models";
 import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
@@ -697,6 +697,7 @@ export class ChatAgent {
           messages: [
             { role: "system", content: systemPrompt },
             ...this.history,
+            { role: "user" as const, content: nowNote() },
             ...(savedCandidates ? [{ role: "user" as const, content: savedCandidates }] : []),
             // 마무리 안내는 이 요청에만 붙이고 대화 기록에는 넣지 않는다.
             ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
