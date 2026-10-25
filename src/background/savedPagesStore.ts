@@ -1,4 +1,4 @@
-import { maskStringForModel, maskValue } from "./loginSecrets";
+import { containsSecret, maskStringForModel, maskValue } from "./loginSecrets";
 import {
   addLink,
   candidatesFor,
@@ -132,6 +132,8 @@ export async function makeOffer(
     evicts: lru?.name ?? null,
     savedTemplates: list.map((l) => templateText(l.template)),
   };
+  // 제목·주소에 자동 로그인으로 넣은 값이 보이면 기억하기를 제안하지 않는다(저장 링크는 브라우저를 다시 켠 뒤에도 남아 모델 후보로 간다).
+  if (await containsSecret({ title: offer.title, url: offer.url })) return null;
   // 페이지 글자는 지금(턴이 끝난 화면) 읽어 둔다. 카드를 늦게 열면 탭이 다른 화면일 수 있다.
   // 경고가 있는 주소는 초안을 묻지 않으므로 읽지 않는다.
   const page = context && !offer.warning ? await screenText(tabId, documentId, url) : "";
@@ -247,6 +249,8 @@ export async function savePage(req: SaveRequest): Promise<{ evicted: string | nu
     lastUsedAt: now,
     uses: 0,
   };
+  // 저장할 이름·용도·템플릿·자리 설명에 자동 로그인 값이 있으면 저장하지 않는다.
+  if (await containsSecret(entry)) throw new Error("자동 로그인으로 넣은 값이 들어 있어 저장하지 않았습니다.");
   const evicted = await enqueue(async () => {
     const result = addLink(await load(), entry);
     await store(result.list);
@@ -275,6 +279,7 @@ export async function deletePages(id: string | null): Promise<void> {
 
 // 설정 화면에서 이름·용도·자리 설명을 고친다(템플릿 자체는 바꾸지 않는다 — 다시 저장한다).
 export async function updateLink(id: string, patch: { name?: unknown; purpose?: unknown; hints?: unknown }): Promise<void> {
+  if (await containsSecret(patch)) throw new Error("자동 로그인으로 넣은 값이 들어 있어 저장하지 않았습니다.");
   await enqueue(async () => {
     const list = await load();
     const hit = list.find((l) => l.id === id);
