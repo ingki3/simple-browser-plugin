@@ -24,6 +24,10 @@ for (const f of files) {
   for (const s of mod.default) all.push({ group: f.replace(/\.mjs$/, ""), ...s });
 }
 const chosen = all.filter((s) => !filter || `${s.group} ${s.name}`.includes(filter));
+if (!chosen.length) {
+  console.error(`'${filter}'에 맞는 시나리오가 없습니다.`);
+  process.exit(1);
+}
 
 const h = await startHarness();
 const rows = [];
