@@ -77,6 +77,8 @@ const VALUE_PSEUDOS = new Set([
   "autofill",
   "-webkit-autofill",
   "-internal-autofill-selected",
+  // dir="auto"인 칸은 지금 값의 첫 글자로 방향이 정해진다.
+  "dir",
 ]);
 
 // 거부 이유(모델에 보이는 문구). 허용이면 null.

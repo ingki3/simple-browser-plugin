@@ -56,6 +56,8 @@ test("selectorBlock: 값에 의존하는 조건은 거부(중첩·대소문자·
     "input[data-x='a",
     ":is('x",
     "a\n[data-x='1']",
+    "input[dir=auto]:dir(rtl)",
+    ":is(input:DIR(ltr))",
   ]) {
     assert.notEqual(selectorBlock(s), null, s);
   }
