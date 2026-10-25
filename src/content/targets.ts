@@ -545,9 +545,11 @@ function wrapsOnly(ref: Element, popup: Element): boolean {
   if (ref === popup || !ref.contains(popup)) return false;
   if (POPUP_ROLES.has((ref.getAttribute("role") ?? "").trim().toLowerCase())) return false;
   if (popupOf(ref as HTMLElement) !== ref) return false;
-  // ref 자신이나 그 조상이 트리거면(콤보박스 안의 목록) 그 트리거가 목록을 연 것일 수 있다.
-  for (let cur: Element | null = ref, depth = 0; cur; cur = composedParent(cur), depth++) {
-    if (depth >= 200 || isTrigger(cur)) return false;
+  // ref는 일반 문서(shadow root 밖)에 있어야 하고, 조상 어디에도 shadow root가 없어야 한다(조상의 닫힌 shadow root 슬롯에
+  // 배치되면 실제 조상 경로를 볼 수 없다). ref 자신이나 그 조상이 트리거면(콤보박스 안의 목록) 그 트리거가 목록을 연 것일 수 있다.
+  if (!(ref.getRootNode() instanceof Document)) return false;
+  for (let cur: Element | null = ref, depth = 0; cur; cur = cur.parentElement, depth++) {
+    if (depth >= 500 || isTrigger(cur) || (cur !== ref && hasHiddenTree(cur))) return false;
   }
   // shadow root·슬롯·프레임 안은 querySelectorAll이 보지 못하므로, 그런 것이 있으면 안을 다 확인할 수 없어 래퍼로 보지 않는다.
   if (hasHiddenTree(ref)) return false;
