@@ -32,7 +32,17 @@ export function Options() {
   }, []);
 
   const save = async () => {
-    const normalized = settingsForStorage(draft);
+    // 옵션 페이지는 모델 제공자·제공자별 키·모델을 다루지 않는다(사이드 패널 설정). 열어 둔 사이 그쪽에서 바꾼 값을
+    // 처음 읽은 값으로 덮어쓰지 않게, 그 필드는 저장 직전의 최신 값을 쓴다(#97).
+    const latest = normalizeSettings(
+      (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] as Partial<Settings> | undefined,
+    );
+    const normalized = settingsForStorage({
+      ...draft,
+      provider: latest.provider,
+      apiKeys: latest.apiKeys,
+      providerModels: latest.providerModels,
+    });
     setDraft(normalized);
     await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
     await chrome.runtime.sendMessage({ kind: "settings_updated" }).catch(() => {

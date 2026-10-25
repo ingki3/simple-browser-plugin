@@ -58,4 +58,19 @@ export default [
       void r;
     },
   },
+  {
+    name: "옵션 페이지에서 저장해도 사이드 패널에서 고른 제공자·키를 덮어쓰지 않는다",
+    async run(h) {
+      const opt = await h.ctx.newPage();
+      await opt.goto(`chrome-extension://${h.extId}/src/options/index.html`);
+      await opt.waitForTimeout(500);
+      // 옵션 페이지를 연 뒤 다른 곳(사이드 패널)에서 OpenAI로 바꾼다.
+      await h.settings({ provider: "openai", apiKeys: { openai: "sk-test-openai" } });
+      await opt.locator("button.primary").first().click();
+      await opt.waitForTimeout(400);
+      const st = await h.sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings);
+      await opt.close();
+      expect(st.provider === "openai" && st.apiKeys?.openai === "sk-test-openai", `유지(${JSON.stringify({ provider: st.provider, apiKeys: st.apiKeys })})`);
+    },
+  },
 ];
