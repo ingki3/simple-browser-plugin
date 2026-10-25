@@ -145,7 +145,20 @@ function hiddenSubmitterBlock(btn: HTMLElement, form: HTMLFormElement): string |
   if (dest && destructiveRoute(dest)) return DESTRUCTIVE_REASON;
   const urlWhy = dest ? sensitiveUrlReason(dest) : null;
   if (urlWhy) return `${urlWhy}로 이어지는 버튼`;
-  const text = ["value", "alt", "aria-label", "title"].map((a) => btn.getAttribute(a) ?? "").join(" ") + ` ${btn.textContent ?? ""}`;
+  // 버튼 자신의 name=value를 실제 목적지에 붙인 주소로 삭제·결제·개인정보 신호를 본다(name="delete" value="1", full_name=Bob 등).
+  const name = btn.getAttribute("name");
+  if (name && dest) {
+    try {
+      const u = new URL(dest);
+      u.searchParams.append(name, (btn as HTMLButtonElement).value ?? btn.getAttribute("value") ?? "");
+      if (destructiveRoute(u.href)) return DESTRUCTIVE_REASON;
+      const why = sensitiveUrlReason(u.href);
+      if (why) return `${why}를 보내는 버튼`;
+    } catch {
+      /* 주소가 아니면 아래 글자 검사로 */
+    }
+  }
+  const text = ["name", "value", "alt", "aria-label", "title"].map((a) => btn.getAttribute(a) ?? "").join(" ") + ` ${btn.textContent ?? ""}`;
   const words = `${text} ${splitIdentifier(text)}`;
   if (DESTRUCTIVE_TEXT_RE.test(words)) return DESTRUCTIVE_REASON;
   // 버튼 자신이 실어 보내는 name=value가 개인정보 모양이면(숨은 '이메일 변경' 버튼 등) 묻는다.
@@ -324,7 +337,14 @@ export function inspectLogin(id: string, callId: string): LoginShape {
 }
 
 // targetId가 null이면 모든 칸을 지금 기술로 다시 등록한다(값을 넣은 뒤 제출 직전 재판정 — 승인 대상은 바꾸지 않는 별도 callId로).
-function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked, callId: string): LoginShape {
+// inserted: 넣은 뒤 재판정이면 이번 호출이 넣은 이름·값 쌍(제출 버튼 위험 계산에서 그 값은 뺀다).
+function buildShape(
+  target: HTMLInputElement,
+  targetId: string | null,
+  p: Picked,
+  callId: string,
+  inserted: readonly InsertedValue[] = [],
+): LoginShape {
   const fieldEls = [p.username, p.password, p.otp].filter((e): e is HTMLInputElement => !!e);
   const ids = fieldEls.map((e) => (e === target && targetId ? targetId : registerFieldTarget(e)));
   const fields = inspectTargets(ids, callId, "f");
@@ -339,7 +359,9 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
   }
   const hiddenSubmitBlock = submitter && p.form && !layoutVisible(submitter) ? hiddenSubmitterBlock(submitter, p.form) : null;
   // 기본 버튼이 아닌 제출 컨트롤의 위험(같은 양식의 '삭제' 버튼 등).
-  const otherSubmitBlocks = p.form ? allSubmitterRisks(p.form, `${callId}:all`) : [];
+  // 넣을 칸 이름의 값은 이번 호출이 덮어쓰므로 뺀다(같은 이름의 다른 칸이 있으면 sharedName이 따로 묻는다).
+  const ownNames = fieldEls.map((e) => ({ name: e.name })).filter((x) => x.name);
+  const otherSubmitBlocks = p.form ? allSubmitterRisks(p.form, `${callId}:all`, [...inserted, ...ownNames]) : [];
   const submitUrls = new Set<string>();
   if (p.form) for (const u of formDestinations(p.form)) submitUrls.add(u);
   for (const f of fields) for (const u of [f.submitTo ?? "", ...(f.scopeFormActions ?? []), ...(f.aroundFormActions ?? [])]) if (u) submitUrls.add(u);
@@ -419,7 +441,10 @@ export async function fillLogin(
     if (!submit || !now.form) return null;
     // 기본 제출 버튼의 위험 신호(삭제 선언·결제 등)를 입력 이벤트마다 다시 본다(처리기가 그 버튼으로 바로 제출할 수 있다).
     // 버튼이 승인 때와 같아도 기술은 바뀔 수 있어(값을 넣으면 켜짐 등) 지금 기술로 다시 등록해 위험만 본다.
-    const added = newReasons(allSubmitterRisks(now.form, `${callId}:guard`, inserted), approved);
+    const ownNames = [before.picked.username, before.picked.password, before.picked.otp]
+      .map((e) => ({ name: e?.name ?? "" }))
+      .filter((x) => x.name);
+    const added = newReasons(allSubmitterRisks(now.form, `${callId}:guard`, [...inserted, ...ownNames]), approved);
     if (added.length) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${added[0]}).`;
     if (!now.form.isConnected) return "양식이 사라졌습니다.";
     const urls = formDestinations(now.form);
@@ -471,7 +496,7 @@ export async function fillLogin(
   if (approved) {
     const targetEl = registeredElement(before.targetId, "f") as HTMLInputElement;
     const recheckId = `${callId}:recheck`;
-    const fresh = buildShape(targetEl, null, pick(targetEl), recheckId);
+    const fresh = buildShape(targetEl, null, pick(targetEl), recheckId, inserted);
     const why = newReasons(loginShapeBlocks(fresh, approved.origin, inserted), approved)[0];
     if (why) {
       return { filled: total, total, submitted: false, note: `값을 넣은 뒤 양식에 새 위험이 보여 제출하지 않았습니다(${why}).` };

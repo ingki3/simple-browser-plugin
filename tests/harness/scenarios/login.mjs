@@ -4,7 +4,8 @@ import { expect, lastTool, okResult } from "../lib.mjs";
 
 const UUID = "0123456789abcdef0123456789abcdef";
 const PW = "Harness-Pw-7731!";
-const USER = "alice.harness";
+// 아이디를 이메일 모양으로 둔다(넣은 값이 개인정보 신호로 오판되지 않는지도 본다).
+const USER = "alice@harness.test";
 const findF = { tool: "find_form_fields", args: {} };
 const describe = { tool: "describe_page", args: {} };
 
@@ -133,6 +134,27 @@ export default [
       const t = lastTool(r, "sign_in");
       expect(r.out === "", `제출되지 않음(out='${r.out}')`);
       expect(t?.result?.submitted === false, `결과가 제출 안 함(${JSON.stringify(t)})`);
+    },
+  },
+  {
+    name: "숨은 제출 버튼이 name=delete를 보내면 묻는다",
+    pages: {
+      "/confirm": `<title>Confirm</title><main><form role=dialog method=post action="/confirm" onsubmit="event.preventDefault();document.getElementById('out').textContent='제출됨'">
+<label>비밀번호 <input name=p type=password autocomplete=current-password></label>
+<button hidden name=delete value=1>확인</button></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await connect(h);
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/confirm",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1, `카드로 물음(cards=${r.cards}, ${summary})`);
+      expect(r.out === "", "제출하지 않음");
     },
   },
   {
