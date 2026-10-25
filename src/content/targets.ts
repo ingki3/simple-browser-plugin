@@ -452,8 +452,9 @@ function fullInfo(
 // 선택지와 그것을 펼친 트리거의 관계(#43 B). 소속을 포함 구조나 글자로 추론하지 않는다.
 // - linked: 펼쳐진(aria-expanded=true) 트리거(combobox·aria-haspopup 요소) 중 aria-controls/aria-owns로 선택지나
 //   선택지를 담은 팝업(가장 가까운 listbox·menu 조상, 없으면 선택지 자신)을 가리키는 것이 정확히 하나.
-//   aria-controls가 팝업을 감싼 요소를 가리키면(Google 항공편의 공항 추천 목록) 그 안의 팝업이 이 팝업 하나뿐이고
-//   트리거를 품지 않을 때만 같은 연결로 본다(명시적 참조를 한 단계 따라갈 뿐, 소속을 포함 구조로 추론하지 않는다).
+//   직접 연결이 없으면, 펼친 트리거들의 참조 중 팝업을 감싼 요소가 정확히 하나이고 그것이 aria-controls이며 그 안을 모두 볼 수
+//   있고 다른 팝업·트리거가 없을 때(Google 항공편의 공항 추천 목록) 그 트리거와 연결로 본다(wrapperLink — 명시적 참조를
+//   한 단계 따라갈 뿐, 소속을 포함 구조로 추론하지 않는다).
 // - unlinked: 그런 연결이 없고, 접근 가능한 모든 문서에서 펼쳐진 트리거가 0개나 1개.
 // - 그 밖(펼쳐진 트리거가 둘 이상인데 연결 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
 // 관계는 찾을 때·승인 카드 때·실행 직전·스크롤과 포커스 뒤에 다시 계산해 같아야 한다.
@@ -522,19 +523,35 @@ export function expandedTriggers(): HTMLElement[] {
   return out;
 }
 
-// 트리거가 aria-controls/aria-owns로 팝업이나 선택지를 가리키는지. 참조는 트리거와 같은 Document/ShadowRoot 안에서만 푼다.
-// aria-controls는 팝업을 감싼 요소를 가리켜도 된다: 그 요소 안의 팝업(listbox·menu)이 이 팝업 하나뿐이고 트리거를 품지 않을 때.
-function linkVia(trigger: Element, popup: Element, el: Element): "controls" | "owns" | null {
+// 트리거가 aria-controls/aria-owns로 대상(팝업 또는 선택지)을 가리키는지. 참조는 트리거와 같은 Document/ShadowRoot 안에서만 푼다.
+function linkVia(trigger: Element, targets: Element[]): "controls" | "owns" | null {
+  for (const { attr, ref } of ariaRefs(trigger)) if (targets.includes(ref)) return attr;
+  return null;
+}
+
+function ariaRefs(trigger: Element): Array<{ attr: "controls" | "owns"; ref: Element }> {
   const root = trigger.getRootNode() as Document | ShadowRoot;
+  const out: Array<{ attr: "controls" | "owns"; ref: Element }> = [];
   for (const attr of ["controls", "owns"] as const) {
     for (const id of (trigger.getAttribute(`aria-${attr}`) ?? "").split(/\s+/).filter(Boolean)) {
       const ref = root.getElementById?.(id) ?? null;
-      if (!ref) continue;
-      if (ref === popup || ref === el) return attr;
-      if (attr === "controls" && wrapsOnly(ref, popup) && !ref.contains(trigger)) return attr;
+      if (ref) out.push({ attr, ref });
     }
   }
-  return null;
+  return out;
+}
+
+// 직접 연결이 없을 때, aria-controls가 팝업을 감싼 요소를 가리키는 연결(Google 항공편 공항 추천). 펼친 트리거들의 참조 중
+// 팝업을 담은 것이 정확히 하나이고, 그것이 aria-controls이며 wrapsOnly를 만족하고 트리거를 품지 않을 때만 그 트리거.
+// 다른 트리거도 팝업을 담은 요소를 가리키면(대화상자 전체를 가리키는 '삭제' 버튼 등) 어느 것이 연 목록인지 정할 수 없다.
+function wrapperLink(expanded: HTMLElement[], popup: Element): HTMLElement | null {
+  const hits: Array<{ trigger: HTMLElement; attr: "controls" | "owns"; ref: Element }> = [];
+  for (const t of expanded) {
+    for (const r of ariaRefs(t)) if (r.ref !== popup && r.ref.contains(popup)) hits.push({ trigger: t, ...r });
+  }
+  if (hits.length !== 1) return null;
+  const [{ trigger, attr, ref }] = hits;
+  return attr === "controls" && wrapsOnly(ref, popup) && !ref.contains(trigger) ? trigger : null;
 }
 
 // ref가 popup을 담고, 그 안의 팝업 역할 요소가 popup 하나뿐인지(같은 트리 안만 본다). ref 자신이 팝업이거나 다른 팝업 안에
@@ -547,7 +564,8 @@ function wrapsOnly(ref: Element, popup: Element): boolean {
   if (popupOf(ref as HTMLElement) !== ref) return false;
   // ref는 일반 문서(shadow root 밖)에 있어야 하고, 조상 어디에도 shadow root가 없어야 한다(조상의 닫힌 shadow root 슬롯에
   // 배치되면 실제 조상 경로를 볼 수 없다). ref 자신이나 그 조상이 트리거면(콤보박스 안의 목록) 그 트리거가 목록을 연 것일 수 있다.
-  if (!(ref.getRootNode() instanceof Document)) return false;
+  // 같은 출처 iframe의 문서는 이 창의 Document와 realm이 달라 instanceof로 보지 않는다.
+  if (ref.getRootNode() !== ref.ownerDocument) return false;
   for (let cur: Element | null = ref, depth = 0; cur; cur = cur.parentElement, depth++) {
     if (depth >= 500 || isTrigger(cur) || (cur !== ref && hasHiddenTree(cur))) return false;
   }
@@ -578,7 +596,7 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
   if (!popup) return null;
   const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
   for (const t of expanded) {
-    const via = linkVia(t, popup, el);
+    const via = linkVia(t, [popup, el]);
     if (via) linked.push({ trigger: t, via });
   }
   const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"]): Relation => ({
@@ -591,6 +609,8 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
   });
   if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via);
   if (linked.length > 1) return null;
+  const wrapped = wrapperLink(expanded, popup);
+  if (wrapped) return make("linked", wrapped, "controls");
   if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null);
   return null;
 }
