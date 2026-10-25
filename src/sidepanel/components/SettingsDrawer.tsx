@@ -106,10 +106,12 @@ export function SettingsDrawer({ open, onClose }: Props) {
   useEffect(() => {
     if (loaded) setDraft(mergeSettingsPatch(mergeSettingsPatch(settings, inflight.current ?? {}), dirty.current));
   }, [loaded, settings, open]);
-  // 제공자를 바꾸거나 서랍을 열면 키 칸을 그 제공자의 저장된 키로.
+  // 제공자를 바꾸거나 서랍을 열 때만 키 칸을 그 제공자의 저장된 키로(저장 알림이 입력 중인 키를 되돌리지 않게).
+  const savedKeyRef = useRef(savedKey);
+  savedKeyRef.current = savedKey;
   useEffect(() => {
-    setKeyDraft(savedKey);
-  }, [draft.provider, open, savedKey]);
+    setKeyDraft(savedKeyRef.current);
+  }, [draft.provider, open, loaded]);
 
   // "저장됨"은 잠깐만 보인다.
   useEffect(() => {
@@ -153,9 +155,18 @@ export function SettingsDrawer({ open, onClose }: Props) {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => void flush(), delay);
   };
-  // 패널이 닫히거나(Chrome의 패널 닫기) 숨겨지면 남은 변경을 바로 보낸다(타이머가 사라져 마지막 입력을 잃지 않게).
+  // 패널이 닫히거나(Chrome의 패널 닫기) 숨겨지면 남은 변경을 기다리지 않고 바로 보낸다(문서가 사라지면 진행 중인 저장 뒤의
+  // 이어 저장이 실행되지 않는다). 백그라운드가 받은 순서대로 합치므로 앞서 보낸 저장 뒤에 처리된다.
   useEffect(() => {
-    const now = () => void flush();
+    const now = () => {
+      window.clearTimeout(timer.current);
+      const patch = dirty.current;
+      if (!Object.keys(patch).length) return;
+      dirty.current = {};
+      void savePatch(patch.maxToolHops !== undefined ? { ...patch, maxToolHops: clampHops(patch.maxToolHops) } : patch).catch(() => {
+        dirty.current = mergePatch(patch, dirty.current);
+      });
+    };
     const onHide = () => {
       if (document.visibilityState === "hidden") now();
     };
@@ -512,7 +523,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 max={MAX_MAX_TOOL_HOPS}
                 step={1}
                 value={draft.maxToolHops}
-                onChange={(e) => update({ maxToolHops: Number(e.target.value) }, SAVE_DELAY_MS)}
+                onChange={(e) => update({ maxToolHops: clampHops(Number(e.target.value)) }, SAVE_DELAY_MS)}
               />
               <FieldHelp summary={KO.maxToolHopsHelp} />
             </label>
