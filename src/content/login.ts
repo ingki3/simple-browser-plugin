@@ -114,13 +114,13 @@ function hiddenSubmitterBlock(btn: HTMLElement, form: HTMLFormElement): string |
 }
 
 // 기본 제출 버튼의 지금 위험들(보이면 클릭 대상 기술로, 숨었으면 구조·글자로).
-function submitterRisks(btn: HTMLElement, form: HTMLFormElement, callId: string): string[] {
+function submitterRisks(btn: HTMLElement, form: HTMLFormElement, callId: string, inserted: readonly string[] = []): string[] {
   if (!layoutVisible(btn)) {
     const why = hiddenSubmitterBlock(btn, form);
     return why ? [why] : [];
   }
   const [info] = inspectTargets([registerClickTarget(btn)], callId, "c");
-  return submitControlBlocks(info);
+  return submitControlBlocks(info, inserted);
 }
 
 // 승인 때 없던 이유(카드로 승인한 이유는 빼고).
@@ -297,6 +297,8 @@ export async function fillLogin(
 ): Promise<LoginFillResult> {
   // 값을 쓰기 전에 승인 때의 구조(단계·새 비밀번호 칸 유무·넣을 칸·양식)가 그대로인지 본다
   // (기다리는 사이 autocomplete가 new-password로 바뀌는 등).
+  // 이번 호출이 넣는 값(재판정에서 제출 주소의 그 값은 빼고 본다).
+  const inserted = fills.map((f) => f.value);
   const before = inspected.get(callId);
   inspected.delete(callId);
   if (!before) throw new Error("로그인 칸을 다시 확인하세요.");
@@ -327,7 +329,7 @@ export async function fillLogin(
     // 버튼이 승인 때와 같아도 기술은 바뀔 수 있어(값을 넣으면 켜짐 등) 지금 기술로 다시 등록해 위험만 본다.
     const ds = defaultSubmitter(now.form);
     if (ds) {
-      const added = newReasons(submitterRisks(ds, now.form, `${callId}:guard`), approved);
+      const added = newReasons(submitterRisks(ds, now.form, `${callId}:guard`, inserted), approved);
       if (added.length) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${added[0]}).`;
     }
     if (!now.form.isConnected) return "양식이 사라졌습니다.";
@@ -381,7 +383,7 @@ export async function fillLogin(
     const targetEl = registeredElement(before.targetId, "f") as HTMLInputElement;
     const recheckId = `${callId}:recheck`;
     const fresh = buildShape(targetEl, null, pick(targetEl), recheckId);
-    const why = newReasons(loginShapeBlocks(fresh, approved.origin), approved)[0];
+    const why = newReasons(loginShapeBlocks(fresh, approved.origin, inserted), approved)[0];
     if (why) {
       return { filled: total, total, submitted: false, note: `값을 넣은 뒤 양식에 새 위험이 보여 제출하지 않았습니다(${why}).` };
     }
@@ -412,7 +414,7 @@ export async function fillLogin(
     // 값을 넣으면 활성화되는 버튼(disabled 해제)처럼 기술이 바뀌는 것은 정상이라, 같은 요소를 지금 기술로 다시 등록해 위험 신호만 본다.
     const freshId = registerClickTarget(submitter);
     const [now] = inspectTargets([freshId], submitCallId(callId), "c");
-    const why = newReasons(submitControlBlocks(now), approved)[0];
+    const why = newReasons(submitControlBlocks(now, inserted), approved)[0];
     if (why) return { filled: total, total, submitted: false, note: `제출 버튼에 위험 신호가 생겨 제출하지 않았습니다(${why}).` };
   } else {
     // 승인 때 보이는 제출 버튼이 없었는데 지금 생겼으면(그 버튼의 위험 신호를 보지 않았다) 제출하지 않는다.

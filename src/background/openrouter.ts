@@ -721,8 +721,17 @@ export class ChatAgent {
     const endTurn = timeSpan("turn");
     const prevTurnTab = this.turnTab;
     this.turnTab = await captureTurnTab();
-    // 기록에 넣을 때 쓰는 가림 목록을 미리 읽어 둔다(서비스 워커가 다시 시작된 뒤 첫 결과도 가리게).
-    await warmSecrets().catch(() => undefined);
+    // 기록에 넣을 때 쓰는 가림 목록을 미리 읽어 둔다(서비스 워커가 다시 시작된 뒤 첫 결과도 가리게). 읽지 못하면 이 요청을
+    // 보내지 않는다(가릴 값을 모른 채 페이지 글자를 보내지 않게).
+    try {
+      await warmSecrets();
+    } catch (err) {
+      this.send({ kind: "error", message: `자동 로그인 가림 목록을 읽지 못해 요청을 보내지 않았습니다(${err instanceof Error ? err.message : String(err)}). 다시 시도해 주세요.` });
+      this.send({ kind: "assistant_done" });
+      endTurn("fail");
+      endKeepalive();
+      return;
+    }
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
     // 앞 턴에서 우리 클릭으로 열려 따라가던 팝업 창이 아직 열려 있으면 같은 탭에서 시작한 이번 턴도 그 창에서 이어 간다.

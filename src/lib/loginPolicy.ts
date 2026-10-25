@@ -2,7 +2,15 @@
 // 사이트 목록(출처 → KeePassXC 항목 묶음)의 정리. 판정은 구조(정확한 출처, 칸 종류, 양식의 제출 주소)와 사용자의 명시적 승인으로만
 // 한다. 낱말은 결제·삭제처럼 "더 묻는" 기존 신호(destructiveClickBlock·PAYMENT_TEXT_RE)로만 쓴다.
 import type { TargetInfo } from "./actionTarget.ts";
-import { destructiveClickBlock, destructiveFillBlock, expandUrls, PAYMENT_TEXT_RE, sensitiveUrlReason, splitIdentifier } from "./autoApprove.ts";
+import {
+  decodeDeepText,
+  destructiveClickBlock,
+  destructiveFillBlock,
+  expandUrls,
+  PAYMENT_TEXT_RE,
+  sensitiveUrlReason,
+  splitIdentifier,
+} from "./autoApprove.ts";
 import { httpOrigin } from "./url.ts";
 
 export const MAX_LOGIN_SITES = 50;
@@ -101,7 +109,9 @@ function onlyOrigin(url: string, origin: string): boolean {
 // 자동 로그인을 막는 이유. null이면 구조로는 자동 실행해도 된다(사이트 승인·항목 묶음은 따로 본다).
 // origin: 값을 받을 출처(항목을 묶은 출처). 모든 제출 주소가 이 출처여야 한다(다른 승인 사이트로도 보내지 않는다).
 // 자동 로그인을 막는 이유 모두(카드로 승인한 뒤 새로 생긴 이유만 골라 막으려고 각각 모은다). 빈 목록이면 구조로는 자동 실행해도 된다.
-export function loginShapeBlocks(shape: LoginShape, origin: string): string[] {
+// inserted: 이번 호출이 칸에 넣은 값들. 넣은 뒤 다시 판정할 때 칸 값까지 합친 제출 주소에서 그 값을 빼고 본다(비밀번호에
+// 'Payment'·주소 모양 글자가 있어도 결제·외부 목적지로 오판하지 않게). 숨은 칸·버튼 값과 목적지는 그대로 본다.
+export function loginShapeBlocks(shape: LoginShape, origin: string, inserted: readonly string[] = []): string[] {
   const out = new Set<string>();
   const add = (why: string | null | undefined) => {
     if (why) out.add(why);
@@ -138,12 +148,12 @@ export function loginShapeBlocks(shape: LoginShape, origin: string): string[] {
   // 칸 값까지 합친 제출 주소(숨은 칸의 next=https://다른곳 등)에 실린 목적지도 같은 출처여야 한다.
   for (const t of [...shape.fields, ...(shape.submit ? [shape.submit] : [])]) {
     for (const u of [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])]) {
-      if (u && !onlyOrigin(u, origin)) add("로그인 정보를 다른 출처로 보낼 수 있는 양식(실린 주소)");
+      if (u && !onlyOrigin(withoutValues(u, inserted), origin)) add("로그인 정보를 다른 출처로 보낼 수 있는 양식(실린 주소)");
     }
   }
   add(destructiveFillBlock(shape.fields));
-  if (shape.fields.some(paymentSubmission)) add("결제 값을 함께 보내는 양식");
-  if (shape.submit) for (const why of submitControlBlocks(shape.submit)) add(why);
+  if (shape.fields.some((f) => paymentSubmission(f, inserted))) add("결제 값을 함께 보내는 양식");
+  if (shape.submit) for (const why of submitControlBlocks(shape.submit, inserted)) add(why);
   if (shape.fields.some((f) => f.paymentContext)) add("결제 화면의 칸");
   return [...out];
 }
@@ -153,18 +163,37 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   return loginShapeBlocks(shape, origin)[0] ?? null;
 }
 
+// 쿼리에서 값이 inserted 중 하나인 매개변수를 뺀 주소(값은 한 번 이상 인코딩돼 있을 수 있어 풀어서 비교).
+function withoutValues(url: string, inserted: readonly string[]): string {
+  if (!inserted.length) return url;
+  try {
+    const u = new URL(url);
+    const kept = new URLSearchParams();
+    u.searchParams.forEach((v, k) => {
+      const dv = decodeDeepText(v);
+      if (!inserted.some((x) => x === v || x === dv || x.trim() === dv.trim())) kept.append(k, v);
+    });
+    u.search = kept.toString();
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
 const PAYMENT_URL_REASON = "결제·주문 주소";
 
 // 실제 제출 값을 합친 주소(숨은 칸 operation=pay 등)의 결제 신호. 개인정보 모양은 보지 않는다(브라우저가 채운 이메일
 // 아이디만으로 로그인 양식이 늘 걸리지 않게 — 그 값은 이 호출이 넣는 값이거나 사용자의 값이다).
-function paymentSubmission(t: TargetInfo): boolean {
-  return [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])].some((u) => !!u && sensitiveUrlReason(u) === PAYMENT_URL_REASON);
+function paymentSubmission(t: TargetInfo, inserted: readonly string[] = []): boolean {
+  return [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])].some(
+    (u) => !!u && sensitiveUrlReason(withoutValues(u, inserted)) === PAYMENT_URL_REASON,
+  );
 }
 
 // 제출 버튼의 되돌리기 어려운 동작·결제 신호 모두(승인 판정과 입력·제출 직전 재검사가 함께 쓴다).
-export function submitControlBlocks(t: TargetInfo): string[] {
+export function submitControlBlocks(t: TargetInfo, inserted: readonly string[] = []): string[] {
   const out = new Set<string>();
-  if (paymentSubmission(t)) out.add("결제 값을 함께 보내는 양식");
+  if (paymentSubmission(t, inserted)) out.add("결제 값을 함께 보내는 양식");
   const clickDestructive = destructiveClickBlock([t]);
   if (clickDestructive) out.add(clickDestructive);
   const raw = `${t.name} ${t.outerText ?? ""}`;

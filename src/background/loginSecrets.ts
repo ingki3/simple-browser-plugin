@@ -26,24 +26,18 @@ function update(fn: (store: Store) => Store | null): Promise<void> {
   return run;
 }
 
+// 읽기·쓰기에 실패하면 오류를 그대로 낸다: 목록을 확보하지 못했는데 빈 목록으로 이어 가면 가려야 할 값이 모델로 간다.
+// (넣기 전 기록 실패 → 넣지 않음, 요청 전 읽기 실패 → 요청하지 않음.)
 async function load(): Promise<Store> {
   if (cache) return cache;
-  try {
-    const raw = (await chrome.storage.session.get(KEY))[KEY];
-    cache = raw && typeof raw === "object" ? (raw as Store) : {};
-  } catch {
-    cache = {};
-  }
+  const raw = (await chrome.storage.session.get(KEY))[KEY];
+  cache = raw && typeof raw === "object" ? (raw as Store) : {};
   return cache;
 }
 
 async function save(store: Store): Promise<void> {
+  await chrome.storage.session.set({ [KEY]: store });
   cache = store;
-  try {
-    await chrome.storage.session.set({ [KEY]: store });
-  } catch {
-    /* 메모리 캐시로 이어 간다 */
-  }
 }
 
 function listen(): void {

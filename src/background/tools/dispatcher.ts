@@ -84,6 +84,8 @@ import { finishAction, notePendingAction } from "../actionLog";
 import { noteRead, readHintsFor } from "../readRecipes";
 import { recipeArgs, usefulResult } from "@/lib/readRecipe";
 import { prepareSignIn, runSignIn, stepLabel, type SignInPreview } from "../signIn";
+import { loginShapeBlocks } from "@/lib/loginPolicy";
+import { httpOrigin } from "@/lib/url";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -282,9 +284,18 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["sign_in"];
       const signIn = await prepareSignIn(args.id, callId, turnTab);
       const where = signIn.origin ?? "이 페이지";
+      // 카드에는 실제로 보낼 곳과 구조상 위험을 모두 보인다(사용자가 본 위험만 승인한 것으로 친다 — runSignIn이 같은 목록을 쓴다).
+      const dests = [...new Set(signIn.shape.submitUrls.map((u) => httpOrigin(u) ?? u))];
+      const risks = signIn.origin ? loginShapeBlocks(signIn.shape, signIn.origin) : [];
       return {
-        summary: `${where}의 로그인 화면에 비밀번호 관리자(KeePassXC)의 ${stepLabel(signIn.shape.step)}를 넣고 제출합니다. 넣을 항목을 고르세요.`,
-        details: "값은 도우미가 직접 넣고 모델에는 보내지 않습니다.",
+        summary: `${where}의 로그인 화면에 비밀번호 관리자(KeePassXC)의 ${stepLabel(signIn.shape.step)}를 넣고 ${
+          signIn.shape.hasForm ? "제출합니다" : "넣습니다(제출은 하지 않음)"
+        }. 넣을 항목을 고르세요.`,
+        details: [
+          "값은 도우미가 직접 넣고 모델에는 보내지 않습니다.",
+          ...(dests.length ? [`보내는 곳: ${dests.join(", ")}`] : []),
+          ...risks.map((r) => `⚠ ${r}`),
+        ].join("\n"),
         choices: signIn.entries.map((e) => ({ id: e.uuid, label: e.name || e.login || "(이름 없음)", sub: e.login })),
         choiceLimit: 1,
         choiceDefaults: [],

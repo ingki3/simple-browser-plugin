@@ -267,6 +267,12 @@ test("로그인 모양: 막는 구조", () => {
   assert.match(loginShapeBlock(shape({ otherTarget: true }), ORIGIN), /다른 창/);
   // 비밀번호 칸으로 분류된 카드 보안 코드 칸(cc-csc).
   assert.match(loginShapeBlock(shape({ paymentField: true }), ORIGIN), /결제/);
+  // 이번 호출이 넣은 값(비밀번호에 'Payment')은 결제 신호로 보지 않는다. 숨은 값의 결제 신호는 그대로.
+  const withPw = shape({ fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/session?p=MyPayment2026!` }] });
+  assert.ok(loginShapeBlocks(withPw, ORIGIN).some((r) => /결제/.test(r)));
+  assert.deepEqual(loginShapeBlocks(withPw, ORIGIN, ["MyPayment2026!"]), []);
+  const hiddenPay = shape({ fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/session?p=x1y2z3&operation=pay` }] });
+  assert.ok(loginShapeBlocks(hiddenPay, ORIGIN, ["x1y2z3"]).some((r) => /결제/.test(r)));
   // 이유를 모두 모은다(카드로 승인한 이유 뒤에 새로 생긴 결제 이유를 따로 볼 수 있게).
   const many = loginShapeBlocks(shape({ otherFields: true, fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/s?operation=pay` }] }), ORIGIN);
   assert.ok(many.length >= 2 && many.some((r) => /결제/.test(r)) && many.some((r) => /입력 칸/.test(r)));
