@@ -13,6 +13,7 @@ import {
   fixedPartsUrl,
   normalizeName,
   normalizeSlotKey,
+  parseLinkDraft,
   parseSaved,
   splitUrl,
   templateText,
@@ -156,4 +157,26 @@ test("고정 값은 주소에 적힌 그대로 보존한다(UTF-8이 아닌 인�
   assert.equal(p.params[1].value, "a b");
   const { template } = makeTemplate(url, [{ mode: "keep" }, { mode: "slot", slot: "모드" }, { mode: "keep" }]);
   assert.equal(templateText(template), "https://old.example/search?q=%B0%A1&mode={모드}&flag");
+});
+
+test("parseLinkDraft: 값마다 고정·자리·빼기, 잘못된 번호·빈 자리 이름은 고정, 예전 slots 형식도", () => {
+  const d = parseLinkDraft(
+    '생각... {"name":" 네이버  가격비교 검색 ","purpose":"쇼핑을 위한 가격 비교 검색","params":[' +
+      '{"index":0,"mode":"slot","slot":"{상품명}","hint":"검색할 상품 이름"},{"index":1,"mode":"keep"},' +
+      '{"index":2,"mode":"drop"},{"index":3,"mode":"slot","slot":"  "},{"index":9,"mode":"drop"},{"index":1.5,"mode":"drop"}]}',
+    4,
+    "제목",
+  );
+  assert.equal(d.name, "네이버 가격비교 검색");
+  assert.equal(d.purpose, "쇼핑을 위한 가격 비교 검색");
+  assert.deepEqual(d.choices, [{ mode: "slot", slot: "상품명" }, { mode: "keep" }, { mode: "drop" }, { mode: "keep" }]);
+  assert.equal(d.hints["상품명"], "검색할 상품 이름");
+  const old = parseLinkDraft('{"name":"","slots":[{"index":1,"slot":"지역"}]}', 2, "제목");
+  assert.equal(old.name, "제목");
+  assert.deepEqual(old.choices, [{ mode: "keep" }, { mode: "slot", slot: "지역" }]);
+  assert.equal(parseLinkDraft("", 1, "t"), null);
+  assert.equal(parseLinkDraft("{nope}", 1, "t"), null);
+  // 상속 속성 이름의 자리도 자기 속성으로만 다룬다.
+  const proto = parseLinkDraft('{"params":[{"index":0,"mode":"slot","slot":"constructor","hint":"h"}]}', 1, "t");
+  assert.equal(proto.hints.constructor, "h");
 });

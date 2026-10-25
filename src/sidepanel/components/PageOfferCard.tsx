@@ -14,7 +14,8 @@ interface Draft {
 type Mode = ParamChoice["mode"];
 
 // "이 페이지 기억하기"(#30·#86): 이름·용도를 확인하고, 쿼리 값마다 고정·입력 자리·빼기를 골라 다시 쓸 수 있는 링크로 저장한다.
-// 카드를 열면 모델에 초안(이름·용도·자리)을 한 번 묻고, 사용자가 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면 한 번 더 확인.
+// 카드를 열면 모델에 초안(이름·용도·값마다 고정·자리·빼기)을 한 번 묻고(이 턴의 요청·답·페이지 글자를 함께 보낸다), 사용자가
+// 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면 쿼리 값은 빼고 묻고, 저장할 때 한 번 더 확인한다.
 export function PageOfferCard({ offer }: Props) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(offer.title);
@@ -43,8 +44,6 @@ export function PageOfferCard({ offer }: Props) {
 
   const openCard = async () => {
     setOpen(true);
-    // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(사용자가 직접 정한다).
-    if (offer.warning) return;
     const seq = ++draftSeq.current;
     setDrafting(true);
     try {
@@ -121,7 +120,7 @@ export function PageOfferCard({ offer }: Props) {
   }
   return (
     <div className="page-offer open">
-      {drafting && <span className="field-help">이름·용도·입력 자리 초안을 만드는 중…</span>}
+      {drafting && <span className="field-help">요청과 페이지 내용으로 이름·용도·주소 값을 채우는 중…</span>}
       <label className="field">
         <span className="field-label">이름</span>
         <input
@@ -206,7 +205,8 @@ export function PageOfferCard({ offer }: Props) {
         <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{offer.evicts}'이(가) 지워집니다.</span>
       )}
       <span className="field-help">
-        입력 자리의 지금 값은 저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 모델(OpenRouter)에 후보로
+        카드를 열면 이번 요청·답·페이지 글자를 모델(OpenRouter)에 보내 이름·용도·주소 값 초안을 채웁니다. 입력 자리의 지금 값은
+        저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 모델(OpenRouter)에 후보로
         전송되고, 요청이 용도에 맞으면 도우미가 자리에 값을 넣어 엽니다. 설정에서 고치거나 지울 수 있습니다.
       </span>
       {state === "error" && <span className="field-help error-text">{error}</span>}
