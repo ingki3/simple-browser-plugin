@@ -2,9 +2,9 @@
 // OpenAI 호환 형식(OpenRouterMessage·OpenRouterStreamChunk)이고, 어댑터가 제공자 형식과 서로 바꾼다.
 import type { OpenRouterMessage, OpenRouterStreamChunk } from "../openrouter.ts";
 
-export type ProviderId = "openrouter" | "openai" | "gemini";
+export type ProviderId = "openrouter" | "openai" | "gemini" | "anthropic";
 
-export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai", "gemini"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai", "gemini", "anthropic"];
 
 export function isProviderId(v: unknown): v is ProviderId {
   return typeof v === "string" && (PROVIDER_IDS as readonly string[]).includes(v);

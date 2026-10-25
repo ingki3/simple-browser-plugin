@@ -173,23 +173,56 @@ async function installMockModel(sw) {
       });
     globalThis.fetch = async (url, init) => {
       // 모델 제공자 엔드포인트(#97)만 흉내 낸다. 요청 주소·본문은 __modelReqs에 남긴다.
-      if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com/.test(String(url))) return realFetch(url, init);
+      if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com|api\.anthropic\.com/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
-      (globalThis.__modelReqs ??= []).push({ url: String(url), body });
+      (globalThis.__modelReqs ??= []).push({ url: String(url), body, headers: init.headers });
+      const anthropic = String(url).includes("api.anthropic.com");
+      // Anthropic: 응답은 Messages 형식, 스트림은 content_block 이벤트(아래 anthropicSse).
+      if (anthropic && !body.stream) {
+        (globalThis.__draftReqs ??= []).push(body);
+        return new Response(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(globalThis.__draft ?? {}) }] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
       if (body.response_format) {
         (globalThis.__draftReqs ??= []).push(body);
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(globalThis.__draft ?? {}) } }] }), {
           headers: { "content-type": "application/json" },
         });
       }
-      const lastTool = [...body.messages].reverse().find((m) => m.role === "tool");
+      // Anthropic 기록(user 메시지의 tool_result 블록·assistant의 tool_use 블록)을 같은 꼴로 읽는다.
+      const msgs = anthropic
+        ? body.messages.flatMap((m) =>
+            m.content.flatMap((b) =>
+              b.type === "tool_result"
+                ? [{ role: "tool", tool_call_id: b.tool_use_id, content: b.content }]
+                : b.type === "tool_use"
+                  ? [{ role: "assistant", tool_calls: [{ id: b.id, function: { name: b.name } }] }]
+                  : [],
+            ),
+          )
+        : body.messages;
+      const lastTool = [...msgs].reverse().find((m) => m.role === "tool");
       let data = null;
       if (lastTool) {
         const parsed = JSON.parse(lastTool.content);
         // 도구 이름: 결과 메시지의 name(OpenRouter) 또는 같은 id의 도구 호출(name을 보내지 않는 제공자).
-        const call = body.messages.flatMap((m) => m.tool_calls ?? []).find((c) => c.id === lastTool.tool_call_id);
+        const call = msgs.flatMap((m) => m.tool_calls ?? []).find((c) => c.id === lastTool.tool_call_id);
         globalThis.__toolLog.push({ name: lastTool.name ?? call?.function?.name, ...parsed });
         data = parsed.result ?? null;
+      }
+      const anthropicSse = (events) =>
+        new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      if (anthropic && body.tool_choice?.type === "none") {
+        return anthropicSse([
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "정리" } },
+          { type: "content_block_stop", index: 0 },
+          { type: "message_delta", delta: { stop_reason: "end_turn" } },
+          { type: "message_stop" },
+        ]);
       }
       if (body.tool_choice === "none") return sse([{ choices: [{ delta: { content: "정리" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }]);
       const step = globalThis.__steps.shift();
@@ -205,6 +238,36 @@ async function installMockModel(sw) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
         out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       } else if (step) out = step;
+      if (anthropic) {
+        const ev = [];
+        // 생각 블록(서명 포함)을 먼저 보낸다 — 다음 요청에 그대로 돌아오는지 본다.
+        if (out.thinking) {
+          ev.push(
+            { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: out.thinking } },
+            { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-" + out.thinking.length } },
+            { type: "content_block_stop", index: 0 },
+          );
+        }
+        const i = ev.length ? 1 : 0;
+        if (out.tool) {
+          const args = JSON.stringify(out.args);
+          ev.push(
+            { type: "content_block_start", index: i, content_block: { type: "tool_use", id: "toolu_" + ++globalThis.__n, name: out.tool, input: {} } },
+            { type: "content_block_delta", index: i, delta: { type: "input_json_delta", partial_json: args.slice(0, 3) } },
+            { type: "content_block_delta", index: i, delta: { type: "input_json_delta", partial_json: args.slice(3) } },
+            { type: "content_block_stop", index: i },
+          );
+        } else {
+          ev.push(
+            { type: "content_block_start", index: i, content_block: { type: "text", text: "" } },
+            { type: "content_block_delta", index: i, delta: { type: "text_delta", text: out.text } },
+            { type: "content_block_stop", index: i },
+          );
+        }
+        ev.push({ type: "message_delta", delta: { stop_reason: out.tool ? "tool_use" : "end_turn" } }, { type: "message_stop" });
+        return anthropicSse(ev);
+      }
       const chunks = out.tool
         ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "call" + ++globalThis.__n, type: "function", function: { name: out.tool, arguments: JSON.stringify(out.args) }, ...(out.extra ? { extra_content: out.extra } : {}) }] } }] }]
         : [{ choices: [{ delta: { content: out.text } }] }];

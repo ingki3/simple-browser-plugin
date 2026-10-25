@@ -1,4 +1,5 @@
 // 제공자 어댑터 목록(#97).
+import { anthropicAdapter } from "./anthropic.ts";
 import { geminiAdapter } from "./gemini.ts";
 import { openAiAdapter } from "./openai.ts";
 import { openRouterAdapter } from "./openrouter.ts";
@@ -11,6 +12,7 @@ const ADAPTERS: Record<ProviderId, ProviderAdapter> = {
   openrouter: openRouterAdapter,
   openai: openAiAdapter,
   gemini: geminiAdapter,
+  anthropic: anthropicAdapter,
 };
 
 export function providerAdapter(id: ProviderId = "openrouter"): ProviderAdapter {

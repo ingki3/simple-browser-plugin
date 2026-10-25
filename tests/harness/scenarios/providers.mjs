@@ -107,4 +107,26 @@ export default [
       expect(JSON.stringify(call?.extra_content) === JSON.stringify(sig), `서명 돌려줌(${JSON.stringify(call)})`);
     },
   },
+  {
+    name: "Claude 제공자: Messages API 형식·헤더, 도구 왕복, 생각 블록과 서명을 다음 요청에 돌려준다",
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
+      const r = await h.turn([{ tool: "describe_page", args: {}, thinking: "페이지를 먼저 본다" }, { text: "끝" }]);
+      okResult(r, "describe_page");
+      const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+      expect(reqs.length === 2 && reqs.every((q) => q.url === "https://api.anthropic.com/v1/messages"), `엔드포인트(${reqs.map((q) => q.url).join(", ")})`);
+      const hd = reqs[0].headers ?? {};
+      expect(hd["x-api-key"] === "sk-ant-test" && hd["anthropic-version"] && hd["anthropic-dangerous-direct-browser-access"] === "true" && !hd.Authorization, `헤더(${Object.keys(hd).join(",")})`);
+      const b = reqs[1].body;
+      expect(typeof b.system === "string" && b.system.length > 0 && b.messages.every((m) => m.role !== "system"), "system 필드");
+      expect(b.tools?.[0]?.input_schema && b.tool_choice?.type === "auto" && b.tool_choice.disable_parallel_tool_use === true, `도구 형식(${JSON.stringify(b.tool_choice)})`);
+      expect(b.thinking?.type === "enabled" && b.thinking.budget_tokens < b.max_tokens && !("temperature" in b), `생각(${JSON.stringify(b.thinking)})`);
+      const asst = b.messages.find((m) => m.role === "assistant");
+      expect(asst?.content?.[0]?.type === "thinking" && asst.content[0].signature === "sig-10" && asst.content[1]?.type === "tool_use", `생각·도구 블록(${JSON.stringify(asst?.content).slice(0, 300)})`);
+      const res = b.messages.flatMap((m) => m.content).find((c) => c.type === "tool_result");
+      expect(res && res.tool_use_id === asst.content[1].id, "tool_result 짝");
+      const roles = b.messages.map((m) => m.role).join(",");
+      expect(!/user,user|assistant,assistant/.test(roles), `역할 번갈음(${roles})`);
+    },
+  },
 ];

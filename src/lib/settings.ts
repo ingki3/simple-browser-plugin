@@ -4,6 +4,7 @@ import { normalizeManualSites } from "./manualSites.ts";
 import { isProviderId, type ProviderId } from "./providers/types.ts";
 import { OPENAI_DEFAULT_MODEL } from "./providers/openai.ts";
 import { GEMINI_DEFAULT_MODEL } from "./providers/gemini.ts";
+import { ANTHROPIC_DEFAULT_MODEL } from "./providers/anthropic.ts";
 import { DEFAULT_MODEL, normalizeModelId } from "./models.ts";
 import {
   DEFAULT_CSV_MAX_CHARS,
@@ -41,8 +42,8 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
   return {
     provider: isProviderId(r.provider) ? r.provider : DEFAULT_SETTINGS.provider,
     openRouterApiKey: typeof r.openRouterApiKey === "string" ? r.openRouterApiKey : DEFAULT_SETTINGS.openRouterApiKey,
-    apiKeys: stringFields(r.apiKeys, ["openai", "gemini"]),
-    providerModels: stringFields(r.providerModels, ["openai", "gemini"]),
+    apiKeys: stringFields(r.apiKeys, ["openai", "gemini", "anthropic"]),
+    providerModels: stringFields(r.providerModels, ["openai", "gemini", "anthropic"]),
     model: normalizeModelId(r.model),
     systemPrompt:
       typeof r.systemPrompt === "string" ? r.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH) : DEFAULT_SETTINGS.systemPrompt,
@@ -72,8 +73,8 @@ export function settingsForStorage(next: Settings): Settings {
     maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
     csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     manualSites: normalizeManualSites(next.manualSites),
-    apiKeys: stringFields(next.apiKeys, ["openai", "gemini"]),
-    providerModels: stringFields(next.providerModels, ["openai", "gemini"]),
+    apiKeys: stringFields(next.apiKeys, ["openai", "gemini", "anthropic"]),
+    providerModels: stringFields(next.providerModels, ["openai", "gemini", "anthropic"]),
   };
 }
 
@@ -90,6 +91,9 @@ function stringFields<K extends string>(v: unknown, keys: readonly K[]): Partial
 
 // 지금 쓸 제공자·키·모델(#97). 키가 없으면 apiKey는 빈 글자.
 export function activeModel(s: Settings): { provider: ProviderId; apiKey: string; model: string } {
+  if (s.provider === "anthropic") {
+    return { provider: "anthropic", apiKey: s.apiKeys.anthropic ?? "", model: s.providerModels.anthropic || ANTHROPIC_DEFAULT_MODEL };
+  }
   if (s.provider === "gemini") {
     return { provider: "gemini", apiKey: s.apiKeys.gemini ?? "", model: s.providerModels.gemini || GEMINI_DEFAULT_MODEL };
   }

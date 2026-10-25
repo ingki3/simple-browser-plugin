@@ -330,11 +330,11 @@ export type RuntimeMsg =
 
 export interface Settings {
   // 모델 제공자(#97). OpenRouter의 키·모델은 아래 openRouterApiKey·model(예전 설정 그대로), 다른 제공자는 apiKeys·providerModels.
-  provider: "openrouter" | "openai" | "gemini";
+  provider: "openrouter" | "openai" | "gemini" | "anthropic";
   openRouterApiKey: string;
   model: ModelId;
-  apiKeys: { openai?: string; gemini?: string };
-  providerModels: { openai?: string; gemini?: string };
+  apiKeys: { openai?: string; gemini?: string; anthropic?: string };
+  providerModels: { openai?: string; gemini?: string; anthropic?: string };
   systemPrompt: string;
   translationTargetLang: string;
   downloadFolderPrefix: string;
