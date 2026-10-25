@@ -102,3 +102,14 @@ export function activeModel(s: Settings): { provider: ProviderId; apiKey: string
   }
   return { provider: "openrouter", apiKey: s.openRouterApiKey, model: s.model };
 }
+
+// 바꾼 필드(patch)를 설정에 합친다(#99). 제공자별 키·모델(apiKeys·providerModels)은 한 단계 더 합쳐, 한 제공자의 값만 바꾼
+// patch가 다른 제공자의 값을 되돌리지 않게 한다.
+export function mergeSettingsPatch(base: Settings, patch: Partial<Settings>): Settings {
+  return {
+    ...base,
+    ...patch,
+    apiKeys: { ...base.apiKeys, ...(patch.apiKeys ?? {}) },
+    providerModels: { ...base.providerModels, ...(patch.providerModels ?? {}) },
+  };
+}

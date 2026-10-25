@@ -1,5 +1,5 @@
 import { FLAGS_KEY, SETTINGS_KEY, type Flags, type Settings } from "@/lib/messages";
-import { normalizeSettings, settingsForStorage } from "@/lib/settings";
+import { mergeSettingsPatch, normalizeSettings, settingsForStorage } from "@/lib/settings";
 
 export { DEFAULT_SETTINGS } from "@/lib/settings";
 
@@ -10,6 +10,18 @@ export async function readSettings(): Promise<Settings> {
 
 export async function writeSettings(next: Settings): Promise<void> {
   await chrome.storage.local.set({ [SETTINGS_KEY]: settingsForStorage(next) });
+}
+
+// 바꾼 필드만 최신 설정에 합쳐 쓴다(#99). 읽기·합치기·쓰기를 차례로 처리해, 여러 패널의 저장이 겹쳐도 서로의 변경을
+// 오래된 값으로 덮지 않는다.
+let patchQueue: Promise<unknown> = Promise.resolve();
+export function applySettingsPatch(patch: Partial<Settings>): Promise<void> {
+  const run = patchQueue.then(async () => {
+    await writeSettings(mergeSettingsPatch(await readSettings(), patch));
+    invalidateSettingsCache();
+  });
+  patchQueue = run.catch(() => {});
+  return run;
 }
 
 let cache: Settings | null = null;

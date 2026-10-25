@@ -79,4 +79,19 @@ export default [
       expect(st.autoApprove === false && st.showThinking === true, `둘 다 유지(${JSON.stringify({ autoApprove: st.autoApprove, showThinking: st.showThinking })})`);
     },
   },
+  {
+    name: "동시에 보낸 저장도 서로 덮지 않고, 한 제공자의 모델만 바꾸면 다른 제공자의 모델은 그대로",
+    async run(h) {
+      await h.settings({ autoApprove: true, showThinking: false, providerModels: { openai: "gpt-5" } });
+      await h.panel.evaluate(async () => {
+        const send = (patch) => chrome.runtime.sendMessage({ kind: "settings_patch", patch });
+        await Promise.all([send({ autoApprove: false }), send({ showThinking: true }), send({ providerModels: { gemini: "gemini-3.1-pro-preview" } })]);
+      });
+      const st = await stored(h);
+      expect(
+        st.autoApprove === false && st.showThinking === true && st.providerModels.openai === "gpt-5" && st.providerModels.gemini === "gemini-3.1-pro-preview",
+        `모두 유지(${JSON.stringify({ autoApprove: st.autoApprove, showThinking: st.showThinking, providerModels: st.providerModels })})`,
+      );
+    },
+  },
 ];

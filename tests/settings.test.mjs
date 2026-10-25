@@ -70,3 +70,14 @@ test("settingsForStorage: 한도 표시를 붙이고 목록·숫자를 정리한
   // 저장한 값을 다시 읽으면 사용자가 고른 8을 그대로 둔다.
   assert.equal(normalizeSettings(out).maxToolHops, 8);
 });
+
+import { mergeSettingsPatch } from "../src/lib/settings.ts";
+
+test("mergeSettingsPatch: 바꾼 필드만, 제공자별 키·모델은 한 단계 더 합친다", () => {
+  const base = normalizeSettings({ autoApprove: true, apiKeys: { openai: "a", gemini: "g" }, providerModels: { openai: "gpt-5" } });
+  const next = mergeSettingsPatch(base, { showThinking: true, providerModels: { gemini: "gemini-3.6-flash" }, apiKeys: { gemini: "g2" } });
+  assert.equal(next.autoApprove, true);
+  assert.equal(next.showThinking, true);
+  assert.deepEqual(next.providerModels, { openai: "gpt-5", gemini: "gemini-3.6-flash" });
+  assert.deepEqual(next.apiKeys, { openai: "a", gemini: "g2" });
+});

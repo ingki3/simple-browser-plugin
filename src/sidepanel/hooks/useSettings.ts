@@ -31,13 +31,11 @@ export function useSettings() {
     });
   }, []);
 
-  // 바꾼 필드만 저장소의 최신 설정에 합쳐 저장한다(#99). 다른 창·패널에서 바꾼 다른 필드를 오래된 값으로 덮지 않게.
+  // 바꾼 필드만 최신 설정에 합쳐 저장한다(#99). 합치기·쓰기는 백그라운드가 차례로 해 여러 패널의 저장이 겹쳐도 서로 덮지 않는다.
   const savePatch = useCallback(async (patch: Partial<Settings>) => {
-    const latest = normalizeSettings(
-      (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] as Partial<Settings> | undefined,
-    );
-    await save({ ...latest, ...patch });
-  }, [save]);
+    const res = (await chrome.runtime.sendMessage({ kind: "settings_patch", patch })) as { ok?: boolean; error?: string } | undefined;
+    if (!res?.ok) throw new Error(res?.error ?? "설정을 저장하지 못했습니다.");
+  }, []);
 
   return { settings, loaded, save, savePatch };
 }

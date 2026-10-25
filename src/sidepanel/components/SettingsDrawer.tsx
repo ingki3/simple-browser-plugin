@@ -47,8 +47,19 @@ import {
 } from "@/lib/messages";
 import { useSettings } from "../hooks/useSettings";
 import { FieldHelp } from "./FieldHelp";
+import { mergeSettingsPatch } from "@/lib/settings";
 
 const SAVE_DELAY_MS = 600;
+
+// 두 patch를 합친다(제공자별 키·모델은 한 단계 더).
+function mergePatch(a: Partial<Settings>, b: Partial<Settings>): Partial<Settings> {
+  return {
+    ...a,
+    ...b,
+    ...(a.apiKeys || b.apiKeys ? { apiKeys: { ...a.apiKeys, ...b.apiKeys } } : {}),
+    ...(a.providerModels || b.providerModels ? { providerModels: { ...a.providerModels, ...b.providerModels } } : {}),
+  };
+}
 import { KO } from "../i18n/ko";
 
 interface Props {
@@ -77,6 +88,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
   // API 키만 "저장" 버튼으로 확정한다(keyDraft).
   const pending = useRef<{ timer: number; patch: Partial<Settings> } | null>(null);
   const [savedAt, setSavedAt] = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
   const [keyDraft, setKeyDraft] = useState(savedKey);
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
@@ -87,7 +99,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
   // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 아직 저장하지 않은 이 서랍의 변경(pending)은 덮지 않는다.
   useEffect(() => {
-    if (loaded) setDraft({ ...settings, ...(pending.current?.patch ?? {}) });
+    if (loaded) setDraft(mergeSettingsPatch(settings, pending.current?.patch ?? {}));
   }, [loaded, settings, open]);
   // 제공자를 바꾸거나 서랍을 열면 키 칸을 그 제공자의 저장된 키로.
   useEffect(() => {
@@ -108,13 +120,21 @@ export function SettingsDrawer({ open, onClose }: Props) {
     window.clearTimeout(p.timer);
     pending.current = null;
     const patch = p.patch.maxToolHops !== undefined ? { ...p.patch, maxToolHops: clampHops(p.patch.maxToolHops) } : p.patch;
-    await savePatch(patch);
-    setSavedAt(Date.now());
+    try {
+      await savePatch(patch);
+      setSaveError(null);
+      setSavedAt(Date.now());
+    } catch (err) {
+      // 실패한 변경은 버리지 않는다(그 사이 새 변경이 있으면 그것이 우선). 다음 변경·닫기 때 다시 저장한다.
+      const later = pending.current as { timer: number; patch: Partial<Settings> } | null;
+      pending.current = { timer: later?.timer ?? 0, patch: mergePatch(patch, later?.patch ?? {}) };
+      setSaveError(err instanceof Error ? err.message : String(err));
+    }
   };
   // patch를 반영하고 저장한다. delay가 있으면 그동안 다음 변경을 모아 한 번에 저장한다.
   const update = (patch: Partial<Settings>, delay = 0) => {
-    setDraft((cur) => ({ ...cur, ...patch }));
-    const merged = { ...(pending.current?.patch ?? {}), ...patch };
+    setDraft((cur) => mergeSettingsPatch(cur, patch));
+    const merged = mergePatch(pending.current?.patch ?? {}, patch);
     if (pending.current) window.clearTimeout(pending.current.timer);
     pending.current = { patch: merged, timer: window.setTimeout(() => void flush(), delay) };
   };
@@ -132,7 +152,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
     };
   });
   const saveKey = () =>
-    update(direct ? { apiKeys: { ...draft.apiKeys, [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
+    update(direct ? { apiKeys: { [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
 
   const refreshGoogleStatus = async () => {
     try {
@@ -253,7 +273,9 @@ export function SettingsDrawer({ open, onClose }: Props) {
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-header">
           <h2>{KO.settingsTitle}</h2>
-          <span className="drawer-saved" aria-live="polite">{savedAt ? "저장됨" : ""}</span>
+          <span className="drawer-saved" aria-live="polite">
+            {saveError ? `저장하지 못함: ${saveError}` : savedAt ? "저장됨" : ""}
+          </span>
           <button type="button" className="ghost-btn" onClick={() => void handleClose()}>
             닫기
           </button>
@@ -311,7 +333,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
                     type="text"
                     list={`${direct.id}-models`}
                     value={draft.providerModels[direct.id] ?? ""}
-                    onChange={(e) => update({ providerModels: { ...draft.providerModels, [direct.id]: e.target.value } }, SAVE_DELAY_MS)}
+                    onChange={(e) => update({ providerModels: { [direct.id]: e.target.value } }, SAVE_DELAY_MS)}
                     placeholder={direct.defaultModel}
                     spellCheck={false}
                   />
