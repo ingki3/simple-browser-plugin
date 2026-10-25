@@ -142,6 +142,8 @@ export class KpxSession {
         const timer = setTimeout(() => {
           if (this.pending?.action === action) this.pending = null;
           reject(new KpxError("KeePassXC가 제때 답하지 않았습니다(잠금 해제나 허락 창을 확인하세요)."));
+          // 늦게 온 응답이 다음 요청의 응답으로 잡히지 않게 이 세션을 버린다(다음 요청은 새 세션으로).
+          this.close();
         }, timeoutMs);
         this.pending = { action, nonce: String(body.nonce ?? ""), resolve, reject, timer };
         try {

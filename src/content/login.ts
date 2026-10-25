@@ -40,12 +40,31 @@ function usable(el: Element): el is HTMLInputElement {
   return isTag(el, "input") && !(el as HTMLInputElement).disabled && layoutVisible(el as HTMLElement);
 }
 
-// 칸의 양식 범위: <form>이면 그 양식의 컨트롤(form 속성으로 바깥에서 연결된 칸 포함), 아니면 가장 가까운 대화상자 또는 문서 본문.
+// 양식이 없을 때의 범위: 가장 가까운 대화상자, 없으면 칸이 든 shadow root 또는 문서 본문.
+function formlessRoot(el: Element): Element | ShadowRoot {
+  const dialog = el.closest("dialog, [role='dialog'], [aria-modal='true']");
+  if (dialog) return dialog;
+  const root = el.getRootNode();
+  if (root instanceof ShadowRoot) return root;
+  return el.ownerDocument.body ?? el.ownerDocument.documentElement;
+}
+
+// 칸의 양식 범위: <form>이면 그 양식의 컨트롤(form 속성으로 바깥에서 연결된 칸 포함), 아니면 formlessRoot 안의 칸.
 function scopeInputs(el: HTMLInputElement): { form: HTMLFormElement | null; inputs: HTMLInputElement[] } {
   const form = el.form;
   if (form) return { form, inputs: formElements(form).filter((c): c is HTMLInputElement => isTag(c, "input")) };
-  const root = el.closest("dialog, [role='dialog'], [aria-modal='true']") ?? el.ownerDocument.body ?? el.ownerDocument.documentElement;
-  return { form: null, inputs: Array.from(root.querySelectorAll("input")) };
+  const inputs = Array.from(formlessRoot(el).querySelectorAll("input"));
+  // 범위 조회가 대상 자신을 못 찾는 구조(다른 shadow root)여도 대상은 늘 본다.
+  if (!inputs.includes(el)) inputs.push(el);
+  return { form: null, inputs };
+}
+
+// 아이디 칸으로 대신 고를 수 있는 칸: autocomplete가 비었거나 아이디·이메일 뜻일 때만(주소·이름 등 다른 뜻을 밝힌 칸은 아님).
+const USERNAME_LIKE_TOKENS = new Set(["on", "off", "username", "email", "webauthn"]);
+function usernameCandidate(el: HTMLInputElement): boolean {
+  return autocompleteTokens(el)
+    .filter((t) => !t.startsWith("section-"))
+    .every((t) => USERNAME_LIKE_TOKENS.has(t));
 }
 
 // 양식이 실제로 쓰는 제출 메서드들(양식의 method와 제출 버튼들의 formmethod). 소문자.
@@ -84,17 +103,14 @@ function pick(target: HTMLInputElement): Picked {
   const { form, inputs } = scopeInputs(target);
   const visible = inputs.filter(usable);
   const passwords = visible.filter((i) => i.type === "password");
-  const newPassword = passwords.length > 1 || visible.some((i) => autocompleteTokens(i).includes("new-password"));
+  const newPassword =
+    passwords.length > 1 ||
+    autocompleteTokens(target).includes("new-password") ||
+    visible.some((i) => autocompleteTokens(i).includes("new-password"));
   const hasOtherFields = (picked: Array<HTMLInputElement | null>): boolean => {
     const mine = new Set(picked.filter(Boolean) as Element[]);
     // 양식이 없는 화면은 같은 범위(대화상자 또는 문서 본문)의 모든 칸을 본다(정보 수정 화면의 change 처리기가 바로 저장할 수 있다).
-    const controls: Element[] = form
-      ? formElements(form)
-      : Array.from(
-          (target.closest("dialog, [role='dialog'], [aria-modal='true']") ?? target.ownerDocument.body ?? target.ownerDocument.documentElement).querySelectorAll(
-            "input, select, textarea",
-          ),
-        );
+    const controls: Element[] = form ? formElements(form) : Array.from(formlessRoot(target).querySelectorAll("input, select, textarea"));
     const shown = controls.some((c) => {
       if (mine.has(c)) return false;
       if (isTag(c, "select") || isTag(c, "textarea")) return layoutVisible(c as HTMLElement);
@@ -114,7 +130,7 @@ function pick(target: HTMLInputElement): Picked {
     // 아이디 칸: 같은 범위의 autocomplete=username, 없으면 비밀번호 칸 바로 앞의 보이는 글자 칸.
     let username = visible.find((i) => i !== password && autocompleteTokens(i).includes("username")) ?? null;
     if (!username) {
-      const before = visible.slice(0, visible.indexOf(password)).filter(isTextInput);
+      const before = visible.slice(0, visible.indexOf(password)).filter((i) => isTextInput(i) && usernameCandidate(i));
       username = before[before.length - 1] ?? null;
     }
     return { ...base, step: "password", username, password, otp: null, otherFields: hasOtherFields([username, password]) };

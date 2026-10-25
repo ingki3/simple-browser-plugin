@@ -117,6 +117,21 @@ test("KeePassXC: 연결이 끊기면 기다리던 요청이 실패", async () =>
   await assert.rejects(p, /끊겼/);
 });
 
+test("KeePassXC: 시간 초과면 세션을 버린다(늦은 응답이 다음 요청에 섞이지 않게)", async () => {
+  let disconnected = false;
+  const port = {
+    postMessage() {},
+    onMessage: { addListener() {} },
+    onDisconnect: { addListener() {} },
+    disconnect() {
+      disconnected = true;
+    },
+  };
+  const s = new KpxSession(port);
+  await assert.rejects(s.handshake(20), /제때/);
+  assert.ok(s.isClosed && disconnected);
+});
+
 test("항목 정리: uuid·비밀번호 없는 항목은 뺀다", () => {
   const out = parseEntries([ENTRY, { login: "x" }, { uuid: "u", password: "p", expired: "true" }]);
   assert.equal(out.length, 2);

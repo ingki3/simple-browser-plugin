@@ -49,6 +49,28 @@ export default [
     },
   },
   {
+    name: "비밀번호 앞의 주소 칸을 아이디로 쓰지 않고 묻는다",
+    pages: {
+      "/addr": `<title>Addr</title><main><form method=post action="/update" onsubmit="event.preventDefault();document.getElementById('out').textContent='저장됨'">
+<label>주소 <input name=a autocomplete=street-address></label>
+<label>비밀번호 <input name=p type=password autocomplete=current-password></label>
+<button>저장</button></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await connect(h);
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/addr",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1 && /입력 칸/.test(summary), `카드에 이유(${summary})`);
+      expect((await h.tab.locator("input[name=a]").inputValue()) === "", "주소 칸에 넣지 않음");
+    },
+  },
+  {
     name: "값을 넣어야 켜지는 로그인 버튼도 제출한다",
     pages: {
       "/login": `<title>Login</title><main>
