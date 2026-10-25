@@ -29,6 +29,14 @@ export function Options() {
     chrome.storage.local.get(SETTINGS_KEY).then((obj) => {
       setDraft(normalizeSettings(obj[SETTINGS_KEY] as Partial<Settings> | undefined));
     });
+    // 사이드 패널에서 바꾼 모델 제공자·키·모델을 따라간다(안내·연결 테스트 버튼이 지금 선택을 보게, #97).
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== "local" || !changes[SETTINGS_KEY]) return;
+      const next = normalizeSettings(changes[SETTINGS_KEY].newValue as Partial<Settings> | undefined);
+      setDraft((cur) => ({ ...cur, provider: next.provider, apiKeys: next.apiKeys, providerModels: next.providerModels }));
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
   }, []);
 
   const save = async () => {
@@ -56,6 +64,14 @@ export function Options() {
     setTesting(true);
     setTestResult(null);
     try {
+      // 이 버튼은 OpenRouter 키를 확인한다. 지금 제공자가 OpenRouter가 아니면(다른 곳에서 바꿈) 보내지 않는다.
+      const latest = normalizeSettings(
+        (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] as Partial<Settings> | undefined,
+      );
+      if (latest.provider !== "openrouter") {
+        setTestResult({ ok: false, msg: "지금 모델 제공자가 OpenRouter가 아니라 확인하지 않았습니다. 사이드 패널 설정에서 확인하세요." });
+        return;
+      }
       await providerAdapter("openrouter").complete(draft.openRouterApiKey, {
         model: draft.model,
         messages: [{ role: "user", content: "hi" }],

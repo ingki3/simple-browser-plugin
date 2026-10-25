@@ -732,13 +732,6 @@ export class ChatAgent {
   ): Promise<ModelReply | null> {
     const CONNECT_TIMEOUT_MS = 20_000;
     const INACTIVITY_MS = 60_000;
-    // 턴 도중 설정에서 제공자·키·모델을 바꿨으면 이 턴의 내용을 새 설정으로도, 이전 제공자로도 보내지 않고 멈춘다
-    // (고른 제공자로만 보낸다는 약속). 다음 요청에서 새 설정으로 대화를 새로 시작한다.
-    const now = activeModel(await getSettings());
-    if (this.isStale(turn)) return null;
-    if (now.provider !== this.provider || now.apiKey !== apiKey || now.model !== model) {
-      throw new Error("설정에서 모델 제공자·API 키·모델이 바뀌어 이 요청을 멈췄습니다. 다시 요청하면 새 설정으로 새 대화를 시작합니다.");
-    }
     const controller = new AbortController();
     this.activeRequest = controller;
     let connectTimedOut = false;
@@ -754,6 +747,19 @@ export class ChatAgent {
     if (this.isStale(turn)) {
       clearTimeout(connectTimer);
       return null;
+    }
+    // 턴 도중 설정에서 제공자·키·모델을 바꿨으면 이 턴의 내용을 새 설정으로도, 이전 제공자로도 보내지 않고 멈춘다
+    // (고른 제공자로만 보낸다는 약속). 모든 준비(후보 조회 등)가 끝난 뒤, 요청을 열기 바로 앞에서 본다 — 이 확인과 요청
+    // 사이에는 기다림이 없다. 다음 요청에서 새 설정으로 대화를 새로 시작한다.
+    const now = activeModel(await getSettings());
+    if (this.isStale(turn)) {
+      clearTimeout(connectTimer);
+      return null;
+    }
+    if (now.provider !== this.provider || now.apiKey !== apiKey || now.model !== model) {
+      clearTimeout(connectTimer);
+      if (this.activeRequest === controller) this.activeRequest = null;
+      throw new Error("설정에서 모델 제공자·API 키·모델이 바뀌어 이 요청을 멈췄습니다. 다시 요청하면 새 설정으로 새 대화를 시작합니다.");
     }
     let stream: ChatStream;
     try {

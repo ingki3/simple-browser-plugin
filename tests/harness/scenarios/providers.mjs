@@ -73,4 +73,22 @@ export default [
       expect(st.provider === "openai" && st.apiKeys?.openai === "sk-test-openai", `유지(${JSON.stringify({ provider: st.provider, apiKeys: st.apiKeys })})`);
     },
   },
+  {
+    name: "열어 둔 옵션 페이지가 제공자 변경을 따라가 안내하고 OpenRouter 연결 테스트를 막는다",
+    async run(h) {
+      await h.settings({ openRouterApiKey: "sk-or-test-dummy" });
+      const opt = await h.ctx.newPage();
+      await opt.goto(`chrome-extension://${h.extId}/src/options/index.html`);
+      await opt.waitForTimeout(500);
+      const testBtn = opt.locator("button", { hasText: "연결 테스트" });
+      const enabledBefore = await testBtn.isEnabled().catch(() => null);
+      await h.settings({ provider: "openai", apiKeys: { openai: "sk-test-openai" } });
+      await opt.waitForTimeout(400);
+      const notice = (await opt.locator("body").innerText()).includes("지금 모델 제공자는 OpenAI");
+      const enabledAfter = await testBtn.isEnabled().catch(() => null);
+      await opt.close();
+      expect(enabledBefore === true, `처음엔 테스트 가능(${enabledBefore})`);
+      expect(notice && enabledAfter === false, `바뀐 뒤 안내·버튼 막힘(notice=${notice}, enabled=${enabledAfter})`);
+    },
+  },
 ];
