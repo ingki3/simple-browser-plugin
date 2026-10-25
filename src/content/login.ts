@@ -3,7 +3,9 @@
 // 주소와 메서드로만 한다(낱말로 로그인 화면을 짐작하지 않는다). 값은 이 파일에서 돌려주지 않는다.
 import { loginShapeBlock, submitControlBlock, type LoginShape } from "@/lib/loginPolicy";
 import { isShadowRoot, isTag } from "./docs";
+import { DESTRUCTIVE_REASON, DESTRUCTIVE_TEXT_RE, PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import {
+  declaresDelete,
   fillFormFields,
   formDestinations,
   formElements,
@@ -84,9 +86,31 @@ function submitMethods(form: HTMLFormElement): string[] {
 }
 
 // 양식의 기본 제출 버튼(HTML의 암묵적 제출이 쓰는 첫 제출 컨트롤).
+// form.elements는 이미지 버튼을 빼므로 양식이 든 루트에서 그 양식의 이미지 버튼을 더하고 문서 순서로 첫 것을 고른다.
 function defaultSubmitter(form: HTMLFormElement): HTMLElement | null {
-  for (const c of formElements(form)) if (isSubmitControl(c)) return c as HTMLElement;
+  const list: HTMLElement[] = formElements(form).filter(isSubmitControl) as HTMLElement[];
+  for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {
+    if ((img as HTMLInputElement).form === form && !list.includes(img as HTMLElement)) list.push(img as HTMLElement);
+  }
+  list.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  return list[0] ?? null;
+}
+
+// 숨은 기본 제출 버튼의 위험(클릭 대상 기술은 보이는 요소만 만들 수 있어 구조와 글자로 따로 본다 — 더 묻는 쪽).
+function hiddenSubmitterBlock(btn: HTMLElement, form: HTMLFormElement): string | null {
+  if (declaresDelete(btn, [btn], form)) return DESTRUCTIVE_REASON;
+  const text = ["value", "alt", "aria-label", "title"].map((a) => btn.getAttribute(a) ?? "").join(" ") + ` ${btn.textContent ?? ""}`;
+  const words = `${text} ${splitIdentifier(text)}`;
+  if (DESTRUCTIVE_TEXT_RE.test(words)) return DESTRUCTIVE_REASON;
+  if (PAYMENT_TEXT_RE.test(words)) return "결제·주문 버튼";
   return null;
+}
+
+// 기본 제출 버튼의 지금 위험(보이면 클릭 대상 기술로, 숨었으면 구조·글자로).
+function submitterRisk(btn: HTMLElement, form: HTMLFormElement, callId: string): string | null {
+  if (!layoutVisible(btn)) return hiddenSubmitterBlock(btn, form);
+  const [info] = inspectTargets([registerClickTarget(btn)], callId, "c");
+  return submitControlBlock(info);
 }
 
 interface Picked {
@@ -188,6 +212,7 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     submitId = registerClickTarget(submitter);
     [submit] = inspectTargets([submitId], submitCallId(callId), "c");
   }
+  const hiddenSubmitBlock = submitter && p.form && !layoutVisible(submitter) ? hiddenSubmitterBlock(submitter, p.form) : null;
   const submitUrls = new Set<string>();
   if (p.form) for (const u of formDestinations(p.form)) submitUrls.add(u);
   for (const f of fields) for (const u of [f.submitTo ?? "", ...(f.scopeFormActions ?? []), ...(f.aroundFormActions ?? [])]) if (u) submitUrls.add(u);
@@ -197,6 +222,7 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     topUrl: window.location.href,
     newPassword: p.newPassword,
     otherFields: p.otherFields,
+    hiddenSubmitBlock,
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],
@@ -260,8 +286,7 @@ export async function fillLogin(
     // 버튼이 승인 때와 같아도 기술은 바뀔 수 있어(값을 넣으면 켜짐 등) 지금 기술로 다시 등록해 위험만 본다.
     const ds = defaultSubmitter(now.form);
     if (ds) {
-      const [info] = inspectTargets([registerClickTarget(ds)], `${callId}:guard`, "c");
-      const why = submitControlBlock(info);
+      const why = submitterRisk(ds, now.form, `${callId}:guard`);
       if (why && why !== approved?.block) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${why}).`;
     }
     if (!now.form.isConnected) return "양식이 사라졌습니다.";

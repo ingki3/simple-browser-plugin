@@ -86,6 +86,41 @@ export default [
     },
   },
   {
+    name: "Enter용 숨은 제출 버튼이 있어도 로그인한다",
+    pages: {
+      "/login": `<title>Login</title><main><form method=post action="/session" onsubmit="event.preventDefault();this.remove();document.getElementById('out').textContent='제출됨'">
+<button type=submit style="display:none">숨은 제출</button>
+<label>아이디 <input name=u autocomplete=username></label>
+<label>비밀번호 <input name=p type=password autocomplete=current-password></label></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await connect(h);
+      const r = await h.turn([findF, { signIn: "password" }], { path: "/login" });
+      expect(r.cards === 0 && r.out === "제출됨", `카드 없이 제출(cards=${r.cards}, out='${r.out}')`);
+    },
+  },
+  {
+    name: "기본 제출이 '계정 삭제' 이미지 버튼이면 묻는다",
+    pages: {
+      "/reauth": `<title>Reauth</title><main><form method=post action="/confirm" onsubmit="event.preventDefault();document.getElementById('out').textContent='제출됨'">
+<label>비밀번호 <input name=p type=password autocomplete=current-password></label>
+<input type=image alt="계정 삭제" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width=40 height=20></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await connect(h);
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/reauth",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1 && /되돌리기 어려운|삭제/.test(summary), `카드에 이유(${summary})`);
+      expect(r.out === "", "제출하지 않음");
+    },
+  },
+  {
     name: "값을 넣어야 켜지는 로그인 버튼도 제출한다",
     pages: {
       "/login": `<title>Login</title><main>

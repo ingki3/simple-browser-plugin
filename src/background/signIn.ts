@@ -198,6 +198,14 @@ export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, s
     .finally(() => signal?.removeEventListener("abort", onAbort));
   const base = { origin: c.origin, step: shape.step };
   const what = STEP_LABEL[shape.step];
+  // 페이지가 입력 중에 이미 제출했으면(그 뒤 칸을 지워 반영 개수가 모자라도) 제출한 것으로 알린다.
+  if (res.submitted && res.filled < res.total) {
+    return {
+      ok: true,
+      summary: `${c.origin}에서 ${what}를 넣는 중에 페이지가 제출했습니다. 로그인이 끝났는지는 화면을 다시 관측해 확인하세요.`,
+      data: { ...base, submitted: true, note: res.note },
+    };
+  }
   if (res.filled < res.total) {
     return { ok: false, summary: `${what}를 넣지 못했습니다. ${res.note ?? ""}`.trim(), data: { ...base, submitted: false, note: res.note } };
   }
