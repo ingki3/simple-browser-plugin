@@ -274,16 +274,17 @@ export async function fillLogin(
   let submittedByPage = false;
   if (todo.length) {
     // 입력·변경 처리기가 양식을 바로 제출하는 페이지(일회용 코드 자동 제출 등)면 다시 제출하지 않는다.
-    const doc = now.form?.ownerDocument;
-    const onSubmit = (e: Event) => {
-      if (now.form && e.target === now.form) submittedByPage = true;
+    // submit 이벤트는 shadow 경계를 넘지 않으므로 양식에 직접 단다.
+    const formEl = now.form;
+    const onSubmit = () => {
+      submittedByPage = true;
     };
-    doc?.addEventListener("submit", onSubmit, true);
+    formEl?.addEventListener("submit", onSubmit, true);
     let res: Awaited<ReturnType<typeof fillFormFields>>;
     try {
       res = await fillFormFields({ fills: todo }, callId, formDrift);
     } finally {
-      doc?.removeEventListener("submit", onSubmit, true);
+      formEl?.removeEventListener("submit", onSubmit, true);
     }
     if (res.filledCount !== res.results.length) {
       return { filled: res.filledCount, total, submitted: false, note: "일부 칸에 값이 들어가지 않아 제출하지 않았습니다." };
@@ -316,6 +317,15 @@ export async function fillLogin(
     submitter = registeredElement(submit.submitId, "c");
     if (defaultSubmitter(form) !== submitter || !layoutVisible(submitter)) {
       return { filled: total, total, submitted: false, note: "제출 버튼이 바뀌어 제출하지 않았습니다." };
+    }
+    // 아직 비활성인 버튼(보안 문자·서버 확인을 기다리는 화면)으로는 제출하지 않는다.
+    if ((submitter as HTMLButtonElement).disabled || submitter.matches(":disabled")) {
+      return {
+        filled: total,
+        total,
+        submitted: false,
+        note: "로그인 버튼이 아직 비활성이라 제출하지 않았습니다. 화면을 관측해 남은 단계(보안 문자 등)를 사용자에게 알리세요.",
+      };
     }
     // 승인 뒤 제출 버튼에 삭제 선언·결제 신호가 생겼는지 지금 모습으로 다시 본다(넣은 값은 개인정보 변화가 아니라 이 호출이 넣은 것).
     // 값을 넣으면 활성화되는 버튼(disabled 해제)처럼 기술이 바뀌는 것은 정상이라, 같은 요소를 지금 기술로 다시 등록해 위험 신호만 본다.
