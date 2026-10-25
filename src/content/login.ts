@@ -74,7 +74,8 @@ function submitMethods(form: HTMLFormElement): string[] {
   for (const c of formElements(form)) {
     if (isSubmitControl(c) && c.hasAttribute("formmethod")) out.add((c.getAttribute("formmethod") ?? "").trim().toLowerCase() || "get");
   }
-  for (const img of Array.from(form.ownerDocument.querySelectorAll('input[type="image" i]'))) {
+  // form.elements는 이미지 버튼을 빼므로 양식이 든 루트(shadow root 포함)에서 따로 찾는다.
+  for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {
     if ((img as HTMLInputElement).form === form && img.hasAttribute("formmethod")) {
       out.add((img.getAttribute("formmethod") ?? "").trim().toLowerCase() || "get");
     }

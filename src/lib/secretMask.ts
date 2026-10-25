@@ -23,36 +23,31 @@ function htmlEscape(s: string): string {
 // 값 하나를 찾을 표현들: 그대로, URL 인코딩(encodeURIComponent·폼 인코딩의 +), HTML 엔티티, base64(패딩 있음·없음, URL용 글자).
 export function secretForms(value: string): string[] {
   if (value.length < MIN_SECRET_LENGTH) return [];
-  const forms = new Set<string>([value]);
-  // 페이지 글자를 모델용으로 정리할 때(cleanModelText) 공백 묶음을 한 칸으로 줄이고 앞뒤를 자른다.
-  const collapsed = value.replace(/\s+/g, " ").trim();
-  if (collapsed) forms.add(collapsed);
-  // 입력 칸이 정리한 값(줄바꿈 제거, email 칸의 앞뒤 공백 제거).
-  const stripped = value.replace(/[\r\n]/g, "");
-  if (stripped) forms.add(stripped);
-  const trimmed = value.trim();
-  if (trimmed) forms.add(trimmed);
-  const uri = encodeURIComponent(value);
-  forms.add(uri);
-  forms.add(uri.replace(/%20/g, "+"));
-  forms.add(encodeURI(value));
-  forms.add(htmlEscape(value));
-  const b = utf8Base64(value);
-  forms.add(b);
-  forms.add(b.replace(/=+$/, ""));
-  forms.add(b.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+  // 값이 페이지에 놓일 수 있는 모양들: 그대로, 모델용 정리(공백 묶음 한 칸·앞뒤 자르기 — cleanModelText), 입력 칸이 정리한 값
+  // (줄바꿈 제거, email 칸의 앞뒤 공백 제거). 모양마다 아래 인코딩을 모두 만든다.
+  const bases = new Set<string>([value]);
+  for (const b of [value.replace(/\s+/g, " ").trim(), value.replace(/[\r\n]/g, ""), value.trim()]) if (b) bases.add(b);
+  const forms = new Set<string>();
   // URL 인코딩은 퍼센트 이스케이프를 소문자로 쓸 수 있다(%2f). 일반 글자의 대소문자는 그대로 둔다.
-  const lowEsc = (s: string) => s.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
-  forms.add(lowEsc(uri));
-  forms.add(lowEsc(uri.replace(/%20/g, "+")));
-  forms.add(lowEsc(encodeURI(value)));
-  // 폼 인코딩(URLSearchParams·양식 제출): !'()~도 이스케이프하고 공백은 +.
-  const formEnc = new URLSearchParams([["", value]]).toString().slice(1);
-  forms.add(formEnc);
-  forms.add(lowEsc(formEnc));
-  // JSON 문자열 안에 든 모양(따옴표·역슬래시·제어 문자가 이스케이프됨). 도구 결과는 JSON으로 직렬화해 기록에 넣는다.
-  forms.add(JSON.stringify(value).slice(1, -1));
-  forms.add(JSON.stringify(htmlEscape(value)).slice(1, -1));
+  const lowEsc = (x: string) => x.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+  for (const v of bases) {
+    forms.add(v);
+    const uri = encodeURIComponent(v);
+    // 폼 인코딩(URLSearchParams·양식 제출): !'()~도 이스케이프하고 공백은 +.
+    const formEnc = new URLSearchParams([["", v]]).toString().slice(1);
+    for (const e of [uri, uri.replace(/%20/g, "+"), encodeURI(v), formEnc]) {
+      forms.add(e);
+      forms.add(lowEsc(e));
+    }
+    forms.add(htmlEscape(v));
+    const b = utf8Base64(v);
+    forms.add(b);
+    forms.add(b.replace(/=+$/, ""));
+    forms.add(b.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+    // JSON 문자열 안에 든 모양(따옴표·역슬래시·제어 문자가 이스케이프됨). 도구 결과는 JSON으로 직렬화해 기록에 넣는다.
+    forms.add(JSON.stringify(v).slice(1, -1));
+    forms.add(JSON.stringify(htmlEscape(v)).slice(1, -1));
+  }
   return [...forms].filter((f) => f.length >= MIN_SECRET_LENGTH);
 }
 

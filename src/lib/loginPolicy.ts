@@ -2,7 +2,7 @@
 // 사이트 목록(출처 → KeePassXC 항목 묶음)의 정리. 판정은 구조(정확한 출처, 칸 종류, 양식의 제출 주소)와 사용자의 명시적 승인으로만
 // 한다. 낱말은 결제·삭제처럼 "더 묻는" 기존 신호(destructiveClickBlock·PAYMENT_TEXT_RE)로만 쓴다.
 import type { TargetInfo } from "./actionTarget.ts";
-import { destructiveClickBlock, destructiveFillBlock, PAYMENT_TEXT_RE, sensitiveUrlReason, splitIdentifier } from "./autoApprove.ts";
+import { destructiveClickBlock, destructiveFillBlock, expandUrls, PAYMENT_TEXT_RE, sensitiveUrlReason, splitIdentifier } from "./autoApprove.ts";
 import { httpOrigin } from "./url.ts";
 
 export const MAX_LOGIN_SITES = 50;
@@ -84,6 +84,14 @@ export interface LoginShape {
   submit?: TargetInfo;
 }
 
+// 주소와 그 안에 실린 주소(리다이렉트 매개변수 등, expandUrls)가 모두 그 출처인지. 끝까지 펼치지 못했으면 false.
+function onlyOrigin(url: string, origin: string): boolean {
+  if (httpOrigin(url) !== origin) return false;
+  const { urls, overflow } = expandUrls(url);
+  if (overflow) return false;
+  return urls.every((u) => !/^https?:$/.test(u.protocol) || u.origin === origin);
+}
+
 // 자동 로그인을 막는 이유. null이면 구조로는 자동 실행해도 된다(사이트 승인·항목 묶음은 따로 본다).
 // origin: 값을 받을 출처(항목을 묶은 출처). 모든 제출 주소가 이 출처여야 한다(다른 승인 사이트로도 보내지 않는다).
 export function loginShapeBlock(shape: LoginShape, origin: string): string | null {
@@ -94,7 +102,7 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   if (shape.newPassword) return "새 비밀번호 칸이 있는 화면(가입·비밀번호 변경일 수 있음)";
   if (shape.otherFields) return "로그인 칸 밖의 입력 칸이 함께 있는 양식(정보 수정일 수 있음)";
   for (const u of shape.submitUrls) {
-    if (httpOrigin(u) !== origin) return "로그인 정보를 다른 출처로 보내는 양식";
+    if (!onlyOrigin(u, origin)) return "로그인 정보를 다른 출처로 보내는 양식";
     // 결제·개인정보 주소로 보내는 양식(결제 재인증 등)은 클릭·입력과 같은 기준으로 묻는다.
     const why = sensitiveUrlReason(u);
     if (why) return `${why}로 보내는 양식`;
@@ -104,7 +112,7 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   for (const t of [...shape.fields, ...(shape.submit ? [shape.submit] : [])]) {
     if (t.opaqueRequest) return "확인할 수 없는 htmx 요청이 붙은 칸·버튼";
     for (const u of t.requestUrls ?? []) {
-      if (httpOrigin(u) !== origin) return "로그인 정보를 다른 출처로 보내는 요청(htmx)";
+      if (!onlyOrigin(u, origin)) return "로그인 정보를 다른 출처로 보내는 요청(htmx)";
       if (sensitiveUrlReason(u)) return `${sensitiveUrlReason(u)}로 보내는 요청(htmx)`;
     }
     // htmx GET 요청은 칸 값을 주소에 싣는다(비밀번호가 주소창·서버 로그에 남음).
@@ -112,6 +120,12 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   }
   // GET 양식은 값을 주소에 실어 주소창·방문 기록·서버 로그에 남긴다.
   if (shape.hasForm && shape.submitMethods.some((m) => m !== "post")) return "POST가 아닌 방법으로 제출하는 양식";
+  // 칸 값까지 합친 제출 주소(숨은 칸의 next=https://다른곳 등)에 실린 목적지도 같은 출처여야 한다.
+  for (const t of [...shape.fields, ...(shape.submit ? [shape.submit] : [])]) {
+    for (const u of [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])]) {
+      if (u && !onlyOrigin(u, origin)) return "로그인 정보를 다른 출처로 보낼 수 있는 양식(실린 주소)";
+    }
+  }
   const fieldDestructive = destructiveFillBlock(shape.fields);
   if (fieldDestructive) return fieldDestructive;
   if (shape.fields.some(paymentSubmission)) return "결제 값을 함께 보내는 양식";

@@ -151,6 +151,8 @@ test("가리기: 값과 흔한 표현", () => {
   assert.ok(forms.includes(Buffer.from(pw).toString("base64")));
   // 퍼센트 이스케이프만 소문자인 모양(일반 글자 대소문자는 그대로).
   assert.ok(maskText("x Ab%2fcD%2bEf y", ["Ab/cD+Ef"]).masked);
+  // 입력 칸이 정리한 값(앞뒤 공백 제거)의 인코딩.
+  assert.ok(maskText(`v=${Buffer.from("alice@example.com").toString("base64")}`, [" alice@example.com "]).masked);
   // 폼 인코딩(URLSearchParams)과 그 소문자 이스케이프.
   const formPw = "p@ss!w (x)~";
   const enc = new URLSearchParams({ password: formPw }).toString();
@@ -265,6 +267,10 @@ test("로그인 모양: 막는 구조", () => {
   assert.match(loginShapeBlock(shape({ topUrl: "https://other.example/" }), ORIGIN), /끼워 넣은/);
   assert.match(loginShapeBlock(shape({ frameUrl: "http://acc.example/login" }), ORIGIN), /https/);
   assert.match(loginShapeBlock(shape({ submitUrls: ["about:too-many-forms"] }), ORIGIN), /다른 출처/);
+  // 같은 출처 주소 안에 실린 다른 출처(리다이렉트 매개변수), 숨은 칸 값으로 실린 목적지.
+  assert.match(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/redirect?next=https%3A%2F%2Fevil.test%2Fcollect`] }), ORIGIN), /다른 출처/);
+  assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, submitUrl: `${ORIGIN}/session?next=https://evil.test/c` } }), ORIGIN));
+  assert.equal(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/session?next=${encodeURIComponent(`${ORIGIN}/home`)}`] }), ORIGIN), null);
   // 계정 삭제 재인증처럼 삭제 신호가 있는 제출 버튼, 결제 버튼은 묻는다.
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, name: "계정 삭제", text: "계정 삭제" } }), ORIGIN));
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, deleteMethod: true } }), ORIGIN));

@@ -54,10 +54,12 @@ function listen(): void {
 export async function rememberSecrets(tabId: number, values: string[]): Promise<void> {
   listen();
   await update((store) => {
-    const cur = new Set(store[String(tabId)] ?? []);
+    // 키를 숫자가 아닌 글자("t12")로 둬야 객체 키가 넣은 순서를 지킨다(정수 모양 키는 숫자 순으로 정렬된다).
+    const key = `t${tabId}`;
+    const cur = new Set(store[key] ?? []);
     for (const v of values) if (v) cur.add(v);
-    delete store[String(tabId)];
-    store[String(tabId)] = [...cur];
+    delete store[key];
+    store[key] = [...cur];
     // 오래된 탭의 목록부터 덜어 낸다(넣은 순서 = 객체 키 순서).
     const keys = Object.keys(store);
     for (const k of keys.slice(0, Math.max(0, keys.length - MAX_TABS))) delete store[k];
