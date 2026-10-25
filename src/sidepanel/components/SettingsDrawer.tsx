@@ -92,6 +92,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const inflight = useRef<Partial<Settings> | null>(null);
   const timer = useRef(0);
   const saving = useRef<Promise<void> | null>(null);
+  // 저장이 끝날 때마다 화면을 저장소의 확정 값(범위로 고친 값 포함)으로 다시 맞춘다.
+  const [syncTick, setSyncTick] = useState(0);
   const [savedAt, setSavedAt] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
   const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
@@ -105,7 +107,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
   // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 이 서랍의 저장 중인 변경과 아직 보내지 않은 변경을 그 위에 둔다.
   useEffect(() => {
     if (loaded) setDraft(mergeSettingsPatch(mergeSettingsPatch(settings, inflight.current ?? {}), dirty.current));
-  }, [loaded, settings, open]);
+  }, [loaded, settings, open, syncTick]);
   // 제공자를 바꾸거나 서랍을 열 때만 키 칸을 그 제공자의 저장된 키로(저장 알림이 입력 중인 키를 되돌리지 않게).
   const savedKeyRef = useRef(savedKey);
   savedKeyRef.current = savedKey;
@@ -121,7 +123,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
   }, [savedAt]);
 
   // 보내지 않은 변경을 하나씩 차례로 저장한다(백그라운드가 바꾼 필드만 최신 설정에 합친다). 저장 중에 생긴 변경은 끝난 뒤 이어서.
-  // 실패하면 그 변경 위에 그 뒤의 변경을 덮어 다시 보관하고(최신 선택이 이긴다) 멈춘다 — 다음 변경·닫기 때 다시 저장한다.
+  // 실패한 변경은 다시 넣지 않는다(옛 변경이 나중 선택을 되돌리지 않게) — 오류를 보이고 화면을 저장된 값으로 되돌린다.
   const flush = (): Promise<void> => {
     window.clearTimeout(timer.current);
     if (saving.current) return saving.current;
@@ -135,11 +137,10 @@ export function SettingsDrawer({ open, onClose }: Props) {
           setSaveError(null);
           setSavedAt(Date.now());
         } catch (err) {
-          dirty.current = mergePatch(patch, dirty.current);
-          setSaveError(err instanceof Error ? err.message : String(err));
-          break;
+          setSaveError(`${err instanceof Error ? err.message : String(err)} — 바뀌지 않은 값이 보입니다. 다시 바꿔 주세요.`);
         } finally {
           inflight.current = null;
+          setSyncTick((t) => t + 1);
         }
       }
     })();
@@ -163,9 +164,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
       const patch = dirty.current;
       if (!Object.keys(patch).length) return;
       dirty.current = {};
-      void savePatch(patch.maxToolHops !== undefined ? { ...patch, maxToolHops: clampHops(patch.maxToolHops) } : patch).catch(() => {
-        dirty.current = mergePatch(patch, dirty.current);
-      });
+      // 닫히는 중이라 결과를 보일 수 없다. 실패하면 다음에 열 때 저장된 값이 보인다(옛 변경을 다시 넣지 않는다).
+      void savePatch(patch.maxToolHops !== undefined ? { ...patch, maxToolHops: clampHops(patch.maxToolHops) } : patch).catch(() => {});
     };
     const onHide = () => {
       if (document.visibilityState === "hidden") now();
