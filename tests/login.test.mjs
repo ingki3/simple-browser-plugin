@@ -12,7 +12,8 @@ const unb64 = (s) => new Uint8Array(Buffer.from(s, "base64"));
 
 // KeePassXC를 흉내 내는 가짜 포트: change-public-keys와 암호화 요청을 실제 프로토콜대로 처리한다.
 function fakeKeePassXC({ entries = [], totp = "123456", tamperNonce = false, deny = null } = {}) {
-  const host = nacl.box.keyPair();
+  // 실제 KeePassXC처럼 키 교환마다 새 키 쌍을 만든다.
+  let host = nacl.box.keyPair();
   let clientKey = null;
   const msgL = [];
   const discL = [];
@@ -23,6 +24,7 @@ function fakeKeePassXC({ entries = [], totp = "123456", tamperNonce = false, den
     postMessage(m) {
       sent.push(m);
       if (m.action === "change-public-keys") {
+        host = nacl.box.keyPair();
         clientKey = unb64(m.publicKey);
         reply({ action: m.action, publicKey: b64(host.publicKey), nonce: b64(incrementNonce(unb64(m.nonce))), success: "true" });
         return;
@@ -83,6 +85,15 @@ test("KeePassXC: 연결·확인·항목·일회용 코드", async () => {
   assert.ok(kp.sent.every((m) => m.action === "change-public-keys" || typeof m.message === "string"));
 });
 
+test("KeePassXC: 동시에 들어온 첫 요청은 키 교환을 한 번만 한다", async () => {
+  const kp = fakeKeePassXC({ entries: [ENTRY] });
+  const s = new KpxSession(kp.port);
+  const [a, code] = await Promise.all([s.associate(), s.getTotp(ENTRY.uuid)]);
+  assert.equal(a.id, "me");
+  assert.equal(code, "123456");
+  assert.equal(kp.sent.filter((m) => m.action === "change-public-keys").length, 1);
+});
+
 test("KeePassXC: 항목 없음(15)은 빈 목록, 다른 연결 키는 거부", async () => {
   const kp = fakeKeePassXC({ deny: "get-logins" });
   const s = new KpxSession(kp.port);
@@ -125,6 +136,11 @@ test("가리기: 값과 흔한 표현", () => {
   assert.ok(forms.includes(Buffer.from(pw).toString("base64")));
   // 퍼센트 이스케이프만 소문자인 모양(일반 글자 대소문자는 그대로).
   assert.ok(maskText("x Ab%2fcD%2bEf y", ["Ab/cD+Ef"]).masked);
+  // 폼 인코딩(URLSearchParams)과 그 소문자 이스케이프.
+  const formPw = "p@ss!w (x)~";
+  const enc = new URLSearchParams({ password: formPw }).toString();
+  assert.ok(maskText(`/login?${enc}`, [formPw]).masked, enc);
+  assert.ok(maskText(`/login?${enc.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase())}`, [formPw]).masked);
   for (const f of forms) {
     const r = maskText(`앞 ${f} 뒤`, [pw]);
     assert.ok(r.masked, f);

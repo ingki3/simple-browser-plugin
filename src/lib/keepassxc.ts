@@ -81,6 +81,8 @@ export class KpxSession {
   private readonly keys = nacl.box.keyPair();
   private readonly clientId = b64(nacl.randomBytes(24));
   private hostKey: Uint8Array | null = null;
+  // 진행 중인 키 교환(동시에 들어온 첫 요청들이 키 교환을 한 번만 하게 같은 약속을 기다린다).
+  private handshaking: Promise<void> | null = null;
   private pending: Pending | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private closed: string | null = null;
@@ -155,8 +157,18 @@ export class KpxSession {
     return next;
   }
 
-  // 세션 키 교환. 다른 요청 전에 한 번.
-  async handshake(timeoutMs = 10_000): Promise<void> {
+  // 세션 키 교환. 다른 요청 전에 한 번(겹치면 진행 중인 교환을 함께 기다린다).
+  handshake(timeoutMs = 10_000): Promise<void> {
+    if (this.hostKey) return Promise.resolve();
+    if (!this.handshaking) {
+      this.handshaking = this.exchangeKeys(timeoutMs).finally(() => {
+        this.handshaking = null;
+      });
+    }
+    return this.handshaking;
+  }
+
+  private async exchangeKeys(timeoutMs: number): Promise<void> {
     const nonce = nacl.randomBytes(24);
     const res = await this.request(
       { action: "change-public-keys", publicKey: b64(this.keys.publicKey), nonce: b64(nonce), clientID: this.clientId },

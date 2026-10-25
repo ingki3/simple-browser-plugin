@@ -38,6 +38,10 @@ export function secretForms(value: string): string[] {
   forms.add(lowEsc(uri));
   forms.add(lowEsc(uri.replace(/%20/g, "+")));
   forms.add(lowEsc(encodeURI(value)));
+  // 폼 인코딩(URLSearchParams·양식 제출): !'()~도 이스케이프하고 공백은 +.
+  const formEnc = new URLSearchParams([["", value]]).toString().slice(1);
+  forms.add(formEnc);
+  forms.add(lowEsc(formEnc));
   // JSON 문자열 안에 든 모양(따옴표·역슬래시·제어 문자가 이스케이프됨). 도구 결과는 JSON으로 직렬화해 기록에 넣는다.
   forms.add(JSON.stringify(value).slice(1, -1));
   forms.add(JSON.stringify(htmlEscape(value)).slice(1, -1));
