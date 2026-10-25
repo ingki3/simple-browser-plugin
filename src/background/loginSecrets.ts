@@ -5,7 +5,10 @@
 import { maskDeep, maskMessages, maskText } from "@/lib/secretMask";
 
 const KEY = "loginSecrets";
-const MAX_TABS = 100;
+// 가림 목록의 최대 값 수. 넘으면 지우지 않고(지운 값이 다른 탭에 남아 있을 수 있다) 새 로그인 입력을 멈춘다.
+const MAX_SECRETS = 500;
+
+export class SecretsFullError extends Error {}
 
 type Store = Record<string, string[]>;
 
@@ -47,22 +50,23 @@ function listen(): void {
   if (listening) return;
   listening = true;
   // 탭이 닫혀도 지우지 않는다: 값이 다른 탭(같은 출처의 opener 등)으로 복사됐거나 처리 중인 결과에 남아 있을 수 있다.
-  // 브라우저를 끄면 storage.session과 함께 사라진다. 탭별 목록은 늘어나지 않게 최근 MAX_TABS개 탭만 둔다.
+  // 브라우저를 끄면 storage.session과 함께 사라진다. 가득 차면 지우지 않고 새 입력을 멈춘다(MAX_SECRETS).
 }
 
 // 페이지에 넣기 직전에 부른다(넣은 뒤 관측이 먼저 오지 않게).
 export async function rememberSecrets(tabId: number, values: string[]): Promise<void> {
   listen();
   await update((store) => {
+    const total = Object.values(store).reduce((n, v) => n + v.length, 0);
+    if (total + values.length > MAX_SECRETS) {
+      throw new SecretsFullError("가릴 값 목록이 가득 차 더 넣지 않았습니다. 브라우저를 다시 시작하면 비워집니다. 사용자에게 직접 로그인해 달라고 하세요.");
+    }
     // 키를 숫자가 아닌 글자("t12")로 둬야 객체 키가 넣은 순서를 지킨다(정수 모양 키는 숫자 순으로 정렬된다).
     const key = `t${tabId}`;
     const cur = new Set(store[key] ?? []);
     for (const v of values) if (v) cur.add(v);
     delete store[key];
     store[key] = [...cur];
-    // 오래된 탭의 목록부터 덜어 낸다(넣은 순서 = 객체 키 순서).
-    const keys = Object.keys(store);
-    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_TABS))) delete store[k];
     return store;
   });
 }

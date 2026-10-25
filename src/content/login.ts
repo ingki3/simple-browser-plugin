@@ -145,6 +145,9 @@ interface Picked {
   // 양식에 넣을 칸 밖의 보이는 입력 칸(글자·선택·긴 글)이나 값이 채워진 개인정보 칸이 함께 있는지. 로그인이 아니라 정보 수정
   // 양식일 수 있다(주소가 채워진 '저장' 양식 등). checkbox·radio(로그인 상태 유지 등)는 세지 않는다.
   otherFields: boolean;
+  // 넣을 칸의 결제 칸 단서(paymentFieldHint)와, 양식이 다른 창·프레임으로 보내는지. 입력 직전·이벤트 사이에도 비교한다.
+  paymentField: boolean;
+  otherTarget: boolean;
 }
 
 function pick(target: HTMLInputElement): Picked {
@@ -170,9 +173,11 @@ function pick(target: HTMLInputElement): Picked {
     });
     return shown || (!!form && personalValuedElements(form).some((e) => !mine.has(e)));
   };
-  const base = { form, newPassword };
+  const otherTarget = !!form && formTargets(form).some((t) => t !== "" && t.toLowerCase() !== "_self");
+  const base = { form, newPassword, otherTarget };
+  const pay = (els: Array<HTMLInputElement | null>) => els.some((e) => !!e && paymentFieldHint(e));
   if (autocompleteTokens(target).includes("one-time-code")) {
-    return { ...base, step: "otp", username: null, password: null, otp: target, otherFields: hasOtherFields([target]) };
+    return { ...base, step: "otp", username: null, password: null, otp: target, otherFields: hasOtherFields([target]), paymentField: pay([target]) };
   }
   if (target.type === "password" || passwords.length === 1) {
     const password = target.type === "password" ? target : passwords[0];
@@ -182,13 +187,21 @@ function pick(target: HTMLInputElement): Picked {
       const before = visible.slice(0, visible.indexOf(password)).filter((i) => isTextInput(i) && usernameCandidate(i));
       username = before[before.length - 1] ?? null;
     }
-    return { ...base, step: "password", username, password, otp: null, otherFields: hasOtherFields([username, password]) };
+    return {
+      ...base,
+      step: "password",
+      username,
+      password,
+      otp: null,
+      otherFields: hasOtherFields([username, password]),
+      paymentField: pay([username, password]),
+    };
   }
   if (passwords.length === 0) {
     const tokens = autocompleteTokens(target);
     const others = visible.filter((i) => i !== target && isTextInput(i));
     if ((tokens.includes("username") || tokens.includes("email")) && isTextInput(target) && others.length === 0) {
-      return { ...base, step: "username", username: target, password: null, otp: null, otherFields: hasOtherFields([target]) };
+      return { ...base, step: "username", username: target, password: null, otp: null, otherFields: hasOtherFields([target]), paymentField: pay([target]) };
     }
   }
   throw new Error(
@@ -204,6 +217,8 @@ function samePick(a: Picked, b: Picked): boolean {
     a.step === b.step &&
     a.newPassword === b.newPassword &&
     a.otherFields === b.otherFields &&
+    a.paymentField === b.paymentField &&
+    a.otherTarget === b.otherTarget &&
     a.username === b.username &&
     a.password === b.password &&
     a.otp === b.otp &&
@@ -236,8 +251,6 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     [submit] = inspectTargets([submitId], submitCallId(callId), "c");
   }
   const hiddenSubmitBlock = submitter && p.form && !layoutVisible(submitter) ? hiddenSubmitterBlock(submitter, p.form) : null;
-  // 다른 창·프레임으로 보내는 양식(target·formtarget): 페이지가 직접 제출해도 이 문서에서 알 수 없어 중복 제출할 수 있다.
-  const otherTarget = !!p.form && formTargets(p.form).some((t) => t !== "" && t.toLowerCase() !== "_self");
   const submitUrls = new Set<string>();
   if (p.form) for (const u of formDestinations(p.form)) submitUrls.add(u);
   for (const f of fields) for (const u of [f.submitTo ?? "", ...(f.scopeFormActions ?? []), ...(f.aroundFormActions ?? [])]) if (u) submitUrls.add(u);
@@ -248,8 +261,9 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     newPassword: p.newPassword,
     otherFields: p.otherFields,
     hiddenSubmitBlock,
-    otherTarget,
-    paymentField: fieldEls.some(paymentFieldHint),
+    // 다른 창·프레임으로 보내는 양식(target·formtarget): 페이지가 직접 제출해도 이 문서에서 알 수 없어 중복 제출할 수 있다.
+    otherTarget: p.otherTarget,
+    paymentField: p.paymentField,
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],
