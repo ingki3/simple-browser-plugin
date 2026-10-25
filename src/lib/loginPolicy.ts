@@ -81,6 +81,8 @@ export interface LoginShape {
   otherFields: boolean;
   // 숨은 기본 제출 버튼의 위험(삭제 선언·삭제·결제 글자). 보이는 버튼은 submit 기술로 본다.
   hiddenSubmitBlock?: string | null;
+  // 양식의 모든 제출 컨트롤(기본 버튼 아닌 것 포함)의 위험.
+  otherSubmitBlocks?: string[];
   // 다른 창·프레임으로 보내는 양식(target·formtarget).
   otherTarget?: boolean;
   // 넣을 칸에 결제용 autocomplete(cc-*)·결제 칸 단서가 있는지(비밀번호 칸으로 분류된 카드 보안 코드 칸 등).
@@ -125,6 +127,7 @@ export function loginShapeBlocks(shape: LoginShape, origin: string, inserted: re
   if (shape.newPassword) add("새 비밀번호 칸이 있는 화면(가입·비밀번호 변경일 수 있음)");
   if (shape.otherFields) add("로그인 칸 밖의 입력 칸이 함께 있는 양식(정보 수정일 수 있음)");
   add(shape.hiddenSubmitBlock);
+  for (const why of shape.otherSubmitBlocks ?? []) add(why);
   if (shape.otherTarget) add("다른 창·프레임으로 보내는 양식");
   // 결제 정보 칸(카드 번호·보안 코드 등)이 넣을 칸이면 묻는다(비밀번호 칸으로 분류된 보안 코드 칸 포함 — paymentField).
   if (shape.paymentField || shape.fields.some((f) => f.sensitive === "payment")) add("결제 정보 칸");

@@ -227,6 +227,11 @@ test("가리기: 메시지는 본문만(역할·도구 id는 그대로)", () => 
   assert.equal(r.value[0].content[0].type, "text");
   assert.ok(!r.value[0].content[0].text.includes("user"));
   assert.ok(!r.value[2].content.includes("user"));
+  // 제공자에 돌려주는 원본 응답 블록도 가린다(서명은 그대로).
+  const raw = maskMessages([{ role: "assistant", content: "hi alice.k", reasoning_details: [{ type: "anthropic.content", content: [{ type: "text", text: "hi alice.k" }, { type: "thinking", thinking: "t", signature: "alice.k-sig" }] }] }], ["alice.k"]);
+  const blocks = raw.value[0].reasoning_details[0].content;
+  assert.ok(!blocks[0].text.includes("alice.k"));
+  assert.equal(blocks[1].signature, "alice.k-sig");
   // 도구 호출 인자는 JSON으로 남는다(값이 구분자 모양이어도).
   const sep = maskMessages([{ role: "assistant", content: null, tool_calls: [{ id: "a", type: "function", function: { name: "x", arguments: '{"id":"f1"}' } }] }], ['":"']);
   assert.doesNotThrow(() => JSON.parse(sep.value[0].tool_calls[0].function.arguments));

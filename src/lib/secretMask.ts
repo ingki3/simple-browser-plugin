@@ -180,8 +180,23 @@ export function maskMessages<T extends MessageLike>(messages: readonly T[], secr
     }
     return c;
   };
+  // 제공자에 그대로 돌려주는 원본 응답 블록(reasoning_details — Anthropic 원본 블록 등)의 글자도 가린다. 서명(signature)과
+  // 암호화된 생각(data)은 건드리지 않는다. 서명된 생각 글자를 가리면 제공자가 요청을 거부하는데, 값을 보내는 것보다 낫다.
+  const SKIP = new Set(["signature", "data", "type", "id", "tool_use_id", "format", "index"]);
+  const raw = (v: unknown, key = ""): unknown => {
+    if (typeof v === "string") return SKIP.has(key) ? v : text(v);
+    if (Array.isArray(v)) return v.map((x) => raw(x, key));
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = raw(x, k);
+      return out;
+    }
+    return v;
+  };
   const value = messages.map((m) => {
     const next = { ...m, ...(m.content !== undefined ? { content: content(m.content) } : {}) } as T;
+    const details = (m as { reasoning_details?: unknown }).reasoning_details;
+    if (Array.isArray(details)) (next as { reasoning_details?: unknown }).reasoning_details = raw(details);
     if (Array.isArray(m.tool_calls)) {
       (next as MessageLike).tool_calls = m.tool_calls.map((c) =>
         typeof c.function?.arguments === "string" ? { ...c, function: { ...c.function, arguments: args(c.function.arguments) } } : c,

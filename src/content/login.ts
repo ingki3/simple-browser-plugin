@@ -111,12 +111,7 @@ function formTargets(form: HTMLFormElement): string[] {
 // 양식의 기본 제출 버튼(HTML의 암묵적 제출이 쓰는 첫 제출 컨트롤).
 // form.elements는 이미지 버튼을 빼므로 양식이 든 루트에서 그 양식의 이미지 버튼을 더하고 문서 순서로 첫 것을 고른다.
 function defaultSubmitter(form: HTMLFormElement): HTMLElement | null {
-  const list: HTMLElement[] = formElements(form).filter(isSubmitControl) as HTMLElement[];
-  for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {
-    if ((img as HTMLInputElement).form === form && !list.includes(img as HTMLElement)) list.push(img as HTMLElement);
-  }
-  list.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
-  return list[0] ?? null;
+  return allSubmitters(form)[0] ?? null;
 }
 
 // 숨은 기본 제출 버튼의 위험(클릭 대상 기술은 보이는 요소만 만들 수 있어 구조와 글자로 따로 본다 — 더 묻는 쪽).
@@ -142,6 +137,22 @@ function submitterRisks(btn: HTMLElement, form: HTMLFormElement, callId: string,
   }
   const [info] = inspectTargets([registerClickTarget(btn)], callId, "c");
   return submitControlBlocks(info, inserted);
+}
+
+// 양식의 모든 제출 컨트롤(이미지 버튼 포함, 문서 순서).
+function allSubmitters(form: HTMLFormElement): HTMLElement[] {
+  const list: HTMLElement[] = formElements(form).filter(isSubmitControl) as HTMLElement[];
+  for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {
+    if ((img as HTMLInputElement).form === form && !list.includes(img as HTMLElement)) list.push(img as HTMLElement);
+  }
+  return list.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+}
+
+// 양식의 모든 제출 컨트롤의 위험(기본 버튼만이 아니라 — 입력 처리기가 다른 버튼으로 requestSubmit할 수 있다).
+function allSubmitterRisks(form: HTMLFormElement, callId: string, inserted: readonly InsertedValue[] = []): string[] {
+  const out = new Set<string>();
+  for (const b of allSubmitters(form)) for (const r of submitterRisks(b, form, callId, inserted)) out.add(r);
+  return [...out];
 }
 
 // 승인 때 없던 이유(카드로 승인한 이유는 빼고).
@@ -272,6 +283,8 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     [submit] = inspectTargets([submitId], submitCallId(callId), "c");
   }
   const hiddenSubmitBlock = submitter && p.form && !layoutVisible(submitter) ? hiddenSubmitterBlock(submitter, p.form) : null;
+  // 기본 버튼이 아닌 제출 컨트롤의 위험(같은 양식의 '삭제' 버튼 등).
+  const otherSubmitBlocks = p.form ? allSubmitterRisks(p.form, `${callId}:all`) : [];
   const submitUrls = new Set<string>();
   if (p.form) for (const u of formDestinations(p.form)) submitUrls.add(u);
   for (const f of fields) for (const u of [f.submitTo ?? "", ...(f.scopeFormActions ?? []), ...(f.aroundFormActions ?? [])]) if (u) submitUrls.add(u);
@@ -282,6 +295,7 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     newPassword: p.newPassword,
     otherFields: p.otherFields,
     hiddenSubmitBlock,
+    otherSubmitBlocks,
     // 다른 창·프레임으로 보내는 양식(target·formtarget): 페이지가 직접 제출해도 이 문서에서 알 수 없어 중복 제출할 수 있다.
     otherTarget: p.otherTarget,
     paymentField: p.paymentField,
@@ -348,11 +362,8 @@ export async function fillLogin(
     if (!submit || !now.form) return null;
     // 기본 제출 버튼의 위험 신호(삭제 선언·결제 등)를 입력 이벤트마다 다시 본다(처리기가 그 버튼으로 바로 제출할 수 있다).
     // 버튼이 승인 때와 같아도 기술은 바뀔 수 있어(값을 넣으면 켜짐 등) 지금 기술로 다시 등록해 위험만 본다.
-    const ds = defaultSubmitter(now.form);
-    if (ds) {
-      const added = newReasons(submitterRisks(ds, now.form, `${callId}:guard`, inserted), approved);
-      if (added.length) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${added[0]}).`;
-    }
+    const added = newReasons(allSubmitterRisks(now.form, `${callId}:guard`, inserted), approved);
+    if (added.length) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${added[0]}).`;
     if (!now.form.isConnected) return "양식이 사라졌습니다.";
     const urls = formDestinations(now.form);
     if (!urls.every((u) => submit.submitUrls.includes(u)) || !same(submitMethods(now.form), submit.submitMethods)) {
