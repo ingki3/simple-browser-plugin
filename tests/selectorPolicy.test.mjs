@@ -51,6 +51,11 @@ test("selectorBlock: 값에 의존하는 조건은 거부(중첩·대소문자·
     "input[aria-valuenow^='12']",
     "input[aria-valuetext^='s']",
     "[aria-invalid=true]",
+    ':is("\n,input[value^=s])',
+    "input[value^=a",
+    "input[data-x='a",
+    ":is('x",
+    "a\n[data-x='1']",
   ]) {
     assert.notEqual(selectorBlock(s), null, s);
   }

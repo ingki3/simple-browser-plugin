@@ -85,6 +85,9 @@ export function selectorBlock(raw: string): string | null {
   const selector = raw.replace(/\r\n|\r|\f/g, "\n").replace(/\0/g, "\ufffd");
   // 주석은 브라우저가 지우고 실행하므로 주석 안의 따옴표·대괄호로 검사를 어긋나게 할 수 있다. 주석이 있으면 거부한다.
   if (selector.includes("/*")) return "선택자에 주석(/* */)은 쓸 수 없습니다";
+  // 브라우저와 이 검사의 토큰 해석이 갈릴 수 있는 형태는 받지 않는다: 줄바꿈(문자열 안의 줄바꿈은 잘못된 문자열이 되어
+  // 뒤 글자를 다르게 읽는다), 닫히지 않은 문자열·대괄호(브라우저는 끝에서 닫아 실행한다).
+  if (selector.includes("\n")) return "선택자에 줄바꿈은 쓸 수 없습니다";
   let i = 0;
   const n = selector.length;
   while (i < n) {
@@ -95,11 +98,12 @@ export function selectorBlock(raw: string): string | null {
     }
     if (c === '"' || c === "'") {
       i = skipString(selector, i);
+      if (i < 0) return "닫히지 않은 문자열이 든 선택자는 쓸 수 없습니다";
       continue;
     }
     if (c === "[") {
       const end = attrEnd(selector, i);
-      if (end < 0) return null; // 문법 오류는 querySelectorAll이 알린다.
+      if (end < 0) return "닫히지 않은 속성 조건([)이 든 선택자는 쓸 수 없습니다";
       const why = attrBlock(selector.slice(i + 1, end));
       if (why) return why;
       i = end + 1;
@@ -120,11 +124,12 @@ export function selectorBlock(raw: string): string | null {
   return null;
 }
 
+// 따옴표 문자열을 건너뛴 다음 위치. 닫히지 않았으면 -1.
 function skipString(s: string, start: number): number {
   const q = s[start];
   let i = start + 1;
   while (i < s.length && s[i] !== q) i += s[i] === "\\" ? 2 : 1;
-  return i + 1;
+  return i < s.length ? i + 1 : -1;
 }
 
 // [ 다음부터 짝이 되는 ]의 위치(문자열·이스케이프 안의 ]는 건너뜀). 없으면 -1.
@@ -133,8 +138,10 @@ function attrEnd(s: string, start: number): number {
   while (i < s.length) {
     const c = s[i];
     if (c === "\\") i += 2;
-    else if (c === '"' || c === "'") i = skipString(s, i);
-    else if (c === "]") return i;
+    else if (c === '"' || c === "'") {
+      i = skipString(s, i);
+      if (i < 0) return -1;
+    } else if (c === "]") return i;
     else i++;
   }
   return -1;
