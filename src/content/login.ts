@@ -256,6 +256,14 @@ export async function fillLogin(
     }
     if (!samePick(before.picked, again)) return "입력 중 로그인 양식이 바뀌어 넣지 않았습니다.";
     if (!submit || !now.form) return null;
+    // 기본 제출 버튼의 위험 신호(삭제 선언·결제 등)를 입력 이벤트마다 다시 본다(처리기가 그 버튼으로 바로 제출할 수 있다).
+    // 버튼이 승인 때와 같아도 기술은 바뀔 수 있어(값을 넣으면 켜짐 등) 지금 기술로 다시 등록해 위험만 본다.
+    const ds = defaultSubmitter(now.form);
+    if (ds) {
+      const [info] = inspectTargets([registerClickTarget(ds)], `${callId}:guard`, "c");
+      const why = submitControlBlock(info);
+      if (why && why !== approved?.block) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${why}).`;
+    }
     if (!now.form.isConnected) return "양식이 사라졌습니다.";
     const urls = formDestinations(now.form);
     if (!urls.every((u) => submit.submitUrls.includes(u)) || !same(submitMethods(now.form), submit.submitMethods)) {
@@ -286,10 +294,11 @@ export async function fillLogin(
     } finally {
       formEl?.removeEventListener("submit", onSubmit, true);
     }
+    // 페이지가 이미 제출했으면(그 뒤 칸을 지워 반영 확인이 실패해도) 제출한 것으로 알린다.
+    if (submittedByPage) return { filled: res.filledCount, total, submitted: true, note: "페이지가 입력 중에 양식을 제출했습니다." };
     if (res.filledCount !== res.results.length) {
       return { filled: res.filledCount, total, submitted: false, note: "일부 칸에 값이 들어가지 않아 제출하지 않았습니다." };
     }
-    if (submittedByPage) return { filled: total, total, submitted: true, note: "페이지가 입력 중에 양식을 제출했습니다." };
   }
   if (cancelled.has(callId)) return { filled: total, total, submitted: false, note: "중단되어 제출하지 않았습니다." };
   if (!submit) return { filled: total, total, submitted: false };
@@ -341,6 +350,16 @@ export async function fillLogin(
     }
   }
   if (cancelled.has(callId)) return { filled: total, total, submitted: false, note: "중단되어 제출하지 않았습니다." };
+  // 기본 제출 버튼이 비활성이면(숨겨진 버튼 포함) 페이지가 제출을 보류한 것이다. 암묵적 제출로 우회하지 않는다.
+  const implicit = defaultSubmitter(form) as HTMLButtonElement | null;
+  if (implicit && (implicit.disabled || implicit.matches(":disabled"))) {
+    return {
+      filled: total,
+      total,
+      submitted: false,
+      note: "로그인 버튼이 아직 비활성이라 제출하지 않았습니다. 화면을 관측해 남은 단계(보안 문자 등)를 사용자에게 알리세요.",
+    };
+  }
   form.requestSubmit(submitter);
   return { filled: total, total, submitted: true };
 }
