@@ -1,10 +1,13 @@
 // query_dom 선택자 검사(#45). 모델이 준 CSS 선택자는 페이지에서 그대로 실행되므로, 결과 글자·속성을 좁혀도 선택자
-// 조건으로 비공개 값(입력값이 반영된 value 속성, data-* 등)을 결과 개수·유무로 알아낼 수 있다. 그런 조건을 구조로 거부한다:
-// - 속성 값 비교([a=…], ~=, |=, ^=, $=, *=)는 구조 속성(STRUCTURAL_ATTRS, STRUCTURAL_ARIA)에만 허용한다.
-// - 주석이 든 선택자는 거부하고, 줄바꿈은 CSS처럼 정규화한 뒤 본다.
-// - 속성 존재 조건([a])은 허용하되 value는 거부한다(값을 넣은 칸에만 속성을 다는 프레임워크가 있다).
-// - 입력값에 따라 달라지는 상태 의사 클래스(:placeholder-shown, :valid 등)는 거부한다.
-// :has()·:is()·:where()·:not() 안쪽도 같은 기준으로 본다(문자열 전체를 훑는다). 낱말 뜻으로 판단하지 않는다.
+// 조건으로 비공개 값(입력값이 반영된 value 속성, data-* 등)을 결과 개수·유무로 알아낼 수 있다.
+// 위험한 형태를 골라 막으면 브라우저의 CSS 토큰 해석·오류 복구(주석, 잘못된 문자열·url 토큰, 이스케이프 등)와 어긋나
+// 우회된다. 그래서 허용하는 문법만 받는 파서로 본다 — 여기서 읽지 못하는 선택자는 실행하지 않는다:
+// - 선택자 목록: 복합 선택자를 결합자(공백·>·+·~)로 잇고 쉼표로 나열
+// - 단순 선택자: 태그·*, #id, .class, [속성], [속성 연산자 값(이름 또는 역슬래시 없는 따옴표 문자열) i|s]
+// - 의사 클래스: STATE_PSEUDOS(인자 없음), nth-*(an+b), not·is·where·has(선택자 목록, has는 > + ~로 시작 가능)
+// - 이름: 영문·숫자·_·-·비ASCII만(역슬래시 이스케이프 없음)
+// 그리고 속성 값 비교는 구조 속성(STRUCTURAL_ATTRS·STRUCTURAL_ARIA)에만, [value] 존재 조건은 거부한다.
+// 낱말 뜻으로 판단하지 않는다(문법과 속성 이름의 구조로만).
 
 // 값 비교를 허용하는 속성: 페이지가 만든 구조·화면 정보(주소·역할·이름표). class는 .a 선택자와 같다.
 const STRUCTURAL_ATTRS = new Set([
@@ -64,134 +67,210 @@ const STRUCTURAL_ARIA = new Set([
   "aria-placeholder",
 ]);
 
-// 입력 칸의 지금 값에 따라 맞고 안 맞는 의사 클래스.
-const VALUE_PSEUDOS = new Set([
-  "placeholder-shown",
-  "valid",
-  "invalid",
-  "user-valid",
-  "user-invalid",
-  "in-range",
-  "out-of-range",
-  "blank",
-  "autofill",
-  "-webkit-autofill",
-  "-internal-autofill-selected",
-  // dir="auto"인 칸은 지금 값의 첫 글자로 방향이 정해진다.
-  "dir",
+// 인자 없이 허용하는 의사 클래스: 문서 구조와 페이지가 정한 상태. 입력 칸의 지금 값에 따라 달라지는 것
+// (:placeholder-shown·:valid·:invalid·:in-range·:autofill 등)은 넣지 않는다. 체크 상태(:checked)는 찾기 도구도 states로
+// 알려 주는 상태라 허용한다(#43).
+const STATE_PSEUDOS = new Set([
+  "first-child",
+  "last-child",
+  "only-child",
+  "first-of-type",
+  "last-of-type",
+  "only-of-type",
+  "root",
+  "empty",
+  "checked",
+  "disabled",
+  "enabled",
+  "required",
+  "optional",
+  "read-only",
+  "read-write",
+  "default",
+  "indeterminate",
+  "link",
+  "any-link",
+  "target",
+  "scope",
+  "hover",
+  "focus",
+  "focus-within",
+  "focus-visible",
+  "active",
+  "open",
+  "modal",
+  "popover-open",
+  "defined",
 ]);
+const NTH_PSEUDOS = new Set(["nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]);
+const LIST_PSEUDOS = new Set(["not", "is", "where", "has"]);
+
+class Reject extends Error {}
 
 // 거부 이유(모델에 보이는 문구). 허용이면 null.
-export function selectorBlock(raw: string): string | null {
-  // CSS 입력 정규화(줄바꿈 CRLF·CR·FF → LF, NUL → U+FFFD)를 먼저 해 브라우저와 같은 글자로 본다.
-  const selector = raw.replace(/\r\n|\r|\f/g, "\n").replace(/\0/g, "\ufffd");
-  // 주석은 브라우저가 지우고 실행하므로 주석 안의 따옴표·대괄호로 검사를 어긋나게 할 수 있다. 주석이 있으면 거부한다.
-  if (selector.includes("/*")) return "선택자에 주석(/* */)은 쓸 수 없습니다";
-  // 브라우저와 이 검사의 토큰 해석이 갈릴 수 있는 형태는 받지 않는다: 줄바꿈(문자열 안의 줄바꿈은 잘못된 문자열이 되어
-  // 뒤 글자를 다르게 읽는다), 닫히지 않은 문자열·대괄호(브라우저는 끝에서 닫아 실행한다).
-  if (selector.includes("\n")) return "선택자에 줄바꿈은 쓸 수 없습니다";
-  let i = 0;
-  const n = selector.length;
-  while (i < n) {
-    const c = selector[i];
-    if (c === "\\") {
-      i += 2;
-      continue;
-    }
-    if (c === '"' || c === "'") {
-      i = skipString(selector, i);
-      if (i < 0) return "닫히지 않은 문자열이 든 선택자는 쓸 수 없습니다";
-      continue;
-    }
-    if (c === "[") {
-      const end = attrEnd(selector, i);
-      if (end < 0) return "닫히지 않은 속성 조건([)이 든 선택자는 쓸 수 없습니다";
-      const why = attrBlock(selector.slice(i + 1, end));
-      if (why) return why;
-      i = end + 1;
-      continue;
-    }
-    if (c === ":") {
-      if (selector[i + 1] === ":") {
-        i += 2;
-        continue;
-      }
-      const { name, end } = readIdent(selector, i + 1);
-      if (VALUE_PSEUDOS.has(name.toLowerCase())) return `입력값에 따라 달라지는 조건(:${name})은 쓸 수 없습니다`;
-      i = Math.max(end, i + 1);
-      continue;
-    }
-    i++;
+export function selectorBlock(selector: string): string | null {
+  const p = new Parser(selector);
+  try {
+    p.list(false);
+    p.ws();
+    if (!p.done()) p.fail();
+    return null;
+  } catch (err) {
+    if (err instanceof Reject) return err.message;
+    throw err;
   }
-  return null;
 }
 
-// 따옴표 문자열을 건너뛴 다음 위치. 닫히지 않았으면 -1.
-function skipString(s: string, start: number): number {
-  const q = s[start];
-  let i = start + 1;
-  while (i < s.length && s[i] !== q) i += s[i] === "\\" ? 2 : 1;
-  return i < s.length ? i + 1 : -1;
-}
+const UNSUPPORTED = "지원하지 않는 선택자 형식입니다(태그·#id·.class·[속성]·구조 의사 클래스와 결합자만, 이스케이프·주석·함수 불가)";
 
-// [ 다음부터 짝이 되는 ]의 위치(문자열·이스케이프 안의 ]는 건너뜀). 없으면 -1.
-function attrEnd(s: string, start: number): number {
-  let i = start + 1;
-  while (i < s.length) {
-    const c = s[i];
-    if (c === "\\") i += 2;
-    else if (c === '"' || c === "'") {
-      i = skipString(s, i);
-      if (i < 0) return -1;
-    } else if (c === "]") return i;
-    else i++;
+class Parser {
+  i = 0;
+  private readonly s: string;
+  constructor(s: string) {
+    this.s = s;
   }
-  return -1;
-}
 
-// 이름(ident)을 이스케이프를 풀어 읽는다: \41 (16진 1~6자리, 뒤 공백 하나 포함)·\x(그 글자). 끝 위치도 돌려준다.
-function readIdent(s: string, start: number): { name: string; end: number } {
-  let i = start;
-  let name = "";
-  while (i < s.length) {
-    const c = s[i];
-    if (c === "\\") {
-      const hex = /^[0-9a-fA-F]{1,6}/.exec(s.slice(i + 1));
-      if (hex) {
-        const cp = parseInt(hex[0], 16);
-        name += cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "\ufffd";
-        i += 1 + hex[0].length;
-        if (s[i] === " " || s[i] === "\t" || s[i] === "\n") i++;
-      } else if (i + 1 < s.length) {
-        name += s[i + 1];
-        i += 2;
-      } else i++;
-      continue;
-    }
-    if (/[-\w]/.test(c) || c.charCodeAt(0) >= 0x80) {
-      name += c;
-      i++;
-      continue;
-    }
-    break;
+  done(): boolean {
+    return this.i >= this.s.length;
   }
-  return { name, end: i };
-}
+  peek(): string {
+    return this.s[this.i] ?? "";
+  }
+  fail(why: string = UNSUPPORTED): never {
+    throw new Reject(why);
+  }
+  // 공백(스페이스·탭만 — 줄바꿈 등은 받지 않는다). 읽었으면 true.
+  ws(): boolean {
+    const start = this.i;
+    while (this.peek() === " " || this.peek() === "\t") this.i++;
+    return this.i > start;
+  }
+  ident(): string {
+    const start = this.i;
+    while (!this.done()) {
+      const c = this.peek();
+      if (/[A-Za-z0-9_-]/.test(c) || c.charCodeAt(0) >= 0x80) this.i++;
+      else break;
+    }
+    if (this.i === start) this.fail();
+    return this.s.slice(start, this.i);
+  }
 
-// 속성 조건 안쪽(대괄호 제외)을 본다.
-function attrBlock(inner: string): string | null {
-  let i = 0;
-  while (i < inner.length && /\s/.test(inner[i])) i++;
-  // 네임스페이스 접두사(ns| 또는 *|)는 건너뛴다. 접두사가 있어도 속성 이름으로 같은 기준을 쓴다.
-  let first = readIdent(inner, i);
-  if (inner[first.end] === "|" && inner[first.end + 1] !== "=") first = readIdent(inner, first.end + 1);
-  else if (inner[i] === "*" && inner[i + 1] === "|") first = readIdent(inner, i + 2);
-  const name = first.name.toLowerCase();
-  if (!name) return null;
-  let j = first.end;
-  while (j < inner.length && /\s/.test(inner[j])) j++;
-  const compares = /^[~|^$*]?=/.test(inner.slice(j));
-  if (!compares) return name === "value" ? "value 속성 조건은 쓸 수 없습니다(입력값이 반영될 수 있음)" : null;
-  if (STRUCTURAL_ATTRS.has(name) || STRUCTURAL_ARIA.has(name)) return null;
-  return `'${name}' 속성 값 조건은 쓸 수 없습니다(id·class·name·type·role·href·aria-label 같은 구조 속성만)`;
+  // 선택자 목록. relative: :has() 안처럼 앞에 결합자가 올 수 있는지.
+  list(relative: boolean): void {
+    for (;;) {
+      this.ws();
+      this.complex(relative);
+      this.ws();
+      if (this.peek() !== ",") return;
+      this.i++;
+    }
+  }
+
+  complex(relative: boolean): void {
+    if (relative && /[>+~]/.test(this.peek())) {
+      this.i++;
+      this.ws();
+    }
+    this.compound();
+    for (;;) {
+      const hadWs = this.ws();
+      const c = this.peek();
+      if (c === ">" || c === "+" || c === "~") {
+        this.i++;
+        this.ws();
+        this.compound();
+      } else if (hadWs && c && c !== "," && c !== ")") {
+        this.compound();
+      } else return;
+    }
+  }
+
+  compound(): void {
+    let n = 0;
+    if (this.peek() === "*") {
+      this.i++;
+      n++;
+    } else if (/[A-Za-z]/.test(this.peek())) {
+      this.ident();
+      n++;
+    }
+    for (;;) {
+      const c = this.peek();
+      if (c === "#" || c === ".") {
+        this.i++;
+        this.ident();
+      } else if (c === "[") {
+        this.attr();
+      } else if (c === ":") {
+        this.pseudo();
+      } else break;
+      n++;
+    }
+    if (n === 0) this.fail();
+  }
+
+  attr(): void {
+    this.i++; // [
+    this.ws();
+    const name = this.ident().toLowerCase();
+    this.ws();
+    const c = this.peek();
+    if (c === "]") {
+      this.i++;
+      if (name === "value") this.fail("value 속성 조건은 쓸 수 없습니다(입력값이 반영될 수 있음)");
+      return;
+    }
+    let op = "";
+    if (c === "=") op = "=";
+    else if (/[~|^$*]/.test(c) && this.s[this.i + 1] === "=") op = c + "=";
+    else this.fail();
+    this.i += op.length;
+    this.ws();
+    const q = this.peek();
+    if (q === '"' || q === "'") {
+      const end = this.s.indexOf(q, this.i + 1);
+      if (end < 0) this.fail();
+      const body = this.s.slice(this.i + 1, end);
+      if (/[\\\n\r\f]/.test(body)) this.fail();
+      this.i = end + 1;
+    } else {
+      this.ident();
+    }
+    this.ws();
+    if (/[iIsS]/.test(this.peek()) && !/[A-Za-z0-9_-]/.test(this.s[this.i + 1] ?? "")) {
+      this.i++;
+      this.ws();
+    }
+    if (this.peek() !== "]") this.fail();
+    this.i++;
+    if (!STRUCTURAL_ATTRS.has(name) && !STRUCTURAL_ARIA.has(name)) {
+      this.fail(`'${name}' 속성 값 조건은 쓸 수 없습니다(id·class·name·type·role·href·aria-label 같은 구조 속성만)`);
+    }
+  }
+
+  pseudo(): void {
+    this.i++; // :
+    if (this.peek() === ":") this.fail("의사 요소(::)는 쓸 수 없습니다");
+    const name = this.ident().toLowerCase();
+    if (this.peek() !== "(") {
+      if (!STATE_PSEUDOS.has(name)) this.fail(`의사 클래스 :${name}은 쓸 수 없습니다(입력값에 따라 달라지거나 지원하지 않음)`);
+      return;
+    }
+    this.i++; // (
+    if (NTH_PSEUDOS.has(name)) {
+      this.ws();
+      const start = this.i;
+      while (/[0-9nN+\- \t]/.test(this.peek()) || /[a-z]/i.test(this.peek())) this.i++;
+      const arg = this.s.slice(start, this.i).trim().toLowerCase();
+      if (!/^(odd|even|[+-]?\d*n(\s*[+-]\s*\d+)?|[+-]?\d+)$/.test(arg)) this.fail();
+    } else if (LIST_PSEUDOS.has(name)) {
+      this.list(name === "has");
+    } else {
+      this.fail(`의사 클래스 :${name}()은 쓸 수 없습니다`);
+    }
+    this.ws();
+    if (this.peek() !== ")") this.fail();
+    this.i++;
+  }
 }

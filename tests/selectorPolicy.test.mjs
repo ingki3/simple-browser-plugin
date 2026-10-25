@@ -14,7 +14,12 @@ test("selectorBlock: 구조 조건은 허용", () => {
     "a:not([rel=nofollow])",
     '[name="q"]',
     "div:has(> img)",
-    "p::before",
+    "ul > li + li ~ li",
+    "tr:nth-child(2n+1) td:first-child",
+    "div:has(+ p)",
+    ":is(h1, h2):not(.hidden)",
+    "a[href$='.pdf' i]",
+    "*",
     "[class~=active]",
     "a[title*=']']",
   ]) {
@@ -58,6 +63,11 @@ test("selectorBlock: 값에 의존하는 조건은 거부(중첩·대소문자·
     "a\n[data-x='1']",
     "input[dir=auto]:dir(rtl)",
     ":is(input:DIR(ltr))",
+    ':is(url(x"),input[value^=s],")',
+    "p::before",
+    "a[href=x\\y]",
+    "[ns|x]",
+    "input:nth-child(1 of [data-x='1'])",
   ]) {
     assert.notEqual(selectorBlock(s), null, s);
   }
@@ -65,5 +75,6 @@ test("selectorBlock: 값에 의존하는 조건은 거부(중첩·대소문자·
 
 test("selectorBlock: 문자열 안의 대괄호·콜론은 조건으로 보지 않는다", () => {
   assert.equal(selectorBlock("a[title=':valid [value=1]']"), null);
-  assert.equal(selectorBlock(".a\\:valid"), null);
+  // 이스케이프는 받지 않는다(허용 문법 밖).
+  assert.notEqual(selectorBlock(".a\\:valid"), null);
 });
