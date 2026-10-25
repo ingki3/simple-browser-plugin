@@ -132,7 +132,8 @@ function pick(target: HTMLInputElement): Picked {
   const newPassword =
     passwords.length > 1 ||
     autocompleteTokens(target).includes("new-password") ||
-    visible.some((i) => autocompleteTokens(i).includes("new-password"));
+    // 숨은 칸이라도 새 비밀번호를 선언했으면 가입·변경 양식으로 본다(다단계 가입의 다음 단계 칸 등).
+    inputs.some((i) => autocompleteTokens(i).includes("new-password"));
   const hasOtherFields = (picked: Array<HTMLInputElement | null>): boolean => {
     const mine = new Set(picked.filter(Boolean) as Element[]);
     // 양식이 없는 화면은 같은 범위(대화상자 또는 문서 본문)의 모든 칸을 본다(정보 수정 화면의 change 처리기가 바로 저장할 수 있다).
@@ -313,11 +314,17 @@ export async function fillLogin(
       submittedByPage = true;
     };
     formEl?.addEventListener("submit", onSubmit, true);
+    // form.submit()은 submit 이벤트 없이 이동을 시작한다. 문서를 떠나기 시작하면(beforeunload·pagehide) 제출로 본다.
+    const win = formEl?.ownerDocument.defaultView ?? null;
+    win?.addEventListener("beforeunload", onSubmit, true);
+    win?.addEventListener("pagehide", onSubmit, true);
     let res: Awaited<ReturnType<typeof fillFormFields>>;
     try {
       res = await fillFormFields({ fills: todo }, callId, formDrift);
     } finally {
       formEl?.removeEventListener("submit", onSubmit, true);
+      win?.removeEventListener("beforeunload", onSubmit, true);
+      win?.removeEventListener("pagehide", onSubmit, true);
     }
     // 페이지가 이미 제출했으면(그 뒤 칸을 지워 반영 확인이 실패해도) 제출한 것으로 알린다.
     if (submittedByPage) return { filled: res.filledCount, total, submitted: true, note: "페이지가 입력 중에 양식을 제출했습니다." };
@@ -385,7 +392,22 @@ export async function fillLogin(
       note: "로그인 버튼이 아직 비활성이라 제출하지 않았습니다. 화면을 관측해 남은 단계(보안 문자 등)를 사용자에게 알리세요.",
     };
   }
-  form.requestSubmit(submitter);
+  // 숨은 기본 제출 버튼도 실제 제출에 쓴다(formaction·name=value를 잃지 않게 — 위험은 위에서 구조·글자로 봤다).
+  const use = submitter ?? implicit;
+  // 브라우저 입력 검사(pattern·required 등)에 막히면 requestSubmit은 submit 이벤트 없이 끝난다. 실제로 보냈는지 이벤트로 본다.
+  let fired = false;
+  const onFire = () => {
+    fired = true;
+  };
+  form.addEventListener("submit", onFire, true);
+  try {
+    form.requestSubmit(use);
+  } finally {
+    form.removeEventListener("submit", onFire, true);
+  }
+  if (!fired) {
+    return { filled: total, total, submitted: false, note: "브라우저의 입력 검사(형식·필수 칸)에 막혀 제출되지 않았습니다. 화면을 관측하세요." };
+  }
   return { filled: total, total, submitted: true };
 }
 

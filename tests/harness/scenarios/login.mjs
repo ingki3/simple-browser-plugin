@@ -121,6 +121,21 @@ export default [
     },
   },
   {
+    name: "브라우저 입력 검사에 막히면 제출했다고 하지 않는다",
+    pages: {
+      "/login": `<title>Login</title><main><form method=post action="/session" onsubmit="event.preventDefault();document.getElementById('out').textContent='제출됨'">
+<label>아이디 <input name=u autocomplete=username pattern="[0-9]+"></label>
+<label>비밀번호 <input name=p type=password autocomplete=current-password></label><button>로그인</button></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await connect(h);
+      const r = await h.turn([findF, { signIn: "password" }], { path: "/login" });
+      const t = lastTool(r, "sign_in");
+      expect(r.out === "", `제출되지 않음(out='${r.out}')`);
+      expect(t?.result?.submitted === false, `결과가 제출 안 함(${JSON.stringify(t)})`);
+    },
+  },
+  {
     name: "값을 넣어야 켜지는 로그인 버튼도 제출한다",
     pages: {
       "/login": `<title>Login</title><main>
