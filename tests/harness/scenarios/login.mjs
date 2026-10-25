@@ -106,6 +106,29 @@ export default [
     },
   },
   {
+    name: "로그인 칸 밖의 입력 칸이 있는 양식(정보 수정)은 승인한 사이트라도 묻는다",
+    pages: {
+      "/profile": `<title>Profile</title><main><form method=post action="/update" onsubmit="event.preventDefault();document.getElementById('out').textContent='저장됨'">
+<label>주소 <input name=addr value="서울시 어딘가 1"></label>
+<label>아이디 <input name=u autocomplete=username></label>
+<label>현재 비밀번호 <input name=p type=password autocomplete=current-password></label>
+<button>저장</button></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await connect(h);
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/profile",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1 && /입력 칸/.test(summary), `카드에 이유(${summary})`);
+      expect(r.out === "", "제출하지 않음");
+    },
+  },
+  {
     name: "비밀번호 관리자를 연결하지 않았으면 칸을 표시해 직접 로그인하게 한다",
     pages: { "/login": loginPage() },
     async run(h) {

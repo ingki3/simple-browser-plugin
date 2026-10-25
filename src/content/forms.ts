@@ -1570,9 +1570,12 @@ export interface FillResult {
 const SETTLE_MS = 150;
 
 // 승인 카드에서 확인한 칸들이 모두 그대로일 때만 채운다. 하나라도 바뀌었으면 아무것도 채우지 않는다.
+// extraGuard: 칸마다 쓰기 직전과 input 처리기가 돈 뒤(change 전)에 부르는 추가 검사(자동 로그인이 양식의 제출 방법·주소가 그대로인지
+// 보려고). 이유를 돌려주면 그 칸과 남은 칸을 채우지 않는다.
 export async function fillFormFields(
   args: { fills: Array<{ id: string; value: string }> },
   callId: string,
+  extraGuard?: () => string | null,
 ): Promise<{ filledCount: number; results: FillResult[] }> {
   const ids = args.fills.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("같은 칸 id가 두 번 들어 있습니다. 칸마다 한 번만 지정하세요.");
@@ -1628,6 +1631,11 @@ export async function fillFormFields(
     // 브라우저가 정리한 실제 값(onSet에서 받는다). change 전 재검사의 허용 값에도 넣는다.
     let actual: string | undefined;
     const driftReason = (): string | null => {
+      const guarded = extraGuard?.();
+      if (guarded) {
+        halted = true;
+        return guarded;
+      }
       if (el.name !== startName) return "입력 중 칸 이름이 바뀌어 채우지 않았습니다. 다시 찾으세요.";
       const nowRisk = FIELD_KIND.risk?.(el);
       // 같은 칸의 양식 제출 주소와, 양식 밖 칸이면 주변 양식들의 제출 주소를 함께 본다.

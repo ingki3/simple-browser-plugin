@@ -123,6 +123,8 @@ test("가리기: 값과 흔한 표현", () => {
   const forms = secretForms(pw);
   assert.ok(forms.includes(encodeURIComponent(pw)));
   assert.ok(forms.includes(Buffer.from(pw).toString("base64")));
+  // 퍼센트 이스케이프만 소문자인 모양(일반 글자 대소문자는 그대로).
+  assert.ok(maskText("x Ab%2fcD%2bEf y", ["Ab/cD+Ef"]).masked);
   for (const f of forms) {
     const r = maskText(`앞 ${f} 뒤`, [pw]);
     assert.ok(r.masked, f);
@@ -193,6 +195,7 @@ const shape = (over = {}) => ({
   frameUrl: `${ORIGIN}/login`,
   topUrl: `${ORIGIN}/login`,
   newPassword: false,
+  otherFields: false,
   hasForm: true,
   submitUrls: [`${ORIGIN}/session`],
   submitMethods: ["post"],
@@ -212,6 +215,7 @@ test("로그인 모양: 막는 구조", () => {
   assert.match(loginShapeBlock(shape({ submitMethods: ["get"] }), ORIGIN), /POST/);
   assert.match(loginShapeBlock(shape({ submitMethods: ["post", "dialog"] }), ORIGIN), /POST/);
   assert.match(loginShapeBlock(shape({ newPassword: true }), ORIGIN), /새 비밀번호/);
+  assert.match(loginShapeBlock(shape({ otherFields: true }), ORIGIN), /입력 칸/);
   assert.match(loginShapeBlock(shape({ topUrl: "https://other.example/" }), ORIGIN), /끼워 넣은/);
   assert.match(loginShapeBlock(shape({ frameUrl: "http://acc.example/login" }), ORIGIN), /https/);
   assert.match(loginShapeBlock(shape({ submitUrls: ["about:too-many-forms"] }), ORIGIN), /다른 출처/);

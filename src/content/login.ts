@@ -3,7 +3,15 @@
 // 주소와 메서드로만 한다(낱말로 로그인 화면을 짐작하지 않는다). 값은 이 파일에서 돌려주지 않는다.
 import { submitControlBlock, type LoginShape } from "@/lib/loginPolicy";
 import { isTag } from "./docs";
-import { fillFormFields, formDestinations, formElements, layoutVisible, registerFieldTarget, isSubmitControl } from "./forms";
+import {
+  fillFormFields,
+  formDestinations,
+  formElements,
+  isSubmitControl,
+  layoutVisible,
+  personalValuedElements,
+  registerFieldTarget,
+} from "./forms";
 import { registerClickTarget } from "./clickables";
 import { inspectTargets, registeredElement } from "./targets";
 
@@ -67,6 +75,9 @@ interface Picked {
   otp: HTMLInputElement | null;
   form: HTMLFormElement | null;
   newPassword: boolean;
+  // 양식에 넣을 칸 밖의 보이는 입력 칸(글자·선택·긴 글)이나 값이 채워진 개인정보 칸이 함께 있는지. 로그인이 아니라 정보 수정
+  // 양식일 수 있다(주소가 채워진 '저장' 양식 등). checkbox·radio(로그인 상태 유지 등)는 세지 않는다.
+  otherFields: boolean;
 }
 
 function pick(target: HTMLInputElement): Picked {
@@ -74,9 +85,22 @@ function pick(target: HTMLInputElement): Picked {
   const visible = inputs.filter(usable);
   const passwords = visible.filter((i) => i.type === "password");
   const newPassword = passwords.length > 1 || visible.some((i) => autocompleteTokens(i).includes("new-password"));
+  const hasOtherFields = (picked: Array<HTMLInputElement | null>): boolean => {
+    if (!form) return false;
+    const mine = new Set(picked.filter(Boolean) as Element[]);
+    const shown = formElements(form).some((c) => {
+      if (mine.has(c)) return false;
+      if (isTag(c, "select") || isTag(c, "textarea")) return layoutVisible(c as HTMLElement);
+      if (!isTag(c, "input")) return false;
+      const t = (c as HTMLInputElement).type;
+      if (["hidden", "submit", "button", "reset", "image", "checkbox", "radio"].includes(t)) return false;
+      return layoutVisible(c as HTMLElement);
+    });
+    return shown || personalValuedElements(form).some((e) => !mine.has(e));
+  };
   const base = { form, newPassword };
   if (autocompleteTokens(target).includes("one-time-code")) {
-    return { ...base, step: "otp", username: null, password: null, otp: target };
+    return { ...base, step: "otp", username: null, password: null, otp: target, otherFields: hasOtherFields([target]) };
   }
   if (target.type === "password" || passwords.length === 1) {
     const password = target.type === "password" ? target : passwords[0];
@@ -86,13 +110,13 @@ function pick(target: HTMLInputElement): Picked {
       const before = visible.slice(0, visible.indexOf(password)).filter(isTextInput);
       username = before[before.length - 1] ?? null;
     }
-    return { ...base, step: "password", username, password, otp: null };
+    return { ...base, step: "password", username, password, otp: null, otherFields: hasOtherFields([username, password]) };
   }
   if (passwords.length === 0) {
     const tokens = autocompleteTokens(target);
     const others = visible.filter((i) => i !== target && isTextInput(i));
     if ((tokens.includes("username") || tokens.includes("email")) && isTextInput(target) && others.length === 0) {
-      return { ...base, step: "username", username: target, password: null, otp: null };
+      return { ...base, step: "username", username: target, password: null, otp: null, otherFields: hasOtherFields([target]) };
     }
   }
   throw new Error(
@@ -107,6 +131,7 @@ function samePick(a: Picked, b: Picked): boolean {
   return (
     a.step === b.step &&
     a.newPassword === b.newPassword &&
+    a.otherFields === b.otherFields &&
     a.username === b.username &&
     a.password === b.password &&
     a.otp === b.otp &&
@@ -141,6 +166,7 @@ export function inspectLogin(id: string, callId: string): LoginShape {
     frameUrl: doc.URL,
     topUrl: window.location.href,
     newPassword: p.newPassword,
+    otherFields: p.otherFields,
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],
@@ -184,6 +210,20 @@ export async function fillLogin(
     return { filled: 0, total: fills.length, submitted: false, note: "승인한 뒤 로그인 양식이 바뀌어 넣지 않았습니다." };
   }
   const anchor = fills[0] ? registeredElement(fills[0].id, "f") : null;
+  // 제출 방법·주소가 승인 때와 같은지: 쓰기 전과 칸마다(입력 이벤트 사이) 본다. change 처리기가 바로 제출하는 양식이
+  // 그사이 GET·다른 주소로 바뀌었으면 값을 넣지 않는다.
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  const formDrift = (): string | null => {
+    if (!submit || !now.form) return null;
+    if (!now.form.isConnected) return "양식이 사라졌습니다.";
+    const urls = formDestinations(now.form);
+    if (!urls.every((u) => submit.submitUrls.includes(u)) || !same(submitMethods(now.form), submit.submitMethods)) {
+      return "승인한 뒤 양식의 제출 주소·방법이 바뀌어 넣지 않았습니다.";
+    }
+    return null;
+  };
+  const drift = formDrift();
+  if (drift) return { filled: 0, total: fills.length, submitted: false, note: drift };
   // 아이디 칸에 이미 같은 값이 있으면(브라우저 자동 채우기 등) 건드리지 않는다.
   const todo = fills.filter((f) => {
     const el = registeredElement(f.id, "f") as HTMLInputElement;
@@ -191,7 +231,7 @@ export async function fillLogin(
   });
   const total = fills.length;
   if (todo.length) {
-    const res = await fillFormFields({ fills: todo }, callId);
+    const res = await fillFormFields({ fills: todo }, callId, formDrift);
     if (res.filledCount !== res.results.length) {
       return { filled: res.filledCount, total, submitted: false, note: "일부 칸에 값이 들어가지 않아 제출하지 않았습니다." };
     }
@@ -202,7 +242,6 @@ export async function fillLogin(
   if (!form || !form.isConnected) return { filled: total, total, submitted: false, note: "양식이 사라져 제출하지 않았습니다." };
   const urls = formDestinations(form);
   const methods = submitMethods(form);
-  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
   if (!urls.every((u) => submit.submitUrls.includes(u)) || !same(methods, submit.submitMethods)) {
     return { filled: total, total, submitted: false, note: "값을 넣는 사이 양식의 제출 주소·방법이 바뀌어 제출하지 않았습니다." };
   }
