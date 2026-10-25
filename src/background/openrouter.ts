@@ -793,6 +793,10 @@ export class ChatAgent {
     }
     // 문맥을 서명하는 제공자: 기록에 남긴 후보를 지웠거나 껐으면 거둘 수 없으니 멈추고 새 대화로, 바뀌지 않았으면 다시 싣지 않는다.
     let candidatesNote = savedCandidates;
+    // 그런 제공자(Anthropic)는 도구 결과 바로 뒤에 글자 안내를 붙이면 빈 응답으로 끝낼 수 있어, 도구 결과 다음 요청에는
+    // 현재 시각·후보 안내를 붙이지 않는다(사용자 요청 직후 요청에만). 마무리 안내는 그대로 붙인다.
+    const signs = providerAdapter(this.provider).signsContext;
+    const afterToolResult = signs && this.history[this.history.length - 1]?.role === "tool";
     if (providerAdapter(this.provider).signsContext && this.committedCandidates) {
       const now = new Set(currentCandidates ? candidateIdsOf(currentCandidates) : []);
       if ([...this.committedCandidates.ids].some((id) => !now.has(id))) {
@@ -804,8 +808,8 @@ export class ChatAgent {
       if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
     }
     const sentNotes: OpenRouterMessage[] = [
-      { role: "user", content: nowNote() },
-      ...(candidatesNote ? [{ role: "user" as const, content: candidatesNote }] : []),
+      ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
+      ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
       ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
     ];
     let stream: ChatStream;
@@ -923,7 +927,7 @@ export class ChatAgent {
       `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
     );
     if (this.isStale(turn)) return null;
-    return { sentNotes, sentCandidates: candidatesNote, assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
+    return { sentNotes, sentCandidates: afterToolResult ? null : candidatesNote, assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
   }
 
   // 도구 호출 순환 한도에 닿았을 때 지금까지 한 일을 보여 주고 extra번 더 진행할지 묻는다(#55). 사용자의 명시적 선택으로만

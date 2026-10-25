@@ -128,6 +128,9 @@ export default [
       expect(asst?.content?.[0]?.type === "thinking" && asst.content[0].signature === "sig-10" && asst.content[1]?.type === "tool_use", `생각·도구 블록(${JSON.stringify(asst?.content).slice(0, 300)})`);
       const res = b.messages.flatMap((m) => m.content).find((c) => c.type === "tool_result");
       expect(res && res.tool_use_id === asst.content[1].id, "tool_result 짝");
+      // 도구 결과 다음 요청에는 도구 결과 뒤에 글자 안내를 붙이지 않는다(빈 응답 방지).
+      const lastUser = b.messages.at(-1);
+      expect(lastUser.role === "user" && lastUser.content.every((c) => c.type === "tool_result"), `도구 결과만(${JSON.stringify(lastUser.content.map((c) => c.type))})`);
       const roles = b.messages.map((m) => m.role).join(",");
       expect(!/user,user|assistant,assistant/.test(roles), `역할 번갈음(${roles})`);
     },
