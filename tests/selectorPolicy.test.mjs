@@ -43,6 +43,14 @@ test("selectorBlock: 값에 의존하는 조건은 거부(중첩·대소문자·
     "[ns|data-x='1']",
     "[DATA-X='1']",
     "[data-x='a'i]",
+    "/*'*/input[value^=s]",
+    "input/**/[data-x='1']",
+    "input:v\\61\rlid",
+    "input:v\\61\flid",
+    "input:v\\61\r\nlid",
+    "input[aria-valuenow^='12']",
+    "input[aria-valuetext^='s']",
+    "[aria-invalid=true]",
   ]) {
     assert.notEqual(selectorBlock(s), null, s);
   }

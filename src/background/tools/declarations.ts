@@ -238,7 +238,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "query_dom",
     description:
-      "CSS 선택자로 현재 활성 탭의 DOM 요소를 조회해 화면 글자와 속성값을 반환한다. 특정 구조를 읽어야 할 때의 이스케이프 해치. 입력 칸·편집 영역·숨은 요소 안의 글자는 돌려주지 않는다. 선택자 조건은 구조로만: 속성 값 비교는 id·class·name·type·role·href·aria-* 같은 구조 속성에만 쓸 수 있고, data-*·value 값 비교와 :valid·:placeholder-shown 같은 입력값 상태 조건은 거부된다.",
+      "CSS 선택자로 현재 활성 탭의 DOM 요소를 조회해 화면 글자와 속성값을 반환한다. 특정 구조를 읽어야 할 때의 이스케이프 해치. 입력 칸·편집 영역·숨은 요소 안의 글자는 돌려주지 않는다. 선택자 조건은 구조로만: 속성 값 비교는 id·class·name·type·role·href·aria-* 같은 구조 속성에만 쓸 수 있고, data-*·value·aria-valuenow 같은 값 속성 비교, 주석, :valid·:placeholder-shown 같은 입력값 상태 조건은 거부된다.",
     parameters: {
       type: "object",
       properties: {
