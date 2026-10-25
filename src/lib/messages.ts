@@ -301,6 +301,8 @@ export type BgToContent =
   | { kind: "page_skeleton" }
   // 다른 탭 참조: 이 문서의 본문. 지금 주소가 expectUrl과 다르면 읽지 않는다.
   | { kind: "read_page_text"; expectUrl: string }
+  // 저장 카드 초안(#86): 이 문서의 화면 글자(modelText — 입력 칸 값·편집 영역·숨은 내용 제외). 주소가 expectUrl과 다르면 읽지 않는다.
+  | { kind: "screen_text"; expectUrl: string; max: number }
   // read_linked_pages: 이 주소들이 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 링크에 있는지와 링크 글자.
   | { kind: "link_lookup"; urls: string[] }
   // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크(후보 고정용).
