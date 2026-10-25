@@ -1,4 +1,5 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
+import { withTimeout } from "@/lib/async";
 import { navigationError, waitForNavigationSettle } from "../navigation";
 import { describeNavigationError } from "@/lib/navError";
 import { debugLog, timeSpan } from "../debug";
@@ -347,22 +348,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(
-            `${label} 응답이 ${Math.round(ms / 1000)}초 안에 오지 않았습니다. 페이지가 이동했거나 스크립트가 응답하지 않을 수 있습니다.`,
-          ),
-        ),
-      ms,
-    );
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
-  });
+// 컨텐트 스크립트 응답 시간 초과 문구.
+function contentTimeout(label: string, ms: number): string {
+  return `${label} 응답이 ${Math.round(ms / 1000)}초 안에 오지 않았습니다. 페이지가 이동했거나 스크립트가 응답하지 않을 수 있습니다.`;
 }
 
 export async function callContentTool<T = unknown>(
@@ -390,7 +378,7 @@ export async function callContentTool<T = unknown>(
     const res = (await withTimeout(
       chrome.tabs.sendMessage(tabId, msg, documentId ? { documentId } : { frameId: 0 }) as Promise<ContentResponse<T>>,
       timeoutMs,
-      `컨텐트 스크립트(${toolName})`,
+      contentTimeout(`컨텐트 스크립트(${toolName})`, timeoutMs),
     )) as ContentResponse<T>;
     if (documentId) markTabPopupUsed(turnTab, tabId);
     return res;
@@ -449,7 +437,7 @@ export async function queryContent<T>(tabId: number, msg: BgToContent, timeoutMs
   const res = (await withTimeout(
     chrome.tabs.sendMessage(tabId, msg, { frameId: 0 }) as Promise<ContentResponse<T>>,
     timeoutMs,
-    label,
+    contentTimeout(label, timeoutMs),
   )) as ContentResponse<T>;
   if (!res?.ok) {
     if (res?.diag) debugLog("content:diag", `${label} · ${res.diag}`, "warn");

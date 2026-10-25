@@ -1,4 +1,5 @@
 import type { ContentResponse } from "@/lib/messages";
+import { withTimeout } from "@/lib/async";
 import type { HtmlExtractJob, HtmlExtractResult } from "@/lib/documentJob";
 import { decodeHtml } from "@/lib/htmlCharset";
 import { sensitiveUrlReason } from "@/lib/autoApprove";
@@ -73,13 +74,11 @@ export async function snapshotLinks(
   const tabId = await resolveTurnTab(turnTab);
   const pageUrl = (await chrome.tabs.get(tabId)).url ?? "";
   // 페이지가 응답하지 않아도(alert·긴 스크립트) 카드 만들기가 무기한 기다리지 않게 시간 제한을 둔다.
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const res = (await Promise.race([
+  const res = (await withTimeout(
     chrome.tabs.sendMessage(tabId, { kind: "link_lookup", urls }, { frameId: 0 }),
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("페이지가 응답하지 않아 링크를 확인하지 못했습니다.")), LOOKUP_TIMEOUT_MS);
-    }),
-  ]).finally(() => clearTimeout(timer))) as ContentResponse<Array<{ url: string; present: boolean; text: string }>>;
+    LOOKUP_TIMEOUT_MS,
+    "페이지가 응답하지 않아 링크를 확인하지 못했습니다.",
+  )) as ContentResponse<Array<{ url: string; present: boolean; text: string }>>;
   if (!res?.ok || !res.data) throw new Error(res?.error ?? "페이지의 링크를 확인하지 못했습니다.");
   const list: Candidate[] = [];
   const choices: LinkChoice[] = [];

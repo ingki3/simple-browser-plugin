@@ -2,6 +2,8 @@
 // 보안 모델·한계는 src/lib/trustedClick.ts 머리말. 승인 판정은 바꾸지 않고 실행 수단만 바꾼다.
 // 사람처럼 보이게 하는 기능(궤적·무작위 지연)이나 자동화 흔적 숨기기는 넣지 않는다. 디버깅 막대도 숨기지 않는다.
 import type { BgToContent, ContentResponse } from "@/lib/messages";
+import { withTimeout } from "@/lib/async";
+import { originLabel } from "@/lib/url";
 import {
   describeMissedClick,
   FRAME_ARM_TIMEOUT_MS,
@@ -118,7 +120,7 @@ async function mouse(tabId: number, params: Record<string, unknown>, signal: Abo
   });
   try {
     await Promise.race([
-      bounded(chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", params), INPUT_TIMEOUT_MS, "입력"),
+      withTimeout(chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", params), INPUT_TIMEOUT_MS, "입력 응답 없음"),
       aborted,
     ]);
   } finally {
@@ -139,21 +141,11 @@ async function withTabLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-function bounded<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} 응답 없음`)), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
 export async function sendTo<T>(tabId: number, documentId: string, msg: BgToContent, ms: number, label: string): Promise<T> {
-  const res = (await bounded(
+  const res = (await withTimeout(
     chrome.tabs.sendMessage(tabId, msg, { documentId }) as Promise<ContentResponse<T>>,
     ms,
-    label,
+    `${label} 응답 없음`,
   )) as ContentResponse<T>;
   if (!res?.ok) throw new Error(res?.error ?? `${label} 실패`);
   return res.data as T;
@@ -197,14 +189,6 @@ async function disarmFrames(tabId: number, token: string, docs: FrameDoc[]): Pro
     docs.map((f) => sendTo<number>(tabId, f.documentId, msg, FRAME_ARM_TIMEOUT_MS, "프레임 가드 해제").catch(() => 0)),
   );
   return docs.map((doc, i) => ({ doc, blocked: counts[i] || 0 })).filter((r) => r.blocked > 0);
-}
-
-function originOf(url: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return url.slice(0, 40);
-  }
 }
 
 export interface ClickData {
@@ -419,7 +403,7 @@ async function pressIn(
     point,
     frameBlocked: blockedBy.reduce((a, r) => a + r.blocked, 0),
   });
-  const frames = blockedBy.map((r) => `frame ${r.doc.frameId} ${originOf(r.doc.url)} ×${r.blocked}`).join(", ");
+  const frames = blockedBy.map((r) => `frame ${r.doc.frameId} ${originLabel(r.doc.url)} ×${r.blocked}`).join(", ");
   debugLog(
     "input:none",
     `tab ${tabId} · 점 (${point.x}, ${point.y}) · 화면 ${status.viewport?.width}×${status.viewport?.height} · ${why}${frames ? ` · ${frames}` : ""}`,

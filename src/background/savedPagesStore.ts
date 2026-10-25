@@ -18,6 +18,7 @@ import {
   type SavedLink,
 } from "@/lib/savedPages";
 import { openRouterJson } from "@/lib/openrouter";
+import { withTimeout } from "@/lib/async";
 import { translationReasoningConfig } from "@/lib/models";
 import { sensitiveUrlReason } from "@/lib/autoApprove";
 import { siteOf } from "@/lib/siteTrust";
@@ -68,19 +69,15 @@ async function topDocumentId(tabId: number): Promise<string | null> {
 
 async function screenText(tabId: number, documentId: string | null, url: string): Promise<string> {
   if (!documentId) return "";
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const res = (await Promise.race([
+    const res = (await withTimeout(
       chrome.tabs.sendMessage(tabId, { kind: "screen_text", expectUrl: url, max: MAX_CONTEXT_PAGE }, { documentId }),
-      new Promise((resolve) => {
-        timer = setTimeout(() => resolve(null), SCREEN_TEXT_TIMEOUT_MS);
-      }),
-    ])) as { ok?: boolean; data?: unknown } | null;
+      SCREEN_TEXT_TIMEOUT_MS,
+      "screen_text 응답 없음",
+    )) as { ok?: boolean; data?: unknown } | null;
     return res?.ok && typeof res.data === "string" ? res.data : "";
   } catch {
     return "";
-  } finally {
-    clearTimeout(timer);
   }
 }
 const MAX_CONTEXT_QUERY = 1000;

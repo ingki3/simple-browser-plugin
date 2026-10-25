@@ -1,3 +1,4 @@
+import { httpOrigin } from "./url.ts";
 // 주소가 열리지 않아 탭에 Chrome 오류 화면이 떠 있을 때 모델에게 알릴 말.
 // 판단은 Chrome이 webNavigation.onErrorOccurred로 준 오류 코드(net 오류 목록)로만 한다. 페이지 글자는 보지 않는다.
 
@@ -29,12 +30,7 @@ export function navErrorKind(error: string): NavErrorKind {
 
 // 주소는 출처(scheme://host)만 알린다. 경로·쿼리에 실린 값은 넘기지 않는다.
 function originOf(url: string): string {
-  try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.origin : "";
-  } catch {
-    return "";
-  }
+  return httpOrigin(url) ?? "";
 }
 
 const REASON: Record<NavErrorKind, string> = {

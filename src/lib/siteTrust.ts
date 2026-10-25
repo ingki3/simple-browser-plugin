@@ -1,6 +1,7 @@
 // 자동 실행의 사이트 경계(백그라운드 전용). 공개 접미사 목록(tldts)을 쓰므로 content script에서 import하지 않는다
 // (content에서 쓰는 결제·개인정보 신호는 autoApprove.ts에 있다).
 import { parse } from "tldts";
+import { httpOrigin } from "./url.ts";
 import {
   DESTRUCTIVE_REASON,
   decodeDeepText,
@@ -38,12 +39,7 @@ function isSharedHost(host: string): boolean {
 
 // 신뢰 사이트로 기억할 값(웹 주소의 출처). 웹 주소가 아니면 null.
 export function siteOf(url: string): string | null {
-  try {
-    const u = new URL(url);
-    return /^https?:$/.test(u.protocol) ? u.origin : null;
-  } catch {
-    return null;
-  }
+  return httpOrigin(url);
 }
 
 

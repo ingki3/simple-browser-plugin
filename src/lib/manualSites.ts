@@ -1,3 +1,4 @@
+import { httpOrigin } from "./url.ts";
 // "직접 조작할 사이트"(0.2.2): 사용자가 고른 사이트에서는 도우미가 클릭·입력을 하지 않고, 대상을 화면에 표시해 사용자가
 // 직접 하게 한다(손 넘기기). 자동 조작을 막는 사이트(예매 등)를 존중하는 방법이다. 사이트는 사용자의 명시적 선택으로만
 // 정하고(주소의 출처), 페이지 글자로 짐작해 넣지 않는다.
@@ -6,13 +7,7 @@ export const MAX_MANUAL_SITES = 50;
 
 // 사이트 키: http(s) 주소의 출처(scheme://host[:port]). 웹 주소가 아니면 null.
 export function manualSiteOf(url: string | undefined): string | null {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    return /^https?:$/.test(u.protocol) ? u.origin : null;
-  } catch {
-    return null;
-  }
+  return httpOrigin(url);
 }
 
 // 저장된 값 정리: 출처 형태의 문자열만, 중복 없이, 최대 MAX_MANUAL_SITES개.
