@@ -2,6 +2,7 @@
 // 여기에는 DOM 없이 계산하는 부분만 둔다(비교·문구·이동 판정). DOM 쪽은 src/content/targets.ts.
 
 import type { PageRegion } from "./messages";
+import { httpOrigin } from "./url.ts";
 
 // 대상 요소를 사람이 알아볼 수 있게 적은 것. find_* 때 기록하고, 승인 카드와 실행 직전 확인에 쓴다.
 export interface TargetInfo {
@@ -343,12 +344,7 @@ export function fillCard(
 export type NavKind = "none" | "fragment" | "same_origin" | "cross_origin" | "error";
 
 function originOf(url: string): string {
-  try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.origin : "";
-  } catch {
-    return "";
-  }
+  return httpOrigin(url) ?? "";
 }
 
 // 클릭 전후 탭 주소로 이동 종류를 판정한다.

@@ -17,6 +17,7 @@ import {
   type StitchResult,
 } from "@/lib/pageCapture";
 import type { BgToContent, ContentResponse } from "@/lib/messages";
+import { withTimeout } from "@/lib/async";
 import { waitForNavigationSettle } from "../navigation";
 import { runOffscreenJob } from "../offscreen";
 import { callContentTool, isMissingReceiver, resolveTurnTab, type TurnTab } from "./handlers";
@@ -252,20 +253,7 @@ export async function captureVisible(
 
 // 시간 제한과 중단 신호를 함께 거는 기다림(페이지가 응답하지 않아도 도구가 무기한 붙잡히지 않게).
 function bounded<T>(p: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  const stop = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-    if (signal) {
-      onAbort = () => reject(new Error("중단되어 캡처를 멈췄습니다."));
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    }
-  });
-  return Promise.race([p, stop]).finally(() => {
-    clearTimeout(timer);
-    if (onAbort) signal?.removeEventListener("abort", onAbort);
-  });
+  return withTimeout(p, timeoutMs, "timeout", { signal, abortMessage: "중단되어 캡처를 멈췄습니다." });
 }
 
 // 승인한 그 문서(documentId)에만 보낸다. 문서가 바뀌었으면 받는 쪽이 없어 실패한다.

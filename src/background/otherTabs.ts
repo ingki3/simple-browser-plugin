@@ -1,4 +1,6 @@
 import type { ContentResponse } from "@/lib/messages";
+import { withTimeout } from "@/lib/async";
+import { httpOrigin } from "@/lib/url";
 import {
   currentToolTab,
   INJECT_READY_DELAYS_MS,
@@ -40,12 +42,9 @@ function isWebUrl(url: string | undefined): url is string {
   return !!url && /^https?:\/\//i.test(url);
 }
 
+// 후보는 웹 주소만이라(eligible) http(s) 출처, 아니면 빈 글자.
 function originOf(url: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return "";
-  }
+  return httpOrigin(url) ?? "";
 }
 
 async function topDocumentId(tabId: number): Promise<string | null> {
@@ -188,10 +187,11 @@ type PageText = ContentResponse<{ url: string; title: string; mainText: string }
 // 실패한다)한 뒤 잠깐씩 기다리며 다시 보낸다.
 async function readTabText(tabId: number, documentId: string, url: string, signal?: AbortSignal): Promise<PageText> {
   const send = () =>
-    Promise.race([
-      chrome.tabs.sendMessage(tabId, { kind: "read_page_text", expectUrl: url }, { documentId }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("응답 시간 초과")), READ_TIMEOUT_MS)),
-    ]) as Promise<PageText>;
+    withTimeout(
+      chrome.tabs.sendMessage(tabId, { kind: "read_page_text", expectUrl: url }, { documentId }) as Promise<PageText>,
+      READ_TIMEOUT_MS,
+      "응답 시간 초과",
+    );
   try {
     return await send();
   } catch (err) {
