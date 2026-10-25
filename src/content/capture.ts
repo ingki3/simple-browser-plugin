@@ -26,6 +26,9 @@ interface SavedProp {
 interface SavedAttr {
   attr: string | null;
   cssText: string;
+  // 이 세션이 마지막으로 바꾼 직후의 해석 결과. 되돌릴 때 이것과 같으면 그 사이 페이지가 inline 스타일을 건드리지 않은
+  // 것이라 원래 속성 글자를 통째로 되돌린다(shorthand를 지우면 함께 지워지는 longhand까지, #65).
+  after: string;
 }
 
 interface Session {
@@ -46,10 +49,12 @@ function setImportant(s: Session, el: HTMLElement, prop: string, value: string):
   if (!props) s.touched.set(el, (props = new Set()));
   if (!props.has(prop)) {
     props.add(prop);
-    if (!s.attrs.has(el)) s.attrs.set(el, { attr: el.getAttribute("style"), cssText: el.style.cssText });
+    if (!s.attrs.has(el)) s.attrs.set(el, { attr: el.getAttribute("style"), cssText: el.style.cssText, after: "" });
     s.saved.push({ el, prop, value: el.style.getPropertyValue(prop), priority: el.style.getPropertyPriority(prop) });
   }
   el.style.setProperty(prop, value, "important");
+  const a = s.attrs.get(el);
+  if (a) a.after = el.style.cssText;
 }
 
 // 문서(열린 shadow root 포함)의 요소. 너무 큰 문서는 앞부분만 본다.
@@ -128,7 +133,21 @@ function restore(): void {
   if (!s) return;
   session = null;
   if (s.timer) clearTimeout(s.timer);
+  // 페이지가 그 사이 inline 스타일을 건드리지 않은 요소는 원래 속성 글자를 통째로 되돌린다.
+  const whole = new Set<HTMLElement>();
+  for (const [el, a] of s.attrs) {
+    try {
+      if (el.style.cssText !== a.after) continue;
+      if (a.attr === null) el.removeAttribute("style");
+      else el.setAttribute("style", a.attr);
+      whole.add(el);
+    } catch {
+      /* 요소가 사라졌으면 그대로 */
+    }
+  }
+  // 페이지가 바꾼 요소는 그 변경을 두고 우리가 바꾼 속성만 되돌린다.
   for (const p of s.saved.reverse()) {
+    if (whole.has(p.el)) continue;
     try {
       if (p.value) p.el.style.setProperty(p.prop, p.value, p.priority);
       else p.el.style.removeProperty(p.prop);
@@ -137,6 +156,7 @@ function restore(): void {
     }
   }
   for (const [el, a] of s.attrs) {
+    if (whole.has(el)) continue;
     if (el.style.cssText !== a.cssText) continue;
     // 속성 글자를 먼저 읽어 CSSOM 변경을 속성에 반영시킨 뒤 지운다(반영이 늦게 일어나면 지운 뒤 빈 style=""이 생긴다).
     if (el.getAttribute("style") === a.attr) continue;
