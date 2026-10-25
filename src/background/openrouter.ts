@@ -9,10 +9,9 @@ import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./
 import { discardLinkCall, setChosenLinks } from "./linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "./downloadChoices";
 import { candidatesMessage, makeOffer } from "./savedPagesStore";
-import { AGENT_MAX_TOKENS, agentReasoningConfig, agentRetryReasoningConfig } from "@/lib/models";
+import { AGENT_MAX_TOKENS } from "@/lib/models";
+import { providerAdapter, type ChatStream } from "@/lib/providers";
 import {
-  openRouterRequest,
-  readOpenRouterStream,
   type OpenRouterContentPart,
   type OpenRouterMessage,
   type OpenRouterToolCall,
@@ -741,9 +740,9 @@ export class ChatAgent {
       clearTimeout(connectTimer);
       return null;
     }
-    let stream: Response;
+    let stream: ChatStream;
     try {
-      stream = await openRouterRequest(
+      stream = await providerAdapter().openStream(
         apiKey,
         {
           model,
@@ -756,15 +755,14 @@ export class ChatAgent {
             ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
           ],
           tools: availableTools().map((fn) => ({
-            type: "function",
+            type: "function" as const,
             function: fn,
           })),
           // 기록에 도구 호출·결과가 있어 도구 정의는 그대로 보내고, 마무리 요청은 도구를 부르지 못하게 한다.
-          tool_choice: opts.wrapUpNote ? "none" : "auto",
-          parallel_tool_calls: false,
-          reasoning: opts.lowReasoning ? agentRetryReasoningConfig(model) : agentReasoningConfig(model),
-          max_tokens: AGENT_MAX_TOKENS,
-          stream: true,
+          toolChoice: opts.wrapUpNote ? "none" : "auto",
+          parallelToolCalls: false,
+          reasoning: opts.lowReasoning ? "agent_low" : "agent",
+          maxTokens: AGENT_MAX_TOKENS,
         },
         controller.signal,
       );
@@ -790,8 +788,7 @@ export class ChatAgent {
     let thoughtChars = 0;
     let finishReason: string | undefined;
     try {
-      await readOpenRouterStream(
-        stream,
+      await stream.read(
         (chunk) => {
           chunkCount += 1;
           const choice = chunk.choices?.[0];
