@@ -59,7 +59,8 @@ export interface OfferContext {
 const MAX_CONTEXT_QUERY = 1000;
 const MAX_CONTEXT_ANSWER = 1500;
 const MAX_CONTEXT_PAGE = 3000;
-const contexts = new Map<string, { query: string; answer: string; page: string }>();
+// titleFromUrl: 탭 제목이 없어 주소를 제목으로 쓴 경우(초안 요청에는 쿼리·해시가 든 그 제목을 보내지 않는다).
+const contexts = new Map<string, { query: string; answer: string; page: string; titleFromUrl: boolean }>();
 
 async function load(): Promise<SavedLink[]> {
   const obj = await chrome.storage.local.get(SAVED_PAGES_KEY);
@@ -109,6 +110,7 @@ export async function makeOffer(
     query: (context?.query ?? "").slice(0, MAX_CONTEXT_QUERY),
     answer: (context?.answer ?? "").slice(0, MAX_CONTEXT_ANSWER),
     page: page.replace(/\s+/g, " ").trim().slice(0, MAX_CONTEXT_PAGE),
+    titleFromUrl: !normalizeName(tab.title ?? ""),
   });
   while (offers.size > MAX_OFFERS) {
     const oldest = offers.keys().next().value;
@@ -142,7 +144,8 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
     JSON.stringify({
       request: ctx?.query ?? "",
       answer: ctx?.answer ?? "",
-      title: offer.title,
+      // 제목이 없어 주소를 제목으로 쓴 경우는 보내지 않는다(쿼리 값이 제목으로 새지 않게 — 주소는 base·query로만).
+      title: ctx?.titleFromUrl === false ? offer.title : "",
       base: offer.url.split("?")[0].split("#")[0],
       query: offer.params.map((p, i) => (offer.warning ? { index: i, key: p.key } : { index: i, key: p.key, value: p.value })),
       page: ctx?.page ?? "",
