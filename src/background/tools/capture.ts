@@ -324,9 +324,21 @@ export async function captureFullPage(
   let hidden = 0;
   let failure: unknown = null;
   // 시작 단계가 세션을 열고 스타일을 바꾸는 순간부터 복원 범위에 넣는다(아래 확인이 실패해도 바로 되돌린다).
+  // 시작 호출은 중단·시간 초과로 기다림을 그만둬도 계속 진행돼(주입·재시도 대기) 복원 뒤에 늦게 세션을 열 수 있다(#65).
+  // 끝났는지 기억해 두고, 복원할 때까지 끝나지 않았으면 끝난 뒤 같은 세션 값으로 한 번 더 되돌린다.
+  let beginSettled = false;
+  const begin = callContentTool<CaptureMetrics>("capture_page", { fullPage: true, token }, callId, turnTab);
+  begin.then(
+    () => {
+      beginSettled = true;
+    },
+    () => {
+      beginSettled = true;
+    },
+  );
   try {
     try {
-      m = await bounded(callContentTool<CaptureMetrics>("capture_page", { fullPage: true, token }, callId, turnTab), 20_000, signal);
+      m = await bounded(begin, 20_000, signal);
     } catch (err) {
       console.warn("[capture_page] begin failed", err);
       checkAbort(signal);
@@ -378,7 +390,16 @@ export async function captureFullPage(
     failure = err;
   }
   // 오류·중단에도 원래 스크롤 위치와 스타일로 되돌린다(시간 제한 안에서 — 응답이 없으면 페이지의 자가 복원에 맡긴다).
+  // 복원을 보내기 전에 시작이 끝났는지 본다. 아직이면(복원 응답을 기다리는 사이 끝나 늦게 세션을 열 수 있음) 끝난 뒤
+  // 한 번 더 되돌린다. 같은 세션 값을 가진 쪽만 되돌리므로 그 사이 새 캡처가 시작됐어도 그 세션은 건드리지 않는다.
+  const beginDoneBeforeRestore = beginSettled;
   const restored = await restorePage(t, token);
+  if (!beginDoneBeforeRestore) {
+    void begin.then(
+      () => restorePage(t, token),
+      () => {},
+    );
+  }
   if (failure) {
     if (!restored && failure instanceof Error) throw new Error(`${failure.message} ${RESTORE_LATE}`);
     throw failure;
