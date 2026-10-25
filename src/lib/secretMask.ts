@@ -155,6 +155,20 @@ export function maskMessages<T extends MessageLike>(messages: readonly T[], secr
     if (r.masked) masked = true;
     return r.text;
   };
+  // 도구 호출 인자(JSON 글자)는 풀어서 문자열 값만 가리고 다시 직렬화한다(구분자 ":" 같은 값이 문법을 깨지 않게).
+  // 풀 수 없는 인자는 글자 그대로 가린다.
+  const args = (raw: string): string => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return text(raw);
+    }
+    const r = maskDeep(parsed, secrets);
+    if (!r.masked) return raw;
+    masked = true;
+    return JSON.stringify(r.value);
+  };
   const content = (c: unknown): unknown => {
     if (typeof c === "string") return text(c);
     if (Array.isArray(c)) {
@@ -170,7 +184,7 @@ export function maskMessages<T extends MessageLike>(messages: readonly T[], secr
     const next = { ...m, ...(m.content !== undefined ? { content: content(m.content) } : {}) } as T;
     if (Array.isArray(m.tool_calls)) {
       (next as MessageLike).tool_calls = m.tool_calls.map((c) =>
-        typeof c.function?.arguments === "string" ? { ...c, function: { ...c.function, arguments: text(c.function.arguments) } } : c,
+        typeof c.function?.arguments === "string" ? { ...c, function: { ...c.function, arguments: args(c.function.arguments) } } : c,
       );
     }
     return next;

@@ -51,8 +51,10 @@ function listen(): void {
 export async function rememberSecrets(tabId: number, values: string[]): Promise<void> {
   listen();
   await update((store) => {
-    const total = Object.values(store).reduce((n, v) => n + v.length, 0);
-    if (total + values.length > MAX_SECRETS) {
+    // 이미 목록에 있는 값은 새로 늘지 않으므로 세지 않는다.
+    const known = new Set(Object.values(store).flat());
+    const added = new Set(values.filter((v) => v && !known.has(v)));
+    if (known.size + added.size > MAX_SECRETS) {
       throw new SecretsFullError("가릴 값 목록이 가득 차 더 넣지 않았습니다. 브라우저를 다시 시작하면 비워집니다. 사용자에게 직접 로그인해 달라고 하세요.");
     }
     // 키를 숫자가 아닌 글자("t12")로 둬야 객체 키가 넣은 순서를 지킨다(정수 모양 키는 숫자 순으로 정렬된다).

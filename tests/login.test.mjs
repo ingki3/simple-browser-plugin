@@ -205,6 +205,9 @@ test("가리기: 메시지는 본문만(역할·도구 id는 그대로)", () => 
   assert.equal(r.value[0].content[0].type, "text");
   assert.ok(!r.value[0].content[0].text.includes("user"));
   assert.ok(!r.value[2].content.includes("user"));
+  // 도구 호출 인자는 JSON으로 남는다(값이 구분자 모양이어도).
+  const sep = maskMessages([{ role: "assistant", content: null, tool_calls: [{ id: "a", type: "function", function: { name: "x", arguments: '{"id":"f1"}' } }] }], ['":"']);
+  assert.doesNotThrow(() => JSON.parse(sep.value[0].tool_calls[0].function.arguments));
 });
 
 test("가리기: JSON 값 안 깊이(키는 그대로)", () => {
