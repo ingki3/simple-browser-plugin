@@ -537,9 +537,12 @@ function linkVia(trigger: Element, popup: Element, el: Element): "controls" | "o
   return null;
 }
 
-// ref가 popup을 담고, 그 안의 팝업 역할 요소가 popup 하나뿐인지(같은 트리 안만 본다).
+// ref가 popup을 담고, 그 안의 팝업 역할 요소가 popup 하나뿐인지(같은 트리 안만 본다). ref 자신이 팝업이거나 다른 팝업 안에
+// 있으면 중첩 메뉴일 수 있어 래퍼로 보지 않는다(안쪽 목록을 펼친 진짜 트리거의 위험 정보를 건너뛰지 않게).
 function wrapsOnly(ref: Element, popup: Element): boolean {
   if (ref === popup || !ref.contains(popup)) return false;
+  if (POPUP_ROLES.has((ref.getAttribute("role") ?? "").trim().toLowerCase())) return false;
+  if (popupOf(ref as HTMLElement) !== ref) return false;
   for (const p of ref.querySelectorAll("[role]")) {
     if (p !== popup && POPUP_ROLES.has((p.getAttribute("role") ?? "").trim().toLowerCase())) return false;
   }
