@@ -173,7 +173,7 @@ async function installMockModel(sw) {
       });
     globalThis.fetch = async (url, init) => {
       // 모델 제공자 엔드포인트(#97)만 흉내 낸다. 요청 주소·본문은 __modelReqs에 남긴다.
-      if (!/openrouter\.ai|api\.openai\.com/.test(String(url))) return realFetch(url, init);
+      if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
       (globalThis.__modelReqs ??= []).push({ url: String(url), body });
       if (body.response_format) {
@@ -206,7 +206,7 @@ async function installMockModel(sw) {
         out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       } else if (step) out = step;
       const chunks = out.tool
-        ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "call" + ++globalThis.__n, type: "function", function: { name: out.tool, arguments: JSON.stringify(out.args) } }] } }] }]
+        ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "call" + ++globalThis.__n, type: "function", function: { name: out.tool, arguments: JSON.stringify(out.args) }, ...(out.extra ? { extra_content: out.extra } : {}) }] } }] }]
         : [{ choices: [{ delta: { content: out.text } }] }];
       chunks.push({ choices: [{ delta: {}, finish_reason: out.tool ? "tool_calls" : "stop" }] });
       return sse(chunks);

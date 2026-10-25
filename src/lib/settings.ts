@@ -3,6 +3,7 @@
 import { normalizeManualSites } from "./manualSites.ts";
 import { isProviderId, type ProviderId } from "./providers/types.ts";
 import { OPENAI_DEFAULT_MODEL } from "./providers/openai.ts";
+import { GEMINI_DEFAULT_MODEL } from "./providers/gemini.ts";
 import { DEFAULT_MODEL, normalizeModelId } from "./models.ts";
 import {
   DEFAULT_CSV_MAX_CHARS,
@@ -40,8 +41,8 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
   return {
     provider: isProviderId(r.provider) ? r.provider : DEFAULT_SETTINGS.provider,
     openRouterApiKey: typeof r.openRouterApiKey === "string" ? r.openRouterApiKey : DEFAULT_SETTINGS.openRouterApiKey,
-    apiKeys: stringFields(r.apiKeys, ["openai"]),
-    providerModels: stringFields(r.providerModels, ["openai"]),
+    apiKeys: stringFields(r.apiKeys, ["openai", "gemini"]),
+    providerModels: stringFields(r.providerModels, ["openai", "gemini"]),
     model: normalizeModelId(r.model),
     systemPrompt:
       typeof r.systemPrompt === "string" ? r.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH) : DEFAULT_SETTINGS.systemPrompt,
@@ -71,8 +72,8 @@ export function settingsForStorage(next: Settings): Settings {
     maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
     csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     manualSites: normalizeManualSites(next.manualSites),
-    apiKeys: stringFields(next.apiKeys, ["openai"]),
-    providerModels: stringFields(next.providerModels, ["openai"]),
+    apiKeys: stringFields(next.apiKeys, ["openai", "gemini"]),
+    providerModels: stringFields(next.providerModels, ["openai", "gemini"]),
   };
 }
 
@@ -89,6 +90,9 @@ function stringFields<K extends string>(v: unknown, keys: readonly K[]): Partial
 
 // 지금 쓸 제공자·키·모델(#97). 키가 없으면 apiKey는 빈 글자.
 export function activeModel(s: Settings): { provider: ProviderId; apiKey: string; model: string } {
+  if (s.provider === "gemini") {
+    return { provider: "gemini", apiKey: s.apiKeys.gemini ?? "", model: s.providerModels.gemini || GEMINI_DEFAULT_MODEL };
+  }
   if (s.provider === "openai") {
     return { provider: "openai", apiKey: s.apiKeys.openai ?? "", model: s.providerModels.openai || OPENAI_DEFAULT_MODEL };
   }

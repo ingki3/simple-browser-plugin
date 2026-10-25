@@ -91,4 +91,20 @@ export default [
       expect(notice && enabledAfter === false, `바뀐 뒤 안내·버튼 막힘(notice=${notice}, enabled=${enabledAfter})`);
     },
   },
+  {
+    name: "Gemini 제공자: 호환 엔드포인트로, 도구 호출의 thought_signature를 다음 요청에 돌려준다",
+    async run(h) {
+      await h.settings({ provider: "gemini", apiKeys: { gemini: "AIza-test" } });
+      const sig = { google: { thought_signature: "sig-123" } };
+      const r = await h.turn([{ tool: "describe_page", args: {}, extra: sig }, { text: "끝" }]);
+      okResult(r, "describe_page");
+      const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+      expect(reqs.length === 2 && reqs.every((q) => q.url === "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"), `엔드포인트(${reqs.map((q) => q.url).join(", ")})`);
+      const b = reqs[1].body;
+      expect(b.model === "gemini-3.6-flash" && b.reasoning_effort === "medium" && b.max_tokens > 0, `형식(${JSON.stringify({ ...b, messages: undefined, tools: undefined })})`);
+      expect(!("parallel_tool_calls" in b) && !("reasoning" in b), "보내지 않는 필드");
+      const call = b.messages.flatMap((m) => m.tool_calls ?? [])[0];
+      expect(JSON.stringify(call?.extra_content) === JSON.stringify(sig), `서명 돌려줌(${JSON.stringify(call)})`);
+    },
+  },
 ];

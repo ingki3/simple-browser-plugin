@@ -852,6 +852,8 @@ export class ChatAgent {
             if (part.function?.arguments) {
               current.function.arguments += part.function.arguments;
             }
+            // 다음 요청에 돌려줘야 하는 제공자 값(Gemini thought_signature)은 그대로 둔다.
+            if (part.extra_content !== undefined) current.extra_content = part.extra_content;
             functionCallParts.set(part.index, current);
           }
           if (choice?.finish_reason) finishReason = choice.finish_reason;

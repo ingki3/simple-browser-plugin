@@ -110,3 +110,45 @@ test("설정: 제공자·제공자별 키·모델 정리와 activeModel", () => 
   assert.equal(normalizeSettings({ provider: "nope" }).provider, "openrouter");
   assert.deepEqual(normalizeSettings({ apiKeys: "x" }).apiKeys, {});
 });
+
+import { geminiPayload } from "../src/lib/providers/gemini.ts";
+
+const withSig = [
+  { role: "user", content: "hi" },
+  { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "x", arguments: "{}" }, extra_content: { google: { thought_signature: "s" } } }], reasoning: "r" },
+  { role: "tool", tool_call_id: "c1", name: "x", content: "{}" },
+];
+
+test("Gemini 어댑터: 호환 엔드포인트 형식, thought_signature(extra_content)는 돌려주고 OpenRouter 전용 필드는 뺀다", () => {
+  const b = geminiPayload({ model: "gemini-3.6-flash", messages: withSig, tools, toolChoice: "auto", parallelToolCalls: false, reasoning: "agent", maxTokens: 8192 }, true);
+  assert.deepEqual(b, {
+    model: "gemini-3.6-flash",
+    messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "x", arguments: "{}" }, extra_content: { google: { thought_signature: "s" } } }] },
+      { role: "tool", tool_call_id: "c1", content: "{}" },
+    ],
+    tools,
+    tool_choice: "auto",
+    max_tokens: 8192,
+    reasoning_effort: "medium",
+    stream: true,
+  });
+  assert.equal(geminiPayload({ model: "m", messages: msgs, maxTokens: 10, reasoning: "off", temperature: 0 }, false).reasoning_effort, "minimal");
+  assert.equal(geminiPayload({ model: "m", messages: msgs, maxTokens: 10, reasoning: "agent_low" }, false).reasoning_effort, "low");
+});
+
+test("다른 제공자의 extra_content는 OpenAI·OpenRouter 어댑터가 보내지 않는다", () => {
+  const oa = openAiPayload({ model: "gpt-5", messages: withSig, maxTokens: 10, reasoning: "agent" }, false);
+  assert.ok(!JSON.stringify(oa).includes("thought_signature"));
+  const or = openRouterPayload({ model: "deepseek/deepseek-v4-pro", messages: withSig, maxTokens: 10, reasoning: "agent" }, false);
+  assert.ok(!JSON.stringify(or).includes("thought_signature"));
+  // 서명이 없는 기록은 OpenRouter에 그대로(같은 객체).
+  assert.equal(openRouterPayload({ model: "x/y", messages: msgs, maxTokens: 10, reasoning: "agent" }, false).messages[0], msgs[0]);
+});
+
+test("설정: Gemini 키·모델과 activeModel", () => {
+  const g = normalizeSettings({ provider: "gemini", apiKeys: { gemini: "AIza" }, providerModels: { gemini: "gemini-3.1-pro-preview" } });
+  assert.deepEqual(activeModel(g), { provider: "gemini", apiKey: "AIza", model: "gemini-3.1-pro-preview" });
+  assert.equal(activeModel(normalizeSettings({ provider: "gemini" })).model, "gemini-3.6-flash");
+});
