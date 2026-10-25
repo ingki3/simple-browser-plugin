@@ -1,5 +1,5 @@
 // 선택지 관계(#43 B·0.2.8), 입력값 보호(#43), 숨긴 select + 대리 콤보박스(#88).
-import { expect, lastTool } from "../lib.mjs";
+import { expect, okResult } from "../lib.mjs";
 
 const findC = (query) => ({ tool: "find_clickables", args: query ? { query } : {} });
 
@@ -28,7 +28,7 @@ export default [
     async run(h) {
       await h.settings({ autoApprove: true });
       const r = await h.turn([findC("김해"), { click: "김해국제공항", role: "option" }], { path: "/w" });
-      const found = r.tools.find((t) => t.name === "find_clickables")?.result ?? [];
+      const found = okResult(r, "find_clickables");
       expect(found.some((c) => c.role === "option"), `선택지가 나와야 한다(${JSON.stringify(found)})`);
       expect(r.out === "김해", `눌러야 한다(out='${r.out}')`);
     },
@@ -38,8 +38,10 @@ export default [
     pages: { "/d": dialogMenu },
     async run(h) {
       await h.settings({ autoApprove: true });
-      const r = await h.turn([findC("선택 항목"), { text: "끝" }], { path: "/d" });
-      const found = lastTool(r, "find_clickables")?.result ?? [];
+      const r = await h.turn([findC(), { text: "끝" }], { path: "/d" });
+      const found = okResult(r, "find_clickables");
+      expect(Array.isArray(found), `목록이어야 한다(${JSON.stringify(found)})`);
+      expect(found.some((c) => c.text === "관리"), `같은 페이지의 버튼은 나와야 한다(${JSON.stringify(found)})`);
       expect(!found.some((c) => c.role === "menuitem"), `메뉴 항목이 나오면 안 된다(${JSON.stringify(found)})`);
     },
   },
@@ -48,8 +50,11 @@ export default [
     pages: { "/w": wrapped },
     async run(h) {
       const r = await h.turn([{ tool: "find_form_fields", args: {} }, findC(), { text: "끝" }], { path: "/w" });
+      const fields = okResult(r, "find_form_fields");
+      const clicks = okResult(r, "find_clickables");
+      expect(fields.length === 2 && fields.every((f) => f.hasValue === true), `값이 있는 칸 2개(${JSON.stringify(fields)})`);
+      expect(clicks.filter((c) => c.role === "option").length === 2, `선택지 2개가 나와야 한다(${JSON.stringify(clicks)})`);
       const json = JSON.stringify(r.tools);
-      expect(r.tools.length >= 2, `도구 결과 2개(${r.tools.length})`);
       expect(!json.includes("서울") && !json.includes("부산"), `입력값이 결과에 있으면 안 된다(${json.slice(0, 300)})`);
     },
   },
@@ -59,10 +64,10 @@ export default [
     async run(h) {
       await h.settings({ autoApprove: true });
       const r = await h.turn([{ tool: "find_form_fields", args: {} }, { fillType: "select", value: "2023년" }], { path: "/s" });
-      const fields = r.tools.find((t) => t.name === "find_form_fields")?.result ?? [];
+      const fields = okResult(r, "find_form_fields");
       const sel = fields.find((f) => f.type === "select");
       expect(sel?.options?.some((o) => o.label === "2023년"), `선택지 전송(${JSON.stringify(fields)})`);
-      const res = lastTool(r, "fill_form_fields")?.result;
+      const res = okResult(r, "fill_form_fields");
       expect(res?.filledCount === 1 && r.out === "연식 2023", `값 반영(${JSON.stringify(r.tools).slice(0, 600)}, card=${r.stoppedAtCard}, out='${r.out}')`);
     },
   },

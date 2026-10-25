@@ -1,5 +1,5 @@
 // 승인 규칙: 자동 실행 꺼짐·켜짐, 결제 단서, 요청한 사이트 밖 이동, 늘 묻는 동작(삭제).
-import { expect, lastTool } from "../lib.mjs";
+import { expect, okResult } from "../lib.mjs";
 
 const findC = { tool: "find_clickables", args: {} };
 
@@ -52,7 +52,7 @@ export default [
       await h.settings({ autoApprove: true });
       const r = await h.turn([{ tool: "find_form_fields", args: {} }, { fill: "검색어", value: "노트북" }]);
       expect(!r.stoppedAtCard, "카드가 뜨면 안 된다");
-      const res = lastTool(r, "fill_form_fields")?.result;
+      const res = okResult(r, "fill_form_fields");
       expect(res?.filledCount === 1, `1칸 반영(${JSON.stringify(res)})`);
     },
   },

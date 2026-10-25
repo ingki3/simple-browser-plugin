@@ -108,6 +108,7 @@ export async function startHarness() {
     let cards = 0;
     const started = Date.now();
     let stoppedAtCard = false;
+    let finished = false;
     while (Date.now() - started < maxWaitMs) {
       await panel.waitForTimeout(200);
       const pending = panel.locator(".tool-pending:not(.resolved)");
@@ -123,8 +124,13 @@ export async function startHarness() {
         await panel.waitForTimeout(300);
         continue;
       }
-      if (!(await panel.locator("button.composer-btn.danger").count())) break;
+      if (!(await panel.locator("button.composer-btn.danger").count())) {
+        finished = true;
+        break;
+      }
     }
+    // 카드에서 일부러 멈춘 것이 아니면 턴이 끝나야 한다(시간 초과는 실패 — 강제로 멈춘 턴을 통과로 보지 않게).
+    if (!finished && !stoppedAtCard) throw new Fail(`턴이 ${maxWaitMs}ms 안에 끝나지 않았습니다`);
     const tools = await sw.evaluate(() => globalThis.__toolLog);
     const out = await tab.locator("#out").innerText().catch(() => null);
     if (await panel.locator("button.composer-btn.danger").count()) {
@@ -217,4 +223,12 @@ export function lastTool(r, name) {
 // 백그라운드 로그의 도구 결과 요약 줄(패널·동작 기록에 보이는 것). 없으면 빈 글자.
 export function resultLog(r, name) {
   return [...r.logs].reverse().find((l) => l.includes("tool:result") && l.includes(` ${name} `)) ?? "";
+}
+
+// 이름이 같은 마지막 도구 결과가 성공이어야 하고, 그 result를 돌려준다(오류·없음이면 실패).
+export function okResult(r, name) {
+  const t = lastTool(r, name);
+  expect(t, `${name} 결과가 없다`);
+  expect(!t.error && t.result !== undefined, `${name} 오류: ${t.error ?? "result 없음"}`);
+  return t.result;
 }
