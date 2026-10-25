@@ -107,4 +107,78 @@ export default [
       expect(JSON.stringify(call?.extra_content) === JSON.stringify(sig), `서명 돌려줌(${JSON.stringify(call)})`);
     },
   },
+  {
+    name: "Claude 제공자: Messages API 형식·헤더, 도구 왕복, 생각 블록과 서명을 다음 요청에 돌려준다",
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
+      const r = await h.turn([{ tool: "describe_page", args: {}, thinking: "페이지를 먼저 본다" }, { text: "끝" }]);
+      okResult(r, "describe_page");
+      const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+      expect(reqs.length === 2 && reqs.every((q) => q.url === "https://api.anthropic.com/v1/messages"), `엔드포인트(${reqs.map((q) => q.url).join(", ")})`);
+      const hd = reqs[0].headers ?? {};
+      expect(hd["x-api-key"] === "sk-ant-test" && hd["anthropic-version"] && hd["anthropic-dangerous-direct-browser-access"] === "true" && !hd.Authorization, `헤더(${Object.keys(hd).join(",")})`);
+      const b = reqs[1].body;
+      expect(typeof b.system === "string" && b.system.length > 0 && b.messages.every((m) => m.role !== "system"), "system 필드");
+      expect(b.tools?.[0]?.input_schema && b.tool_choice?.type === "auto" && b.tool_choice.disable_parallel_tool_use === true, `도구 형식(${JSON.stringify(b.tool_choice)})`);
+      expect(b.thinking?.type === "adaptive" && b.output_config?.effort === "medium" && !("temperature" in b), `생각(${JSON.stringify(b.thinking)})`);
+      // 기록은 덧붙이기만: 두 번째 요청의 첫 메시지(사용자 요청 + 그때 붙인 현재 시각 안내)가 첫 요청과 같다.
+      expect(JSON.stringify(b.messages[0]) === JSON.stringify(reqs[0].body.messages[0]), "앞 문맥 그대로");
+      expect(reqs[0].body.messages[0].content.some((c) => c.type === "text" && c.text.includes("현재 시각")), "첫 요청의 현재 시각 안내가 기록에 남음");
+      const asst = b.messages.find((m) => m.role === "assistant");
+      expect(asst?.content?.[0]?.type === "thinking" && asst.content[0].signature === "sig-10" && asst.content[1]?.type === "tool_use", `생각·도구 블록(${JSON.stringify(asst?.content).slice(0, 300)})`);
+      const res = b.messages.flatMap((m) => m.content).find((c) => c.type === "tool_result");
+      expect(res && res.tool_use_id === asst.content[1].id, "tool_result 짝");
+      // 도구 결과 다음 요청에는 도구 결과 뒤에 글자 안내를 붙이지 않는다(빈 응답 방지).
+      const lastUser = b.messages.at(-1);
+      expect(lastUser.role === "user" && lastUser.content.every((c) => c.type === "tool_result"), `도구 결과만(${JSON.stringify(lastUser.content.map((c) => c.type))})`);
+      const roles = b.messages.map((m) => m.role).join(",");
+      expect(!/user,user|assistant,assistant/.test(roles), `역할 번갈음(${roles})`);
+    },
+  },
+  {
+    name: "Claude: 대화에 보낸 저장 링크 후보를 지우면 멈추고 다음 요청은 새 대화로(기록에서 거둘 수 없음)",
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
+      await h.sw.evaluate(async () => {
+        await chrome.storage.local.set({ savedPages: [{ name: "주문 조회", url: "https://shop.example/orders", site: "https://shop.example", savedAt: 1, uses: 0 }] });
+      });
+      await h.turn([{ text: "첫 답" }], { text: "첫 요청" });
+      const first = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1).body);
+      const hasCand = (b) => JSON.stringify(b.messages).includes("저장한 링크 후보 데이터");
+      expect(hasCand(first), "첫 요청에 후보");
+      await h.sw.evaluate(async () => {
+        await chrome.storage.local.set({ savedPages: [] });
+        globalThis.__modelReqs = [];
+      });
+      await h.turn([{ text: "보내면 안 됨" }], { noReload: true, text: "둘째 요청" });
+      const second = await h.sw.evaluate(() => globalThis.__modelReqs);
+      const text = await h.panel.locator("body").innerText();
+      expect(second.length === 0 && text.includes("새 대화로 시작합니다"), `둘째 요청은 보내지 않음(${second.length})`);
+      await h.turn([{ text: "새 대화 답" }], { noReload: true, text: "셋째 요청" });
+      const third = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1).body);
+      expect(!hasCand(third) && third.messages.length === 1, `새 대화(${third.messages.length}개, 후보 ${hasCand(third)})`);
+    },
+  },
+  {
+    name: "Claude: 마무리 요청은 후보를 싣지 않아도 저장 링크 삭제로 보지 않는다",
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" }, maxToolHops: 1, maxToolHopsVersion: 2 });
+      await h.sw.evaluate(async () => {
+        await chrome.storage.local.set({ savedPages: [{ name: "주문 조회", url: "https://shop.example/orders", site: "https://shop.example", savedAt: 1, uses: 0 }] });
+      });
+      // 도구를 계속 부르게 해 순환 한도 카드 → "그만두기"(마무리 요청)로 끝낸다.
+      const steps = Array.from({ length: 4 }, () => ({ tool: "describe_page", args: {} }));
+      await h.turn(steps, {
+        onCard: async (card, n) => {
+          if (n > 1) return;
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+      const last = reqs.at(-1)?.body;
+      const text = await h.panel.locator("body").innerText();
+      expect(last?.tool_choice?.type === "none", `마무리 요청을 보냄(${JSON.stringify(last?.tool_choice)})`);
+      expect(!text.includes("거둘 수 없어"), "삭제로 오판하지 않음");
+    },
+  },
 ];

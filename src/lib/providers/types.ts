@@ -2,9 +2,9 @@
 // OpenAI 호환 형식(OpenRouterMessage·OpenRouterStreamChunk)이고, 어댑터가 제공자 형식과 서로 바꾼다.
 import type { OpenRouterMessage, OpenRouterStreamChunk } from "../openrouter.ts";
 
-export type ProviderId = "openrouter" | "openai" | "gemini";
+export type ProviderId = "openrouter" | "openai" | "gemini" | "anthropic";
 
-export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai", "gemini"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai", "gemini", "anthropic"];
 
 export function isProviderId(v: unknown): v is ProviderId {
   return typeof v === "string" && (PROVIDER_IDS as readonly string[]).includes(v);
@@ -47,6 +47,9 @@ export interface ProviderAdapter {
   label: string;
   // 사용자 메시지의 파일 조각(type "file", PDF 첨부)을 받는지. 받지 않으면 PDF는 첨부하지 않고 read_document로 읽게 한다.
   supportsFileParts: boolean;
+  // 응답(생각 서명)이 그 앞의 문맥까지 서명해, 다음 요청에서 앞 문맥이 바뀌면 거부하는지(Anthropic). 그러면 요청 끝에 붙인
+  // 임시 안내(현재 시각·저장 링크 후보 등)도 그 응답 앞에 기록으로 남겨 기록을 덧붙이기만 한다.
+  signsContext: boolean;
   // 스트림 요청을 연다(연결·HTTP 오류는 여기서). 읽기는 돌려준 ChatStream으로.
   openStream(apiKey: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatStream>;
   // 스트림 없이 한 번 받는다. 응답 본문 글자(없으면 "").

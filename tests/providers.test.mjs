@@ -182,3 +182,155 @@ test("Gemini: Pro 모델의 생각 끄기는 low, 기록의 파일 조각은 안
   assert.ok(!JSON.stringify(b).includes("base64"));
   assert.equal(b.messages[0].content[1].type, "text");
 });
+
+import { anthropicMessages, anthropicPayload, anthropicStreamConverter, anthropicThinkingMode, anthropicThinkingModel } from "../src/lib/providers/anthropic.ts";
+
+test("Anthropic: 기록 변환 — system 분리, 같은 역할 합치기(tool_result 먼저), 생각·도구 블록, PDF document", () => {
+  const { system, messages } = anthropicMessages([
+    { role: "system", content: "규칙" },
+    { role: "user", content: [{ type: "text", text: "이 PDF 요약" }, { type: "file", file: { filename: "a.pdf", file_data: "data:application/pdf;base64,QUJD" } }] },
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "toolu_1", type: "function", function: { name: "describe_page", arguments: '{"a":1}' } }],
+      reasoning_details: [{ type: "anthropic.thinking", thinking: "생각", signature: "sig" }, { type: "reasoning.text", text: "다른 제공자" }],
+    },
+    { role: "tool", tool_call_id: "toolu_1", name: "describe_page", content: "{}" },
+    { role: "user", content: "[현재 시각]" },
+    { role: "assistant", content: "" },
+    { role: "assistant", content: "끝" },
+  ]);
+  assert.equal(system, "규칙");
+  assert.deepEqual(messages, [
+    { role: "user", content: [{ type: "text", text: "이 PDF 요약" }, { type: "document", source: { type: "base64", media_type: "application/pdf", data: "QUJD" } }] },
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "생각", signature: "sig" },
+        { type: "tool_use", id: "toolu_1", name: "describe_page", input: { a: 1 } },
+      ],
+    },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "{}" }, { type: "text", text: "[현재 시각]" }] },
+    { role: "assistant", content: [{ type: "text", text: "끝" }] },
+  ]);
+});
+
+test("Anthropic: 요청 형식 — 도구·tool_choice·생각(에이전트만)·JSON 지침", () => {
+  const tools = [{ type: "function", function: { name: "describe_page", description: "관측", parameters: { type: "object", properties: {} } } }];
+  const agent = anthropicPayload({ model: "claude-sonnet-5-5", messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }], tools, toolChoice: "auto", parallelToolCalls: false, reasoning: "agent", maxTokens: 8192, temperature: 0 }, true);
+  assert.deepEqual(agent, {
+    model: "claude-sonnet-5-5",
+    system: "s",
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+    max_tokens: 8192,
+    tools: [{ name: "describe_page", description: "관측", input_schema: { type: "object", properties: {} } }],
+    tool_choice: { type: "auto", disable_parallel_tool_use: true },
+    // 5 계열은 adaptive + effort, temperature는 보내지 않는다.
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium" },
+    stream: true,
+  });
+  assert.deepEqual(anthropicPayload({ model: "claude-sonnet-5-5", messages: [{ role: "user", content: "x" }], tools, toolChoice: "none", reasoning: "agent_low", maxTokens: 8192 }, true).tool_choice, { type: "none" });
+  assert.deepEqual(anthropicPayload({ model: "claude-sonnet-5-5", messages: [{ role: "user", content: "x" }], reasoning: "agent_low", maxTokens: 8192 }, true).output_config, { effort: "low" });
+  // 4~4.5와 3.7은 budget_tokens.
+  const b45 = anthropicPayload({ model: "claude-sonnet-4-5", messages: [{ role: "user", content: "x" }], reasoning: "agent", maxTokens: 8192, temperature: 0 }, true);
+  assert.deepEqual(b45.thinking, { type: "enabled", budget_tokens: 4096 });
+  assert.ok(!("temperature" in b45) && !("output_config" in b45));
+  assert.equal(anthropicPayload({ model: "claude-3-7-sonnet-latest", messages: [{ role: "user", content: "x" }], reasoning: "agent_low", maxTokens: 8192 }, true).thinking.budget_tokens, 1024);
+  assert.equal(anthropicThinkingMode("claude-opus-4-6"), "adaptive");
+  assert.equal(anthropicThinkingMode("claude-sonnet-4-20250514"), "budget");
+  assert.equal(anthropicThinkingMode("claude-fable-5-1"), "adaptive");
+  const json = anthropicPayload({ model: "claude-haiku-5-5", messages: [{ role: "user", content: "x" }], reasoning: "off", maxTokens: 1500, temperature: 0, responseFormat: { type: "json_schema", json_schema: { schema: { type: "object" } } } }, false);
+  assert.ok(!("thinking" in json) && !("temperature" in json));
+  // adaptive 모델의 생각 끄기는 강도를 가장 낮게.
+  assert.deepEqual(json.output_config, { effort: "low" });
+  assert.ok(!("output_config" in anthropicPayload({ model: "claude-sonnet-4-5", messages: [{ role: "user", content: "x" }], reasoning: "off", maxTokens: 10 }, false)));
+  assert.match(json.system, /JSON 객체 하나만/);
+  assert.match(json.system, /"type":"object"/);
+  // 생각을 지원하지 않는 옛 모델은 켜지 않는다.
+  assert.equal(anthropicThinkingModel("claude-3-5-haiku-latest"), false);
+  assert.equal(anthropicThinkingModel("claude-3-7-sonnet-latest"), true);
+  assert.equal(anthropicThinkingModel("claude-opus-4-1"), true);
+  assert.ok(!("thinking" in anthropicPayload({ model: "claude-3-5-haiku-latest", messages: [{ role: "user", content: "x" }], reasoning: "agent", maxTokens: 100 }, true)));
+});
+
+test("Anthropic: 스트림 이벤트 → 내부 조각(글자·생각·도구 인자·종료 이유), 끝에 받은 블록 배열을 순서 그대로", () => {
+  const conv = anthropicStreamConverter();
+  const evs = [
+    { type: "message_start" },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "음" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "S" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "보자" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "content_block_start", index: 2, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 2, delta: { type: "thinking_delta", thinking: "다시" } },
+    { type: "content_block_delta", index: 2, delta: { type: "signature_delta", signature: "T" } },
+    { type: "content_block_stop", index: 2 },
+    { type: "content_block_start", index: 3, content_block: { type: "tool_use", id: "t1", name: "find_clickables" } },
+    { type: "content_block_delta", index: 3, delta: { type: "input_json_delta", partial_json: '{"q":' } },
+    { type: "content_block_delta", index: 3, delta: { type: "input_json_delta", partial_json: '"a"}' } },
+    { type: "content_block_stop", index: 3 },
+    { type: "content_block_start", index: 4, content_block: { type: "tool_use", id: "t2", name: "describe_page" } },
+    { type: "content_block_stop", index: 4 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" } },
+    { type: "message_stop" },
+  ];
+  const deltas = evs.flatMap((e) => conv(e)).map((c) => ({ ...c.choices[0].delta, ...(c.choices[0].finish_reason ? { finish: c.choices[0].finish_reason } : {}) }));
+  assert.deepEqual(deltas, [
+    { reasoning: "음" },
+    { content: "보자" },
+    { reasoning: "다시" },
+    { tool_calls: [{ index: 0, id: "t1", type: "function", function: { name: "find_clickables", arguments: "" } }] },
+    { tool_calls: [{ index: 0, function: { arguments: '{"q":' } }] },
+    { tool_calls: [{ index: 0, function: { arguments: '"a"}' } }] },
+    { tool_calls: [{ index: 1, id: "t2", type: "function", function: { name: "describe_page", arguments: "" } }] },
+    { tool_calls: [{ index: 1, function: { arguments: "{}" } }] },
+    {
+      reasoning_details: [
+        {
+          type: "anthropic.content",
+          content: [
+            { type: "thinking", thinking: "음", signature: "S" },
+            { type: "text", text: "보자" },
+            { type: "thinking", thinking: "다시", signature: "T" },
+            { type: "tool_use", id: "t1", name: "find_clickables", input: { q: "a" } },
+            { type: "tool_use", id: "t2", name: "describe_page", input: {} },
+          ],
+        },
+      ],
+    },
+    { finish: "tool_calls" },
+  ]);
+  const c2 = anthropicStreamConverter();
+  assert.equal(c2({ type: "message_delta", delta: { stop_reason: "max_tokens" } })[0].choices[0].finish_reason, "length");
+  assert.equal(c2({ type: "message_delta", delta: { stop_reason: "model_context_window_exceeded" } })[0].choices[0].finish_reason, "length");
+  assert.equal(anthropicStreamConverter()({ type: "message_delta", delta: { stop_reason: "end_turn" } })[0].choices[0].finish_reason, "stop");
+});
+
+test("Anthropic: 받은 블록 배열(anthropic.content)이 있으면 그 응답은 순서 그대로 돌려준다", () => {
+  const content = [
+    { type: "thinking", thinking: "음", signature: "S" },
+    { type: "text", text: "보자" },
+    { type: "thinking", thinking: "다시", signature: "T" },
+    { type: "tool_use", id: "t1", name: "x", input: {} },
+  ];
+  const { messages } = anthropicMessages([
+    { role: "user", content: "q" },
+    { role: "assistant", content: "보자", tool_calls: [{ id: "t1", type: "function", function: { name: "x", arguments: "{}" } }], reasoning_details: [{ type: "anthropic.content", content }] },
+    { role: "tool", tool_call_id: "t1", name: "x", content: "{}" },
+  ]);
+  assert.deepEqual(messages[1], { role: "assistant", content });
+});
+import { candidateIdsOf, candidatesText } from "../src/lib/savedPages.ts";
+
+test("candidateIdsOf: 후보 데이터 글자에서 id를 읽는다", () => {
+  const t = candidatesText([
+    { id: "a", name: "n", purpose: "", site: "https://s", slots: [], template: { base: "", params: [], hash: "" }, savedAt: 0, lastUsedAt: 0, uses: 0 },
+    { id: "b", name: "m", purpose: "p", site: "https://t", slots: [{ key: "k", hint: "" }], template: { base: "", params: [], hash: "" }, savedAt: 0, lastUsedAt: 0, uses: 0 },
+  ]);
+  assert.deepEqual(candidateIdsOf(t), ["a", "b"]);
+  assert.deepEqual(candidateIdsOf("엉망"), []);
+});

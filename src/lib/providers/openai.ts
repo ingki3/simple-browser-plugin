@@ -66,6 +66,7 @@ export const openAiAdapter: ProviderAdapter = {
   id: "openai",
   label: LABEL,
   supportsFileParts: true,
+  signsContext: false,
   async openStream(apiKey, req, signal) {
     const response = await chatRequest(OPENAI_CHAT_URL, { Authorization: `Bearer ${apiKey}` }, openAiPayload(req, true), signal, LABEL);
     return { read: (onChunk, inactivityMs) => readOpenRouterStream(response, onChunk, inactivityMs, LABEL) };

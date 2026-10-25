@@ -9,6 +9,7 @@ import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./
 import { discardLinkCall, setChosenLinks } from "./linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "./downloadChoices";
 import { candidatesMessage, makeOffer } from "./savedPagesStore";
+import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
 import { providerAdapter, type ChatStream, type ProviderId } from "@/lib/providers";
 import { activeModel } from "@/lib/settings";
@@ -59,6 +60,10 @@ import {
 
 // 모델 요청 한 번의 결과(requestModel).
 interface ModelReply {
+  // 이 요청 끝에 붙였던 임시 안내(현재 시각·저장 링크 후보·마무리 안내). 문맥을 서명하는 제공자면 응답 앞에 기록으로 남긴다.
+  sentNotes: OpenRouterMessage[];
+  // 그중 저장 링크 후보 글자(없으면 null).
+  sentCandidates: string | null;
   assistantText: string;
   assistantReasoning: string;
   reasoningDetails: unknown[];
@@ -289,6 +294,10 @@ export class ChatAgent {
   // (외부 내용을 신뢰 사이트의 검색어·입력값·번역 언어·Google 검색어 등으로 내보내지 않게).
   private externalContent = false;
   private lastAttachedPdfUrl: string | null = null;
+  // 문맥을 서명하는 제공자(Anthropic)에서 이 대화 기록에 남긴 저장 링크 후보(마지막 글자와 지금까지 보낸 id). 기록에서 거둘 수
+  // 없으니, 그중 하나를 지웠거나 기능을 껐으면 다음 요청을 새 대화로 시작한다(forceNewConversation).
+  private committedCandidates: { text: string; ids: Set<string> } | null = null;
+  private forceNewConversation = false;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
   // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
   private translatedTabs = new Set<number>();
@@ -401,6 +410,8 @@ export class ChatAgent {
   reset(): void {
     this.history = [];
     this.lastAttachedPdfUrl = null;
+    this.committedCandidates = null;
+    this.forceNewConversation = false;
     this.approvedSites.clear();
     this.linkGrant = null;
     this.chatGrants.clear();
@@ -448,6 +459,7 @@ export class ChatAgent {
       throw new Error(`${providerAdapter(active.provider).label} API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.`);
     }
     if (
+      this.forceNewConversation ||
       this.provider !== active.provider ||
       this.apiKey !== active.apiKey ||
       this.model !== active.model ||
@@ -460,6 +472,8 @@ export class ChatAgent {
       this.history = [];
       // 첨부한 PDF는 지운 기록에 있었다. 새 기록(새 제공자)에는 다시 첨부해야 한다.
       this.lastAttachedPdfUrl = null;
+      this.committedCandidates = null;
+      this.forceNewConversation = false;
     }
     return {
       apiKey: active.apiKey,
@@ -506,6 +520,18 @@ export class ChatAgent {
         return popup ? describePopup(popup).join(" ") : null;
       },
     };
+  }
+
+  // 응답이 앞 문맥까지 서명하는 제공자(Anthropic)면 그 요청에 붙였던 임시 안내를 응답 앞에 기록으로 남긴다 — 다음 요청의
+  // 앞 문맥이 서명 때와 같게(기록을 덧붙이기만 한다). 다른 제공자는 지금처럼 요청마다 새로 붙인다.
+  private commitNotes(reply: ModelReply): void {
+    if (!providerAdapter(this.provider).signsContext) return;
+    this.history.push(...reply.sentNotes);
+    if (reply.sentCandidates) {
+      const ids = new Set(this.committedCandidates?.ids ?? []);
+      for (const id of candidateIdsOf(reply.sentCandidates)) ids.add(id);
+      this.committedCandidates = { text: reply.sentCandidates, ids };
+    }
   }
 
   // 대화 기록의 마지막 답(글자). 저장 카드 초안의 맥락으로 쓴다.
@@ -745,9 +771,9 @@ export class ChatAgent {
     }, CONNECT_TIMEOUT_MS);
     // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
     // 마무리 요청(wrapUpNote)에는 붙이지 않는다(이동 후보가 필요 없음).
-    const savedCandidates = opts.wrapUpNote
-      ? null
-      : await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null).catch(() => null);
+    // 지금 저장 링크 후보(마무리 요청에도 읽는다 — 기록에 남긴 후보가 지워졌는지 검사용). 실을지는 아래에서 정한다.
+    const currentCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null).catch(() => null);
+    const savedCandidates = opts.wrapUpNote ? null : currentCandidates;
     if (this.isStale(turn)) {
       clearTimeout(connectTimer);
       return null;
@@ -765,6 +791,27 @@ export class ChatAgent {
       if (this.activeRequest === controller) this.activeRequest = null;
       throw new Error("설정에서 모델 제공자·API 키·모델이 바뀌어 이 요청을 멈췄습니다. 다시 요청하면 새 설정으로 새 대화를 시작합니다.");
     }
+    // 문맥을 서명하는 제공자: 기록에 남긴 후보를 지웠거나 껐으면 거둘 수 없으니 멈추고 새 대화로, 바뀌지 않았으면 다시 싣지 않는다.
+    let candidatesNote = savedCandidates;
+    // 그런 제공자(Anthropic)는 도구 결과 바로 뒤에 글자 안내를 붙이면 빈 응답으로 끝낼 수 있어, 도구 결과 다음 요청에는
+    // 현재 시각·후보 안내를 붙이지 않는다(사용자 요청 직후 요청에만). 마무리 안내는 그대로 붙인다.
+    const signs = providerAdapter(this.provider).signsContext;
+    const afterToolResult = signs && this.history[this.history.length - 1]?.role === "tool";
+    if (providerAdapter(this.provider).signsContext && this.committedCandidates) {
+      const now = new Set(currentCandidates ? candidateIdsOf(currentCandidates) : []);
+      if ([...this.committedCandidates.ids].some((id) => !now.has(id))) {
+        clearTimeout(connectTimer);
+        if (this.activeRequest === controller) this.activeRequest = null;
+        this.forceNewConversation = true;
+        throw new Error("저장 링크를 지우거나 꺼서 이 대화에 이미 보낸 후보를 거둘 수 없어 멈췄습니다. 다시 요청하면 새 대화로 시작합니다.");
+      }
+      if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
+    }
+    const sentNotes: OpenRouterMessage[] = [
+      ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
+      ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
+      ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
+    ];
     let stream: ChatStream;
     try {
       stream = await providerAdapter(this.provider).openStream(
@@ -774,10 +821,8 @@ export class ChatAgent {
           messages: [
             { role: "system", content: systemPrompt },
             ...this.history,
-            { role: "user" as const, content: nowNote() },
-            ...(savedCandidates ? [{ role: "user" as const, content: savedCandidates }] : []),
-            // 마무리 안내는 이 요청에만 붙이고 대화 기록에는 넣지 않는다.
-            ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
+            // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).
+            ...sentNotes,
           ],
           tools: availableTools().map((fn) => ({
             type: "function" as const,
@@ -882,7 +927,7 @@ export class ChatAgent {
       `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
     );
     if (this.isStale(turn)) return null;
-    return { assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
+    return { sentNotes, sentCandidates: afterToolResult ? null : candidatesNote, assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
   }
 
   // 도구 호출 순환 한도에 닿았을 때 지금까지 한 일을 보여 주고 extra번 더 진행할지 묻는다(#55). 사용자의 명시적 선택으로만
@@ -915,6 +960,7 @@ export class ChatAgent {
     if (reply.functionCalls.length) debugLog("wrapup:ignored_tool_calls", `${reply.functionCalls.length}`, "warn");
     const text = reply.assistantText.trim();
     if (text) {
+      this.commitNotes(reply);
       this.history.push({
         role: "assistant",
         content: reply.assistantText,
@@ -1002,6 +1048,7 @@ export class ChatAgent {
         );
       }
 
+      this.commitNotes(reply);
       this.history.push({
         role: "assistant",
         content: assistantText || null,

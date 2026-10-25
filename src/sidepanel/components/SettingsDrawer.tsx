@@ -9,6 +9,7 @@ import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import { OPENAI_DEFAULT_MODEL, OPENAI_MODEL_SUGGESTIONS } from "@/lib/providers/openai";
 import { GEMINI_DEFAULT_MODEL, GEMINI_MODEL_SUGGESTIONS } from "@/lib/providers/gemini";
+import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_MODEL_SUGGESTIONS } from "@/lib/providers/anthropic";
 
 // OpenRouter 밖에서 직접 연결하는 제공자의 설정 칸(#97).
 const DIRECT_PROVIDERS = {
@@ -27,6 +28,14 @@ const DIRECT_PROVIDERS = {
     keyHelp: "Google AI Studio(aistudio.google.com)의 API 키.",
     defaultModel: GEMINI_DEFAULT_MODEL,
     suggestions: GEMINI_MODEL_SUGGESTIONS as readonly string[],
+  },
+  anthropic: {
+    id: "anthropic",
+    label: "Claude",
+    keyPlaceholder: "sk-ant-...",
+    keyHelp: "Anthropic Console(console.anthropic.com)의 API 키.",
+    defaultModel: ANTHROPIC_DEFAULT_MODEL,
+    suggestions: ANTHROPIC_MODEL_SUGGESTIONS as readonly string[],
   },
 } as const;
 import {
@@ -216,6 +225,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
               <option value="openrouter">OpenRouter (여러 회사 모델)</option>
               <option value="openai">OpenAI (ChatGPT API 키)</option>
               <option value="gemini">Google Gemini (AI Studio API 키)</option>
+              <option value="anthropic">Anthropic Claude (Claude API 키)</option>
             </select>
             <span className="field-help">
               대화·페이지 내용은 고른 제공자로만 보냅니다. 제공자나 모델을 바꾸면 대화를 새로 시작합니다.
