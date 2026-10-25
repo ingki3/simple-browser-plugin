@@ -96,7 +96,10 @@ function submitMethods(form: HTMLFormElement): string[] {
 
 // 양식과 제출 버튼들이 정한 제출 대상 창(target·formtarget).
 function formTargets(form: HTMLFormElement): string[] {
-  const out = [(form.getAttribute("target") ?? "").trim()];
+  // 양식에 target이 없으면 문서의 <base target>을 물려받는다(HTML의 대상 결정 규칙).
+  const own = (form.getAttribute("target") ?? "").trim();
+  const inherited = form.hasAttribute("target") ? "" : (form.ownerDocument.querySelector("base[target]")?.getAttribute("target") ?? "").trim();
+  const out = [own, inherited];
   for (const c of formElements(form)) if (isSubmitControl(c) && c.hasAttribute("formtarget")) out.push((c.getAttribute("formtarget") ?? "").trim());
   // form.elements는 이미지 버튼을 빼므로 양식이 든 루트에서 따로 본다.
   for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {

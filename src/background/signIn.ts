@@ -188,6 +188,11 @@ export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, s
   // 넣은 뒤의 관측이 먼저 모델로 가지 않게, 넣기 전에 가림 목록에 둔다.
   await rememberSecrets(c.tabId, secrets);
   checkAbort();
+  // KeePassXC를 기다리는 사이 팝업 탭이 가려졌거나 작업 탭이 바뀌었으면 넣지 않는다(다른 도구가 보내기 직전에 하는 확인과 같다).
+  if ((await resolveTurnTab(turnTab)) !== c.tabId) throw new Error("로그인 칸을 확인한 탭이 아니어서 넣지 않았습니다. 다시 관측하세요.");
+  await recheckTabPopup(turnTab, c.tabId);
+  if ((await topDocumentId(c.tabId)) !== c.documentId) throw new Error("로그인 칸을 확인한 뒤 페이지가 바뀌어 넣지 않았습니다. 다시 관측하세요.");
+  checkAbort();
   // 넣는 사이 중단되면 페이지에 알려 제출하지 않게 한다(넣은 값은 그대로 남지만 보내지는 않는다).
   const onAbort = () => void sendTo(c.tabId, c.documentId, { kind: "login_cancel", callId }, 1_000, "로그인 중단").catch(() => undefined);
   signal?.addEventListener("abort", onAbort, { once: true });
