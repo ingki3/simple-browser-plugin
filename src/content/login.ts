@@ -279,10 +279,12 @@ function pick(target: HTMLInputElement): Picked {
   }
   if (target.type === "password" || passwords.length === 1) {
     const password = target.type === "password" ? target : passwords[0];
-    // 아이디 칸: 같은 범위의 autocomplete=username, 없으면 비밀번호 칸 바로 앞의 보이는 글자 칸.
-    let username = visible.find((i) => i !== password && autocompleteTokens(i).includes("username")) ?? null;
+    // 아이디 칸: 비밀번호 칸과 같은 양식 관계(같은 form, 양식 밖이면 양식 밖)인 칸 중 autocomplete=username, 없으면 비밀번호 칸
+    // 바로 앞의 보이는 글자 칸. 다른 양식의 칸을 묶으면 그 양식의 제출 방법·주소를 판정하지 못한다.
+    const sameForm = visible.filter((i) => i.form === password.form);
+    let username = sameForm.find((i) => i !== password && autocompleteTokens(i).includes("username")) ?? null;
     if (!username) {
-      const before = visible.slice(0, visible.indexOf(password)).filter((i) => isTextInput(i) && usernameCandidate(i));
+      const before = sameForm.slice(0, sameForm.indexOf(password)).filter((i) => isTextInput(i) && usernameCandidate(i));
       username = before[before.length - 1] ?? null;
     }
     return {
@@ -550,19 +552,31 @@ export async function fillLogin(
   }
   // 숨은 기본 제출 버튼도 실제 제출에 쓴다(formaction·name=value를 잃지 않게 — 위험은 위에서 구조·글자로 봤다).
   const use = submitter ?? implicit;
-  // 브라우저 입력 검사(pattern·required 등)에 막히면 requestSubmit은 submit 이벤트 없이 끝난다. 실제로 보냈는지 이벤트로 본다.
+  // 제출 버튼이 있으면 그 버튼을 누른다(클릭 처리기에서 인증 API를 부르는 사이트가 있다 — requestSubmit은 클릭 처리기를 건너뛴다).
+  // 버튼이 없으면 requestSubmit. 실제로 보냈는지는 submit·invalid 이벤트로 본다.
   let fired = false;
+  let invalid = false;
   const onFire = () => {
     fired = true;
   };
+  const onInvalid = () => {
+    invalid = true;
+  };
   form.addEventListener("submit", onFire, true);
+  form.addEventListener("invalid", onInvalid, true);
   try {
-    form.requestSubmit(use);
+    if (use) use.click();
+    else form.requestSubmit(null);
   } finally {
     form.removeEventListener("submit", onFire, true);
+    form.removeEventListener("invalid", onInvalid, true);
+  }
+  if (invalid && !fired) {
+    return { filled: total, total, submitted: false, note: "브라우저의 입력 검사(형식·필수 칸)에 막혀 제출되지 않았습니다. 화면을 관측하세요." };
   }
   if (!fired) {
-    return { filled: total, total, submitted: false, note: "브라우저의 입력 검사(형식·필수 칸)에 막혀 제출되지 않았습니다. 화면을 관측하세요." };
+    // 클릭 처리기가 기본 제출을 막고 직접 처리했을 수 있다(인증 API 호출).
+    return { filled: total, total, submitted: true, note: "로그인 버튼을 눌렀습니다(페이지가 직접 처리 — 결과는 화면으로 확인)." };
   }
   return { filled: total, total, submitted: true };
 }
