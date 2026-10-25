@@ -86,7 +86,12 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [showKey, setShowKey] = useState(false);
   // 바꾸면 바로 저장(#99): 고르는 항목은 곧바로, 글자 칸은 입력이 멈추면(SAVE_DELAY_MS) 저장한다. 닫을 때 남은 저장을 마친다.
   // API 키만 "저장" 버튼으로 확정한다(keyDraft).
-  const pending = useRef<{ timer: number; patch: Partial<Settings> } | null>(null);
+  // 저장 상태: dirty(아직 보내지 않은 변경)와 inflight(저장 중인 변경). 저장은 한 번에 하나씩만 보낸다 — 실패한 옛 변경이
+  // 나중 변경을 되돌리거나, 늦게 온 저장 알림이 최신 입력을 덮지 않게.
+  const dirty = useRef<Partial<Settings>>({});
+  const inflight = useRef<Partial<Settings> | null>(null);
+  const timer = useRef(0);
+  const saving = useRef<Promise<void> | null>(null);
   const [savedAt, setSavedAt] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
   const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
@@ -97,9 +102,9 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [diag, setDiag] = useState<string | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
 
-  // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 아직 저장하지 않은 이 서랍의 변경(pending)은 덮지 않는다.
+  // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 이 서랍의 저장 중인 변경과 아직 보내지 않은 변경을 그 위에 둔다.
   useEffect(() => {
-    if (loaded) setDraft(mergeSettingsPatch(settings, pending.current?.patch ?? {}));
+    if (loaded) setDraft(mergeSettingsPatch(mergeSettingsPatch(settings, inflight.current ?? {}), dirty.current));
   }, [loaded, settings, open]);
   // 제공자를 바꾸거나 서랍을 열면 키 칸을 그 제공자의 저장된 키로.
   useEffect(() => {
@@ -113,30 +118,40 @@ export function SettingsDrawer({ open, onClose }: Props) {
     return () => window.clearTimeout(t);
   }, [savedAt]);
 
-  // 바꾼 필드만 최신 설정에 합쳐 저장한다(다른 곳에서 바꾼 필드를 덮지 않게).
-  const flush = async () => {
-    const p = pending.current;
-    if (!p) return;
-    window.clearTimeout(p.timer);
-    pending.current = null;
-    const patch = p.patch.maxToolHops !== undefined ? { ...p.patch, maxToolHops: clampHops(p.patch.maxToolHops) } : p.patch;
-    try {
-      await savePatch(patch);
-      setSaveError(null);
-      setSavedAt(Date.now());
-    } catch (err) {
-      // 실패한 변경은 버리지 않는다(그 사이 새 변경이 있으면 그것이 우선). 다음 변경·닫기 때 다시 저장한다.
-      const later = pending.current as { timer: number; patch: Partial<Settings> } | null;
-      pending.current = { timer: later?.timer ?? 0, patch: mergePatch(patch, later?.patch ?? {}) };
-      setSaveError(err instanceof Error ? err.message : String(err));
-    }
+  // 보내지 않은 변경을 하나씩 차례로 저장한다(백그라운드가 바꾼 필드만 최신 설정에 합친다). 저장 중에 생긴 변경은 끝난 뒤 이어서.
+  // 실패하면 그 변경 위에 그 뒤의 변경을 덮어 다시 보관하고(최신 선택이 이긴다) 멈춘다 — 다음 변경·닫기 때 다시 저장한다.
+  const flush = (): Promise<void> => {
+    window.clearTimeout(timer.current);
+    if (saving.current) return saving.current;
+    const run = (async () => {
+      while (Object.keys(dirty.current).length) {
+        const patch = dirty.current;
+        dirty.current = {};
+        inflight.current = patch;
+        try {
+          await savePatch(patch.maxToolHops !== undefined ? { ...patch, maxToolHops: clampHops(patch.maxToolHops) } : patch);
+          setSaveError(null);
+          setSavedAt(Date.now());
+        } catch (err) {
+          dirty.current = mergePatch(patch, dirty.current);
+          setSaveError(err instanceof Error ? err.message : String(err));
+          break;
+        } finally {
+          inflight.current = null;
+        }
+      }
+    })();
+    saving.current = run.finally(() => {
+      saving.current = null;
+    });
+    return saving.current;
   };
   // patch를 반영하고 저장한다. delay가 있으면 그동안 다음 변경을 모아 한 번에 저장한다.
   const update = (patch: Partial<Settings>, delay = 0) => {
     setDraft((cur) => mergeSettingsPatch(cur, patch));
-    const merged = mergePatch(pending.current?.patch ?? {}, patch);
-    if (pending.current) window.clearTimeout(pending.current.timer);
-    pending.current = { patch: merged, timer: window.setTimeout(() => void flush(), delay) };
+    dirty.current = mergePatch(dirty.current, patch);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => void flush(), delay);
   };
   // 패널이 닫히거나(Chrome의 패널 닫기) 숨겨지면 남은 변경을 바로 보낸다(타이머가 사라져 마지막 입력을 잃지 않게).
   useEffect(() => {
