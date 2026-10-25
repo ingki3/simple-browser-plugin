@@ -7,6 +7,14 @@ import { fillFormFields, formDestinations, formElements, layoutVisible, register
 import { registerClickTarget } from "./clickables";
 import { inspectTargets, registeredElement } from "./targets";
 
+// 백그라운드가 중단을 알린 호출(값을 넣는 사이 사용자가 멈추면 제출하지 않는다).
+const cancelled = new Set<string>();
+
+export function cancelLogin(callId: string): void {
+  cancelled.add(callId);
+  if (cancelled.size > 50) cancelled.delete(cancelled.values().next().value as string);
+}
+
 // 승인 대상 등록의 호출 id. 칸 묶음과 제출 버튼을 따로 둔다(승인 당시 상태 기록이 호출마다 하나라 섞이지 않게).
 const submitCallId = (callId: string) => `${callId}:submit`;
 
@@ -158,6 +166,7 @@ export async function fillLogin(
       return { filled: res.filledCount, total, submitted: false, note: "일부 칸에 값이 들어가지 않아 제출하지 않았습니다." };
     }
   }
+  if (cancelled.has(callId)) return { filled: total, total, submitted: false, note: "중단되어 제출하지 않았습니다." };
   if (!submit) return { filled: total, total, submitted: false };
   const form = anchor && isTag(anchor, "input") ? (anchor as HTMLInputElement).form : null;
   if (!form || !form.isConnected) return { filled: total, total, submitted: false, note: "양식이 사라져 제출하지 않았습니다." };
@@ -184,6 +193,7 @@ export async function fillLogin(
       return { filled: total, total, submitted: false, note: "제출 버튼이 새로 생겨 제출하지 않았습니다." };
     }
   }
+  if (cancelled.has(callId)) return { filled: total, total, submitted: false, note: "중단되어 제출하지 않았습니다." };
   form.requestSubmit(submitter);
   return { filled: total, total, submitted: true };
 }

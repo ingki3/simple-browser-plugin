@@ -1,5 +1,5 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
-import { fillLogin, inspectLogin, loginFieldStillShown } from "./login";
+import { cancelLogin, fillLogin, inspectLogin, loginFieldStillShown } from "./login";
 import { extractMainContent } from "./extract";
 import { lookupLinks } from "./links";
 import { stopTranslation, translatePage } from "./translate";
@@ -93,6 +93,11 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
       (err) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse),
     );
     return true;
+  }
+  if (msg.kind === "login_cancel") {
+    cancelLogin(msg.callId);
+    sendResponse({ ok: true } satisfies ContentResponse);
+    return false;
   }
   if (msg.kind === "login_field_shown") {
     sendResponse({ ok: true, data: loginFieldStillShown(msg.id) } satisfies ContentResponse);

@@ -154,6 +154,9 @@ export async function runSignIn(callId: string, uuid: string, signal?: AbortSign
   // 넣은 뒤의 관측이 먼저 모델로 가지 않게, 넣기 전에 가림 목록에 둔다.
   await rememberSecrets(c.tabId, secrets);
   checkAbort();
+  // 넣는 사이 중단되면 페이지에 알려 제출하지 않게 한다(넣은 값은 그대로 남지만 보내지는 않는다).
+  const onAbort = () => void sendTo(c.tabId, c.documentId, { kind: "login_cancel", callId }, 1_000, "로그인 중단").catch(() => undefined);
+  signal?.addEventListener("abort", onAbort, { once: true });
   if ((await topDocumentId(c.tabId)) !== c.documentId) throw new Error("로그인 칸을 확인한 뒤 페이지가 바뀌어 넣지 않았습니다. 다시 관측하세요.");
   checkAbort();
   const res = await sendTo<{ filled: number; total: number; submitted: boolean; note?: string }>(
@@ -167,7 +170,7 @@ export async function runSignIn(callId: string, uuid: string, signal?: AbortSign
     },
     20_000,
     "로그인 정보 넣기",
-  );
+  ).finally(() => signal?.removeEventListener("abort", onAbort));
   const base = { origin: c.origin, step: shape.step };
   const what = STEP_LABEL[shape.step];
   if (res.filled < res.total) {

@@ -1,3 +1,4 @@
+import { maskValue } from "./loginSecrets";
 import { ACTION_LOG_KEY, LEGACY_READ_RECIPES_KEYS, READ_RECIPES_KEY } from "@/lib/messages";
 import {
   capTargets,
@@ -92,7 +93,8 @@ export function finishAction(
     const now = Date.now();
     const obj = await chrome.storage.local.get(ACTION_LOG_KEY);
     const entries = pruneLog(obj[ACTION_LOG_KEY], now);
-    entries.push(entry);
+    // 대상 이름·페이지 글자에 자동 로그인으로 넣은 값이 보였으면 저장하기 전에 가린다.
+    entries.push(await maskValue(entry));
     const next = pruneLog(entries, now);
     try {
       await chrome.storage.local.set({ [ACTION_LOG_KEY]: next });

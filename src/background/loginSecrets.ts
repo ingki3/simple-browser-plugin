@@ -2,7 +2,7 @@
 // - 수명은 대화가 아니라 값을 넣은 탭: 새 대화를 시작해도 페이지에 복사본이 남을 수 있어 지우지 않고, 탭이 닫히면 지운다.
 // - 서비스 워커가 다시 시작돼도 잃지 않게 chrome.storage.session(메모리 전용, 디스크에 쓰지 않음, content script는 못 읽음)에 둔다.
 // - 거르기는 탭과 관계없이 모든 모델 요청에 쓴다.
-import { maskDeep, maskText } from "@/lib/secretMask";
+import { maskDeep, maskMessages, maskText } from "@/lib/secretMask";
 
 const KEY = "loginSecrets";
 
@@ -71,10 +71,14 @@ export async function allSecrets(): Promise<string[]> {
   return [...new Set(Object.values(store).flat())];
 }
 
-// 모델로 가는 글자·값을 가린다. masked: 하나라도 가렸는지.
-export async function maskForModel<T>(value: T): Promise<{ value: T; masked: boolean }> {
-  const secrets = await allSecrets();
-  return maskDeep(value, secrets);
+// 모델로 가는 메시지의 본문을 가린다(프로토콜 필드는 그대로). masked: 하나라도 가렸는지.
+export async function maskMessagesForModel<T extends { role: string }>(messages: T[]): Promise<{ value: T[]; masked: boolean }> {
+  return maskMessages(messages, await allSecrets());
+}
+
+// 저장하기 전의 기록 항목 등 JSON 값의 글자를 가린다.
+export async function maskValue<T>(value: T): Promise<T> {
+  return maskDeep(value, await allSecrets()).value;
 }
 
 export async function maskStringForModel(text: string): Promise<{ text: string; masked: boolean }> {
@@ -86,6 +90,17 @@ export async function maskStringForModel(text: string): Promise<{ text: string; 
 export function maskSyncDeep<T>(value: T): { value: T; masked: boolean } {
   if (!cache) return { value, masked: false };
   return maskDeep(value, [...new Set(Object.values(cache).flat())]);
+}
+
+export function maskSyncMessages<T extends { role: string }>(messages: T[]): { value: T[]; masked: boolean } {
+  if (!cache) return { value: messages, masked: false };
+  return maskMessages(messages, [...new Set(Object.values(cache).flat())]);
+}
+
+// 디버그 로그처럼 기다릴 수 없는 곳의 글자.
+export function maskSyncText(text: string): string {
+  if (!cache) return text;
+  return maskText(text, [...new Set(Object.values(cache).flat())]).text;
 }
 
 // 서비스 워커가 깨어날 때 캐시를 미리 채운다(동기 거르기가 빈 목록으로 지나가지 않게).

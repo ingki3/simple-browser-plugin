@@ -56,7 +56,7 @@ export function maskText(text: string, secrets: Iterable<string>): { text: strin
   return { text: out, masked };
 }
 
-// JSON 모양의 값 안의 모든 글자를 가린다(객체 키도). 원본은 바꾸지 않는다.
+// JSON 모양의 값 안의 모든 글자 값을 가린다(객체 키는 두는데, 도구 결과·기록 항목의 키는 확장이 정한 이름이다). 원본은 바꾸지 않는다.
 export function maskDeep<T>(value: T, secrets: readonly string[]): { value: T; masked: boolean } {
   if (!secrets.length) return { value, masked: false };
   let masked = false;
@@ -69,14 +69,50 @@ export function maskDeep<T>(value: T, secrets: readonly string[]): { value: T; m
     if (Array.isArray(v)) return v.map(walk);
     if (v && typeof v === "object") {
       const out: Record<string, unknown> = {};
-      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-        const key = walk(k) as string;
-        out[key] = walk(x);
-      }
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = walk(x);
       return out;
     }
     return v;
   };
   const next = walk(value) as T;
   return { value: masked ? next : value, masked };
+}
+
+// 모델 메시지(OpenAI 호환 형식)의 본문만 가린다. 역할·도구 호출 id·도구 이름·생각 서명 같은 프로토콜 필드는 그대로 둔다
+// (아이디가 'user'여도 role을 바꾸지 않게). 가리는 것: content(글자, 또는 text 조각의 text), assistant의 도구 호출 인자.
+interface MessageLike {
+  role: string;
+  content?: unknown;
+  tool_calls?: Array<{ function?: { arguments?: unknown } }>;
+}
+
+export function maskMessages<T extends MessageLike>(messages: readonly T[], secrets: readonly string[]): { value: T[]; masked: boolean } {
+  if (!secrets.length) return { value: [...messages], masked: false };
+  let masked = false;
+  const text = (s: string): string => {
+    const r = maskText(s, secrets);
+    if (r.masked) masked = true;
+    return r.text;
+  };
+  const content = (c: unknown): unknown => {
+    if (typeof c === "string") return text(c);
+    if (Array.isArray(c)) {
+      return c.map((p) =>
+        p && typeof p === "object" && (p as { type?: unknown }).type === "text" && typeof (p as { text?: unknown }).text === "string"
+          ? { ...(p as object), text: text((p as { text: string }).text) }
+          : p,
+      );
+    }
+    return c;
+  };
+  const value = messages.map((m) => {
+    const next = { ...m, ...(m.content !== undefined ? { content: content(m.content) } : {}) } as T;
+    if (Array.isArray(m.tool_calls)) {
+      (next as MessageLike).tool_calls = m.tool_calls.map((c) =>
+        typeof c.function?.arguments === "string" ? { ...c, function: { ...c.function, arguments: text(c.function.arguments) } } : c,
+      );
+    }
+    return next;
+  });
+  return { value: masked ? value : [...messages], masked };
 }

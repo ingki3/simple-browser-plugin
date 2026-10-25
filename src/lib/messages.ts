@@ -314,6 +314,8 @@ export type BgToContent =
       submit: { submitId?: string; submitUrls: string[]; submitMethods: string[] } | null;
     }
   | { kind: "login_field_shown"; id: string }
+  // 도구가 중단됐다: 아직 제출하지 않았으면 이 호출의 제출을 하지 않는다.
+  | { kind: "login_cancel"; callId: string }
   // click_element 뒤 같은 문서에서 관찰한 변화를 읽는다.
   | { kind: "action_effect"; token: string }
   // 동작 기록용 페이지 뼈대 해시(최상위 문서).

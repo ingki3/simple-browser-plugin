@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import nacl from "tweetnacl";
 import { incrementNonce, KpxSession, parseEntries, hostManifest } from "../src/lib/keepassxc.ts";
-import { MASK, maskDeep, maskText, secretForms } from "../src/lib/secretMask.ts";
+import { MASK, maskDeep, maskMessages, maskText, secretForms } from "../src/lib/secretMask.ts";
 import { loginOrigin, loginShapeBlock, normalizeLoginSites, signInDecision } from "../src/lib/loginPolicy.ts";
 import { normalizeSettings } from "../src/lib/settings.ts";
 
@@ -141,10 +141,26 @@ test("가리기: JSON으로 직렬화한 글자 안의 값(따옴표·역슬래�
   assert.ok(!JSON.parse(r.text).text.includes(pw));
 });
 
-test("가리기: JSON 값 안 깊이(키 포함)", () => {
+test("가리기: 메시지는 본문만(역할·도구 id는 그대로)", () => {
+  const msgs = [
+    { role: "user", content: [{ type: "text", text: "제목: 안녕 user" }] },
+    { role: "assistant", content: null, tool_calls: [{ id: "user", type: "function", function: { name: "sign_in", arguments: '{"id":"user"}' } }] },
+    { role: "tool", tool_call_id: "user", name: "describe_page", content: "user 님" },
+  ];
+  const r = maskMessages(msgs, ["user"]);
+  assert.ok(r.masked);
+  assert.deepEqual(r.value.map((m) => m.role), ["user", "assistant", "tool"]);
+  assert.equal(r.value[2].tool_call_id, "user");
+  assert.equal(r.value[1].tool_calls[0].id, "user");
+  assert.equal(r.value[0].content[0].type, "text");
+  assert.ok(!r.value[0].content[0].text.includes("user"));
+  assert.ok(!r.value[2].content.includes("user"));
+});
+
+test("가리기: JSON 값 안 깊이(키는 그대로)", () => {
   const r = maskDeep({ a: ["hello alice"], alice: 1, n: 3 }, ["alice"]);
   assert.ok(r.masked);
-  assert.deepEqual(r.value, { a: [`hello ${MASK}`], [MASK]: 1, n: 3 });
+  assert.deepEqual(r.value, { a: [`hello ${MASK}`], alice: 1, n: 3 });
   const same = { a: 1 };
   assert.equal(maskDeep(same, []).value, same);
 });
@@ -206,6 +222,11 @@ test("로그인 모양: 막는 구조", () => {
   // 결제 주소로 보내는 양식(결제 재인증), 결제 주소를 가리키는 제출 버튼은 묻는다.
   assert.match(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/checkout/confirm`] }), ORIGIN), /결제/);
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, submitTo: `${ORIGIN}/checkout/pay` } }), ORIGIN));
+  // htmx 요청: 다른 출처, 같은 출처라도 GET(값이 주소에 실림), 확인할 수 없는 요청은 묻는다.
+  const pwField = shape().fields[0];
+  assert.match(loginShapeBlock(shape({ fields: [{ ...pwField, requestUrls: ["https://collector.example/c"] }] }), ORIGIN), /다른 출처/);
+  assert.match(loginShapeBlock(shape({ fields: [{ ...pwField, requestUrls: [`${ORIGIN}/check`] }] }), ORIGIN), /GET/);
+  assert.ok(loginShapeBlock(shape({ hasForm: false, submitMethods: [], fields: [{ ...pwField, opaqueRequest: true }] }), ORIGIN));
   // 양식이 없으면(채우기만) 메서드는 보지 않는다.
   assert.equal(loginShapeBlock(shape({ hasForm: false, submitMethods: [], submitUrls: [] }), ORIGIN), null);
 });

@@ -32,7 +32,7 @@ import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } 
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
 import { loginSiteFor, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
 import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "./signIn";
-import { maskForModel, maskSyncDeep, warmSecrets } from "./loginSecrets";
+import { maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "./loginSecrets";
 import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
 import { applySettingsUpdate, getSettings, readFlags, setFlag } from "./storage";
@@ -755,12 +755,12 @@ export class ChatAgent {
       }
       this.closeDanglingToolCalls();
       // 사용자 글·탭 문맥(제목 등)도 기록에 넣기 전에 가린다(탭을 닫아 가림 목록이 지워진 뒤에도 원문이 남지 않게).
-      const maskedUser = maskSyncDeep(userContent);
+      const maskedUser = maskSyncMessages<OpenRouterMessage>([{ role: "user", content: userContent }]);
       if (maskedUser.masked) {
         this.secretsMasked = true;
         debugLog("login:masked", "사용자 요청 문맥에서 넣은 로그인 값을 가림", "warn");
       }
-      this.history.push({ role: "user", content: maskedUser.value });
+      this.history.push(maskedUser.value[0]);
 
       const completed = await this.streamLoop(apiKey, model, systemPrompt, turn);
       // 읽기 레시피: 답을 마친 턴에서 통한 읽기 방법만 남긴다(중단·도구 호출 한도 초과는 버림).
@@ -849,14 +849,14 @@ export class ChatAgent {
       }
       if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
     }
-    const sentNotes: OpenRouterMessage[] = maskSyncDeep<OpenRouterMessage[]>([
+    const sentNotes: OpenRouterMessage[] = maskSyncMessages<OpenRouterMessage>([
       ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
       ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
       ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
       // 문맥을 서명하는 제공자는 이 안내를 기록에 남기므로 남기기 전에 가린다.
     ]).value;
     // 자동 로그인으로 넣은 값은 어디서 왔든(기록·메모·안내) 모델로 보내지 않는다(기록에 넣을 때 이미 가렸고, 여기는 마지막 거르기).
-    const outgoing = await maskForModel<OpenRouterMessage[]>([
+    const outgoing = await maskMessagesForModel<OpenRouterMessage>([
       { role: "system", content: systemPrompt },
       ...this.history,
       // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).

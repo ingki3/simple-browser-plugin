@@ -96,6 +96,17 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
     const why = sensitiveUrlReason(u);
     if (why) return `${why}로 보내는 양식`;
   }
+  // 값을 넣거나 누르면 일으킬 htmx 요청(change·click 처리기가 칸 값을 실어 보냄)도 같은 출처·같은 기준이어야 한다.
+  // 확인할 수 없는 요청(GET 아님·from: 리스너 등)은 묻는다.
+  for (const t of [...shape.fields, ...(shape.submit ? [shape.submit] : [])]) {
+    if (t.opaqueRequest) return "확인할 수 없는 htmx 요청이 붙은 칸·버튼";
+    for (const u of t.requestUrls ?? []) {
+      if (httpOrigin(u) !== origin) return "로그인 정보를 다른 출처로 보내는 요청(htmx)";
+      if (sensitiveUrlReason(u)) return `${sensitiveUrlReason(u)}로 보내는 요청(htmx)`;
+    }
+    // htmx GET 요청은 칸 값을 주소에 싣는다(비밀번호가 주소창·서버 로그에 남음).
+    if ((t.requestUrls ?? []).length) return "값을 주소에 싣는 htmx GET 요청이 붙은 칸·버튼";
+  }
   // GET 양식은 값을 주소에 실어 주소창·방문 기록·서버 로그에 남긴다.
   if (shape.hasForm && shape.submitMethods.some((m) => m !== "post")) return "POST가 아닌 방법으로 제출하는 양식";
   const fieldDestructive = destructiveFillBlock(shape.fields);
