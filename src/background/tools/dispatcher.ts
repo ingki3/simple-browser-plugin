@@ -822,9 +822,9 @@ async function runTool(
     }
     case "sign_in": {
       // 승인 판정에서 정한 항목(execArgs.uuid)만 쓴다. 모델 인자에는 항목이 없다.
-      const uuid = (parsedArgs as { uuid?: unknown }).uuid;
-      if (typeof uuid !== "string" || !uuid) throw new Error("넣을 비밀번호 관리자 항목을 정하지 못했습니다.");
-      return runSignIn(callId, uuid, signal);
+      const { uuid, token } = parsedArgs as { uuid?: unknown; token?: unknown };
+      if (typeof uuid !== "string" || !uuid || typeof token !== "string") throw new Error("넣을 비밀번호 관리자 항목을 정하지 못했습니다.");
+      return runSignIn(token, uuid, turnTab, signal);
     }
     case "find_form_fields": {
       const data = await callContentTool<FormField[]>(toolName, parsedArgs, callId, turnTab);

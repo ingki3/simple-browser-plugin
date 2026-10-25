@@ -296,6 +296,8 @@ export class ChatAgent {
   // 자동 로그인(sign_in): 카드가 제안한 출처(호출별), 사용자가 그 제안을 고른 호출, 이 대화에서 이미 시도한 출처·단계
   // (다시 자동으로 하지 않는다), 페이지가 넣은 값을 다시 보여 가린 적이 있는지(그러면 이 대화에서는 자동 로그인하지 않는다).
   private loginSiteOffers = new Map<string, string>();
+  // 카드를 띄운 sign_in 호출의 준비 열쇠(signIn.ts의 token).
+  private signInTokens = new Map<string, string>();
   private rememberLogin = new Set<string>();
   private loginAttempts = new Set<string>();
   private secretsMasked = false;
@@ -391,7 +393,8 @@ export class ChatAgent {
       setChosenTabs(callId, choiceIds);
       setChosenLinks(callId, choiceIds);
       setChosenDownloads(callId, choiceIds);
-      chooseSignInEntry(callId, choiceIds);
+      const token = this.signInTokens.get(callId);
+      if (token) chooseSignInEntry(token, choiceIds);
     }
     if (rememberLoginSite && this.pendingApprovals.has(callId) && this.loginSiteOffers.has(callId)) {
       this.rememberLogin.add(callId);
@@ -1173,6 +1176,8 @@ export class ChatAgent {
         let execArgs: unknown = parsedArgs;
         // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
         let signInAttempt: string | null = null;
+        // sign_in 준비의 열쇠(취소·손 넘기기로 끝나면 받은 값을 버린다).
+        let signInToken: string | null = null;
         // 이번 대화 허락으로 저장할 이미지를 이 호출을 위해 쿠키 없이 미리 받은 것(실행 옵션으로 직접 넘긴다).
         let grantImages: Map<string, string> | undefined;
         // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
@@ -1236,6 +1241,7 @@ export class ChatAgent {
           if (toolName === "sign_in" && preview.signIn) {
             const sp = preview.signIn;
             if (sp.origin) signInAttempt = `${sp.origin}|${sp.shape.step}`;
+            signInToken = sp.token;
             const asMode = (mode: ApprovalDecision["mode"], block: string | null): ApprovalDecision => ({
               mode,
               autoMode: mode === "card",
@@ -1274,7 +1280,7 @@ export class ChatAgent {
               });
               if (d.auto && site) {
                 decision = asMode("auto", null);
-                execArgs = { ...(parsedArgs as object), uuid: site.uuid };
+                execArgs = { ...(parsedArgs as object), uuid: site.uuid, token: sp.token };
               } else {
                 decision = asMode("card", d.auto ? null : d.reason);
                 // 승인한 항목이 있으면 처음부터 골라 둔다. 승인 목록에 없거나 다른 항목이면 사용자가 직접 고른다.
@@ -1318,7 +1324,8 @@ export class ChatAgent {
             if (toolName === "click_element") handoffPopups = await this.watchHandoffPopups(turnTab);
             let shown: HandoffSession;
             try {
-              shown = await showHandoff(turnTab, callId, toolName === "click_element" ? "c" : "f", ids);
+              // sign_in은 칸을 준비 열쇠(token)로 승인 대상에 남겼다.
+              shown = await showHandoff(turnTab, (toolName === "sign_in" && signInToken) || callId, toolName === "click_element" ? "c" : "f", ids);
             } catch (err) {
               handoffPopups?.stop();
               handoffPopups = null;
@@ -1435,6 +1442,7 @@ export class ChatAgent {
             if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
             if (urlOffer) this.personalUrlOffers.set(callId, { turn, keys: personalUrlKeys });
             if (loginOffer) this.loginSiteOffers.set(callId, loginOffer);
+            if (toolName === "sign_in" && preview.signIn) this.signInTokens.set(callId, preview.signIn.token);
             if (chatGrant.offer && isChatGrantTool(toolName)) {
               this.chatGrantOffers.set(callId, { tool: toolName, scope: preview.grantScope ?? "" });
             }
@@ -1448,8 +1456,9 @@ export class ChatAgent {
             const rememberOrigin = this.rememberLogin.has(callId) ? this.loginSiteOffers.get(callId) : undefined;
             this.loginSiteOffers.delete(callId);
             this.rememberLogin.delete(callId);
+            this.signInTokens.delete(callId);
             if (this.isStale(turn)) {
-              discardSignIn(callId);
+              discardSignIn(preview.signIn?.token);
               return false;
             }
             debugLog(
@@ -1458,14 +1467,15 @@ export class ChatAgent {
             );
             // 자동 로그인: 카드에서 고른 항목으로 실행한다. "앞으로 자동 로그인"을 골랐으면 그 출처에 이 항목을 묶어 둔다.
             if (approved && toolName === "sign_in") {
-              const uuid = chosenSignInEntry(callId);
+              const token = preview.signIn?.token ?? "";
+              const uuid = chosenSignInEntry(token);
               if (!uuid) {
-                discardSignIn(callId);
+                discardSignIn(token);
                 recordCancelledAction(callId, turnTab);
                 failCall("로그인할 항목을 고르지 않아 넣지 않았습니다.", argsKey);
                 continue;
               }
-              execArgs = { ...(parsedArgs as object), uuid };
+              execArgs = { ...(parsedArgs as object), uuid, token };
               const entry = preview.signIn?.entries.find((e) => e.uuid === uuid);
               if (rememberOrigin && entry) {
                 await applySettingsUpdate((cur) => ({
@@ -1476,7 +1486,7 @@ export class ChatAgent {
                 })).catch((err) => debugLog("login:remember_failed", err instanceof Error ? err.message : String(err), "warn"));
                 debugLog("login:site_approved", rememberOrigin);
                 if (this.isStale(turn)) {
-                  discardSignIn(callId);
+                  discardSignIn(token);
                   return false;
                 }
               }
@@ -1494,7 +1504,7 @@ export class ChatAgent {
 
           if (!approved) {
             recordCancelledAction(callId, turnTab);
-            discardSignIn(callId);
+            discardSignIn(signInToken);
             discardTabChoices(callId);
             discardLinkCall(callId);
             discardDownloadCall(callId);
@@ -1517,7 +1527,7 @@ export class ChatAgent {
         }
 
         if (handoffOutcome && toolName === "sign_in") {
-          discardSignIn(callId);
+          discardSignIn(signInToken);
           const note = "사용자가 직접 로그인을 마쳤다고 알렸습니다. 결과는 페이지를 다시 관측해 확인하세요.";
           this.send({ kind: "tool_result", callId, toolName, ok: true, summary: "직접 로그인 · 사용자가 마쳤다고 알림" });
           this.history.push({

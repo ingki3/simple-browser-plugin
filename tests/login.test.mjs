@@ -151,6 +151,15 @@ test("가리기: 값과 흔한 표현", () => {
   assert.equal(maskText("a b", ["a"]).masked, false);
 });
 
+test("가리기: 공백을 줄이거나 한도로 자른 글자", () => {
+  const pw = "correct  horse  battery";
+  assert.ok(maskText("보임 correct horse battery 끝", [pw]).masked);
+  const cut = maskText("앞 글자 correct horse bat", [pw]);
+  assert.ok(cut.masked);
+  assert.ok(!cut.text.includes("horse"));
+  assert.ok(maskText("battery 뒤 글자", ["horse battery"]).masked);
+});
+
 test("가리기: JSON으로 직렬화한 글자 안의 값(따옴표·역슬래시)", () => {
   const pw = 'a"b\\c';
   const json = JSON.stringify({ text: `보임 ${pw}` });

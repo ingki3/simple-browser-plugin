@@ -29,6 +29,8 @@ const calls = new Map<string, SignInCall>();
 const CALL_TTL_MS = 15 * 60_000;
 
 export interface SignInPreview {
+  // 이 준비의 상태 열쇠(승인·실행이 같은 준비를 쓰게).
+  token: string;
   origin: string | null;
   shape: LoginShape;
   // 비밀번호 관리자 상태: none(연결 안 함)·error·ok.
@@ -48,14 +50,15 @@ export function stepLabel(step: LoginShape["step"]): string {
   return STEP_LABEL[step];
 }
 
-export async function prepareSignIn(id: string, callId: string, turnTab: TurnTab): Promise<SignInPreview> {
-  calls.delete(callId);
+// callId는 모델이 정한 값이라 다른 대화와 겹칠 수 있다. 상태는 여기서 만든 token으로만 찾고, 페이지 쪽 승인 대상도 token으로 남긴다.
+export async function prepareSignIn(id: string, _callId: string, turnTab: TurnTab): Promise<SignInPreview> {
+  const token = crypto.randomUUID();
   const tabId = await resolveTurnTab(turnTab);
   await waitForNavigationSettle(tabId, 10_000);
   await recheckTabPopup(turnTab, tabId);
   const documentId = await topDocumentId(tabId);
   if (!documentId) throw new Error("탭의 문서를 확인할 수 없습니다. 다시 관측하세요.");
-  const shape = await sendTo<LoginShape>(tabId, documentId, { kind: "login_inspect", id, callId }, 5_000, "로그인 칸 확인");
+  const shape = await sendTo<LoginShape>(tabId, documentId, { kind: "login_inspect", id, callId: token }, 5_000, "로그인 칸 확인");
   // 출처는 브라우저가 아는 그 문서의 주소로 정한다(페이지가 알려 준 주소는 같은지 확인에만 쓴다).
   let topUrl: string | undefined;
   try {
@@ -67,8 +70,8 @@ export async function prepareSignIn(id: string, callId: string, turnTab: TurnTab
   const origin = loginOrigin(topUrl);
   if (!origin || loginOrigin(shape.topUrl) !== origin) {
     // https가 아니거나 페이지가 알려 준 주소와 다르면 비밀번호 관리자에 묻지 않는다(손 넘기기·카드로).
-    calls.set(callId, { tabId, documentId, origin: null, shape, entries: null, kpxError: null, chosen: null });
-    return { origin: null, shape, manager: "none", managerError: null, entries: [] };
+    calls.set(token, { tabId, documentId, origin: null, shape, entries: null, kpxError: null, chosen: null });
+    return { token, origin: null, shape, manager: "none", managerError: null, entries: [] };
   }
   let entries: KpxEntry[] | null = null;
   let kpxError: string | null = null;
@@ -81,12 +84,13 @@ export async function prepareSignIn(id: string, callId: string, turnTab: TurnTab
     debugLog("keepassxc:get_logins", kpxError, "warn");
   }
   const call: SignInCall = { tabId, documentId, origin, shape, entries, kpxError, chosen: null };
-  calls.set(callId, call);
+  calls.set(token, call);
   // 카드가 오래 열려 있거나 대화가 끝나 정리되지 않아도 받은 값을 오래 두지 않는다.
   setTimeout(() => {
-    if (calls.get(callId) === call) calls.delete(callId);
+    if (calls.get(token) === call) calls.delete(token);
   }, CALL_TTL_MS);
   return {
+    token,
     origin,
     shape,
     manager: kpxError ? "error" : entries === null ? "none" : "ok",
@@ -96,19 +100,19 @@ export async function prepareSignIn(id: string, callId: string, turnTab: TurnTab
 }
 
 // 카드에서 고른 항목(이 호출이 받은 항목 중 하나만).
-export function chooseSignInEntry(callId: string, ids: readonly string[]): void {
-  const c = calls.get(callId);
+export function chooseSignInEntry(token: string, ids: readonly string[]): void {
+  const c = calls.get(token);
   if (!c?.entries) return;
   const id = ids[0]?.toLowerCase();
   c.chosen = c.entries.some((e) => e.uuid.toLowerCase() === id) ? (id ?? null) : null;
 }
 
-export function chosenSignInEntry(callId: string): string | null {
-  return calls.get(callId)?.chosen ?? null;
+export function chosenSignInEntry(token: string): string | null {
+  return calls.get(token)?.chosen ?? null;
 }
 
-export function discardSignIn(callId: string): void {
-  calls.delete(callId);
+export function discardSignIn(token: string | null | undefined): void {
+  if (token) calls.delete(token);
 }
 
 export interface SignInRunResult {
@@ -118,15 +122,18 @@ export interface SignInRunResult {
 }
 
 // 항목 uuid의 값을 넣고 제출한다. 문서가 바뀌었으면 넣지 않는다.
-export async function runSignIn(callId: string, uuid: string, signal?: AbortSignal): Promise<SignInRunResult> {
-  const c = calls.get(callId);
-  calls.delete(callId);
+export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, signal?: AbortSignal): Promise<SignInRunResult> {
+  const callId = token;
+  const c = calls.get(token);
+  calls.delete(token);
   // 기다리는 사이(일회용 코드 받기 등) 사용자가 멈췄거나 새 대화를 시작했으면 넣지 않는다.
   const checkAbort = () => {
     if (signal?.aborted) throw new Error("중단되어 로그인 정보를 넣지 않았습니다.");
   };
   checkAbort();
   if (!c || !c.origin) throw new Error("로그인 칸을 다시 확인하세요(find_form_fields로 다시 찾은 뒤 sign_in).");
+  // 승인·판정한 탭이 지금 이 대화의 작업 탭이어야 한다.
+  if ((await resolveTurnTab(turnTab)) !== c.tabId) throw new Error("로그인 칸을 확인한 탭이 아니어서 넣지 않았습니다. 다시 관측하세요.");
   const entry = c.entries?.find((e) => e.uuid.toLowerCase() === uuid.toLowerCase());
   if (!entry) throw new Error("고른 비밀번호 관리자 항목이 없습니다.");
   if ((await topDocumentId(c.tabId)) !== c.documentId) throw new Error("로그인 칸을 확인한 뒤 페이지가 바뀌어 넣지 않았습니다. 다시 관측하세요.");

@@ -24,6 +24,9 @@ function htmlEscape(s: string): string {
 export function secretForms(value: string): string[] {
   if (value.length < MIN_SECRET_LENGTH) return [];
   const forms = new Set<string>([value]);
+  // 페이지 글자를 모델용으로 정리할 때(cleanModelText) 공백 묶음을 한 칸으로 줄이고 앞뒤를 자른다.
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed) forms.add(collapsed);
   const uri = encodeURIComponent(value);
   forms.add(uri);
   forms.add(uri.replace(/%20/g, "+"));
@@ -49,16 +52,39 @@ export function secretForms(value: string): string[] {
 }
 
 // 긴 표현부터 바꾼다(짧은 것이 긴 것의 일부일 때 긴 것을 먼저 지우게).
+// 글자 수 한도로 잘린 글자(cleanModelText·도구의 자르기)는 값의 앞부분으로 끝나거나 뒷부분으로 시작할 수 있어, 글자의
+// 끝·처음에 붙은 값의 앞·뒷부분(EDGE_MIN 글자 이상)도 가린다. 너무 짧은 조각은 다른 글자와 우연히 겹쳐 쓸데없이 가리게 된다.
+const EDGE_MIN = 4;
+
 export function maskText(text: string, secrets: Iterable<string>): { text: string; masked: boolean } {
   const forms = new Set<string>();
   for (const s of secrets) for (const f of secretForms(s)) forms.add(f);
   if (!forms.size || !text) return { text, masked: false };
   let out = text;
   let masked = false;
-  for (const f of [...forms].sort((a, b) => b.length - a.length)) {
+  const sorted = [...forms].sort((a, b) => b.length - a.length);
+  for (const f of sorted) {
     if (!out.includes(f)) continue;
     out = out.split(f).join(MASK);
     masked = true;
+  }
+  for (const f of sorted) {
+    for (let k = f.length - 1; k >= EDGE_MIN; k--) {
+      const head = f.slice(0, k);
+      if (out.endsWith(head)) {
+        out = out.slice(0, out.length - k) + MASK;
+        masked = true;
+        break;
+      }
+    }
+    for (let k = f.length - 1; k >= EDGE_MIN; k--) {
+      const tail = f.slice(f.length - k);
+      if (out.startsWith(tail)) {
+        out = MASK + out.slice(k);
+        masked = true;
+        break;
+      }
+    }
   }
   return { text: out, masked };
 }
