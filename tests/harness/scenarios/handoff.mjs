@@ -54,15 +54,19 @@ export default [
     pages: { "/h": page },
     async run(h) {
       await h.settings({ autoApprove: true, manualSites: [h.base] });
+      let cancelled = false;
       const r = await h.turn([findC, { click: "조회하기" }], {
         path: "/h",
         onCard: async (card, n) => {
-          if (n === 1) await card.locator(".btn-cancel").click();
+          if (n > 1) return;
+          await card.locator(".btn-cancel").click();
+          cancelled = true;
         },
       });
+      expect(cancelled, "손 넘기기 카드가 떠서 취소를 눌러야 한다");
       expect(r.out === "", `눌리면 안 된다(out='${r.out}')`);
       const t = lastTool(r, "click_element");
-      expect(t && !t.result?.handedOff, `취소 결과(${JSON.stringify(t)})`);
+      expect(!t?.result && t?.error === "user_cancelled", `취소 오류 결과(${JSON.stringify(t)})`);
     },
   },
 ];
