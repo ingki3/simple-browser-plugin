@@ -64,6 +64,12 @@ export function Options() {
   return (
     <div className="options">
       <h1>간편 도우미 설정</h1>
+      {draft.provider !== "openrouter" && (
+        <p className="intro">
+          ⚠ 지금 모델 제공자는 {providerAdapter(draft.provider).label}입니다. 아래 OpenRouter 키·모델은 제공자를 OpenRouter로
+          바꿀 때 쓰입니다. 제공자와 그 키·모델은 사이드 패널의 설정(⚙)에서 바꿉니다.
+        </p>
+      )}
       <p className="intro">
         OpenRouter API 키와 모델을 설정합니다. API 키는 이 기기의 chrome.storage.local에 평문으로
         저장되며, 외부로 전송되지 않습니다.
@@ -208,7 +214,7 @@ export function Options() {
         <button
           className="ghost-btn"
           onClick={testKey}
-          disabled={testing || !draft.openRouterApiKey || !draft.model}
+          disabled={testing || draft.provider !== "openrouter" || !draft.openRouterApiKey || !draft.model}
         >
           {testing ? "확인 중…" : "연결 테스트"}
         </button>
