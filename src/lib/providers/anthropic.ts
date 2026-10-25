@@ -18,12 +18,33 @@ const API_VERSION = "2023-06-01";
 export const ANTHROPIC_MODEL_SUGGESTIONS = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"] as const;
 export const ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5";
 
-// 생각(extended thinking)을 지원하는 모델인지(모델 ID 형태로만 — 요청 매개변수를 고르는 데 쓴다): Claude 3.7 이후.
+// 모델 ID의 세대(주·부 번호). claude-sonnet-5-5 → 5.5, claude-3-7-sonnet-latest → 3.7, claude-sonnet-4-20250514 → 4.0
+// (날짜는 부 번호가 아니다). 읽지 못하면 null.
+export function anthropicVersion(model: string): { major: number; minor: number } | null {
+  const m = /^claude-(?:[a-z]+-)?(\d+)(?:[-.](\d+))?/i.exec(model);
+  if (!m) return null;
+  const minor = m[2] && m[2].length <= 2 ? Number(m[2]) : 0;
+  return { major: Number(m[1]), minor };
+}
+
+// 생각 방식(모델 ID 형태로만 — 요청 매개변수를 고르는 데 쓴다):
+// - adaptive: Claude 4.6 이후·5 계열은 모델이 생각 양을 정하고 강도(effort)만 받는다(budget_tokens를 받지 않음).
+// - budget: Claude 3.7·4~4.5는 budget_tokens.
+// - none: 그 앞 모델은 생각을 켜지 않는다.
+export function anthropicThinkingMode(model: string): "adaptive" | "budget" | "none" {
+  const v = anthropicVersion(model);
+  if (!v) return "none";
+  if (v.major >= 5 || (v.major === 4 && v.minor >= 6)) return "adaptive";
+  if (v.major === 4 || (v.major === 3 && v.minor >= 7)) return "budget";
+  return "none";
+}
+
 export function anthropicThinkingModel(model: string): boolean {
-  return /^claude-3-7/i.test(model) || /^claude-[a-z]+-([4-9]|\d{2,})/i.test(model);
+  return anthropicThinkingMode(model) !== "none";
 }
 
 const THINKING_BUDGET = { agent: 4096, agent_low: 1024 } as const;
+const THINKING_EFFORT = { agent: "medium", agent_low: "low" } as const;
 
 type Block = Record<string, unknown>;
 
@@ -105,7 +126,8 @@ function jsonInstruction(format: Record<string, unknown>): string {
 
 export function anthropicPayload(req: ChatRequest, stream: boolean): Record<string, unknown> {
   const { system, messages } = anthropicMessages(req.messages);
-  const thinking = req.reasoning !== "off" && anthropicThinkingModel(req.model);
+  const mode = req.reasoning === "off" ? "none" : anthropicThinkingMode(req.model);
+  const intent = req.reasoning as "agent" | "agent_low";
   const sys = [system, req.responseFormat ? jsonInstruction(req.responseFormat) : ""].filter(Boolean).join("\n\n");
   return {
     model: req.model,
@@ -124,10 +146,11 @@ export function anthropicPayload(req: ChatRequest, stream: boolean): Record<stri
               : { type: "auto", ...(req.parallelToolCalls === false ? { disable_parallel_tool_use: true } : {}) },
         }
       : {}),
-    ...(thinking
-      ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET[req.reasoning as "agent" | "agent_low"] } }
-      : req.temperature !== undefined
-        ? { temperature: req.temperature }
+    // temperature 등 샘플링 값은 보내지 않는다(최신 모델은 기본값과 다른 값을 거부한다).
+    ...(mode === "adaptive"
+      ? { thinking: { type: "adaptive" }, output_config: { effort: THINKING_EFFORT[intent] } }
+      : mode === "budget"
+        ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET[intent] } }
         : {}),
     ...(stream ? { stream: true } : {}),
   };
@@ -203,6 +226,7 @@ export const anthropicAdapter: ProviderAdapter = {
   id: "anthropic",
   label: LABEL,
   supportsFileParts: true,
+  signsContext: true,
   async openStream(apiKey, req, signal) {
     const response = await chatRequest(ANTHROPIC_MESSAGES_URL, headers(apiKey), anthropicPayload(req, true), signal, LABEL);
     const convert = anthropicStreamConverter();

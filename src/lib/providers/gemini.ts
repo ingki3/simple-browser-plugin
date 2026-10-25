@@ -80,6 +80,7 @@ export const geminiAdapter: ProviderAdapter = {
   id: "gemini",
   label: LABEL,
   supportsFileParts: false,
+  signsContext: false,
   async openStream(apiKey, req, signal) {
     const response = await chatRequest(GEMINI_CHAT_URL, { Authorization: `Bearer ${apiKey}` }, geminiPayload(req, true), signal, LABEL);
     const index = geminiIndexer();

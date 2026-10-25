@@ -59,6 +59,8 @@ import {
 
 // 모델 요청 한 번의 결과(requestModel).
 interface ModelReply {
+  // 이 요청 끝에 붙였던 임시 안내(현재 시각·저장 링크 후보·마무리 안내). 문맥을 서명하는 제공자면 응답 앞에 기록으로 남긴다.
+  sentNotes: OpenRouterMessage[];
   assistantText: string;
   assistantReasoning: string;
   reasoningDetails: unknown[];
@@ -508,6 +510,12 @@ export class ChatAgent {
     };
   }
 
+  // 응답이 앞 문맥까지 서명하는 제공자(Anthropic)면 그 요청에 붙였던 임시 안내를 응답 앞에 기록으로 남긴다 — 다음 요청의
+  // 앞 문맥이 서명 때와 같게(기록을 덧붙이기만 한다). 다른 제공자는 지금처럼 요청마다 새로 붙인다.
+  private commitNotes(reply: ModelReply): void {
+    if (providerAdapter(this.provider).signsContext) this.history.push(...reply.sentNotes);
+  }
+
   // 대화 기록의 마지막 답(글자). 저장 카드 초안의 맥락으로 쓴다.
   private lastAnswerText(): string {
     for (let i = this.history.length - 1; i >= 0; i--) {
@@ -765,6 +773,11 @@ export class ChatAgent {
       if (this.activeRequest === controller) this.activeRequest = null;
       throw new Error("설정에서 모델 제공자·API 키·모델이 바뀌어 이 요청을 멈췄습니다. 다시 요청하면 새 설정으로 새 대화를 시작합니다.");
     }
+    const sentNotes: OpenRouterMessage[] = [
+      { role: "user", content: nowNote() },
+      ...(savedCandidates ? [{ role: "user" as const, content: savedCandidates }] : []),
+      ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
+    ];
     let stream: ChatStream;
     try {
       stream = await providerAdapter(this.provider).openStream(
@@ -774,10 +787,8 @@ export class ChatAgent {
           messages: [
             { role: "system", content: systemPrompt },
             ...this.history,
-            { role: "user" as const, content: nowNote() },
-            ...(savedCandidates ? [{ role: "user" as const, content: savedCandidates }] : []),
-            // 마무리 안내는 이 요청에만 붙이고 대화 기록에는 넣지 않는다.
-            ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
+            // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).
+            ...sentNotes,
           ],
           tools: availableTools().map((fn) => ({
             type: "function" as const,
@@ -882,7 +893,7 @@ export class ChatAgent {
       `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
     );
     if (this.isStale(turn)) return null;
-    return { assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
+    return { sentNotes, assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
   }
 
   // 도구 호출 순환 한도에 닿았을 때 지금까지 한 일을 보여 주고 extra번 더 진행할지 묻는다(#55). 사용자의 명시적 선택으로만
@@ -915,6 +926,7 @@ export class ChatAgent {
     if (reply.functionCalls.length) debugLog("wrapup:ignored_tool_calls", `${reply.functionCalls.length}`, "warn");
     const text = reply.assistantText.trim();
     if (text) {
+      this.commitNotes(reply);
       this.history.push({
         role: "assistant",
         content: reply.assistantText,
@@ -1002,6 +1014,7 @@ export class ChatAgent {
         );
       }
 
+      this.commitNotes(reply);
       this.history.push({
         role: "assistant",
         content: assistantText || null,

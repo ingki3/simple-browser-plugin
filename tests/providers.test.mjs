@@ -183,7 +183,7 @@ test("Gemini: Pro 모델의 생각 끄기는 low, 기록의 파일 조각은 안
   assert.equal(b.messages[0].content[1].type, "text");
 });
 
-import { anthropicMessages, anthropicPayload, anthropicStreamConverter, anthropicThinkingModel } from "../src/lib/providers/anthropic.ts";
+import { anthropicMessages, anthropicPayload, anthropicStreamConverter, anthropicThinkingMode, anthropicThinkingModel } from "../src/lib/providers/anthropic.ts";
 
 test("Anthropic: 기록 변환 — system 분리, 같은 역할 합치기(tool_result 먼저), 생각·도구 블록, PDF document", () => {
   const { system, messages } = anthropicMessages([
@@ -225,13 +225,23 @@ test("Anthropic: 요청 형식 — 도구·tool_choice·생각(에이전트만)�
     max_tokens: 8192,
     tools: [{ name: "describe_page", description: "관측", input_schema: { type: "object", properties: {} } }],
     tool_choice: { type: "auto", disable_parallel_tool_use: true },
-    thinking: { type: "enabled", budget_tokens: 4096 },
+    // 5 계열은 adaptive + effort, temperature는 보내지 않는다.
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium" },
     stream: true,
   });
   assert.deepEqual(anthropicPayload({ model: "claude-sonnet-5-5", messages: [{ role: "user", content: "x" }], tools, toolChoice: "none", reasoning: "agent_low", maxTokens: 8192 }, true).tool_choice, { type: "none" });
-  assert.equal(anthropicPayload({ model: "claude-sonnet-5-5", messages: [{ role: "user", content: "x" }], reasoning: "agent_low", maxTokens: 8192 }, true).thinking.budget_tokens, 1024);
+  assert.deepEqual(anthropicPayload({ model: "claude-sonnet-5-5", messages: [{ role: "user", content: "x" }], reasoning: "agent_low", maxTokens: 8192 }, true).output_config, { effort: "low" });
+  // 4~4.5와 3.7은 budget_tokens.
+  const b45 = anthropicPayload({ model: "claude-sonnet-4-5", messages: [{ role: "user", content: "x" }], reasoning: "agent", maxTokens: 8192, temperature: 0 }, true);
+  assert.deepEqual(b45.thinking, { type: "enabled", budget_tokens: 4096 });
+  assert.ok(!("temperature" in b45) && !("output_config" in b45));
+  assert.equal(anthropicPayload({ model: "claude-3-7-sonnet-latest", messages: [{ role: "user", content: "x" }], reasoning: "agent_low", maxTokens: 8192 }, true).thinking.budget_tokens, 1024);
+  assert.equal(anthropicThinkingMode("claude-opus-4-6"), "adaptive");
+  assert.equal(anthropicThinkingMode("claude-sonnet-4-20250514"), "budget");
+  assert.equal(anthropicThinkingMode("claude-fable-5-1"), "adaptive");
   const json = anthropicPayload({ model: "claude-haiku-5-5", messages: [{ role: "user", content: "x" }], reasoning: "off", maxTokens: 1500, temperature: 0, responseFormat: { type: "json_schema", json_schema: { schema: { type: "object" } } } }, false);
-  assert.ok(!("thinking" in json) && json.temperature === 0);
+  assert.ok(!("thinking" in json) && !("temperature" in json) && !("output_config" in json));
   assert.match(json.system, /JSON 객체 하나만/);
   assert.match(json.system, /"type":"object"/);
   // 생각을 지원하지 않는 옛 모델은 켜지 않는다.

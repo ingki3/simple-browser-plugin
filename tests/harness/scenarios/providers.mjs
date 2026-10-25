@@ -120,7 +120,10 @@ export default [
       const b = reqs[1].body;
       expect(typeof b.system === "string" && b.system.length > 0 && b.messages.every((m) => m.role !== "system"), "system 필드");
       expect(b.tools?.[0]?.input_schema && b.tool_choice?.type === "auto" && b.tool_choice.disable_parallel_tool_use === true, `도구 형식(${JSON.stringify(b.tool_choice)})`);
-      expect(b.thinking?.type === "enabled" && b.thinking.budget_tokens < b.max_tokens && !("temperature" in b), `생각(${JSON.stringify(b.thinking)})`);
+      expect(b.thinking?.type === "adaptive" && b.output_config?.effort === "medium" && !("temperature" in b), `생각(${JSON.stringify(b.thinking)})`);
+      // 기록은 덧붙이기만: 두 번째 요청의 첫 메시지(사용자 요청 + 그때 붙인 현재 시각 안내)가 첫 요청과 같다.
+      expect(JSON.stringify(b.messages[0]) === JSON.stringify(reqs[0].body.messages[0]), "앞 문맥 그대로");
+      expect(reqs[0].body.messages[0].content.some((c) => c.type === "text" && c.text.includes("현재 시각")), "첫 요청의 현재 시각 안내가 기록에 남음");
       const asst = b.messages.find((m) => m.role === "assistant");
       expect(asst?.content?.[0]?.type === "thinking" && asst.content[0].signature === "sig-10" && asst.content[1]?.type === "tool_use", `생각·도구 블록(${JSON.stringify(asst?.content).slice(0, 300)})`);
       const res = b.messages.flatMap((m) => m.content).find((c) => c.type === "tool_result");
