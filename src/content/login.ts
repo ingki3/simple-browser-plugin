@@ -85,6 +85,13 @@ function submitMethods(form: HTMLFormElement): string[] {
   return [...out].map((m) => (m === "post" || m === "dialog" ? m : "get"));
 }
 
+// 양식과 제출 버튼들이 정한 제출 대상 창(target·formtarget).
+function formTargets(form: HTMLFormElement): string[] {
+  const out = [(form.getAttribute("target") ?? "").trim()];
+  for (const c of formElements(form)) if (isSubmitControl(c) && c.hasAttribute("formtarget")) out.push((c.getAttribute("formtarget") ?? "").trim());
+  return out;
+}
+
 // 양식의 기본 제출 버튼(HTML의 암묵적 제출이 쓰는 첫 제출 컨트롤).
 // form.elements는 이미지 버튼을 빼므로 양식이 든 루트에서 그 양식의 이미지 버튼을 더하고 문서 순서로 첫 것을 고른다.
 function defaultSubmitter(form: HTMLFormElement): HTMLElement | null {
@@ -214,6 +221,8 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     [submit] = inspectTargets([submitId], submitCallId(callId), "c");
   }
   const hiddenSubmitBlock = submitter && p.form && !layoutVisible(submitter) ? hiddenSubmitterBlock(submitter, p.form) : null;
+  // 다른 창·프레임으로 보내는 양식(target·formtarget): 페이지가 직접 제출해도 이 문서에서 알 수 없어 중복 제출할 수 있다.
+  const otherTarget = !!p.form && formTargets(p.form).some((t) => t !== "" && t.toLowerCase() !== "_self");
   const submitUrls = new Set<string>();
   if (p.form) for (const u of formDestinations(p.form)) submitUrls.add(u);
   for (const f of fields) for (const u of [f.submitTo ?? "", ...(f.scopeFormActions ?? []), ...(f.aroundFormActions ?? [])]) if (u) submitUrls.add(u);
@@ -224,6 +233,7 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     newPassword: p.newPassword,
     otherFields: p.otherFields,
     hiddenSubmitBlock,
+    otherTarget,
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],
@@ -373,7 +383,7 @@ export async function fillLogin(
     const freshId = registerClickTarget(submitter);
     const [now] = inspectTargets([freshId], submitCallId(callId), "c");
     const why = submitControlBlock(now);
-    if (why) return { filled: total, total, submitted: false, note: `제출 버튼에 위험 신호가 생겨 제출하지 않았습니다(${why}).` };
+    if (why && why !== approved?.block) return { filled: total, total, submitted: false, note: `제출 버튼에 위험 신호가 생겨 제출하지 않았습니다(${why}).` };
   } else {
     // 승인 때 보이는 제출 버튼이 없었는데 지금 생겼으면(그 버튼의 위험 신호를 보지 않았다) 제출하지 않는다.
     const appeared = defaultSubmitter(form);

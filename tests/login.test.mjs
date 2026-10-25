@@ -264,6 +264,8 @@ test("로그인 모양: 막는 구조", () => {
   assert.match(loginShapeBlock(shape({ submitMethods: ["post", "dialog"] }), ORIGIN), /POST/);
   assert.match(loginShapeBlock(shape({ newPassword: true }), ORIGIN), /새 비밀번호/);
   assert.match(loginShapeBlock(shape({ otherFields: true }), ORIGIN), /입력 칸/);
+  assert.match(loginShapeBlock(shape({ otherTarget: true }), ORIGIN), /다른 창/);
+  assert.match(loginShapeBlock(shape({ fields: [{ ...shape().fields[0], sensitive: "payment" }] }), ORIGIN), /결제/);
   assert.match(loginShapeBlock(shape({ topUrl: "https://other.example/" }), ORIGIN), /끼워 넣은/);
   assert.match(loginShapeBlock(shape({ frameUrl: "http://acc.example/login" }), ORIGIN), /https/);
   assert.match(loginShapeBlock(shape({ submitUrls: ["about:too-many-forms"] }), ORIGIN), /다른 출처/);

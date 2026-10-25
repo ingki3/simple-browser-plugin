@@ -71,6 +71,8 @@ export interface LoginShape {
   otherFields: boolean;
   // 숨은 기본 제출 버튼의 위험(삭제 선언·삭제·결제 글자). 보이는 버튼은 submit 기술로 본다.
   hiddenSubmitBlock?: string | null;
+  // 다른 창·프레임으로 보내는 양식(target·formtarget).
+  otherTarget?: boolean;
   // 양식(<form>) 안인지. 아니면 채우기만 하고 제출은 모델의 click_element(기존 승인 규칙)로 한다.
   hasForm: boolean;
   // 양식의 제출 주소들(action, 제출 버튼의 formaction, 범위 안 다른 양식의 action). 절대 주소.
@@ -104,6 +106,9 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   if (shape.newPassword) return "새 비밀번호 칸이 있는 화면(가입·비밀번호 변경일 수 있음)";
   if (shape.otherFields) return "로그인 칸 밖의 입력 칸이 함께 있는 양식(정보 수정일 수 있음)";
   if (shape.hiddenSubmitBlock) return shape.hiddenSubmitBlock;
+  if (shape.otherTarget) return "다른 창·프레임으로 보내는 양식";
+  // 결제 정보 칸(카드 번호 등)이 넣을 칸이면 묻는다(입력 정책과 같은 분류).
+  if (shape.fields.some((f) => f.sensitive === "payment")) return "결제 정보 칸";
   for (const u of shape.submitUrls) {
     if (!onlyOrigin(u, origin)) return "로그인 정보를 다른 출처로 보내는 양식";
     // 결제·개인정보 주소로 보내는 양식(결제 재인증 등)은 클릭·입력과 같은 기준으로 묻는다.
