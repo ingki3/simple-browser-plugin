@@ -1,4 +1,4 @@
-import { SENSITIVE_TOOLS, type BgToPanel, type PageContent, type ToolName } from "@/lib/messages";
+import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { popupWhere } from "@/lib/actionTarget";
 import type { ModelId } from "@/lib/models";
@@ -36,7 +36,6 @@ import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
 import {
-  callContentTool,
   captureTurnTab,
   currentToolTab,
   inheritPopups,
@@ -650,15 +649,9 @@ export class ChatAgent {
       commitReads(turnTab, completed && !this.isStale(turn) && !this.externalContent);
       // 답을 마친 턴에서 탭이 다른 화면에 있으면 "이 페이지 기억하기"를 제안한다(시크릿·꺼짐·같은 주소는 제안 없음).
       if (completed && !this.isStale(turn) && "tabId" in turnTab) {
-        const offerTab = turnTab.tabId;
-        const offer = await makeOffer(offerTab, startUrl, {
+        const offer = await makeOffer(turnTab.tabId, startUrl, {
           query: userText,
           answer: this.lastAnswerText(),
-          // 이 탭의 맨 위 문서 글자(따라간 팝업이 아니라 제안하는 탭). 모델이 볼 수 있던 화면 글자다.
-          readPage: async () => {
-            const page = await callContentTool<PageContent>("get_page_content", {}, `offer-${turn}`, { tabId: offerTab, internal: false });
-            return { url: page.url, text: page.mainText };
-          },
         }).catch(() => null);
         if (offer && !this.isStale(turn)) this.send({ kind: "page_save_offer", offer });
       }

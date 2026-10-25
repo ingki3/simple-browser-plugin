@@ -49,12 +49,39 @@ export interface PageOffer {
 
 const offers = new Map<string, PageOffer>();
 
-// 초안을 만들 때 쓸 이 턴의 맥락(패널로 보내지 않는다): 사용자 요청, 모델의 마지막 답, 제안을 만들 때 읽은 페이지 글자.
+// 초안을 만들 때 쓸 이 턴의 맥락(패널로 보내지 않는다): 사용자 요청, 모델의 마지막 답. 페이지 글자는 makeOffer가 읽는다.
 export interface OfferContext {
   query: string;
   answer: string;
-  // 제안을 만들 때 한 번 읽는다(읽은 문서 주소와 글자). 실패하거나 주소가 제안과 다르면 쓰지 않는다.
-  readPage: () => Promise<{ url: string; text: string }>;
+}
+const SCREEN_TEXT_TIMEOUT_MS = 3000;
+
+// 제안하는 탭의 맨 위 문서 화면 글자(modelText — 입력 칸 값·편집 영역·숨은 내용 제외, #43). 제안 시점의 문서(documentId)와
+// 주소에만 묻는다(새로고침·이동한 새 문서는 읽지 않는다). 실패하면 빈 글자.
+async function topDocumentId(tabId: number): Promise<string | null> {
+  try {
+    return (await chrome.webNavigation.getFrame({ tabId, frameId: 0 }))?.documentId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function screenText(tabId: number, documentId: string | null, url: string): Promise<string> {
+  if (!documentId) return "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const res = (await Promise.race([
+      chrome.tabs.sendMessage(tabId, { kind: "screen_text", expectUrl: url, max: MAX_CONTEXT_PAGE }, { documentId }),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), SCREEN_TEXT_TIMEOUT_MS);
+      }),
+    ])) as { ok?: boolean; data?: unknown } | null;
+    return res?.ok && typeof res.data === "string" ? res.data : "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
 }
 const MAX_CONTEXT_QUERY = 1000;
 const MAX_CONTEXT_ANSWER = 1500;
@@ -78,6 +105,8 @@ export async function makeOffer(
   context?: OfferContext,
 ): Promise<PageOffer | null> {
   if (!(await getSettings()).rememberPages) return null;
+  // 문서를 먼저 고정한 뒤 탭 주소·제목을 읽는다. 그 사이 새로고침·이동하면 고정한 문서가 없어져 페이지 글자를 읽지 않는다.
+  const documentId = context ? await topDocumentId(tabId) : null;
   let tab: chrome.tabs.Tab;
   try {
     tab = await chrome.tabs.get(tabId);
@@ -104,9 +133,8 @@ export async function makeOffer(
     savedTemplates: list.map((l) => templateText(l.template)),
   };
   // 페이지 글자는 지금(턴이 끝난 화면) 읽어 둔다. 카드를 늦게 열면 탭이 다른 화면일 수 있다.
-  // 경고가 있는 주소는 초안을 묻지 않으므로 읽지 않는다. 읽는 사이 탭이 다른 문서로 바뀌었으면 그 글자는 버린다.
-  const read = context && !offer.warning ? await context.readPage().catch(() => null) : null;
-  const page = read && read.url === url ? read.text : "";
+  // 경고가 있는 주소는 초안을 묻지 않으므로 읽지 않는다.
+  const page = context && !offer.warning ? await screenText(tabId, documentId, url) : "";
   offers.set(offer.offerId, offer);
   contexts.set(offer.offerId, {
     query: (context?.query ?? "").slice(0, MAX_CONTEXT_QUERY),

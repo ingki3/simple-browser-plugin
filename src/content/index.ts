@@ -11,6 +11,7 @@ import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
+import { modelText } from "./modelText";
 import { endHandoff, handoffStatus, showHandoff } from "./handoff";
 import { armFrameGuard, cancelGuard, checkBeforePress, disarm, frameBlocked, guardAlive, guardResult } from "./trustedClick";
 import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
@@ -151,6 +152,15 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
       if (location.href !== msg.expectUrl) throw new Error("탭의 주소가 바뀌었습니다.");
       const content = extractMainContent();
       sendResponse({ ok: true, data: { url: location.href, title: content.title, mainText: content.mainText } } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
+  if (msg.kind === "screen_text") {
+    try {
+      if (location.href !== msg.expectUrl) throw new Error("탭의 주소가 바뀌었습니다.");
+      sendResponse({ ok: true, data: document.body ? modelText(document.body, msg.max) : "" } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
     }
