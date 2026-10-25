@@ -1,3 +1,4 @@
+import { FieldHelp } from "./FieldHelp";
 import { DEFAULT_CSV_MAX_CHARS, MAX_CSV_MAX_CHARS, MIN_CSV_MAX_CHARS } from "@/lib/messages";
 
 interface Props {
@@ -28,11 +29,11 @@ export function CsvMaxCharsField({ value, onChange }: Props) {
           기본값
         </button>
       </div>
-      <span className="field-help">
+      <FieldHelp summary="CSV·TSV 파일을 표로 읽을 때 이 글자 수까지만 읽습니다.">
         CSV·TSV 파일을 표로 읽을 때 이 글자 수까지만 읽고 나머지 행은 건너뜁니다({MIN_CSV_MAX_CHARS.toLocaleString()}~
         {MAX_CSV_MAX_CHARS.toLocaleString()}, 기본 {DEFAULT_CSV_MAX_CHARS.toLocaleString()}). 늘리면 더 많은 행을 읽지만
         요청마다 쓰는 토큰도 늘어납니다.
-      </span>
+      </FieldHelp>
     </label>
   );
 }

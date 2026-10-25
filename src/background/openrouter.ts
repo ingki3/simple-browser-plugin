@@ -1,4 +1,4 @@
-import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
+import { SENSITIVE_TOOLS, type BgToPanel, type Settings, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { describePopup, popupWhere } from "@/lib/actionTarget";
 import type { ModelId } from "@/lib/models";
@@ -305,6 +305,14 @@ export class ChatAgent {
   private inputSession = new InputSession();
 
   constructor(private readonly port: chrome.runtime.Port) {}
+
+  // 설정이 바뀌었을 때(저장소 변경). 이 대화가 쓰던 제공자·키·모델과 달라지면 이 대화가 연 페이지 번역(남은 배치·동적
+  // 재번역)을 멈춘다 — 한 번역이 두 제공자에 걸치지 않게(#108 후속, #99). 대화 기록은 다음 요청에서 새로 시작한다.
+  onSettingsChanged(next: Settings): void {
+    if (this.apiKey === null) return;
+    const now = activeModel(next);
+    if (now.provider !== this.provider || now.apiKey !== this.apiKey || now.model !== this.model) this.stopTranslations();
+  }
 
   abort(): void {
     this.currentTurn += 1;
