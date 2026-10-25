@@ -464,7 +464,9 @@ export class ChatAgent {
   // (clickedAt 앞 HANDOFF_POPUP_LEAD_MS부터) 열린 창만 클릭과 같은 규칙(settlePopups)으로 따라가고 안내 문구를 돌려준다.
   // 손 넘기기는 window.open을 감싸지 않으므로(오래 기다림) 따로 뜬 팝업 창만 따라간다 — 같은 창의 탭으로 열린 것은 그
   // 기록이 없어 따라가지 않는다.
-  private async watchHandoffPopups(turnTab: TurnTab): Promise<{ stop(): void; settle(clickedAt: number): Promise<string | null> } | null> {
+  private async watchHandoffPopups(
+    turnTab: TurnTab,
+  ): Promise<{ stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> } | null> {
     let tabId: number;
     try {
       tabId = await resolveTurnTab(turnTab);
@@ -482,12 +484,17 @@ export class ChatAgent {
     };
     return {
       stop: () => void stop(),
-      settle: async (clickedAt) => {
+      settle: async (clickedAt, stale) => {
         // 클릭이 연 창이 만들어질 시간을 잠깐 준다.
         await new Promise((r) => setTimeout(r, HANDOFF_POPUP_SETTLE_MS));
         const created = stop().filter((t) => clickedAt > 0 && (t.at ?? 0) >= clickedAt - HANDOFF_POPUP_LEAD_MS);
-        if (!created.length) return null;
-        const popup = await settlePopups(turnTab, before, created, { calls: [], complete: false }, tabId, sourceWindowId);
+        if (!created.length || stale() || "error" in turnTab) return null;
+        // 따라갈 창은 사본에서 정하고, 그 사이 중단·새 요청이 없을 때만 이 턴에 반영한다(중단된 턴이 팝업을 남기지 않게).
+        const scratch = { ...turnTab, popups: [...(turnTab.popups ?? [])] };
+        const popup = await settlePopups(scratch, before, created, { calls: [], complete: false }, tabId, sourceWindowId);
+        if (stale()) return null;
+        turnTab.popups = scratch.popups;
+        turnTab.originDocumentId = scratch.originDocumentId;
         return popup ? describePopup(popup).join(" ") : null;
       },
     };
@@ -1033,7 +1040,7 @@ export class ChatAgent {
         // 직접 조작할 사이트에서 사용자에게 넘겨 마친 호출(실행하지 않는다).
         let handoffOutcome: HandoffOutcome | null = null;
         // 손 넘기기 동안 이 탭이 여는 창 감시(#81)와 사용자가 대상을 누른 것을 안 시각.
-        let handoffPopups: { stop(): void; settle(clickedAt: number): Promise<string | null> } | null = null;
+        let handoffPopups: { stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> } | null = null;
         let handoffClickedAt = 0;
         // 이번 대화 허락(#53)으로 카드 없이 실행한 호출.
         let grantRan = false;
@@ -1162,10 +1169,11 @@ export class ChatAgent {
             });
             let by: HandoffOutcome = "confirmed";
             let expired = false;
-            const stopWatch = watchHandoff(shown, (outcome) => {
+            const stopWatch = watchHandoff(shown, (outcome, clickedAt) => {
               if (outcome === "expired") expired = true;
               else by = outcome;
-              if (outcome === "clicked") handoffClickedAt = Date.now();
+              // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 확인한 시각.
+              if (outcome === "clicked") handoffClickedAt = clickedAt || Date.now();
               this.pendingApprovals.get(callId)?.(!expired);
             });
             approved = await new Promise<boolean>((resolve) => {
@@ -1291,7 +1299,9 @@ export class ChatAgent {
         if (handoffOutcome && (toolName === "click_element" || toolName === "fill_form_fields")) {
           recordHandedOffAction(callId, turnTab);
           // 사용자의 클릭이 팝업 창을 열었으면 따라가고 그 안내를 붙인다(클릭 결과와 같은 문구).
-          const popupNote = handoffPopups ? await handoffPopups.settle(handoffClickedAt).catch(() => null) : null;
+          const popupNote = handoffPopups
+            ? await handoffPopups.settle(handoffClickedAt, () => this.isStale(turn)).catch(() => null)
+            : null;
           handoffPopups = null;
           if (this.isStale(turn)) return false;
           const note = `${handoffResultText(toolName, handoffOutcome)}${popupNote ? ` ${popupNote}` : ""}`;
