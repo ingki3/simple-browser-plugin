@@ -79,7 +79,13 @@ function scopeInputs(el: HTMLInputElement): { form: HTMLFormElement | null; inpu
     const inputs = [...new Set([...formElements(form), ...deepQuery(form, "input")])].filter((c): c is HTMLInputElement => isTag(c, "input"));
     return { form, inputs };
   }
-  const inputs = Array.from(formlessRoot(el).querySelectorAll("input"));
+  // 칸이 든 루트와 칸의 범위들(대화상자·shadow host·slot 너머)을 열린 shadow DOM까지 내려가며 본다(숨은 새 비밀번호 칸 등).
+  const inputs = [
+    ...new Set([
+      ...deepQuery(formlessRoot(el), "input"),
+      ...fieldFormlessScopes(el).flatMap((sc) => deepQuery(sc.node, "input")),
+    ]),
+  ].filter((c): c is HTMLInputElement => isTag(c, "input"));
   // 범위 조회가 대상 자신을 못 찾는 구조(다른 shadow root)여도 대상은 늘 본다.
   if (!inputs.includes(el)) inputs.push(el);
   return { form: null, inputs };
@@ -332,6 +338,7 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     // 다른 창·프레임으로 보내는 양식(target·formtarget): 페이지가 직접 제출해도 이 문서에서 알 수 없어 중복 제출할 수 있다.
     otherTarget: p.otherTarget,
     paymentField: p.paymentField,
+    fieldNames: fieldEls.map((e) => e.name).filter(Boolean),
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],
