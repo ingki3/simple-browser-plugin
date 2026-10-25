@@ -655,9 +655,10 @@ export class ChatAgent {
           query: userText,
           answer: this.lastAnswerText(),
           // 이 탭의 맨 위 문서 글자(따라간 팝업이 아니라 제안하는 탭). 모델이 볼 수 있던 화면 글자다.
-          readPage: async () =>
-            (await callContentTool<PageContent>("get_page_content", {}, `offer-${turn}`, { tabId: offerTab, internal: false }))
-              .mainText,
+          readPage: async () => {
+            const page = await callContentTool<PageContent>("get_page_content", {}, `offer-${turn}`, { tabId: offerTab, internal: false });
+            return { url: page.url, text: page.mainText };
+          },
         }).catch(() => null);
         if (offer && !this.isStale(turn)) this.send({ kind: "page_save_offer", offer });
       }

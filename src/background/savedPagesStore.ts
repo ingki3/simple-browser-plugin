@@ -53,8 +53,8 @@ const offers = new Map<string, PageOffer>();
 export interface OfferContext {
   query: string;
   answer: string;
-  // 제안을 만들 때 한 번 읽는다(실패하면 빈 글자).
-  readPage: () => Promise<string>;
+  // 제안을 만들 때 한 번 읽는다(읽은 문서 주소와 글자). 실패하거나 주소가 제안과 다르면 쓰지 않는다.
+  readPage: () => Promise<{ url: string; text: string }>;
 }
 const MAX_CONTEXT_QUERY = 1000;
 const MAX_CONTEXT_ANSWER = 1500;
@@ -104,7 +104,9 @@ export async function makeOffer(
     savedTemplates: list.map((l) => templateText(l.template)),
   };
   // 페이지 글자는 지금(턴이 끝난 화면) 읽어 둔다. 카드를 늦게 열면 탭이 다른 화면일 수 있다.
-  const page = context ? await context.readPage().catch(() => "") : "";
+  // 경고가 있는 주소는 초안을 묻지 않으므로 읽지 않는다. 읽는 사이 탭이 다른 문서로 바뀌었으면 그 글자는 버린다.
+  const read = context && !offer.warning ? await context.readPage().catch(() => null) : null;
+  const page = read && read.url === url ? read.text : "";
   offers.set(offer.offerId, offer);
   contexts.set(offer.offerId, {
     query: (context?.query ?? "").slice(0, MAX_CONTEXT_QUERY),
@@ -125,12 +127,13 @@ export async function makeOffer(
 // 저장 카드의 초안: 이름·용도와 쿼리 값마다 고정·자리·빼기를 모델이 제안한다(어떤 값이 검색어인지는 뜻의 판단이라 코드가
 // 파라미터 이름으로 정하지 않는다). 사용자 요청·모델의 답·페이지 글자를 함께 보내 이 페이지를 왜 열었는지에 맞게 정하게 한다.
 // 보내는 것은 이 턴에 모델이 이미 받았거나 볼 수 있던 것(탭 주소·제목·사용자 요청·답·화면 글자)이다. 주소에 결제·개인정보
-// 단서가 있으면 쿼리 값은 빼고 이름만 보낸다. 사용자가 카드에서 고쳐 저장한다. 실패하면 null(모두 고정으로 시작).
+// 단서가 있으면 경로·제목·본문으로도 값이 샐 수 있어 초안을 묻지 않는다(사용자가 직접 정한다). 실패하면 null(모두 고정).
 export async function draftLink(offerId: string): Promise<LinkDraft | null> {
   const offer = offers.get(offerId);
   if (!offer) throw new Error("저장 제안이 만료됐습니다. 다시 요청해 주세요.");
   const { openRouterApiKey, model } = await getSettings();
   if (!openRouterApiKey) return null;
+  if (offer.warning) return null;
   const ctx = contexts.get(offerId);
   const prompt = [
     "사용자가 도우미와 대화하다 도착한 웹 페이지 주소를 다시 쓸 수 있는 링크 템플릿으로 저장하려 한다. JSON 하나로만 답한다.",
@@ -147,7 +150,7 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
       // 제목이 없어 주소를 제목으로 쓴 경우는 보내지 않는다(쿼리 값이 제목으로 새지 않게 — 주소는 base·query로만).
       title: ctx?.titleFromUrl === false ? offer.title : "",
       base: offer.url.split("?")[0].split("#")[0],
-      query: offer.params.map((p, i) => (offer.warning ? { index: i, key: p.key } : { index: i, key: p.key, value: p.value })),
+      query: offer.params.map((p, i) => ({ index: i, key: p.key, value: p.value })),
       page: ctx?.page ?? "",
     }),
   ].join("\n");

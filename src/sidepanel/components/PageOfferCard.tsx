@@ -15,7 +15,7 @@ type Mode = ParamChoice["mode"];
 
 // "이 페이지 기억하기"(#30·#86): 이름·용도를 확인하고, 쿼리 값마다 고정·입력 자리·빼기를 골라 다시 쓸 수 있는 링크로 저장한다.
 // 카드를 열면 모델에 초안(이름·용도·값마다 고정·자리·빼기)을 한 번 묻고(이 턴의 요청·답·페이지 글자를 함께 보낸다), 사용자가
-// 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면 쿼리 값은 빼고 묻고, 저장할 때 한 번 더 확인한다.
+// 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면 초안을 묻지 않고, 저장할 때 한 번 더 확인한다.
 export function PageOfferCard({ offer }: Props) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(offer.title);
@@ -44,6 +44,8 @@ export function PageOfferCard({ offer }: Props) {
 
   const openCard = async () => {
     setOpen(true);
+    // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(경로·제목·본문으로도 값이 샐 수 있어 사용자가 직접 정한다).
+    if (offer.warning) return;
     const seq = ++draftSeq.current;
     setDrafting(true);
     try {
