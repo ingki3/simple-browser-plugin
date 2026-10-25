@@ -1,4 +1,5 @@
-import { PORT_NAME, type PanelToBg } from "@/lib/messages";
+import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/messages";
+import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
 import { invalidateSettingsCache } from "./storage";
 import { deletePages, draftLink, listPages, savePage, updateLink } from "./savedPagesStore";
@@ -81,7 +82,14 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
 
+  // 설정이 바뀌면 지금 대화에 알린다(제공자·키·모델이 바뀌면 진행 중인 번역을 멈춘다).
+  const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area === "local" && changes[SETTINGS_KEY]) agent?.onSettingsChanged(normalizeSettings(changes[SETTINGS_KEY].newValue as Partial<Settings> | undefined));
+  };
+  chrome.storage.onChanged.addListener(onStorage);
+
   port.onDisconnect.addListener(() => {
+    chrome.storage.onChanged.removeListener(onStorage);
     agent?.abort();
     agent = null;
     activeConversationId = null;

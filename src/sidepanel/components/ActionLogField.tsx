@@ -1,3 +1,4 @@
+import { FieldHelp } from "./FieldHelp";
 import { useEffect, useState } from "react";
 
 interface Props {
@@ -46,11 +47,11 @@ export function ActionLogField({ enabled, onToggle }: Props) {
           {busy ? "지우는 중…" : "기록 지우기"}
         </button>
       </div>
-      <span className="field-help">
+      <FieldHelp summary="누르거나 채운 기록과 통한 읽기 방법만 이 브라우저에 남깁니다(입력값·페이지 내용은 남기지 않음).">
         어느 페이지에서 무엇을 누르거나 채웠는지와 그 결과, 같은 구조의 페이지에서 내용을 읽는 데 통한 방법(선택자·검색어)만
         남깁니다. 읽기 방법은 다음에 같은 구조의 페이지를 볼 때 먼저 시도합니다. 입력한 값과 페이지 내용은 남기지 않고,
         외부로 보내지 않습니다. 시크릿 창은 기록하지 않습니다. 30일이 지나거나 500건을 넘으면 오래된 것부터 지웁니다.
-      </span>
+      </FieldHelp>
     </div>
   );
 }

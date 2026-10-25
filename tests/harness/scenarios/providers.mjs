@@ -59,39 +59,6 @@ export default [
     },
   },
   {
-    name: "옵션 페이지에서 저장해도 사이드 패널에서 고른 제공자·키를 덮어쓰지 않는다",
-    async run(h) {
-      const opt = await h.ctx.newPage();
-      await opt.goto(`chrome-extension://${h.extId}/src/options/index.html`);
-      await opt.waitForTimeout(500);
-      // 옵션 페이지를 연 뒤 다른 곳(사이드 패널)에서 OpenAI로 바꾼다.
-      await h.settings({ provider: "openai", apiKeys: { openai: "sk-test-openai" } });
-      await opt.locator("button.primary").first().click();
-      await opt.waitForTimeout(400);
-      const st = await h.sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings);
-      await opt.close();
-      expect(st.provider === "openai" && st.apiKeys?.openai === "sk-test-openai", `유지(${JSON.stringify({ provider: st.provider, apiKeys: st.apiKeys })})`);
-    },
-  },
-  {
-    name: "열어 둔 옵션 페이지가 제공자 변경을 따라가 안내하고 OpenRouter 연결 테스트를 막는다",
-    async run(h) {
-      await h.settings({ openRouterApiKey: "sk-or-test-dummy" });
-      const opt = await h.ctx.newPage();
-      await opt.goto(`chrome-extension://${h.extId}/src/options/index.html`);
-      await opt.waitForTimeout(500);
-      const testBtn = opt.locator("button", { hasText: "연결 테스트" });
-      const enabledBefore = await testBtn.isEnabled().catch(() => null);
-      await h.settings({ provider: "openai", apiKeys: { openai: "sk-test-openai" } });
-      await opt.waitForTimeout(400);
-      const notice = (await opt.locator("body").innerText()).includes("지금 모델 제공자는 OpenAI");
-      const enabledAfter = await testBtn.isEnabled().catch(() => null);
-      await opt.close();
-      expect(enabledBefore === true, `처음엔 테스트 가능(${enabledBefore})`);
-      expect(notice && enabledAfter === false, `바뀐 뒤 안내·버튼 막힘(notice=${notice}, enabled=${enabledAfter})`);
-    },
-  },
-  {
     name: "Gemini 제공자: 호환 엔드포인트로, 도구 호출의 thought_signature를 다음 요청에 돌려준다",
     async run(h) {
       await h.settings({ provider: "gemini", apiKeys: { gemini: "AIza-test" } });

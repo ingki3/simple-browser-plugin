@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
 import { AutoApproveField } from "./AutoApproveField";
 import { RememberPagesField } from "./RememberPagesField";
@@ -46,6 +46,9 @@ import {
   type Settings,
 } from "@/lib/messages";
 import { useSettings } from "../hooks/useSettings";
+import { FieldHelp } from "./FieldHelp";
+
+const SAVE_DELAY_MS = 600;
 import { KO } from "../i18n/ko";
 
 interface Props {
@@ -70,19 +73,56 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [draft, setDraft] = useState(settings);
   const direct = draft.provider === "openrouter" ? null : DIRECT_PROVIDERS[draft.provider];
   const [showKey, setShowKey] = useState(false);
+  // 바꾸면 바로 저장(#99): 고르는 항목은 곧바로, 글자 칸은 입력이 멈추면(SAVE_DELAY_MS) 저장한다. 닫을 때 남은 저장을 마친다.
+  // API 키만 "저장" 버튼으로 확정한다(keyDraft).
+  const pending = useRef<{ timer: number; next: Settings } | null>(null);
+  const [savedAt, setSavedAt] = useState(0);
+  const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
+  const [keyDraft, setKeyDraft] = useState(savedKey);
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
   const [googleBusy, setGoogleBusy] = useState<"connect" | "disconnect" | null>(null);
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [diag, setDiag] = useState<string | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
 
+  // 저장 뒤 다시 읽힌 설정이 입력 중인 글자를 덮지 않게, 처음 불러올 때와 서랍을 열 때만 설정에서 다시 채운다.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   useEffect(() => {
-    if (loaded) setDraft(settings);
-  }, [loaded, settings]);
+    if (loaded) setDraft(settingsRef.current);
+  }, [loaded]);
+  useEffect(() => {
+    if (open) setDraft(settingsRef.current);
+  }, [open]);
+  // 제공자를 바꾸거나 서랍을 열면 키 칸을 그 제공자의 저장된 키로.
+  useEffect(() => {
+    setKeyDraft(savedKey);
+  }, [draft.provider, open, savedKey]);
 
+  // "저장됨"은 잠깐만 보인다.
   useEffect(() => {
-    if (open) setDraft(settings);
-  }, [open, settings]);
+    if (!savedAt) return;
+    const t = window.setTimeout(() => setSavedAt(0), 1500);
+    return () => window.clearTimeout(t);
+  }, [savedAt]);
+
+  const flush = async () => {
+    const p = pending.current;
+    if (!p) return;
+    window.clearTimeout(p.timer);
+    pending.current = null;
+    await save({ ...p.next, maxToolHops: clampHops(p.next.maxToolHops) });
+    setSavedAt(Date.now());
+  };
+  // patch를 반영하고 저장한다. delay가 있으면 그동안 다음 변경을 모아 한 번에 저장한다.
+  const update = (patch: Partial<Settings>, delay = 0) => {
+    const next = { ...(pending.current?.next ?? draft), ...patch };
+    setDraft(next);
+    if (pending.current) window.clearTimeout(pending.current.timer);
+    pending.current = { next, timer: window.setTimeout(() => void flush(), delay) };
+  };
+  const saveKey = () =>
+    update(direct ? { apiKeys: { ...draft.apiKeys, [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
 
   const refreshGoogleStatus = async () => {
     try {
@@ -104,7 +144,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
     setGoogleBusy("connect");
     setGoogleError(null);
     try {
-      await save({ ...draft, maxToolHops: clampHops(draft.maxToolHops) });
+      await flush();
       let res: { ok: boolean; error?: string } | undefined;
       try {
         res = (await chrome.runtime.sendMessage({ kind: "google_connect" })) as
@@ -193,21 +233,20 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
   // noop — hoisted above
 
-  const handleSave = async () => {
-    await save({ ...draft, maxToolHops: clampHops(draft.maxToolHops) });
-    onClose();
-  };
-
-  const handleCancel = () => {
-    setDraft(settings);
+  const handleClose = async () => {
+    await flush();
     onClose();
   };
 
   return (
-    <div className="drawer-overlay" onClick={handleCancel}>
+    <div className="drawer-overlay" onClick={() => void handleClose()}>
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-header">
           <h2>{KO.settingsTitle}</h2>
+          <span className="drawer-saved" aria-live="polite">{savedAt ? "저장됨" : ""}</span>
+          <button type="button" className="ghost-btn" onClick={() => void handleClose()}>
+            닫기
+          </button>
         </div>
         {googleError && (
           <div className="drawer-alert">
@@ -216,260 +255,224 @@ export function SettingsDrawer({ open, onClose }: Props) {
           </div>
         )}
         <div className="drawer-body">
-          <label className="field">
-            <span className="field-label">모델 제공자</span>
-            <select
-              value={draft.provider}
-              onChange={(e) => setDraft({ ...draft, provider: e.target.value as Settings["provider"] })}
-            >
-              <option value="openrouter">OpenRouter (여러 회사 모델)</option>
-              <option value="openai">OpenAI (ChatGPT API 키)</option>
-              <option value="gemini">Google Gemini (AI Studio API 키)</option>
-              <option value="anthropic">Anthropic Claude (Claude API 키)</option>
-            </select>
-            <span className="field-help">
-              대화·페이지 내용은 고른 제공자로만 보냅니다. 제공자나 모델을 바꾸면 대화를 새로 시작합니다.
-            </span>
-          </label>
+          <details className="settings-group" open>
+            <summary>시작하기</summary>
+            <label className="field">
+              <span className="field-label">모델 제공자</span>
+              <select value={draft.provider} onChange={(e) => update({ provider: e.target.value as Settings["provider"] })}>
+                <option value="openrouter">OpenRouter (여러 회사 모델)</option>
+                <option value="openai">OpenAI (ChatGPT API 키)</option>
+                <option value="gemini">Google Gemini (AI Studio API 키)</option>
+                <option value="anthropic">Anthropic Claude (Claude API 키)</option>
+              </select>
+              <FieldHelp summary="대화·페이지 내용은 고른 제공자로만 보냅니다.">
+                제공자나 모델을 바꾸면 대화를 새로 시작하고, 진행 중인 페이지 번역도 멈춥니다.
+              </FieldHelp>
+            </label>
 
-          <label className="field">
-            <span className="field-label">{direct ? `${direct.label} API 키` : KO.apiKeyLabel}</span>
-            <div className="key-row">
-              <input
-                type={showKey ? "text" : "password"}
-                value={direct ? (draft.apiKeys[direct.id] ?? "") : draft.openRouterApiKey}
-                onChange={(e) =>
-                  setDraft(
-                    direct
-                      ? { ...draft, apiKeys: { ...draft.apiKeys, [direct.id]: e.target.value } }
-                      : { ...draft, openRouterApiKey: e.target.value },
-                  )
-                }
-                placeholder={direct ? direct.keyPlaceholder : "sk-or-v1-..."}
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button type="button" className="ghost-btn" onClick={() => setShowKey((v) => !v)}>
-                {showKey ? KO.apiKeyHide : KO.apiKeyShow}
-              </button>
+            <div className="field">
+              <span className="field-label">{direct ? `${direct.label} API 키` : KO.apiKeyLabel}</span>
+              <div className="key-row">
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={keyDraft}
+                  onChange={(e) => setKeyDraft(e.target.value)}
+                  placeholder={direct ? direct.keyPlaceholder : "sk-or-v1-..."}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <button type="button" className="ghost-btn" onClick={() => setShowKey((v) => !v)}>
+                  {showKey ? KO.apiKeyHide : KO.apiKeyShow}
+                </button>
+                <button type="button" className="primary" disabled={keyDraft.trim() === savedKey} onClick={saveKey}>
+                  저장
+                </button>
+              </div>
+              <FieldHelp summary={keyDraft.trim() !== savedKey ? "바꾼 키는 저장을 눌러야 적용됩니다." : direct ? direct.keyHelp : "openrouter.ai/keys에서 발급합니다."}>
+                키는 이 브라우저(chrome.storage.local)에만 평문으로 저장되고, 그 제공자를 부를 때만 씁니다.
+              </FieldHelp>
             </div>
-            <span className="field-help">
-              {direct ? `${direct.keyHelp} 이 브라우저에만 저장됩니다.` : KO.apiKeyHelp}
-            </span>
-          </label>
 
-          <label className="field">
-            <span className="field-label">{KO.systemPromptLabel}</span>
-            <textarea
-              value={draft.systemPrompt}
-              onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
-              placeholder="예: 모든 출력은 한글로 작성해줘."
-              maxLength={MAX_SYSTEM_PROMPT_LENGTH}
-              rows={5}
-            />
-            <span className="field-help">{KO.systemPromptHelp}</span>
-          </label>
-
-          <label className="field">
-            <span className="field-label">{KO.modelLabel}</span>
-            {direct ? (
-              <>
-                <input
-                  type="text"
-                  list={`${direct.id}-models`}
-                  value={draft.providerModels[direct.id] ?? ""}
-                  onChange={(e) =>
-                    setDraft({ ...draft, providerModels: { ...draft.providerModels, [direct.id]: e.target.value } })
-                  }
-                  placeholder={direct.defaultModel}
-                  spellCheck={false}
-                />
-                <datalist id={`${direct.id}-models`}>
-                  {direct.suggestions.map((id) => (
-                    <option key={id} value={id} />
-                  ))}
-                </datalist>
-                <span className="field-help">
-                  {direct.label} 모델 ID(비우면 {direct.defaultModel}). 도구 호출을 지원하는 모델이어야 합니다.
-                </span>
-              </>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  list="openrouter-models"
-                  value={draft.model}
-                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                  placeholder="provider/model"
-                  spellCheck={false}
-                />
-                <datalist id="openrouter-models">
-                  {MODEL_IDS.map((id) => (
-                    <option key={id} value={id} label={MODEL_LABELS[id]} />
-                  ))}
-                </datalist>
-                <span className="field-help">
-                  OpenRouter 모델 ID를 입력합니다. 모델은 tool calling을 지원해야 합니다.
-                </span>
-              </>
-            )}
-          </label>
-
-          <label className="field">
-            <span className="field-label">{KO.translationLangLabel}</span>
-            <input
-              type="text"
-              value={draft.translationTargetLang}
-              onChange={(e) =>
-                setDraft({ ...draft, translationTargetLang: e.target.value })
-              }
-              placeholder="ko"
-            />
-          </label>
-
-          <label className="field">
-            <span className="field-label">{KO.downloadFolderLabel}</span>
-            <input
-              type="text"
-              value={draft.downloadFolderPrefix}
-              onChange={(e) =>
-                setDraft({ ...draft, downloadFolderPrefix: e.target.value })
-              }
-              placeholder="simple-browser-plugin"
-            />
-          </label>
-
-          <label className="field">
-            <span className="field-label">{KO.maxToolHopsLabel}</span>
-            <input
-              type="number"
-              min={MIN_MAX_TOOL_HOPS}
-              max={MAX_MAX_TOOL_HOPS}
-              step={1}
-              value={draft.maxToolHops}
-              onChange={(e) =>
-                setDraft({ ...draft, maxToolHops: Number(e.target.value) })
-              }
-            />
-            <span className="field-help">{KO.maxToolHopsHelp}</span>
-          </label>
-
-          <CsvMaxCharsField
-            value={draft.csvMaxChars}
-            onChange={(csvMaxChars) => setDraft({ ...draft, csvMaxChars })}
-          />
-
-          <AutoApproveField
-            enabled={draft.autoApprove}
-            onToggle={(autoApprove) => setDraft({ ...draft, autoApprove })}
-          />
-
-          <ShowThinkingField
-            enabled={draft.showThinking}
-            onToggle={(showThinking) => setDraft({ ...draft, showThinking })}
-          />
-
-          <RememberPagesField
-            enabled={draft.rememberPages}
-            onToggle={(rememberPages) => setDraft({ ...draft, rememberPages })}
-          />
-
-          <TrustedInputField
-            enabled={draft.trustedInput}
-            onToggle={(trustedInput) => setDraft({ ...draft, trustedInput })}
-          />
-
-          <ManualSitesField
-            sites={draft.manualSites}
-            onChange={(manualSites) => setDraft({ ...draft, manualSites })} currentTabButton
-          />
-
-          <ActionLogField
-            enabled={draft.actionLogEnabled}
-            onToggle={(actionLogEnabled) => setDraft({ ...draft, actionLogEnabled })}
-          />
-
-          <div className="field">
-            <span className="field-label">Google Workspace (Sheets / Docs / Drive)</span>
-            <div className="google-status-row">
-              {googleStatus?.connected ? (
-                <span className="tag-ok">● 연결됨</span>
-              ) : googleStatus?.configured ? (
-                <span className="tag-warn">● 연결 필요</span>
+            <label className="field">
+              <span className="field-label">{KO.modelLabel}</span>
+              {direct ? (
+                <>
+                  <input
+                    type="text"
+                    list={`${direct.id}-models`}
+                    value={draft.providerModels[direct.id] ?? ""}
+                    onChange={(e) => update({ providerModels: { ...draft.providerModels, [direct.id]: e.target.value } }, SAVE_DELAY_MS)}
+                    placeholder={direct.defaultModel}
+                    spellCheck={false}
+                  />
+                  <datalist id={`${direct.id}-models`}>
+                    {direct.suggestions.map((id) => (
+                      <option key={id} value={id} />
+                    ))}
+                  </datalist>
+                  <FieldHelp summary={`비우면 ${direct.defaultModel}. 도구 호출을 지원하는 모델이어야 합니다.`} />
+                </>
               ) : (
-                <span className="tag-off">● manifest 설정 필요</span>
+                <>
+                  <input
+                    type="text"
+                    list="openrouter-models"
+                    value={draft.model}
+                    onChange={(e) => update({ model: e.target.value }, SAVE_DELAY_MS)}
+                    placeholder="provider/model"
+                    spellCheck={false}
+                  />
+                  <datalist id="openrouter-models">
+                    {MODEL_IDS.map((id) => (
+                      <option key={id} value={id} label={MODEL_LABELS[id]} />
+                    ))}
+                  </datalist>
+                  <FieldHelp summary="OpenRouter 모델 ID. 도구 호출을 지원하는 모델이어야 합니다." />
+                </>
               )}
-              <button
-                type="button"
-                className="ghost-btn"
-                disabled={googleBusy !== null || !googleStatus?.configured}
-                onClick={connectGoogle}
-              >
-                {googleBusy === "connect" ? "연결 중…" : "Google 연결"}
-              </button>
-              {googleStatus?.connected && (
+            </label>
+          </details>
+
+          <details className="settings-group">
+            <summary>동작</summary>
+            <AutoApproveField enabled={draft.autoApprove} onToggle={(autoApprove) => update({ autoApprove })} />
+            <ManualSitesField sites={draft.manualSites} onChange={(manualSites) => update({ manualSites })} currentTabButton />
+            <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
+          </details>
+
+          <details className="settings-group">
+            <summary>기억·기록</summary>
+            <RememberPagesField enabled={draft.rememberPages} onToggle={(rememberPages) => update({ rememberPages })} />
+            <ActionLogField enabled={draft.actionLogEnabled} onToggle={(actionLogEnabled) => update({ actionLogEnabled })} />
+          </details>
+
+          <details className="settings-group">
+            <summary>연결</summary>
+            <div className="field">
+              <span className="field-label">Google Workspace (Sheets / Docs / Drive)</span>
+              <div className="google-status-row">
+                {googleStatus?.connected ? (
+                  <span className="tag-ok">● 연결됨</span>
+                ) : googleStatus?.configured ? (
+                  <span className="tag-warn">● 연결 필요</span>
+                ) : (
+                  <span className="tag-off">● manifest 설정 필요</span>
+                )}
                 <button
                   type="button"
                   className="ghost-btn"
-                  disabled={googleBusy !== null}
-                  onClick={disconnectGoogle}
+                  disabled={googleBusy !== null || !googleStatus?.configured}
+                  onClick={connectGoogle}
                 >
-                  {googleBusy === "disconnect" ? "해제 중…" : "연결 해제"}
+                  {googleBusy === "connect" ? "연결 중…" : "Google 연결"}
                 </button>
-              )}
-              <button
-                type="button"
-                className="ghost-btn"
-                disabled={diagBusy}
-                onClick={runDiag}
-              >
-                {diagBusy ? "진단 중…" : "연결 진단"}
-              </button>
-            </div>
-            {!googleStatus?.configured && (
-              <div className="setup-card">
-                <strong>OAuth 설정 4단계 (1회성)</strong>
-                <ol>
-                  <li><a href="https://console.cloud.google.com/apis/library" target="_blank" rel="noopener">Google Cloud 콘솔</a>에서 Sheets · Docs · Drive API 활성화</li>
-                  <li>"OAuth 동의 화면" 구성 → 본인 이메일을 테스터 등록</li>
-                  <li>"사용자 인증 정보" → "OAuth 클라이언트 ID" 생성<br />
-                    → 유형 <strong>"Chrome 확장 프로그램"</strong><br />
-                    → Application ID: <code className="copy-hint">이 확장의 ID</code> (chrome://extensions에서 복사)</li>
-                  <li>발급된 client_id를 <code>manifest.config.ts</code>의 <code>GOOGLE_OAUTH_CLIENT_ID</code>에 붙여넣기 → <code>npm run build</code> → 확장 재설치</li>
-                </ol>
-                <p className="setup-note">redirect URI 등록은 필요 없습니다 (Chrome이 내부 처리).</p>
+                {googleStatus?.connected && (
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    disabled={googleBusy !== null}
+                    onClick={disconnectGoogle}
+                  >
+                    {googleBusy === "disconnect" ? "해제 중…" : "연결 해제"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  disabled={diagBusy}
+                  onClick={runDiag}
+                >
+                  {diagBusy ? "진단 중…" : "연결 진단"}
+                </button>
               </div>
-            )}
-            {googleError && <span className="field-error">{googleError}</span>}
-            {diag && (
-              <div className="diag-box">
-                <div className="diag-header">
-                  <span>진단 결과</span>
-                  <div className="diag-actions">
-                    <button type="button" className="ghost-btn" onClick={copyDiag}>
-                      복사
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost-btn"
-                      onClick={() => setDiag(null)}
-                    >
-                      닫기
-                    </button>
-                  </div>
+              {!googleStatus?.configured && (
+                <div className="setup-card">
+                  <strong>OAuth 설정 4단계 (1회성)</strong>
+                  <ol>
+                    <li><a href="https://console.cloud.google.com/apis/library" target="_blank" rel="noopener">Google Cloud 콘솔</a>에서 Sheets · Docs · Drive API 활성화</li>
+                    <li>"OAuth 동의 화면" 구성 → 본인 이메일을 테스터 등록</li>
+                    <li>"사용자 인증 정보" → "OAuth 클라이언트 ID" 생성<br />
+                      → 유형 <strong>"Chrome 확장 프로그램"</strong><br />
+                      → Application ID: <code className="copy-hint">이 확장의 ID</code> (chrome://extensions에서 복사)</li>
+                    <li>발급된 client_id를 <code>manifest.config.ts</code>의 <code>GOOGLE_OAUTH_CLIENT_ID</code>에 붙여넣기 → <code>npm run build</code> → 확장 재설치</li>
+                  </ol>
+                  <p className="setup-note">redirect URI 등록은 필요 없습니다 (Chrome이 내부 처리).</p>
                 </div>
-                <pre className="diag-body">{diag}</pre>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="drawer-footer">
-          <button type="button" className="ghost-btn" onClick={handleCancel}>
-            {KO.cancel}
-          </button>
-          <button type="button" className="primary" onClick={handleSave}>
-            {KO.save}
-          </button>
+              )}
+              {googleError && <span className="field-error">{googleError}</span>}
+              {diag && (
+                <div className="diag-box">
+                  <div className="diag-header">
+                    <span>진단 결과</span>
+                    <div className="diag-actions">
+                      <button type="button" className="ghost-btn" onClick={copyDiag}>
+                        복사
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-btn"
+                        onClick={() => setDiag(null)}
+                      >
+                        닫기
+                      </button>
+                    </div>
+                  </div>
+                  <pre className="diag-body">{diag}</pre>
+                </div>
+              )}
+            </div>
+          </details>
+
+          <details className="settings-group">
+            <summary>고급</summary>
+            <label className="field">
+              <span className="field-label">{KO.systemPromptLabel}</span>
+              <textarea
+                value={draft.systemPrompt}
+                onChange={(e) => update({ systemPrompt: e.target.value }, SAVE_DELAY_MS)}
+                placeholder="예: 모든 출력은 한글로 작성해줘."
+                maxLength={MAX_SYSTEM_PROMPT_LENGTH}
+                rows={5}
+              />
+              <FieldHelp summary={KO.systemPromptHelp} />
+            </label>
+
+            <label className="field">
+              <span className="field-label">{KO.translationLangLabel}</span>
+              <input
+                type="text"
+                value={draft.translationTargetLang}
+                onChange={(e) => update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS)}
+                placeholder="ko"
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-label">{KO.downloadFolderLabel}</span>
+              <input
+                type="text"
+                value={draft.downloadFolderPrefix}
+                onChange={(e) => update({ downloadFolderPrefix: e.target.value }, SAVE_DELAY_MS)}
+                placeholder="simple-browser-plugin"
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-label">{KO.maxToolHopsLabel}</span>
+              <input
+                type="number"
+                min={MIN_MAX_TOOL_HOPS}
+                max={MAX_MAX_TOOL_HOPS}
+                step={1}
+                value={draft.maxToolHops}
+                onChange={(e) => update({ maxToolHops: Number(e.target.value) }, SAVE_DELAY_MS)}
+              />
+              <FieldHelp summary={KO.maxToolHopsHelp} />
+            </label>
+
+            <CsvMaxCharsField value={draft.csvMaxChars} onChange={(csvMaxChars) => update({ csvMaxChars }, SAVE_DELAY_MS)} />
+            <ShowThinkingField enabled={draft.showThinking} onToggle={(showThinking) => update({ showThinking })} />
+          </details>
         </div>
       </div>
     </div>

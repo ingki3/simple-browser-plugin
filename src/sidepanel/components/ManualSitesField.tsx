@@ -1,3 +1,4 @@
+import { FieldHelp } from "./FieldHelp";
 import { useEffect, useState } from "react";
 import { MAX_MANUAL_SITES, manualSiteOf } from "@/lib/manualSites";
 
@@ -66,10 +67,10 @@ export function ManualSitesField({ sites, onChange, currentTabButton = false }: 
           추가
         </button>
       </div>
-      <span className="field-help">
+      <FieldHelp summary="이 사이트에서는 도우미가 누르거나 채우지 않고, 할 일을 표시해 직접 하도록 안내합니다.">
         이 사이트에서는 도우미가 버튼을 누르거나 칸을 채우지 않고, 할 일을 화면에 표시해 직접 하도록 안내합니다. 표시한 버튼을
         누르거나 패널에서 "했어요"를 누르면 이어서 진행합니다. 자동 조작을 막는 예매 사이트 등에 쓰세요.
-      </span>
+      </FieldHelp>
     </div>
   );
 }
