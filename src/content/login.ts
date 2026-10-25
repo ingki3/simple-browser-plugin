@@ -63,10 +63,22 @@ function formlessRoot(el: Element): Element | ShadowRoot {
   return el.ownerDocument.body ?? el.ownerDocument.documentElement;
 }
 
+// 열린 shadow root까지 내려가며 찾는다(양식 안 웹 컴포넌트가 그린 칸).
+function deepQuery(root: Element | ShadowRoot, selector: string, out: Element[] = [], depth = 0): Element[] {
+  out.push(...Array.from(root.querySelectorAll(selector)));
+  if (depth > 8) return out;
+  for (const el of Array.from(root.querySelectorAll("*"))) if (el.shadowRoot) deepQuery(el.shadowRoot, selector, out, depth + 1);
+  return out;
+}
+
 // 칸의 양식 범위: <form>이면 그 양식의 컨트롤(form 속성으로 바깥에서 연결된 칸 포함), 아니면 formlessRoot 안의 칸.
 function scopeInputs(el: HTMLInputElement): { form: HTMLFormElement | null; inputs: HTMLInputElement[] } {
   const form = el.form;
-  if (form) return { form, inputs: formElements(form).filter((c): c is HTMLInputElement => isTag(c, "input")) };
+  if (form) {
+    // 양식 안 열린 shadow DOM의 칸(새 비밀번호 칸 등)도 범위에 넣는다(form.elements에는 없다).
+    const inputs = [...new Set([...formElements(form), ...deepQuery(form, "input")])].filter((c): c is HTMLInputElement => isTag(c, "input"));
+    return { form, inputs };
+  }
   const inputs = Array.from(formlessRoot(el).querySelectorAll("input"));
   // 범위 조회가 대상 자신을 못 찾는 구조(다른 shadow root)여도 대상은 늘 본다.
   if (!inputs.includes(el)) inputs.push(el);
@@ -201,7 +213,7 @@ function pick(target: HTMLInputElement): Picked {
     // 양식이 없는 화면은 같은 범위(대화상자 또는 문서 본문)의 모든 칸을 본다(정보 수정 화면의 change 처리기가 바로 저장할 수 있다).
     // 양식이 없으면 칸이 든 루트와 칸의 범위들(대화상자·shadow host·slot 너머 — formlessScopes)의 칸을 모두 본다.
     const controls: Element[] = form
-      ? formElements(form)
+      ? [...new Set([...formElements(form), ...deepQuery(form, "input, select, textarea")])]
       : [
           ...new Set([
             ...Array.from(formlessRoot(target).querySelectorAll("input, select, textarea")),
@@ -219,9 +231,11 @@ function pick(target: HTMLInputElement): Picked {
     // 값이 채워진 개인정보 칸(숨은 칸 포함)은 양식이 없는 화면에서도 같은 범위에서 본다(change 처리기가 함께 보낼 수 있다).
     // 양식이 없는 화면은 범위 안 다른 양식의 칸까지 본다(칸의 처리기가 그 양식을 제출할 수 있다).
     // 양식이 없는 화면은 칸의 범위들(대화상자·shadow host·slot 너머 — formlessScopes)과 그 안 다른 양식의 칸까지 본다.
-    const personal = form
-      ? personalValuedElements(form)
-      : [...personalValuedElements(formlessRoot(target), true), ...personalValuedInScopes(fieldFormlessScopes(target))];
+    // 양식이 있어도 같은 대화상자·화면의 다른 양식을 처리기가 제출할 수 있어 주변 범위(formlessScopes)도 본다.
+    const personal = [
+      ...(form ? personalValuedElements(form) : personalValuedElements(formlessRoot(target), true)),
+      ...personalValuedInScopes(fieldFormlessScopes(target)),
+    ];
     return shown || personal.some((e) => !mine.has(e));
   };
   const otherTarget = !!form && formTargets(form).some((t) => t !== "" && t.toLowerCase() !== "_self");
