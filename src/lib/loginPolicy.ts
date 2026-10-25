@@ -111,6 +111,7 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   if (shape.hasForm && shape.submitMethods.some((m) => m !== "post")) return "POST가 아닌 방법으로 제출하는 양식";
   const fieldDestructive = destructiveFillBlock(shape.fields);
   if (fieldDestructive) return fieldDestructive;
+  if (shape.fields.some(paymentSubmission)) return "결제 값을 함께 보내는 양식";
   if (shape.submit) {
     const why = submitControlBlock(shape.submit);
     if (why) return why;
@@ -119,8 +120,17 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   return null;
 }
 
+const PAYMENT_URL_REASON = "결제·주문 주소";
+
+// 실제 제출 값을 합친 주소(숨은 칸 operation=pay 등)의 결제 신호. 개인정보 모양은 보지 않는다(브라우저가 채운 이메일
+// 아이디만으로 로그인 양식이 늘 걸리지 않게 — 그 값은 이 호출이 넣는 값이거나 사용자의 값이다).
+function paymentSubmission(t: TargetInfo): boolean {
+  return [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])].some((u) => !!u && sensitiveUrlReason(u) === PAYMENT_URL_REASON);
+}
+
 // 제출 버튼의 되돌리기 어려운 동작·결제 신호(승인 판정과 제출 직전 재검사가 함께 쓴다).
 export function submitControlBlock(t: TargetInfo): string | null {
+  if (paymentSubmission(t)) return "결제 값을 함께 보내는 양식";
   const clickDestructive = destructiveClickBlock([t]);
   if (clickDestructive) return clickDestructive;
   const raw = `${t.name} ${t.outerText ?? ""}`;

@@ -8,6 +8,7 @@ import { loginOrigin, type LoginShape } from "@/lib/loginPolicy";
 import { debugLog } from "./debug";
 import { keepassxcLogins, keepassxcTotp } from "./keepassxc";
 import { rememberSecrets } from "./loginSecrets";
+import { MIN_SECRET_LENGTH } from "@/lib/secretMask";
 import { waitForNavigationSettle } from "./navigation";
 import { recheckTabPopup, resolveTurnTab, topDocumentId, type TurnTab } from "./tools/handlers";
 import { sendTo } from "./trustedInput";
@@ -150,6 +151,10 @@ export async function runSignIn(callId: string, uuid: string, signal?: AbortSign
     }
   }
   if (!fills.length) throw new Error("넣을 값이 없습니다(항목에 아이디가 없음).");
+  // 너무 짧은 값은 페이지가 다시 보여 줘도 가릴 수 없다(다른 글자와 겹쳐 가리기를 쓰지 않는다). 넣지 않고 직접 로그인하게 한다.
+  if (secrets.some((v) => v.length < MIN_SECRET_LENGTH)) {
+    throw new Error(`아이디나 비밀번호가 ${MIN_SECRET_LENGTH}글자보다 짧아 값을 가릴 수 없어 넣지 않았습니다. 사용자에게 직접 로그인해 달라고 하세요.`);
+  }
   checkAbort();
   // 넣은 뒤의 관측이 먼저 모델로 가지 않게, 넣기 전에 가림 목록에 둔다.
   await rememberSecrets(c.tabId, secrets);

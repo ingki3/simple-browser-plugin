@@ -100,11 +100,27 @@ function pick(target: HTMLInputElement): Picked {
   );
 }
 
+// 승인 때 읽은 구조(호출별). 값을 넣기 직전에 지금 구조와 같은지 본다.
+const inspected = new Map<string, { targetId: string; picked: Picked }>();
+
+function samePick(a: Picked, b: Picked): boolean {
+  return (
+    a.step === b.step &&
+    a.newPassword === b.newPassword &&
+    a.username === b.username &&
+    a.password === b.password &&
+    a.otp === b.otp &&
+    a.form === b.form
+  );
+}
+
 // 이 호출(callId)의 로그인 모양. 넣을 칸과 제출 버튼을 이 호출의 승인 대상으로 등록하고 그 기술을 함께 돌려준다.
 export function inspectLogin(id: string, callId: string): LoginShape {
   const target = registeredElement(id, "f");
   if (!isTag(target, "input")) throw new Error("로그인 칸은 input이어야 합니다.");
   const p = pick(target as HTMLInputElement);
+  inspected.set(callId, { targetId: id, picked: p });
+  if (inspected.size > 50) inspected.delete(inspected.keys().next().value as string);
   const fieldEls = [p.username, p.password, p.otp].filter((e): e is HTMLInputElement => !!e);
   const ids = fieldEls.map((e) => (e === target ? id : registerFieldTarget(e)));
   const fields = inspectTargets(ids, callId, "f");
@@ -153,6 +169,20 @@ export async function fillLogin(
   fills: Array<{ id: string; value: string }>,
   submit: { submitId?: string; submitUrls: string[]; submitMethods: string[] } | null,
 ): Promise<LoginFillResult> {
+  // 값을 쓰기 전에 승인 때의 구조(단계·새 비밀번호 칸 유무·넣을 칸·양식)가 그대로인지 본다
+  // (기다리는 사이 autocomplete가 new-password로 바뀌는 등).
+  const before = inspected.get(callId);
+  inspected.delete(callId);
+  if (!before) throw new Error("로그인 칸을 다시 확인하세요.");
+  let now: Picked;
+  try {
+    now = pick(registeredElement(before.targetId, "f") as HTMLInputElement);
+  } catch {
+    return { filled: 0, total: fills.length, submitted: false, note: "승인한 뒤 로그인 양식이 바뀌어 넣지 않았습니다." };
+  }
+  if (!samePick(before.picked, now)) {
+    return { filled: 0, total: fills.length, submitted: false, note: "승인한 뒤 로그인 양식이 바뀌어 넣지 않았습니다." };
+  }
   const anchor = fills[0] ? registeredElement(fills[0].id, "f") : null;
   // 아이디 칸에 이미 같은 값이 있으면(브라우저 자동 채우기 등) 건드리지 않는다.
   const todo = fills.filter((f) => {

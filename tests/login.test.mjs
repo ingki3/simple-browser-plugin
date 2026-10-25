@@ -222,6 +222,9 @@ test("로그인 모양: 막는 구조", () => {
   // 결제 주소로 보내는 양식(결제 재인증), 결제 주소를 가리키는 제출 버튼은 묻는다.
   assert.match(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/checkout/confirm`] }), ORIGIN), /결제/);
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, submitTo: `${ORIGIN}/checkout/pay` } }), ORIGIN));
+  // 숨은 칸 값까지 합친 제출 주소에 결제 신호(operation=pay)가 있으면 묻는다.
+  assert.match(loginShapeBlock(shape({ submit: { ...shape().submit, submitUrl: `${ORIGIN}/session?operation=pay` } }), ORIGIN), /결제/);
+  assert.match(loginShapeBlock(shape({ fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/session?operation=checkout` }] }), ORIGIN), /결제/);
   // htmx 요청: 다른 출처, 같은 출처라도 GET(값이 주소에 실림), 확인할 수 없는 요청은 묻는다.
   const pwField = shape().fields[0];
   assert.match(loginShapeBlock(shape({ fields: [{ ...pwField, requestUrls: ["https://collector.example/c"] }] }), ORIGIN), /다른 출처/);

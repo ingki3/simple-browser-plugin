@@ -7,7 +7,7 @@
 export const MASK = "[가린 값]";
 
 // 너무 짧은 값은 다른 글자와 우연히 겹치기 쉬워도 가린다(일회용 코드 6자리 등). 다만 1~2글자는 문장 전체를 망가뜨려 넣지 않는다.
-const MIN_SECRET_LENGTH = 3;
+export const MIN_SECRET_LENGTH = 3;
 
 function utf8Base64(s: string): string {
   const bytes = new TextEncoder().encode(s);
