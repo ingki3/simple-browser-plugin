@@ -301,6 +301,8 @@ test("로그인 모양: 막는 구조", () => {
   // 넣은 값과 같은 값을 다른 이름의 숨은 칸(buy=alice)에 옮기면 그 신호는 남긴다.
   const moved = shape({ fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/session?u=alice&buy=alice` }] });
   assert.ok(loginShapeBlocks(moved, ORIGIN, [{ name: "u", value: "alice" }]).some((r) => /결제/.test(r)));
+  // 삭제 경로로 보내는 양식(숨은 버튼의 formaction 등).
+  assert.ok(loginShapeBlocks(shape({ submitUrls: [`${ORIGIN}/session`, `${ORIGIN}/account/delete`] }), ORIGIN).some((r) => /되돌리기/.test(r)));
   // 이유를 모두 모은다(카드로 승인한 이유 뒤에 새로 생긴 결제 이유를 따로 볼 수 있게).
   const many = loginShapeBlocks(shape({ otherFields: true, fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/s?operation=pay` }] }), ORIGIN);
   assert.ok(many.length >= 2 && many.some((r) => /결제/.test(r)) && many.some((r) => /입력 칸/.test(r)));

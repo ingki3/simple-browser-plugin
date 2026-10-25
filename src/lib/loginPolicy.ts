@@ -4,7 +4,9 @@
 import type { TargetInfo } from "./actionTarget.ts";
 import {
   decodeDeepText,
+  DESTRUCTIVE_REASON,
   destructiveClickBlock,
+  destructiveRoute,
   destructiveFillBlock,
   expandUrls,
   PAYMENT_TEXT_RE,
@@ -131,6 +133,8 @@ export function loginShapeBlocks(shape: LoginShape, origin: string, inserted: re
     // 결제·개인정보 주소로 보내는 양식(결제 재인증 등)은 클릭·입력과 같은 기준으로 묻는다.
     const why = sensitiveUrlReason(u);
     if (why) add(`${why}로 보내는 양식`);
+    // 삭제 경로로 보내는 양식(숨은 버튼의 formaction="/delete" 등)도 되돌리기 어려운 동작으로 묻는다.
+    if (destructiveRoute(u)) add(DESTRUCTIVE_REASON);
   }
   // 값을 넣거나 누르면 일으킬 htmx 요청(change·click 처리기가 칸 값을 실어 보냄)도 같은 출처·같은 기준이어야 한다.
   // 확인할 수 없는 요청(GET 아님·from: 리스너 등)은 묻는다. htmx GET 요청은 칸 값을 주소에 싣는다.

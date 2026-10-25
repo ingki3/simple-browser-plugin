@@ -3,10 +3,19 @@
 // 주소와 메서드로만 한다(낱말로 로그인 화면을 짐작하지 않는다). 값은 이 파일에서 돌려주지 않는다.
 import { loginShapeBlocks, submitControlBlocks, type InsertedValue, type LoginShape } from "@/lib/loginPolicy";
 import { isShadowRoot, isTag } from "./docs";
-import { DESTRUCTIVE_REASON, DESTRUCTIVE_TEXT_RE, FIELD_PAYMENT_HINT_RE, PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
+import {
+  DESTRUCTIVE_REASON,
+  DESTRUCTIVE_TEXT_RE,
+  FIELD_PAYMENT_HINT_RE,
+  PAYMENT_TEXT_RE,
+  destructiveRoute,
+  sensitiveUrlReason,
+  splitIdentifier,
+} from "@/lib/autoApprove";
 import {
   declaresDelete,
   fillFormFields,
+  formDestination,
   formDestinations,
   formElements,
   isSubmitControl,
@@ -110,6 +119,11 @@ function defaultSubmitter(form: HTMLFormElement): HTMLElement | null {
 // 숨은 기본 제출 버튼의 위험(클릭 대상 기술은 보이는 요소만 만들 수 있어 구조와 글자로 따로 본다 — 더 묻는 쪽).
 function hiddenSubmitterBlock(btn: HTMLElement, form: HTMLFormElement): string | null {
   if (declaresDelete(btn, [btn], form)) return DESTRUCTIVE_REASON;
+  // 이 버튼으로 제출하면 실제로 가는 주소(formaction이 있으면 그것)의 삭제·결제·개인정보 경로.
+  const dest = formDestination(btn, form);
+  if (dest && destructiveRoute(dest)) return DESTRUCTIVE_REASON;
+  const urlWhy = dest ? sensitiveUrlReason(dest) : null;
+  if (urlWhy) return `${urlWhy}로 이어지는 버튼`;
   const text = ["value", "alt", "aria-label", "title"].map((a) => btn.getAttribute(a) ?? "").join(" ") + ` ${btn.textContent ?? ""}`;
   const words = `${text} ${splitIdentifier(text)}`;
   if (DESTRUCTIVE_TEXT_RE.test(words)) return DESTRUCTIVE_REASON;
