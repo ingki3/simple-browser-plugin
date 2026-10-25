@@ -1,7 +1,7 @@
 // 자동 로그인(sign_in, docs/design/login-automation.md)의 페이지 쪽. 모델이 고른 칸 둘레의 로그인 양식을 구조로 읽고(login_inspect),
 // 백그라운드가 비밀번호 관리자에서 받은 값을 넣은 뒤 양식을 제출한다(login_fill). 판정은 칸 종류·autocomplete·양식 관계·제출
 // 주소와 메서드로만 한다(낱말로 로그인 화면을 짐작하지 않는다). 값은 이 파일에서 돌려주지 않는다.
-import { loginShapeBlocks, submitControlBlocks, type LoginShape } from "@/lib/loginPolicy";
+import { loginShapeBlocks, submitControlBlocks, type InsertedValue, type LoginShape } from "@/lib/loginPolicy";
 import { isShadowRoot, isTag } from "./docs";
 import { DESTRUCTIVE_REASON, DESTRUCTIVE_TEXT_RE, FIELD_PAYMENT_HINT_RE, PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import {
@@ -89,6 +89,10 @@ function submitMethods(form: HTMLFormElement): string[] {
 function formTargets(form: HTMLFormElement): string[] {
   const out = [(form.getAttribute("target") ?? "").trim()];
   for (const c of formElements(form)) if (isSubmitControl(c) && c.hasAttribute("formtarget")) out.push((c.getAttribute("formtarget") ?? "").trim());
+  // form.elements는 이미지 버튼을 빼므로 양식이 든 루트에서 따로 본다.
+  for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {
+    if ((img as HTMLInputElement).form === form && img.hasAttribute("formtarget")) out.push((img.getAttribute("formtarget") ?? "").trim());
+  }
   return out;
 }
 
@@ -114,7 +118,7 @@ function hiddenSubmitterBlock(btn: HTMLElement, form: HTMLFormElement): string |
 }
 
 // 기본 제출 버튼의 지금 위험들(보이면 클릭 대상 기술로, 숨었으면 구조·글자로).
-function submitterRisks(btn: HTMLElement, form: HTMLFormElement, callId: string, inserted: readonly string[] = []): string[] {
+function submitterRisks(btn: HTMLElement, form: HTMLFormElement, callId: string, inserted: readonly InsertedValue[] = []): string[] {
   if (!layoutVisible(btn)) {
     const why = hiddenSubmitterBlock(btn, form);
     return why ? [why] : [];
@@ -298,7 +302,7 @@ export async function fillLogin(
   // 값을 쓰기 전에 승인 때의 구조(단계·새 비밀번호 칸 유무·넣을 칸·양식)가 그대로인지 본다
   // (기다리는 사이 autocomplete가 new-password로 바뀌는 등).
   // 이번 호출이 넣는 값(재판정에서 제출 주소의 그 값은 빼고 본다).
-  const inserted = fills.map((f) => f.value);
+  const inserted = fills.map((f) => ({ name: (registeredElement(f.id, "f") as HTMLInputElement).name, value: f.value }));
   const before = inspected.get(callId);
   inspected.delete(callId);
   if (!before) throw new Error("로그인 칸을 다시 확인하세요.");

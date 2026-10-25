@@ -11,7 +11,8 @@ const b64 = (u) => Buffer.from(u).toString("base64");
 const unb64 = (s) => new Uint8Array(Buffer.from(s, "base64"));
 
 // KeePassXC를 흉내 내는 가짜 포트: change-public-keys와 암호화 요청을 실제 프로토콜대로 처리한다.
-function fakeKeePassXC({ entries = [], totp = "123456", tamperNonce = false, deny = null } = {}) {
+function fakeKeePassXC({ entries = [], totp = "123456", tamperNonce = false, deny = null, lockedOnce = false } = {}) {
+  let locked = lockedOnce;
   // 실제 KeePassXC처럼 키 교환마다 새 키 쌍을 만든다.
   let host = nacl.box.keyPair();
   let clientKey = null;
@@ -27,6 +28,15 @@ function fakeKeePassXC({ entries = [], totp = "123456", tamperNonce = false, den
         host = nacl.box.keyPair();
         clientKey = unb64(m.publicKey);
         reply({ action: m.action, publicKey: b64(host.publicKey), nonce: b64(incrementNonce(unb64(m.nonce))), success: "true" });
+        return;
+      }
+      if (locked && m.action !== "change-public-keys") {
+        // 잠겨 있으면 오류 1을 주고, 잠금 해제를 요청받았으면 잠시 뒤 database-unlocked 알림을 보낸다.
+        reply({ action: m.action, error: "Database not opened", errorCode: "1" });
+        if (m.triggerUnlock === "true") {
+          locked = false;
+          setTimeout(() => msgL.forEach((cb) => cb({ action: "database-unlocked" })), 20);
+        }
         return;
       }
       const nonce = unb64(m.nonce);
@@ -92,6 +102,18 @@ test("KeePassXC: 동시에 들어온 첫 요청은 키 교환을 한 번만 한�
   assert.equal(a.id, "me");
   assert.equal(code, "123456");
   assert.equal(kp.sent.filter((m) => m.action === "change-public-keys").length, 1);
+});
+
+test("KeePassXC: 잠겨 있으면 잠금 해제를 요청하고 알림을 기다렸다 이어 간다", async () => {
+  const kp = fakeKeePassXC({ entries: [ENTRY] });
+  const s = new KpxSession(kp.port);
+  const a = await s.associate();
+  const kp2 = fakeKeePassXC({ entries: [ENTRY], lockedOnce: true });
+  const s2 = new KpxSession(kp2.port);
+  // 다른 가짜 호스트라 연결 정보를 그쪽에도 등록해 둔다(잠금 해제 뒤 확인이 통과하게).
+  await assert.rejects(s2.testAssociate(a, 1_000, 0), /not opened/);
+  await s2.testAssociate({ id: "me", idKey: a.idKey }, 1_000, 500).catch((e) => assert.match(String(e), /association failed/));
+  assert.ok(kp2.sent.some((m) => m.triggerUnlock === "true"), "잠금 해제 요청을 보냄");
 });
 
 test("KeePassXC: 항목 없음(15)은 빈 목록, 다른 연결 키는 거부", async () => {
@@ -273,9 +295,12 @@ test("로그인 모양: 막는 구조", () => {
   // 이번 호출이 넣은 값(비밀번호에 'Payment')은 결제 신호로 보지 않는다. 숨은 값의 결제 신호는 그대로.
   const withPw = shape({ fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/session?p=MyPayment2026!` }] });
   assert.ok(loginShapeBlocks(withPw, ORIGIN).some((r) => /결제/.test(r)));
-  assert.deepEqual(loginShapeBlocks(withPw, ORIGIN, ["MyPayment2026!"]), []);
+  assert.deepEqual(loginShapeBlocks(withPw, ORIGIN, [{ name: "p", value: "MyPayment2026!" }]), []);
   const hiddenPay = shape({ fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/session?p=x1y2z3&operation=pay` }] });
-  assert.ok(loginShapeBlocks(hiddenPay, ORIGIN, ["x1y2z3"]).some((r) => /결제/.test(r)));
+  assert.ok(loginShapeBlocks(hiddenPay, ORIGIN, [{ name: "p", value: "x1y2z3" }]).some((r) => /결제/.test(r)));
+  // 넣은 값과 같은 값을 다른 이름의 숨은 칸(buy=alice)에 옮기면 그 신호는 남긴다.
+  const moved = shape({ fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/session?u=alice&buy=alice` }] });
+  assert.ok(loginShapeBlocks(moved, ORIGIN, [{ name: "u", value: "alice" }]).some((r) => /결제/.test(r)));
   // 이유를 모두 모은다(카드로 승인한 이유 뒤에 새로 생긴 결제 이유를 따로 볼 수 있게).
   const many = loginShapeBlocks(shape({ otherFields: true, fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/s?operation=pay` }] }), ORIGIN);
   assert.ok(many.length >= 2 && many.some((r) => /결제/.test(r)) && many.some((r) => /입력 칸/.test(r)));

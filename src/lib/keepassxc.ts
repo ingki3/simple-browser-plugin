@@ -118,10 +118,32 @@ export class KpxSession {
     }
   }
 
+  // 요청하지 않은 알림(database-unlocked 등)을 기다리는 쪽.
+  private signalWaiters: Array<{ action: string; resolve: () => void }> = [];
+
+  // 알림 하나를 기다린다(잠금 해제 등). 시간 안에 오지 않으면 false.
+  waitForSignal(action: string, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const w = { action, resolve: () => resolve(true) };
+      this.signalWaiters.push(w);
+      setTimeout(() => {
+        this.signalWaiters = this.signalWaiters.filter((x) => x !== w);
+        resolve(false);
+      }, timeoutMs);
+    });
+  }
+
   private onMessage(raw: unknown): void {
-    const p = this.pending;
-    if (!p || !raw || typeof raw !== "object") return;
+    if (!raw || typeof raw !== "object") return;
     const msg = raw as Record<string, unknown>;
+    // 알림은 요청 응답과 따로 넘긴다(대기 중인 요청과 action이 달라 아래에서 건너뛴다).
+    const waiting = this.signalWaiters.filter((w) => w.action === msg.action);
+    if (waiting.length) {
+      this.signalWaiters = this.signalWaiters.filter((w) => w.action !== msg.action);
+      for (const w of waiting) w.resolve();
+    }
+    const p = this.pending;
+    if (!p) return;
     // 잠금·잠금 해제 알림 등 요청하지 않은 메시지는 건너뛴다.
     if (msg.action !== p.action) return;
     this.pending = null;
@@ -184,14 +206,21 @@ export class KpxSession {
   }
 
   // 암호화한 요청. 응답을 풀어 success가 "true"인 내용만 돌려준다.
-  async call(message: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+  // triggerUnlock: 데이터베이스가 잠겨 있으면 KeePassXC가 잠금 해제 창을 띄우게 한다(응답은 오류 1, 해제되면 database-unlocked 알림).
+  async call(message: Record<string, unknown>, timeoutMs: number, triggerUnlock = false): Promise<Record<string, unknown>> {
     if (!this.hostKey) await this.handshake();
     const hostKey = this.hostKey!;
     const nonce = nacl.randomBytes(24);
     const plain = new TextEncoder().encode(JSON.stringify(message));
     const boxed = nacl.box(plain, nonce, hostKey, this.keys.secretKey);
     const res = await this.request(
-      { action: message.action, message: b64(boxed), nonce: b64(nonce), clientID: this.clientId },
+      {
+        action: message.action,
+        message: b64(boxed),
+        nonce: b64(nonce),
+        clientID: this.clientId,
+        ...(triggerUnlock ? { triggerUnlock: "true" } : {}),
+      },
       timeoutMs,
     );
     if (typeof res.message !== "string" || typeof res.nonce !== "string") throw new KpxError("KeePassXC 응답 형식이 맞지 않습니다.");
@@ -219,8 +248,16 @@ export class KpxSession {
   }
 
   // 저장한 연결이 지금 열린 데이터베이스에 등록돼 있는지. 다른 요청 전에 이 세션에서 한 번 성공해야 한다.
-  async testAssociate(a: KpxAssociation, timeoutMs = 10_000): Promise<void> {
-    await this.call({ action: "test-associate", id: a.id, key: a.idKey }, timeoutMs);
+  // 잠겨 있으면 잠금 해제 창을 띄우고, 사용자가 해제할 때까지(unlockWaitMs) 기다렸다 한 번 더 확인한다.
+  async testAssociate(a: KpxAssociation, timeoutMs = 10_000, unlockWaitMs = 0): Promise<void> {
+    try {
+      await this.call({ action: "test-associate", id: a.id, key: a.idKey }, timeoutMs, unlockWaitMs > 0);
+    } catch (err) {
+      if (!(err instanceof KpxError) || err.code !== KPX_ERROR_DB_NOT_OPENED || unlockWaitMs <= 0) throw err;
+      const unlocked = await this.waitForSignal("database-unlocked", unlockWaitMs);
+      if (!unlocked) throw new KpxError("KeePassXC 데이터베이스가 잠겨 있습니다(잠금 해제를 기다리다 시간이 지났습니다).", KPX_ERROR_DB_NOT_OPENED);
+      await this.call({ action: "test-associate", id: a.id, key: a.idKey }, timeoutMs);
+    }
   }
 
   // 그 주소에 맞는 항목. KeePassXC가 사이트별 접근 허락 창을 띄울 수 있어 오래 기다린다. 항목이 없으면 빈 목록.

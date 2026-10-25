@@ -111,7 +111,7 @@ function onlyOrigin(url: string, origin: string): boolean {
 // 자동 로그인을 막는 이유 모두(카드로 승인한 뒤 새로 생긴 이유만 골라 막으려고 각각 모은다). 빈 목록이면 구조로는 자동 실행해도 된다.
 // inserted: 이번 호출이 칸에 넣은 값들. 넣은 뒤 다시 판정할 때 칸 값까지 합친 제출 주소에서 그 값을 빼고 본다(비밀번호에
 // 'Payment'·주소 모양 글자가 있어도 결제·외부 목적지로 오판하지 않게). 숨은 칸·버튼 값과 목적지는 그대로 본다.
-export function loginShapeBlocks(shape: LoginShape, origin: string, inserted: readonly string[] = []): string[] {
+export function loginShapeBlocks(shape: LoginShape, origin: string, inserted: readonly InsertedValue[] = []): string[] {
   const out = new Set<string>();
   const add = (why: string | null | undefined) => {
     if (why) out.add(why);
@@ -163,15 +163,21 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   return loginShapeBlocks(shape, origin)[0] ?? null;
 }
 
-// 쿼리에서 값이 inserted 중 하나인 매개변수를 뺀 주소(값은 한 번 이상 인코딩돼 있을 수 있어 풀어서 비교).
-function withoutValues(url: string, inserted: readonly string[]): string {
+export interface InsertedValue {
+  name: string;
+  value: string;
+}
+
+// 쿼리에서 이름·값이 inserted 중 하나인 매개변수를 뺀 주소(값은 한 번 이상 인코딩돼 있을 수 있어 풀어서 비교).
+function withoutValues(url: string, inserted: readonly InsertedValue[]): string {
   if (!inserted.length) return url;
   try {
     const u = new URL(url);
     const kept = new URLSearchParams();
     u.searchParams.forEach((v, k) => {
       const dv = decodeDeepText(v);
-      if (!inserted.some((x) => x === v || x === dv || x.trim() === dv.trim())) kept.append(k, v);
+      // 이번 호출이 쓴 칸의 이름·값 쌍만 뺀다(같은 값을 다른 이름의 숨은 칸에 옮긴 결제 신호 buy=alice는 남긴다).
+      if (!inserted.some((x) => x.name === k && (x.value === v || x.value === dv || x.value.trim() === dv.trim()))) kept.append(k, v);
     });
     u.search = kept.toString();
     return u.href;
@@ -184,14 +190,14 @@ const PAYMENT_URL_REASON = "결제·주문 주소";
 
 // 실제 제출 값을 합친 주소(숨은 칸 operation=pay 등)의 결제 신호. 개인정보 모양은 보지 않는다(브라우저가 채운 이메일
 // 아이디만으로 로그인 양식이 늘 걸리지 않게 — 그 값은 이 호출이 넣는 값이거나 사용자의 값이다).
-function paymentSubmission(t: TargetInfo, inserted: readonly string[] = []): boolean {
+function paymentSubmission(t: TargetInfo, inserted: readonly InsertedValue[] = []): boolean {
   return [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])].some(
     (u) => !!u && sensitiveUrlReason(withoutValues(u, inserted)) === PAYMENT_URL_REASON,
   );
 }
 
 // 제출 버튼의 되돌리기 어려운 동작·결제 신호 모두(승인 판정과 입력·제출 직전 재검사가 함께 쓴다).
-export function submitControlBlocks(t: TargetInfo, inserted: readonly string[] = []): string[] {
+export function submitControlBlocks(t: TargetInfo, inserted: readonly InsertedValue[] = []): string[] {
   const out = new Set<string>();
   if (paymentSubmission(t, inserted)) out.add("결제 값을 함께 보내는 양식");
   const clickDestructive = destructiveClickBlock([t]);
