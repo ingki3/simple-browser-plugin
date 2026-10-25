@@ -771,9 +771,9 @@ export class ChatAgent {
     }, CONNECT_TIMEOUT_MS);
     // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
     // 마무리 요청(wrapUpNote)에는 붙이지 않는다(이동 후보가 필요 없음).
-    const savedCandidates = opts.wrapUpNote
-      ? null
-      : await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null).catch(() => null);
+    // 지금 저장 링크 후보(마무리 요청에도 읽는다 — 기록에 남긴 후보가 지워졌는지 검사용). 실을지는 아래에서 정한다.
+    const currentCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null).catch(() => null);
+    const savedCandidates = opts.wrapUpNote ? null : currentCandidates;
     if (this.isStale(turn)) {
       clearTimeout(connectTimer);
       return null;
@@ -794,7 +794,7 @@ export class ChatAgent {
     // 문맥을 서명하는 제공자: 기록에 남긴 후보를 지웠거나 껐으면 거둘 수 없으니 멈추고 새 대화로, 바뀌지 않았으면 다시 싣지 않는다.
     let candidatesNote = savedCandidates;
     if (providerAdapter(this.provider).signsContext && this.committedCandidates) {
-      const now = new Set(savedCandidates ? candidateIdsOf(savedCandidates) : []);
+      const now = new Set(currentCandidates ? candidateIdsOf(currentCandidates) : []);
       if ([...this.committedCandidates.ids].some((id) => !now.has(id))) {
         clearTimeout(connectTimer);
         if (this.activeRequest === controller) this.activeRequest = null;

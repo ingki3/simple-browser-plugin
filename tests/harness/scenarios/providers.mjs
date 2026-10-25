@@ -156,4 +156,26 @@ export default [
       expect(!hasCand(third) && third.messages.length === 1, `새 대화(${third.messages.length}개, 후보 ${hasCand(third)})`);
     },
   },
+  {
+    name: "Claude: 마무리 요청은 후보를 싣지 않아도 저장 링크 삭제로 보지 않는다",
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" }, maxToolHops: 1, maxToolHopsVersion: 2 });
+      await h.sw.evaluate(async () => {
+        await chrome.storage.local.set({ savedPages: [{ name: "주문 조회", url: "https://shop.example/orders", site: "https://shop.example", savedAt: 1, uses: 0 }] });
+      });
+      // 도구를 계속 부르게 해 순환 한도 카드 → "그만두기"(마무리 요청)로 끝낸다.
+      const steps = Array.from({ length: 4 }, () => ({ tool: "describe_page", args: {} }));
+      await h.turn(steps, {
+        onCard: async (card, n) => {
+          if (n > 1) return;
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+      const last = reqs.at(-1)?.body;
+      const text = await h.panel.locator("body").innerText();
+      expect(last?.tool_choice?.type === "none", `마무리 요청을 보냄(${JSON.stringify(last?.tool_choice)})`);
+      expect(!text.includes("거둘 수 없어"), "삭제로 오판하지 않음");
+    },
+  },
 ];
