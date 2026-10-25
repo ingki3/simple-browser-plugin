@@ -7,11 +7,13 @@ import { ManualSitesField } from "./ManualSitesField";
 import { ShowThinkingField } from "./ShowThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
+import { OPENAI_DEFAULT_MODEL, OPENAI_MODEL_SUGGESTIONS } from "@/lib/providers/openai";
 import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
   MIN_MAX_TOOL_HOPS,
+  type Settings,
 } from "@/lib/messages";
 import { useSettings } from "../hooks/useSettings";
 import { KO } from "../i18n/ko";
@@ -184,15 +186,33 @@ export function SettingsDrawer({ open, onClose }: Props) {
         )}
         <div className="drawer-body">
           <label className="field">
-            <span className="field-label">{KO.apiKeyLabel}</span>
+            <span className="field-label">모델 제공자</span>
+            <select
+              value={draft.provider}
+              onChange={(e) => setDraft({ ...draft, provider: e.target.value as Settings["provider"] })}
+            >
+              <option value="openrouter">OpenRouter (여러 회사 모델)</option>
+              <option value="openai">OpenAI (ChatGPT API 키)</option>
+            </select>
+            <span className="field-help">
+              대화·페이지 내용은 고른 제공자로만 보냅니다. 제공자나 모델을 바꾸면 대화를 새로 시작합니다.
+            </span>
+          </label>
+
+          <label className="field">
+            <span className="field-label">{draft.provider === "openai" ? "OpenAI API 키" : KO.apiKeyLabel}</span>
             <div className="key-row">
               <input
                 type={showKey ? "text" : "password"}
-                value={draft.openRouterApiKey}
+                value={draft.provider === "openai" ? (draft.apiKeys.openai ?? "") : draft.openRouterApiKey}
                 onChange={(e) =>
-                  setDraft({ ...draft, openRouterApiKey: e.target.value })
+                  setDraft(
+                    draft.provider === "openai"
+                      ? { ...draft, apiKeys: { ...draft.apiKeys, openai: e.target.value } }
+                      : { ...draft, openRouterApiKey: e.target.value },
+                  )
                 }
-                placeholder="sk-or-v1-..."
+                placeholder={draft.provider === "openai" ? "sk-..." : "sk-or-v1-..."}
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -200,7 +220,9 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 {showKey ? KO.apiKeyHide : KO.apiKeyShow}
               </button>
             </div>
-            <span className="field-help">{KO.apiKeyHelp}</span>
+            <span className="field-help">
+              {draft.provider === "openai" ? "platform.openai.com의 API 키. 이 브라우저에만 저장됩니다." : KO.apiKeyHelp}
+            </span>
           </label>
 
           <label className="field">
@@ -217,22 +239,43 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
           <label className="field">
             <span className="field-label">{KO.modelLabel}</span>
-            <input
-              type="text"
-              list="openrouter-models"
-              value={draft.model}
-              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              placeholder="provider/model"
-              spellCheck={false}
-            />
-            <datalist id="openrouter-models">
-              {MODEL_IDS.map((id) => (
-                <option key={id} value={id} label={MODEL_LABELS[id]} />
-              ))}
-            </datalist>
-            <span className="field-help">
-              OpenRouter 모델 ID를 입력합니다. 모델은 tool calling을 지원해야 합니다.
-            </span>
+            {draft.provider === "openai" ? (
+              <>
+                <input
+                  type="text"
+                  list="openai-models"
+                  value={draft.providerModels.openai ?? ""}
+                  onChange={(e) => setDraft({ ...draft, providerModels: { ...draft.providerModels, openai: e.target.value } })}
+                  placeholder={OPENAI_DEFAULT_MODEL}
+                  spellCheck={false}
+                />
+                <datalist id="openai-models">
+                  {OPENAI_MODEL_SUGGESTIONS.map((id) => (
+                    <option key={id} value={id} />
+                  ))}
+                </datalist>
+                <span className="field-help">OpenAI 모델 ID(비우면 {OPENAI_DEFAULT_MODEL}). 도구 호출을 지원하는 모델이어야 합니다.</span>
+              </>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  list="openrouter-models"
+                  value={draft.model}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  placeholder="provider/model"
+                  spellCheck={false}
+                />
+                <datalist id="openrouter-models">
+                  {MODEL_IDS.map((id) => (
+                    <option key={id} value={id} label={MODEL_LABELS[id]} />
+                  ))}
+                </datalist>
+                <span className="field-help">
+                  OpenRouter 모델 ID를 입력합니다. 모델은 tool calling을 지원해야 합니다.
+                </span>
+              </>
+            )}
           </label>
 
           <label className="field">

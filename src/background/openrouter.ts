@@ -10,7 +10,8 @@ import { discardLinkCall, setChosenLinks } from "./linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "./downloadChoices";
 import { candidatesMessage, makeOffer } from "./savedPagesStore";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
-import { providerAdapter, type ChatStream } from "@/lib/providers";
+import { providerAdapter, type ChatStream, type ProviderId } from "@/lib/providers";
+import { activeModel } from "@/lib/settings";
 import {
   type OpenRouterContentPart,
   type OpenRouterMessage,
@@ -251,6 +252,8 @@ export class ChatAgent {
   private history: OpenRouterMessage[] = [];
   private apiKey: string | null = null;
   private model: ModelId | null = null;
+  // 모델 제공자(#97). 바뀌면 대화 기록을 새로 시작한다(제공자마다 기록 형식·생각 정보가 다르다).
+  private provider: ProviderId = "openrouter";
   private customSystemPrompt: string | null = null;
   // 턴마다 증가. 중단되거나 새 턴에 밀린 루프는 자기 번호가 현재 값과 달라지므로
   // 늦게 끝난 도구 결과를 대화 기록에 쓰지 않고 빠진다.
@@ -440,22 +443,25 @@ export class ChatAgent {
     systemPrompt: string;
   }> {
     const settings = await getSettings();
-    if (!settings.openRouterApiKey) {
-      throw new Error("OpenRouter API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.");
+    const active = activeModel(settings);
+    if (!active.apiKey) {
+      throw new Error(`${providerAdapter(active.provider).label} API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.`);
     }
     if (
-      this.apiKey !== settings.openRouterApiKey ||
-      this.model !== settings.model ||
+      this.provider !== active.provider ||
+      this.apiKey !== active.apiKey ||
+      this.model !== active.model ||
       this.customSystemPrompt !== settings.systemPrompt
     ) {
-      this.apiKey = settings.openRouterApiKey;
-      this.model = settings.model;
+      this.provider = active.provider;
+      this.apiKey = active.apiKey;
+      this.model = active.model;
       this.customSystemPrompt = settings.systemPrompt;
       this.history = [];
     }
     return {
-      apiKey: settings.openRouterApiKey,
-      model: settings.model,
+      apiKey: active.apiKey,
+      model: active.model,
       systemPrompt: composeSystemPrompt(settings.systemPrompt),
     };
   }
@@ -742,7 +748,7 @@ export class ChatAgent {
     }
     let stream: ChatStream;
     try {
-      stream = await providerAdapter().openStream(
+      stream = await providerAdapter(this.provider).openStream(
         apiKey,
         {
           model,
@@ -769,7 +775,7 @@ export class ChatAgent {
     } catch (err) {
       if (connectTimedOut) {
         throw new Error(
-          `OpenRouter 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
+          `${providerAdapter(this.provider).label} 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
         );
       }
       if (this.isStale(turn)) return null;

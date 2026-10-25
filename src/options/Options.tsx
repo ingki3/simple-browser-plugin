@@ -46,7 +46,7 @@ export function Options() {
     setTesting(true);
     setTestResult(null);
     try {
-      await providerAdapter().complete(draft.openRouterApiKey, {
+      await providerAdapter("openrouter").complete(draft.openRouterApiKey, {
         model: draft.model,
         messages: [{ role: "user", content: "hi" }],
         reasoning: "agent",
