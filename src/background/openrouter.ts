@@ -32,7 +32,7 @@ import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } 
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
 import { loginSiteFor, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
 import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "./signIn";
-import { maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "./loginSecrets";
+import { allSecrets, maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "./loginSecrets";
 import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
 import { applySettingsUpdate, getSettings, readFlags, setFlag } from "./storage";
@@ -667,6 +667,10 @@ export class ChatAgent {
       this.noteExternalContent("PDF 문서를 대화에 붙였습니다.");
       await this.maybeShowPdfGuidance();
       // 파일 첨부를 받지 않는 제공자(Gemini 호환 엔드포인트)면 첨부하지 않고 read_document로 읽게 한다.
+      // 자동 로그인으로 넣은 값이 있으면(이 브라우저 세션) 원본 파일은 가릴 수 없으므로 첨부하지 않고, 가리기를 거치는 read_document로 읽게 한다.
+      if ((await allSecrets()).length > 0) {
+        return `[현재 탭: PDF 문서 — ${pdfInfo.url}]\n이 PDF 내용이 필요하면 read_document로 위 주소를 읽어 답한다(페이지 조작 도구는 쓸 수 없다).\n\n[사용자 요청]\n${userText}`;
+      }
       if (!providerAdapter(this.provider).supportsFileParts) {
         return `[현재 탭: PDF 문서 — ${pdfInfo.url}]\n지금 모델 제공자는 PDF 첨부를 받지 않는다. 이 PDF 내용이 필요하면 read_document로 위 주소를 읽어 답한다(페이지 조작 도구는 쓸 수 없다).\n\n[사용자 요청]\n${userText}`;
       }

@@ -60,6 +60,7 @@ export function secretForms(value: string): string[] {
 // 글자 수 한도로 잘린 글자(cleanModelText·도구의 자르기)는 값의 앞부분으로 끝나거나 뒷부분으로 시작할 수 있어, 글자의
 // 끝·처음에 붙은 값의 앞·뒷부분(EDGE_MIN 글자 이상)도 가린다. 너무 짧은 조각은 다른 글자와 우연히 겹쳐 쓸데없이 가리게 된다.
 const EDGE_MIN = 4;
+const MID_MIN = 6;
 
 export function maskText(text: string, secrets: Iterable<string>): { text: string; masked: boolean } {
   const forms = new Set<string>();
@@ -71,6 +72,22 @@ export function maskText(text: string, secrets: Iterable<string>): { text: strin
   for (const f of sorted) {
     if (!out.includes(f)) continue;
     out = out.split(f).join(MASK);
+    masked = true;
+  }
+  // 잘린 글자가 오류 문장 등 다른 글자 중간에 끼어 들어간 경우: 긴 값(MID_MIN+1 글자 이상)의 앞·뒷부분 MID_MIN 글자 이상은
+  // 글자 어디에 있든 가린다(짧은 조각은 우연히 겹치기 쉬워 끝·처음·잘림 표시 앞에서만 본다).
+  // 모든 모양의 조각을 모아 긴 것부터 바꾼다(한 모양의 짧은 조각이 다른 모양의 긴 조각을 먼저 끊지 않게).
+  const parts = new Set<string>();
+  for (const f of sorted) {
+    if (f.length <= MID_MIN) continue;
+    for (let k = f.length - 1; k >= MID_MIN; k--) {
+      parts.add(f.slice(0, k));
+      parts.add(f.slice(f.length - k));
+    }
+  }
+  for (const part of [...parts].sort((a, b) => b.length - a.length)) {
+    if (!out.includes(part)) continue;
+    out = out.split(part).join(MASK);
     masked = true;
   }
   for (const f of sorted) {

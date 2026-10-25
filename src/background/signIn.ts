@@ -163,7 +163,8 @@ export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, s
   if (secrets.some((v) => /[\r\n]/.test(v))) {
     throw new Error("아이디나 비밀번호에 줄바꿈이 있어 넣지 않았습니다. 사용자에게 직접 로그인해 달라고 하세요.");
   }
-  if (secrets.some((v) => v.length < MIN_SECRET_LENGTH)) {
+  // 페이지 글자 정리(공백 줄이기·앞뒤 자르기) 뒤에도 가릴 수 있는 길이여야 한다.
+  if (secrets.some((v) => v.length < MIN_SECRET_LENGTH || v.replace(/\s+/g, " ").trim().length < MIN_SECRET_LENGTH)) {
     throw new Error(`아이디나 비밀번호가 ${MIN_SECRET_LENGTH}글자보다 짧아 값을 가릴 수 없어 넣지 않았습니다. 사용자에게 직접 로그인해 달라고 하세요.`);
   }
   checkAbort();
