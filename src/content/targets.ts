@@ -540,7 +540,7 @@ function linkVia(trigger: Element, popup: Element, el: Element): "controls" | "o
 // ref가 popup을 담고, 그 안의 팝업 역할 요소가 popup 하나뿐인지(같은 트리 안만 본다). ref 자신이 팝업이거나 다른 팝업 안에
 // 있으면 중첩 메뉴일 수 있어 래퍼로 보지 않는다. ref 자신·조상·안에 트리거(combobox·aria-haspopup)가 있으면 목록을 연 것이
 // 그 트리거일 수 있어(대화상자 안의 메뉴 버튼) 래퍼로 보지 않는다(안쪽 목록을 펼친 진짜 트리거의 위험 정보를 건너뛰지 않게).
-// 안을 모두 볼 수 없으면(shadow root·프레임) 역시 래퍼로 보지 않는다.
+// 안을 모두 볼 수 없으면(shadow root·슬롯·프레임) 역시 래퍼로 보지 않는다.
 function wrapsOnly(ref: Element, popup: Element): boolean {
   if (ref === popup || !ref.contains(popup)) return false;
   if (POPUP_ROLES.has((ref.getAttribute("role") ?? "").trim().toLowerCase())) return false;
@@ -549,7 +549,7 @@ function wrapsOnly(ref: Element, popup: Element): boolean {
   for (let cur: Element | null = ref, depth = 0; cur; cur = composedParent(cur), depth++) {
     if (depth >= 200 || isTrigger(cur)) return false;
   }
-  // shadow root·프레임 안은 querySelectorAll이 보지 못하므로, 그런 것이 있으면 안을 다 확인할 수 없어 래퍼로 보지 않는다.
+  // shadow root·슬롯·프레임 안은 querySelectorAll이 보지 못하므로, 그런 것이 있으면 안을 다 확인할 수 없어 래퍼로 보지 않는다.
   if (hasHiddenTree(ref)) return false;
   for (const p of ref.querySelectorAll("*")) {
     if (hasHiddenTree(p) || isTrigger(p)) return false;
@@ -558,9 +558,10 @@ function wrapsOnly(ref: Element, popup: Element): boolean {
   return true;
 }
 
-// 요소에 shadow root(닫힌 것 포함 — content script만 chrome.dom으로 볼 수 있다)가 있거나 다른 문서를 담는 요소인지.
+// 요소에 shadow root(닫힌 것 포함 — content script만 chrome.dom으로 볼 수 있다)가 있거나 다른 문서·슬롯 배치 요소를 담는 요소인지.
 function hasHiddenTree(el: Element): boolean {
-  if (["iframe", "frame", "object", "embed"].includes(el.localName)) return true;
+  // slot에 배치된 요소는 querySelectorAll이 보지 못한다.
+  if (["iframe", "frame", "object", "embed", "slot"].includes(el.localName)) return true;
   if (el.shadowRoot) return true;
   try {
     return !!chrome.dom?.openOrClosedShadowRoot?.(el as HTMLElement);
