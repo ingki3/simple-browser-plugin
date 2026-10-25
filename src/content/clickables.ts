@@ -589,6 +589,9 @@ function phaseInfo(el: HTMLElement, info: TargetInfo, phase: RecheckPhase): Targ
 
 // 체크 상태를 준비 때(승인 때와 같은지 이미 확인한 상태)로 잠깐 되돌려 check를 부르고 지금 상태로 되살린다.
 // 속성 setter를 직접 써서(프레임워크의 값 추적·이벤트를 건드리지 않음) 동기로만 바꾼다. 상태가 그대로면 그냥 부른다.
+// radio의 직전 체크(prevRadio)는 지금도 대상과 같은 그룹일 때만 되돌린다. 클릭 도중 페이지가 name을 바꿔 다른 그룹이
+// 됐으면 그것을 체크하면 그 그룹의 체크가 풀리므로 건드리지 않는다(#83) — 그러면 확인은 승인 때와 다른 상태를 보게 되어
+// 더 묻는 쪽(클릭 중단)으로만 달라진다.
 function withToggleReverted(
   el: HTMLInputElement,
   before: { checked: boolean; indeterminate: boolean; prevRadio: HTMLInputElement | null },
@@ -596,10 +599,14 @@ function withToggleReverted(
 ): string | null {
   const now = { checked: el.checked, indeterminate: el.indeterminate, prev: el.type === "radio" ? checkedInGroup(el) : null };
   if (now.checked === before.checked && now.indeterminate === before.indeterminate && now.prev === before.prevRadio) return check();
+  const prev = el.type === "radio" && before.prevRadio && sameRadioGroup(before.prevRadio, el) ? before.prevRadio : null;
   const restore = () => {
     if (el.type === "radio") {
-      if (now.prev) setNativeProperty(now.prev, "checked", true);
-      else if (before.prevRadio) setNativeProperty(before.prevRadio, "checked", false);
+      // 직전 체크를 되돌렸으면(같은 그룹) 지금 그룹의 체크로 되살린다. 그 사이 다른 칸이 체크돼 있었으면 그것을, 없으면 해제.
+      if (prev) {
+        if (now.prev) setNativeProperty(now.prev, "checked", true);
+        else setNativeProperty(prev, "checked", false);
+      }
       setNativeProperty(el, "checked", now.checked);
     } else {
       setNativeProperty(el, "checked", now.checked);
@@ -609,7 +616,7 @@ function withToggleReverted(
   try {
     if (el.type === "radio") {
       setNativeProperty(el, "checked", before.checked);
-      if (before.prevRadio) setNativeProperty(before.prevRadio, "checked", true);
+      if (prev) setNativeProperty(prev, "checked", true);
     } else {
       setNativeProperty(el, "checked", before.checked);
       el.indeterminate = before.indeterminate;
@@ -618,6 +625,11 @@ function withToggleReverted(
   } finally {
     restore();
   }
+}
+
+// 두 radio가 지금 같은 그룹인지(같은 name, 같은 양식, 양식이 없으면 같은 문서·shadow root).
+function sameRadioGroup(a: HTMLInputElement, b: HTMLInputElement): boolean {
+  return !!a.name && a.name === b.name && a.form === b.form && (a.form !== null || a.getRootNode() === b.getRootNode());
 }
 
 function scrollToCenter(el: HTMLElement): void {
