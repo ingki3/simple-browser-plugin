@@ -86,9 +86,16 @@ function pick(target: HTMLInputElement): Picked {
   const passwords = visible.filter((i) => i.type === "password");
   const newPassword = passwords.length > 1 || visible.some((i) => autocompleteTokens(i).includes("new-password"));
   const hasOtherFields = (picked: Array<HTMLInputElement | null>): boolean => {
-    if (!form) return false;
     const mine = new Set(picked.filter(Boolean) as Element[]);
-    const shown = formElements(form).some((c) => {
+    // 양식이 없는 화면은 같은 범위(대화상자 또는 문서 본문)의 모든 칸을 본다(정보 수정 화면의 change 처리기가 바로 저장할 수 있다).
+    const controls: Element[] = form
+      ? formElements(form)
+      : Array.from(
+          (target.closest("dialog, [role='dialog'], [aria-modal='true']") ?? target.ownerDocument.body ?? target.ownerDocument.documentElement).querySelectorAll(
+            "input, select, textarea",
+          ),
+        );
+    const shown = controls.some((c) => {
       if (mine.has(c)) return false;
       if (isTag(c, "select") || isTag(c, "textarea")) return layoutVisible(c as HTMLElement);
       if (!isTag(c, "input")) return false;
@@ -96,7 +103,7 @@ function pick(target: HTMLInputElement): Picked {
       if (["hidden", "submit", "button", "reset", "image", "checkbox", "radio"].includes(t)) return false;
       return layoutVisible(c as HTMLElement);
     });
-    return shown || personalValuedElements(form).some((e) => !mine.has(e));
+    return shown || (!!form && personalValuedElements(form).some((e) => !mine.has(e)));
   };
   const base = { form, newPassword };
   if (autocompleteTokens(target).includes("one-time-code")) {
@@ -262,7 +269,9 @@ export async function fillLogin(
       return { filled: total, total, submitted: false, note: "제출 버튼이 바뀌어 제출하지 않았습니다." };
     }
     // 승인 뒤 제출 버튼에 삭제 선언·결제 신호가 생겼는지 지금 모습으로 다시 본다(넣은 값은 개인정보 변화가 아니라 이 호출이 넣은 것).
-    const [now] = inspectTargets([submit.submitId], submitCallId(callId), "c");
+    // 값을 넣으면 활성화되는 버튼(disabled 해제)처럼 기술이 바뀌는 것은 정상이라, 같은 요소를 지금 기술로 다시 등록해 위험 신호만 본다.
+    const freshId = registerClickTarget(submitter);
+    const [now] = inspectTargets([freshId], submitCallId(callId), "c");
     const why = submitControlBlock(now);
     if (why) return { filled: total, total, submitted: false, note: `제출 버튼에 위험 신호가 생겨 제출하지 않았습니다(${why}).` };
   } else {

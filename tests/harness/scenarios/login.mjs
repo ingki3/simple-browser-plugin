@@ -49,6 +49,22 @@ export default [
     },
   },
   {
+    name: "값을 넣어야 켜지는 로그인 버튼도 제출한다",
+    pages: {
+      "/login": `<title>Login</title><main>
+<form id=f action="/session" method="post" oninput="document.getElementById('go').disabled=!(this.u.value&&this.p.value)" onsubmit="event.preventDefault();this.remove();document.getElementById('out').textContent='제출됨'">
+<label>아이디 <input name=u autocomplete=username></label>
+<label>비밀번호 <input name=p type=password autocomplete=current-password></label>
+<button id=go disabled>로그인</button></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await connect(h);
+      const r = await h.turn([findF, { signIn: "password" }], { path: "/login" });
+      expect(r.cards === 0, `카드 없이(cards=${r.cards})`);
+      expect(r.out === "제출됨", `제출됨(out='${r.out}')`);
+    },
+  },
+  {
     name: "승인하지 않은 사이트: 카드에서 항목을 골라 로그인하고 앞으로 자동 로그인으로 묶는다",
     pages: { "/login": loginPage() },
     async run(h) {

@@ -187,7 +187,13 @@ export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, s
     },
     20_000,
     "로그인 정보 넣기",
-  ).finally(() => signal?.removeEventListener("abort", onAbort));
+  )
+    .catch((err) => {
+      // 응답만 늦었을 수 있다(페이지가 나중에 넣고 제출). 페이지 쪽 호출을 취소해 늦은 제출을 막는다.
+      onAbort();
+      throw err;
+    })
+    .finally(() => signal?.removeEventListener("abort", onAbort));
   const base = { origin: c.origin, step: shape.step };
   const what = STEP_LABEL[shape.step];
   if (res.filled < res.total) {
