@@ -38,7 +38,7 @@ export const KO = {
     download_images: "이미지 저장",
   },
   cancel: "취소",
-  errorMissingKey: "API 키가 설정되지 않았습니다. 오른쪽 위 설정에서 OpenRouter API 키를 입력해 주세요.",
+  errorMissingKey: "API 키가 설정되지 않았습니다. 오른쪽 위 설정에서 모델 제공자의 API 키를 입력해 주세요.",
   errorGeneric: "요청에 실패했습니다.",
   settingsTitle: "설정",
   apiKeyLabel: "OpenRouter API 키",
