@@ -1,0 +1,220 @@
+// content script·승인 규칙 하네스: 빌드한 확장(dist)을 Chrome for Testing에 올리고, 로컬 시험 서버 두 개(다른 출처)와
+// 모의 모델(OpenRouter 응답을 단계 목록으로 흉내)로 실제 사이드 패널을 조작한다. `npm run harness`가 쓴다.
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { createServer } from "node:http";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+export const EXT = resolve(process.env.HARNESS_EXT ?? "dist");
+
+// Chrome for Testing 경로: HARNESS_CHROME, 없으면 Playwright 캐시에서 가장 새 chromium. 못 찾으면 null(하네스를 건너뛴다).
+export function findChrome() {
+  if (process.env.HARNESS_CHROME) return existsSync(process.env.HARNESS_CHROME) ? process.env.HARNESS_CHROME : null;
+  const cache =
+    process.env.PLAYWRIGHT_BROWSERS_PATH ??
+    (process.platform === "darwin" ? join(homedir(), "Library/Caches/ms-playwright") : join(homedir(), ".cache/ms-playwright"));
+  if (!existsSync(cache)) return null;
+  const dirs = readdirSync(cache)
+    .filter((d) => /^chromium-\d+$/.test(d))
+    .sort((a, b) => Number(b.split("-")[1]) - Number(a.split("-")[1]));
+  const rel = [
+    "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "chrome-linux64/chrome",
+    "chrome-linux/chrome",
+  ];
+  for (const d of dirs) for (const r of rel) if (existsSync(join(cache, d, r))) return join(cache, d, r);
+  return null;
+}
+
+const DEFAULT_PAGE = `<title>shop</title><body><main>
+<form id=s onsubmit="event.preventDefault();document.getElementById('out').textContent='검색됨:'+this.q.value"><label>검색어 <input name=q></label><button>검색</button></form>
+<button onclick="document.getElementById('out').textContent='결제됨'">결제하기</button>
+<button onclick="document.getElementById('out').textContent='필터됨 '+event.isTrusted">적용</button>
+<p id=out></p></main>`;
+
+
+export async function startHarness() {
+  const { chromium } = await import("playwright-core");
+  const chrome = findChrome();
+  if (!chrome) throw new Error("Chrome for Testing을 찾지 못했습니다(HARNESS_CHROME).");
+  // 시나리오가 경로마다 HTML을 등록한다(서버 둘 — 두 번째는 다른 출처).
+  const pages = new Map();
+  const serve = (which) => (q, r) => {
+    const path = q.url.split("?")[0];
+    const body = pages.get(`${which}${path}`) ?? (which === 1 ? DEFAULT_PAGE : "<title>X</title><p>external</p>");
+    r.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    r.end(`<!doctype html><meta charset=utf-8>${body}`);
+  };
+  const srv = createServer(serve(1));
+  const srv2 = createServer(serve(2));
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  await new Promise((r) => srv2.listen(0, "localhost", r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const base2 = `http://localhost:${srv2.address().port}`;
+  const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "sbp-harness-")), {
+    executablePath: chrome,
+    headless: !process.env.HARNESS_HEADED,
+    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
+  });
+  let [sw] = ctx.serviceWorkers();
+  if (!sw) sw = await ctx.waitForEvent("serviceworker");
+  const extId = sw.url().split("/")[2];
+  const logs = [];
+  sw.on("console", (m) => logs.push(m.text()));
+  const tab = ctx.pages()[0] ?? (await ctx.newPage());
+  await tab.goto(base + "/");
+  await installMockModel(sw);
+  const panel = await ctx.newPage();
+
+  async function settings(patch) {
+    await sw.evaluate(async (patch) => {
+      const cur = (await chrome.storage.local.get("settings")).settings ?? {};
+      await chrome.storage.local.set({ settings: { ...cur, ...patch } });
+    }, patch);
+  }
+
+  // 시나리오마다 새 대화(패널을 다시 열면 새 연결 → 새 대화 상태)와 기본 설정으로 시작한다.
+  async function reset() {
+    await sw.evaluate(async () => {
+      await chrome.storage.local.clear();
+      await chrome.storage.local.set({
+        settings: { openRouterApiKey: "sk-or-test-dummy", model: "deepseek/x", autoApprove: false },
+      });
+      globalThis.__steps = [];
+      globalThis.__toolLog = [];
+      globalThis.__draftReqs = [];
+      globalThis.__draft = null;
+    });
+    logs.length = 0;
+    await panel.goto(`chrome-extension://${extId}/src/sidepanel/index.html`);
+    await panel.waitForTimeout(500);
+    await tab.bringToFront();
+  }
+
+  // 한 턴: 탭을 path로 열고(noReload면 그대로) 단계 목록으로 모의 모델을 돌린다.
+  // approve: 승인 카드가 뜨면 누른다(true) / 카드가 뜨면 거기서 멈춘다(false). onCard(card, n): 카드가 뜰 때 대신 할 일.
+  async function turn(steps, { path = "/", server = 1, noReload = false, approve = false, onCard, maxWaitMs = 20_000, text = "시험" } = {}) {
+    if (!noReload) await tab.goto((server === 1 ? base : base2) + path);
+    await tab.waitForTimeout(200);
+    await sw.evaluate((s) => {
+      globalThis.__steps = s;
+      globalThis.__toolLog = [];
+    }, steps);
+    const before = await panel.locator(".tool-pending:not(.resolved)").count();
+    await panel.fill("textarea.composer-input", text);
+    await panel.click("button.composer-btn.primary");
+    let cards = 0;
+    const started = Date.now();
+    let stoppedAtCard = false;
+    while (Date.now() - started < maxWaitMs) {
+      await panel.waitForTimeout(200);
+      const pending = panel.locator(".tool-pending:not(.resolved)");
+      const n = await pending.count();
+      if (n > before) {
+        cards++;
+        if (onCard) await onCard(pending.last(), cards);
+        else if (approve) await pending.last().locator(".btn-approve").click();
+        else {
+          stoppedAtCard = true;
+          break;
+        }
+        await panel.waitForTimeout(300);
+        continue;
+      }
+      if (!(await panel.locator("button.composer-btn.danger").count())) break;
+    }
+    const tools = await sw.evaluate(() => globalThis.__toolLog);
+    const out = await tab.locator("#out").innerText().catch(() => null);
+    if (await panel.locator("button.composer-btn.danger").count()) {
+      await panel.click("button.composer-btn.danger");
+      await panel.waitForTimeout(300);
+    }
+    return { cards, stoppedAtCard, tools, out, url: tab.url(), logs: [...logs] };
+  }
+
+  async function close() {
+    await ctx.close();
+    srv.close();
+    srv2.close();
+  }
+
+  return { base, base2, pages, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs };
+}
+
+// 모의 모델: 단계마다 직전 도구 결과를 보고 다음 호출을 만든다. 도구 결과(모델에 간 그대로)는 __toolLog에 남긴다.
+// 저장 카드 초안 요청(response_format)에는 __draft를 JSON으로 답하고 요청을 __draftReqs에 남긴다.
+async function installMockModel(sw) {
+  await sw.evaluate(() => {
+    globalThis.__steps = [];
+    globalThis.__toolLog = [];
+    globalThis.__n = 0;
+    // 사이드 패널을 탭으로 띄워 시험하므로 "활성 탭"은 시험 페이지 탭(http, 패널이 아닌 것)으로 고정한다.
+    const realQuery = chrome.tabs.query.bind(chrome.tabs);
+    chrome.tabs.query = async (q) => {
+      if (q && q.active && q.lastFocusedWindow) {
+        const all = await realQuery({});
+        return all.filter((t) => /^https?:/.test(t.url ?? ""));
+      }
+      return realQuery(q);
+    };
+    const realFetch = globalThis.fetch;
+    const sse = (chunks) =>
+      new Response(chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n", {
+        headers: { "content-type": "text/event-stream" },
+      });
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).includes("openrouter.ai")) return realFetch(url, init);
+      const body = JSON.parse(init.body);
+      if (body.response_format) {
+        (globalThis.__draftReqs ??= []).push(body);
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(globalThis.__draft ?? {}) } }] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const lastTool = [...body.messages].reverse().find((m) => m.role === "tool");
+      let data = null;
+      if (lastTool) {
+        const parsed = JSON.parse(lastTool.content);
+        globalThis.__toolLog.push({ name: lastTool.name, ...parsed });
+        data = parsed.result ?? null;
+      }
+      if (body.tool_choice === "none") return sse([{ choices: [{ delta: { content: "정리" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }]);
+      const step = globalThis.__steps.shift();
+      const list = Array.isArray(data) ? data : [];
+      const byLabel = (l) => list.find((f) => (f.label ?? "").includes(l))?.id ?? "f-missing";
+      let out = { text: "끝" };
+      if (step?.fill) out = { tool: "fill_form_fields", args: { fills: [{ id: byLabel(step.fill), value: step.value }] } };
+      else if (step?.fillType) {
+        const id = list.find((f) => f.type === step.fillType)?.id ?? "f-missing";
+        out = { tool: "fill_form_fields", args: { fills: [{ id, value: step.value }] } };
+      }
+      else if (step?.click) {
+        const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
+        out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
+      } else if (step) out = step;
+      const chunks = out.tool
+        ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "call" + ++globalThis.__n, type: "function", function: { name: out.tool, arguments: JSON.stringify(out.args) } }] } }] }]
+        : [{ choices: [{ delta: { content: out.text } }] }];
+      chunks.push({ choices: [{ delta: {}, finish_reason: out.tool ? "tool_calls" : "stop" }] });
+      return sse(chunks);
+    };
+  });
+}
+
+export class Fail extends Error {}
+
+export function expect(cond, message) {
+  if (!cond) throw new Fail(message);
+}
+
+// 도구 결과(모델에 간 것) 중 이름이 같은 마지막 것.
+export function lastTool(r, name) {
+  return [...r.tools].reverse().find((t) => t.name === name) ?? null;
+}
+
+// 백그라운드 로그의 도구 결과 요약 줄(패널·동작 기록에 보이는 것). 없으면 빈 글자.
+export function resultLog(r, name) {
+  return [...r.logs].reverse().find((l) => l.includes("tool:result") && l.includes(` ${name} `)) ?? "";
+}
