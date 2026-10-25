@@ -56,4 +56,27 @@ export default [
       expect(text.includes("사이드 패널의") && text.includes("사이드 패널 열기") && inputs === 0, `안내만(입력 ${inputs}개)`);
     },
   },
+  {
+    name: "두 패널에서 연 서랍이 서로 다른 항목을 바꿔도 상대가 바꾼 값을 덮지 않는다",
+    async run(h) {
+      await h.settings({ autoApprove: true, showThinking: false });
+      const other = await h.ctx.newPage();
+      await other.goto(`chrome-extension://${h.extId}/src/sidepanel/index.html`);
+      await other.waitForTimeout(500);
+      await openDrawer(h);
+      await other.locator("button.icon-btn[title]", { hasText: "⚙" }).click();
+      await other.waitForTimeout(300);
+      // A: 자동 실행 끄기
+      await h.panel.locator("details.settings-group summary", { hasText: "동작" }).click();
+      await h.panel.locator(".field", { hasText: "자동 실행" }).locator("input[type=checkbox]").first().uncheck();
+      await h.panel.waitForTimeout(400);
+      // B(열 때 자동 실행이 켜져 있던 서랍): 생각 보기만 켜기
+      await other.locator("details.settings-group summary", { hasText: "고급" }).click();
+      await other.locator(".field", { hasText: "생각" }).locator("input[type=checkbox]").first().check();
+      await other.waitForTimeout(400);
+      const st = await stored(h);
+      await other.close();
+      expect(st.autoApprove === false && st.showThinking === true, `둘 다 유지(${JSON.stringify({ autoApprove: st.autoApprove, showThinking: st.showThinking })})`);
+    },
+  },
 ];

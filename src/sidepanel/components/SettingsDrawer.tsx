@@ -69,13 +69,13 @@ interface GoogleStatus {
 }
 
 export function SettingsDrawer({ open, onClose }: Props) {
-  const { settings, loaded, save } = useSettings();
+  const { settings, loaded, savePatch } = useSettings();
   const [draft, setDraft] = useState(settings);
   const direct = draft.provider === "openrouter" ? null : DIRECT_PROVIDERS[draft.provider];
   const [showKey, setShowKey] = useState(false);
   // 바꾸면 바로 저장(#99): 고르는 항목은 곧바로, 글자 칸은 입력이 멈추면(SAVE_DELAY_MS) 저장한다. 닫을 때 남은 저장을 마친다.
   // API 키만 "저장" 버튼으로 확정한다(keyDraft).
-  const pending = useRef<{ timer: number; next: Settings } | null>(null);
+  const pending = useRef<{ timer: number; patch: Partial<Settings> } | null>(null);
   const [savedAt, setSavedAt] = useState(0);
   const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
   const [keyDraft, setKeyDraft] = useState(savedKey);
@@ -85,15 +85,10 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [diag, setDiag] = useState<string | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
 
-  // 저장 뒤 다시 읽힌 설정이 입력 중인 글자를 덮지 않게, 처음 불러올 때와 서랍을 열 때만 설정에서 다시 채운다.
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
+  // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 아직 저장하지 않은 이 서랍의 변경(pending)은 덮지 않는다.
   useEffect(() => {
-    if (loaded) setDraft(settingsRef.current);
-  }, [loaded]);
-  useEffect(() => {
-    if (open) setDraft(settingsRef.current);
-  }, [open]);
+    if (loaded) setDraft({ ...settings, ...(pending.current?.patch ?? {}) });
+  }, [loaded, settings, open]);
   // 제공자를 바꾸거나 서랍을 열면 키 칸을 그 제공자의 저장된 키로.
   useEffect(() => {
     setKeyDraft(savedKey);
@@ -106,21 +101,36 @@ export function SettingsDrawer({ open, onClose }: Props) {
     return () => window.clearTimeout(t);
   }, [savedAt]);
 
+  // 바꾼 필드만 최신 설정에 합쳐 저장한다(다른 곳에서 바꾼 필드를 덮지 않게).
   const flush = async () => {
     const p = pending.current;
     if (!p) return;
     window.clearTimeout(p.timer);
     pending.current = null;
-    await save({ ...p.next, maxToolHops: clampHops(p.next.maxToolHops) });
+    const patch = p.patch.maxToolHops !== undefined ? { ...p.patch, maxToolHops: clampHops(p.patch.maxToolHops) } : p.patch;
+    await savePatch(patch);
     setSavedAt(Date.now());
   };
   // patch를 반영하고 저장한다. delay가 있으면 그동안 다음 변경을 모아 한 번에 저장한다.
   const update = (patch: Partial<Settings>, delay = 0) => {
-    const next = { ...(pending.current?.next ?? draft), ...patch };
-    setDraft(next);
+    setDraft((cur) => ({ ...cur, ...patch }));
+    const merged = { ...(pending.current?.patch ?? {}), ...patch };
     if (pending.current) window.clearTimeout(pending.current.timer);
-    pending.current = { next, timer: window.setTimeout(() => void flush(), delay) };
+    pending.current = { patch: merged, timer: window.setTimeout(() => void flush(), delay) };
   };
+  // 패널이 닫히거나(Chrome의 패널 닫기) 숨겨지면 남은 변경을 바로 보낸다(타이머가 사라져 마지막 입력을 잃지 않게).
+  useEffect(() => {
+    const now = () => void flush();
+    const onHide = () => {
+      if (document.visibilityState === "hidden") now();
+    };
+    window.addEventListener("pagehide", now);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", now);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  });
   const saveKey = () =>
     update(direct ? { apiKeys: { ...draft.apiKeys, [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
 
