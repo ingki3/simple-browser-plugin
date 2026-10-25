@@ -158,6 +158,9 @@ test("가리기: 공백을 줄이거나 한도로 자른 글자", () => {
   assert.ok(cut.masked);
   assert.ok(!cut.text.includes("horse"));
   assert.ok(maskText("battery 뒤 글자", ["horse battery"]).masked);
+  // 잘림 표시가 붙은 조각(본문 한도), 직렬화한 글자 안에서도.
+  const trunc = maskText(JSON.stringify({ mainText: "본문 Harness-Pw…", n: 1 }), ["Harness-Pw-7731!"]);
+  assert.ok(trunc.masked && !trunc.text.includes("Harness-Pw"));
 });
 
 test("가리기: JSON으로 직렬화한 글자 안의 값(따옴표·역슬래시)", () => {

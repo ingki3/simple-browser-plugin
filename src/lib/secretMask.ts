@@ -71,8 +71,19 @@ export function maskText(text: string, secrets: Iterable<string>): { text: strin
   for (const f of sorted) {
     for (let k = f.length - 1; k >= EDGE_MIN; k--) {
       const head = f.slice(0, k);
-      if (out.endsWith(head)) {
+      // 잘림 표시(…, ...)가 붙은 조각은 글자 어디에 있든(직렬화한 결과 안 등) 가린다.
+      let hit = false;
+      for (const mark of ["…", "..."]) {
+        if (out.includes(head + mark)) {
+          out = out.split(head + mark).join(MASK + mark);
+          hit = true;
+        }
+      }
+      if (!hit && out.endsWith(head)) {
         out = out.slice(0, out.length - k) + MASK;
+        hit = true;
+      }
+      if (hit) {
         masked = true;
         break;
       }
