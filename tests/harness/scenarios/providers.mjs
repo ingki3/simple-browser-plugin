@@ -37,4 +37,25 @@ export default [
       expect(reqs.every((q) => q.url === "https://openrouter.ai/api/v1/chat/completions") && "reasoning" in reqs[0].body, "OpenRouter 형식");
     },
   },
+  {
+    name: "턴 도중 제공자를 바꾸면 남은 내용을 어느 제공자로도 보내지 않고 멈춘다",
+    async run(h) {
+      let before = -1;
+      const r = await h.turn([{ tool: "find_clickables", args: {} }, { click: "적용" }, { tool: "describe_page", args: {} }, { text: "끝" }], {
+        onCard: async (card, n) => {
+          if (n > 1) return;
+          await h.settings({ provider: "openai", apiKeys: { openai: "sk-test-openai" } });
+          await h.panel.waitForTimeout(200);
+          before = (await h.sw.evaluate(() => globalThis.__modelReqs)).length;
+          await card.locator(".btn-approve").click();
+        },
+      });
+      const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+      expect(before === 2, `카드 전 요청 2개(${before})`);
+      expect(reqs.length === before, `바꾼 뒤 요청 없음(${reqs.map((q) => q.url).join(", ")})`);
+      const text = await h.panel.locator("body").innerText();
+      expect(text.includes("이 요청을 멈췄습니다"), "멈춤 안내");
+      void r;
+    },
+  },
 ];

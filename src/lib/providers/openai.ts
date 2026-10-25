@@ -21,8 +21,11 @@ export function openAiReasoningModel(model: string): boolean {
 function effort(model: string, intent: ReasoningIntent): string {
   if (intent === "agent") return "medium";
   if (intent === "agent_low") return "low";
-  // 생각이 필요 없는 짧은 JSON 호출: gpt-5 계열은 minimal, o 계열은 low가 가장 낮다.
-  return /^gpt-5/i.test(model) ? "minimal" : "low";
+  // 생각이 필요 없는 짧은 JSON 호출: 모델 계열마다 받는 가장 낮은 값이 다르다 — gpt-5·gpt-5-mini·gpt-5-nano는 minimal,
+  // gpt-5.1 같은 뒤 버전은 none, o 계열과 그 밖은 low(모두 받는 값).
+  if (/^gpt-5(-|$)/i.test(model)) return "minimal";
+  if (/^gpt-5\.\d/i.test(model)) return "none";
+  return "low";
 }
 
 // 내부 기록 → OpenAI 메시지(받지 않는 필드를 뺀다).

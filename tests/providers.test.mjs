@@ -67,6 +67,9 @@ test("OpenAI 어댑터: 추론 모델은 reasoning_effort·max_completion_tokens
     stream: true,
   });
   assert.equal(openAiPayload({ model: "gpt-5", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "minimal");
+  assert.equal(openAiPayload({ model: "gpt-5-nano", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "minimal");
+  assert.equal(openAiPayload({ model: "gpt-5.1", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "none");
+  assert.equal(openAiPayload({ model: "gpt-5.2-mini", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "none");
   assert.equal(openAiPayload({ model: "o4-mini", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "low");
   assert.equal(openAiPayload({ model: "o4-mini", messages: msgs, maxTokens: 10, reasoning: "agent_low" }, false).reasoning_effort, "low");
 });
