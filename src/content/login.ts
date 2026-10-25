@@ -102,13 +102,14 @@ function submitMethods(form: HTMLFormElement): string[] {
 // 양식과 제출 버튼들이 정한 제출 대상 창(target·formtarget).
 function formTargets(form: HTMLFormElement): string[] {
   // 양식에 target이 없으면 문서의 <base target>을 물려받는다(HTML의 대상 결정 규칙).
-  const own = (form.getAttribute("target") ?? "").trim();
-  const inherited = form.hasAttribute("target") ? "" : (form.ownerDocument.querySelector("base[target]")?.getAttribute("target") ?? "").trim();
+  // 글자를 다듬지 않는다: 브라우저는 " _self "를 _self가 아닌 다른 이름으로 본다.
+  const own = form.getAttribute("target") ?? "";
+  const inherited = form.hasAttribute("target") ? "" : (form.ownerDocument.querySelector("base[target]")?.getAttribute("target") ?? "");
   const out = [own, inherited];
-  for (const c of formElements(form)) if (isSubmitControl(c) && c.hasAttribute("formtarget")) out.push((c.getAttribute("formtarget") ?? "").trim());
+  for (const c of formElements(form)) if (isSubmitControl(c) && c.hasAttribute("formtarget")) out.push(c.getAttribute("formtarget") ?? "");
   // form.elements는 이미지 버튼을 빼므로 양식이 든 루트에서 따로 본다.
   for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {
-    if ((img as HTMLInputElement).form === form && img.hasAttribute("formtarget")) out.push((img.getAttribute("formtarget") ?? "").trim());
+    if ((img as HTMLInputElement).form === form && img.hasAttribute("formtarget")) out.push(img.getAttribute("formtarget") ?? "");
   }
   return out;
 }
@@ -208,7 +209,8 @@ function pick(target: HTMLInputElement): Picked {
       if (["hidden", "submit", "button", "reset", "image", "checkbox", "radio"].includes(t)) return false;
       return layoutVisible(c as HTMLElement);
     });
-    return shown || (!!form && personalValuedElements(form).some((e) => !mine.has(e)));
+    // 값이 채워진 개인정보 칸(숨은 칸 포함)은 양식이 없는 화면에서도 같은 범위에서 본다(change 처리기가 함께 보낼 수 있다).
+    return shown || personalValuedElements(form ?? formlessRoot(target)).some((e) => !mine.has(e));
   };
   const otherTarget = !!form && formTargets(form).some((t) => t !== "" && t.toLowerCase() !== "_self");
   const base = { form, newPassword, otherTarget };
