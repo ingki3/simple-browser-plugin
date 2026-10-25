@@ -124,7 +124,7 @@ describe_page 결과를 읽는 법:
   채우기만으로는 검색·필터가 적용되지 않는 페이지가 많다. 값을 채운 뒤 결과가 바뀌어야 하는 경우(검색어, 가격 범위 같은 필터)에는 find_clickables로 그 칸 근처의 적용·검색·확인 버튼을 찾아 누른 뒤에 결과를 읽는다. 버튼을 누르기 전에 get_page_content로 결과를 다시 읽지 않는다.
 - list_page_images / download_images(urls): 이미지 목록 → 저장(민감). 아래 이미지·첨부 파일 저장 모드.
 - translate_page: 페이지 전체 번역.
-- query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회. 화면 글자와 정해 둔 구조 속성(attr: href·src·role·type·name·id·alt·title·aria-label·aria-selected·aria-expanded·aria-checked·aria-disabled·disabled·hidden)만 돌려준다. 입력 칸의 값·편집 중인 글자는 볼 수 없다.
+- query_dom: 위 도구들로 해결 안 되는 특정 CSS 선택자 조회. 화면 글자와 정해 둔 구조 속성(attr: href·src·role·type·name·id·alt·title·aria-label·aria-selected·aria-expanded·aria-checked·aria-disabled·disabled·hidden)만 돌려준다. 입력 칸의 값·편집 중인 글자는 볼 수 없다. 선택자에 data-*·value 값 비교나 :valid·:placeholder-shown 같은 입력값 상태 조건을 쓰면 거부되니 태그·id·class·역할 같은 구조 조건을 쓴다.
 - get_youtube_transcript: YouTube 영상 페이지의 자막 스크립트(타임스탬프 포함) 추출.
 - list_file_links(query?): 페이지의 첨부·다운로드 파일 링크 목록.
 - download_files(urls): 민감. 페이지의 첨부·다운로드 파일 링크를 디스크에 저장(로그인 쿠키 포함, 최대 20개). 아래 이미지·첨부 파일 저장 모드.

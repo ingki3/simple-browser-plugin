@@ -71,4 +71,23 @@ export default [
       expect(res?.filledCount === 1 && r.out === "연식 2023", `값 반영(${JSON.stringify(r.tools).slice(0, 600)}, card=${r.stoppedAtCard}, out='${r.out}')`);
     },
   },
+  {
+    name: "query_dom: 값에 기대는 선택자는 실행하지 않고, 구조 선택자는 그대로(#45)",
+    pages: { "/q": `<title>Q</title><main><input id=e name=email value="me@example.com"><a href="/a" data-k="secret">링크</a><p id=out></p></main>` },
+    async run(h) {
+      const r = await h.turn(
+        [
+          { tool: "query_dom", args: { selector: "input[value^='me']" } },
+          { tool: "query_dom", args: { selector: "a[data-k^='s']" } },
+          { tool: "query_dom", args: { selector: "main a[href]", attr: "href" } },
+          { text: "끝" },
+        ],
+        { path: "/q" },
+      );
+      const q = r.tools.filter((t) => t.name === "query_dom");
+      expect(q.length === 3, `결과 3개(${JSON.stringify(q)})`);
+      expect(q[0].error?.includes("value") && q[1].error?.includes("data-k"), `값 조건 거부(${JSON.stringify(q.slice(0, 2))})`);
+      expect(Array.isArray(q[2].result) && q[2].result[0]?.text === "링크", `구조 선택자 실행(${JSON.stringify(q[2])})`);
+    },
+  },
 ];
