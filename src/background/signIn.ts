@@ -4,7 +4,7 @@
 // 2) runSignIn: 고른 항목의 값을 가림 목록에 먼저 넣고, 같은 문서에 값을 넣고 제출한다(login_fill).
 // 값은 이 호출의 메모리에만 두고 결과·오류·로그에 싣지 않는다.
 import type { KpxEntry } from "@/lib/keepassxc";
-import { loginOrigin, type LoginShape } from "@/lib/loginPolicy";
+import { loginOrigin, loginShapeBlock, type LoginShape } from "@/lib/loginPolicy";
 import { debugLog } from "./debug";
 import { keepassxcLogins, keepassxcTotp } from "./keepassxc";
 import { rememberSecrets } from "./loginSecrets";
@@ -123,6 +123,7 @@ export interface SignInRunResult {
 
 // 항목 uuid의 값을 넣고 제출한다. 문서가 바뀌었으면 넣지 않는다.
 export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, signal?: AbortSignal): Promise<SignInRunResult> {
+  // 승인 때의 구조 판정(제출 직전 재판정에서 새 이유만 막는다).
   const callId = token;
   const c = calls.get(token);
   calls.delete(token);
@@ -184,6 +185,7 @@ export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, s
       callId,
       fills,
       submit: shape.hasForm ? { submitId: shape.submitId, submitUrls: shape.submitUrls, submitMethods: shape.submitMethods } : null,
+      approved: { origin: c.origin, block: loginShapeBlock(shape, c.origin) },
     },
     20_000,
     "로그인 정보 넣기",

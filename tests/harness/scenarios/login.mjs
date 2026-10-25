@@ -71,6 +71,21 @@ export default [
     },
   },
   {
+    name: "일회용 코드: 코드 켠 사이트에서 넣고, 입력하자마자 페이지가 제출하면 다시 제출하지 않는다",
+    pages: {
+      "/otp": `<title>OTP</title><main><form id=f method=post action="/otp" oninput="if(this.c.value.length===6)this.requestSubmit()" onsubmit="event.preventDefault();const o=document.getElementById('out');o.textContent=String(Number(o.textContent||0)+1)">
+<label>인증 코드 <input name=c autocomplete=one-time-code inputmode=numeric></label><button>확인</button></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      const kp = await connect(h, { approve: false });
+      await h.settings({ loginSites: [{ origin: h.base, uuid: UUID, entryName: "Harness", totp: true }] });
+      const r = await h.turn([findF, { signIn: "인증 코드" }], { path: "/otp" });
+      expect(r.cards === 0, `카드 없이(cards=${r.cards})`);
+      expect(r.out === "1", `한 번만 제출(out='${r.out}')`);
+      expect(kp.state().log.some((l) => l.action === "get-totp"), "KeePassXC에서 코드를 받음");
+    },
+  },
+  {
     name: "값을 넣어야 켜지는 로그인 버튼도 제출한다",
     pages: {
       "/login": `<title>Login</title><main>

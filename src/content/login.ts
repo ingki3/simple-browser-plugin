@@ -1,8 +1,8 @@
 // 자동 로그인(sign_in, docs/design/login-automation.md)의 페이지 쪽. 모델이 고른 칸 둘레의 로그인 양식을 구조로 읽고(login_inspect),
 // 백그라운드가 비밀번호 관리자에서 받은 값을 넣은 뒤 양식을 제출한다(login_fill). 판정은 칸 종류·autocomplete·양식 관계·제출
 // 주소와 메서드로만 한다(낱말로 로그인 화면을 짐작하지 않는다). 값은 이 파일에서 돌려주지 않는다.
-import { submitControlBlock, type LoginShape } from "@/lib/loginPolicy";
-import { isTag } from "./docs";
+import { loginShapeBlock, submitControlBlock, type LoginShape } from "@/lib/loginPolicy";
+import { isShadowRoot, isTag } from "./docs";
 import {
   fillFormFields,
   formDestinations,
@@ -44,8 +44,9 @@ function usable(el: Element): el is HTMLInputElement {
 function formlessRoot(el: Element): Element | ShadowRoot {
   const dialog = el.closest("dialog, [role='dialog'], [aria-modal='true']");
   if (dialog) return dialog;
+  // 같은 출처 iframe의 shadow root는 이 창의 ShadowRoot가 아니어서 창과 무관한 판별을 쓴다.
   const root = el.getRootNode();
-  if (root instanceof ShadowRoot) return root;
+  if (isShadowRoot(root)) return root;
   return el.ownerDocument.body ?? el.ownerDocument.documentElement;
 }
 
@@ -169,8 +170,13 @@ export function inspectLogin(id: string, callId: string): LoginShape {
   const p = pick(target as HTMLInputElement);
   inspected.set(callId, { targetId: id, picked: p });
   if (inspected.size > 50) inspected.delete(inspected.keys().next().value as string);
+  return buildShape(target as HTMLInputElement, id, p, callId);
+}
+
+// targetId가 null이면 모든 칸을 지금 기술로 다시 등록한다(값을 넣은 뒤 제출 직전 재판정 — 승인 대상은 바꾸지 않는 별도 callId로).
+function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked, callId: string): LoginShape {
   const fieldEls = [p.username, p.password, p.otp].filter((e): e is HTMLInputElement => !!e);
-  const ids = fieldEls.map((e) => (e === target ? id : registerFieldTarget(e)));
+  const ids = fieldEls.map((e) => (e === target && targetId ? targetId : registerFieldTarget(e)));
   const fields = inspectTargets(ids, callId, "f");
   const idOf = (e: HTMLInputElement | null) => (e ? ids[fieldEls.indexOf(e)] : undefined);
   const doc = target.ownerDocument;
@@ -217,6 +223,9 @@ export async function fillLogin(
   callId: string,
   fills: Array<{ id: string; value: string }>,
   submit: { submitId?: string; submitUrls: string[]; submitMethods: string[] } | null,
+  // 승인 때의 구조 판정(카드로 승인했으면 그때 보인 이유, 자동이면 null)과 값을 받을 출처. 제출 직전 다시 판정해 새 이유가 생기면
+  // 제출하지 않는다.
+  approved: { origin: string; block: string | null } | null = null,
 ): Promise<LoginFillResult> {
   // 값을 쓰기 전에 승인 때의 구조(단계·새 비밀번호 칸 유무·넣을 칸·양식)가 그대로인지 본다
   // (기다리는 사이 autocomplete가 new-password로 바뀌는 등).
@@ -261,16 +270,39 @@ export async function fillLogin(
     return !(el.type !== "password" && el.value === f.value);
   });
   const total = fills.length;
+  let submittedByPage = false;
   if (todo.length) {
-    const res = await fillFormFields({ fills: todo }, callId, formDrift);
+    // 입력·변경 처리기가 양식을 바로 제출하는 페이지(일회용 코드 자동 제출 등)면 다시 제출하지 않는다.
+    const doc = now.form?.ownerDocument;
+    const onSubmit = (e: Event) => {
+      if (now.form && e.target === now.form) submittedByPage = true;
+    };
+    doc?.addEventListener("submit", onSubmit, true);
+    let res: Awaited<ReturnType<typeof fillFormFields>>;
+    try {
+      res = await fillFormFields({ fills: todo }, callId, formDrift);
+    } finally {
+      doc?.removeEventListener("submit", onSubmit, true);
+    }
     if (res.filledCount !== res.results.length) {
       return { filled: res.filledCount, total, submitted: false, note: "일부 칸에 값이 들어가지 않아 제출하지 않았습니다." };
     }
+    if (submittedByPage) return { filled: total, total, submitted: true, note: "페이지가 입력 중에 양식을 제출했습니다." };
   }
   if (cancelled.has(callId)) return { filled: total, total, submitted: false, note: "중단되어 제출하지 않았습니다." };
   if (!submit) return { filled: total, total, submitted: false };
   const driftAfter = formDrift();
   if (driftAfter) return { filled: total, total, submitted: false, note: driftAfter.replace("넣지 않았습니다", "제출하지 않았습니다") };
+  // 제출 직전에 지금 모습으로 로그인 구조를 다시 판정한다(쓰기를 건너뛴 칸이 있어도 — 기다리는 사이 숨은 값이 결제로 바뀌는 등).
+  if (approved) {
+    const targetEl = registeredElement(before.targetId, "f") as HTMLInputElement;
+    const recheckId = `${callId}:recheck`;
+    const fresh = buildShape(targetEl, null, pick(targetEl), recheckId);
+    const why = loginShapeBlock(fresh, approved.origin);
+    if (why && why !== approved.block) {
+      return { filled: total, total, submitted: false, note: `값을 넣은 뒤 양식에 새 위험이 보여 제출하지 않았습니다(${why}).` };
+    }
+  }
   const form = anchor && isTag(anchor, "input") ? (anchor as HTMLInputElement).form : null;
   if (!form || !form.isConnected) return { filled: total, total, submitted: false, note: "양식이 사라져 제출하지 않았습니다." };
   const urls = formDestinations(form);

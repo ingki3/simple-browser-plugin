@@ -88,7 +88,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
     return false;
   }
   if (msg.kind === "login_fill") {
-    fillLogin(msg.callId, msg.fills, msg.submit).then(
+    fillLogin(msg.callId, msg.fills, msg.submit, msg.approved).then(
       (data) => sendResponse({ ok: true, data } satisfies ContentResponse),
       (err) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse),
     );
