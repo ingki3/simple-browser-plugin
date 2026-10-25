@@ -179,7 +179,7 @@ gh pr create --base main --title "..." --body "..."
 
 ## 보안 / 프라이버시
 
-- **모델 제공자** (#97) — 설정에서 OpenRouter(기본), OpenAI(ChatGPT API 키), Google Gemini(AI Studio API 키, OpenAI 호환 엔드포인트 — 도구 호출의 thought_signature를 다음 요청에 돌려줌)를 고름. 대화·페이지 글자·도구 결과·저장 링크 초안·번역할 글자는 고른 제공자 한 곳으로만 보냄(OpenRouter는 다시 각 모델 회사로 전달). 제공자나 모델을 바꾸면 대화 기록을 새로 시작
+- **모델 제공자** (#97) — 설정에서 OpenRouter(기본), OpenAI(ChatGPT API 키), Google Gemini(AI Studio API 키, OpenAI 호환 엔드포인트 — 도구 호출의 thought_signature를 다음 요청에 돌려줌, PDF 첨부는 받지 않아 PDF 탭에서는 `read_document`로 읽게 함)를 고름. 대화·페이지 글자·도구 결과·저장 링크 초안·번역할 글자는 고른 제공자 한 곳으로만 보냄(OpenRouter는 다시 각 모델 회사로 전달). 제공자나 모델을 바꾸면 대화 기록을 새로 시작
 - API 키(OpenRouter·OpenAI·Gemini)는 `chrome.storage.local`에 평문 저장 (그 제공자 호출에만 사용; v1 트레이드오프)
 - 키는 BG 서비스 워커에서만 읽히며 content script나 페이지 DOM에 전달되지 않음
 - **페이지 기억하기 · 저장 링크 (설정, 기본 켜짐, #30·#86)** — 답을 마친 뒤 탭이 다른 화면(해시 포함)에 있으면 "이 페이지 기억하기" 버튼이 뜬다. 카드에서 이름·용도(예: "쇼핑을 위한 가격 비교 검색")를 적고, 주소의 쿼리 값마다 고정·입력 자리·빼기를 골라 다시 쓸 수 있는 링크 템플릿으로 저장(예: `…/search/all?query={상품명}`). 카드를 열면 모델이 이름·용도·자리 초안을 제안하고 사용자가 고친다(어떤 값이 검색어인지 코드가 파라미터 이름으로 정하지 않음). 입력 자리의 지금 값과 요청 문장은 저장하지 않는다. 고정으로 남긴 값에 결제·개인정보 단서가 있으면 경고에 체크해야 저장(`src/lib/savedPages.ts`, `src/background/savedPagesStore.ts`)

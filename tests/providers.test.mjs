@@ -152,3 +152,33 @@ test("설정: Gemini 키·모델과 activeModel", () => {
   assert.deepEqual(activeModel(g), { provider: "gemini", apiKey: "AIza", model: "gemini-3.1-pro-preview" });
   assert.equal(activeModel(normalizeSettings({ provider: "gemini" })).model, "gemini-3.6-flash");
 });
+
+import { geminiIndexer } from "../src/lib/providers/gemini.ts";
+
+test("Gemini: index 없는 도구 호출 조각을 호출마다 나눈다(이어지는 조각은 앞 호출)", () => {
+  const ix = geminiIndexer();
+  const d = (calls) => ({ choices: [{ delta: { tool_calls: calls } }] });
+  const out = [
+    ix(d([{ id: "a", type: "function", function: { name: "describe_page", arguments: "" } }])),
+    ix(d([{ function: { arguments: "{}" } }])),
+    ix(d([{ id: "b", type: "function", function: { name: "get_page_content", arguments: "{}" } }])),
+    ix(d([{ id: "c", function: { name: "x", arguments: "{}" } }, { id: "d", function: { name: "y", arguments: "{}" } }])),
+  ].flatMap((c) => c.choices[0].delta.tool_calls.map((t) => t.index));
+  assert.deepEqual(out, [0, 0, 1, 2, 3]);
+  // index가 있으면 그대로.
+  const ix2 = geminiIndexer();
+  assert.equal(ix2(d([{ index: 5, id: "z", function: { name: "n" } }])).choices[0].delta.tool_calls[0].index, 5);
+  assert.equal(ix2(d([{ id: "w", function: { name: "m" } }])).choices[0].delta.tool_calls[0].index, 6);
+  // 도구 호출이 없는 조각은 같은 객체.
+  const plain = { choices: [{ delta: { content: "hi" } }] };
+  assert.equal(geminiIndexer()(plain), plain);
+});
+
+test("Gemini: Pro 모델의 생각 끄기는 low, 기록의 파일 조각은 안내 글자로", () => {
+  assert.equal(geminiPayload({ model: "gemini-3.1-pro-preview", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "low");
+  assert.equal(geminiPayload({ model: "gemini-3.6-flash", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "minimal");
+  const withFile = [{ role: "user", content: [{ type: "text", text: "q" }, { type: "file", file: { filename: "a.pdf", file_data: "data:application/pdf;base64,AAAA" } }] }];
+  const b = geminiPayload({ model: "gemini-3.6-flash", messages: withFile, maxTokens: 10, reasoning: "agent" }, false);
+  assert.ok(!JSON.stringify(b).includes("base64"));
+  assert.equal(b.messages[0].content[1].type, "text");
+});

@@ -41,6 +41,7 @@ export function openRouterPayload(req: ChatRequest, stream: boolean): Record<str
 export const openRouterAdapter: ProviderAdapter = {
   id: "openrouter",
   label: "OpenRouter",
+  supportsFileParts: true,
   async openStream(apiKey, req, signal) {
     const response = await openRouterRequest(apiKey, openRouterPayload(req, true), signal);
     return { read: (onChunk, inactivityMs) => readOpenRouterStream(response, onChunk, inactivityMs) };
