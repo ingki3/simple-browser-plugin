@@ -1,10 +1,11 @@
 // 자동 로그인으로 페이지에 넣은 값(아이디·비밀번호·일회용 코드)의 가림 목록(docs/design/login-automation.md "비밀 값 가리기").
-// - 수명은 대화가 아니라 값을 넣은 탭: 새 대화를 시작해도 페이지에 복사본이 남을 수 있어 지우지 않고, 탭이 닫히면 지운다.
+// - 수명은 대화가 아니라 브라우저 세션: 새 대화를 시작하거나 탭을 닫아도 다른 탭·처리 중인 결과에 복사본이 남을 수 있어 지우지 않는다.
 // - 서비스 워커가 다시 시작돼도 잃지 않게 chrome.storage.session(메모리 전용, 디스크에 쓰지 않음, content script는 못 읽음)에 둔다.
 // - 거르기는 탭과 관계없이 모든 모델 요청에 쓴다.
 import { maskDeep, maskMessages, maskText } from "@/lib/secretMask";
 
 const KEY = "loginSecrets";
+const MAX_TABS = 100;
 
 type Store = Record<string, string[]>;
 
@@ -45,13 +46,8 @@ async function save(store: Store): Promise<void> {
 function listen(): void {
   if (listening) return;
   listening = true;
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    void update((store) => {
-      if (!(String(tabId) in store)) return null;
-      delete store[String(tabId)];
-      return store;
-    });
-  });
+  // 탭이 닫혀도 지우지 않는다: 값이 다른 탭(같은 출처의 opener 등)으로 복사됐거나 처리 중인 결과에 남아 있을 수 있다.
+  // 브라우저를 끄면 storage.session과 함께 사라진다. 탭별 목록은 늘어나지 않게 최근 MAX_TABS개 탭만 둔다.
 }
 
 // 페이지에 넣기 직전에 부른다(넣은 뒤 관측이 먼저 오지 않게).
@@ -60,7 +56,11 @@ export async function rememberSecrets(tabId: number, values: string[]): Promise<
   await update((store) => {
     const cur = new Set(store[String(tabId)] ?? []);
     for (const v of values) if (v) cur.add(v);
+    delete store[String(tabId)];
     store[String(tabId)] = [...cur];
+    // 오래된 탭의 목록부터 덜어 낸다(넣은 순서 = 객체 키 순서).
+    const keys = Object.keys(store);
+    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_TABS))) delete store[k];
     return store;
   });
 }

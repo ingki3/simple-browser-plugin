@@ -27,6 +27,11 @@ export function secretForms(value: string): string[] {
   // 페이지 글자를 모델용으로 정리할 때(cleanModelText) 공백 묶음을 한 칸으로 줄이고 앞뒤를 자른다.
   const collapsed = value.replace(/\s+/g, " ").trim();
   if (collapsed) forms.add(collapsed);
+  // 입력 칸이 정리한 값(줄바꿈 제거, email 칸의 앞뒤 공백 제거).
+  const stripped = value.replace(/[\r\n]/g, "");
+  if (stripped) forms.add(stripped);
+  const trimmed = value.trim();
+  if (trimmed) forms.add(trimmed);
   const uri = encodeURIComponent(value);
   forms.add(uri);
   forms.add(uri.replace(/%20/g, "+"));

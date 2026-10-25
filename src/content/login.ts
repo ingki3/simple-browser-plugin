@@ -214,6 +214,14 @@ export async function fillLogin(
   // 그사이 GET·다른 주소로 바뀌었으면 값을 넣지 않는다.
   const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
   const formDrift = (): string | null => {
+    // 입력 처리기가 칸을 새 비밀번호 칸으로 바꾸거나 칸·양식을 바꿨으면(가입·변경 화면으로 바뀜) 멈춘다.
+    let again: Picked;
+    try {
+      again = pick(registeredElement(before.targetId, "f") as HTMLInputElement);
+    } catch {
+      return "입력 중 로그인 양식이 바뀌어 넣지 않았습니다.";
+    }
+    if (!samePick(before.picked, again)) return "입력 중 로그인 양식이 바뀌어 넣지 않았습니다.";
     if (!submit || !now.form) return null;
     if (!now.form.isConnected) return "양식이 사라졌습니다.";
     const urls = formDestinations(now.form);
@@ -238,6 +246,8 @@ export async function fillLogin(
   }
   if (cancelled.has(callId)) return { filled: total, total, submitted: false, note: "중단되어 제출하지 않았습니다." };
   if (!submit) return { filled: total, total, submitted: false };
+  const driftAfter = formDrift();
+  if (driftAfter) return { filled: total, total, submitted: false, note: driftAfter.replace("넣지 않았습니다", "제출하지 않았습니다") };
   const form = anchor && isTag(anchor, "input") ? (anchor as HTMLInputElement).form : null;
   if (!form || !form.isConnected) return { filled: total, total, submitted: false, note: "양식이 사라져 제출하지 않았습니다." };
   const urls = formDestinations(form);

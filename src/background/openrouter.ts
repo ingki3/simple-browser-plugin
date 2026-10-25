@@ -1481,7 +1481,7 @@ export class ChatAgent {
                 await applySettingsUpdate((cur) => ({
                   loginSites: [
                     ...cur.loginSites.filter((s) => s.origin !== rememberOrigin),
-                    { origin: rememberOrigin, uuid, entryName: entry.name || entry.login, totp: false },
+                    { origin: rememberOrigin, uuid, entryName: entry.name || "(제목 없는 항목)", totp: false },
                   ].slice(-MAX_LOGIN_SITES),
                 })).catch((err) => debugLog("login:remember_failed", err instanceof Error ? err.message : String(err), "warn"));
                 debugLog("login:site_approved", rememberOrigin);

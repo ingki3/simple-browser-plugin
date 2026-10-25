@@ -159,6 +159,10 @@ export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, s
   }
   if (!fills.length) throw new Error("넣을 값이 없습니다(항목에 아이디가 없음).");
   // 너무 짧은 값은 페이지가 다시 보여 줘도 가릴 수 없다(다른 글자와 겹쳐 가리기를 쓰지 않는다). 넣지 않고 직접 로그인하게 한다.
+  // 줄바꿈이 든 값은 입력 칸이 지워 넣으므로 넣은 값과 페이지의 값이 달라진다(그 모양까지 가리지만 로그인도 실패한다). 넣지 않는다.
+  if (secrets.some((v) => /[\r\n]/.test(v))) {
+    throw new Error("아이디나 비밀번호에 줄바꿈이 있어 넣지 않았습니다. 사용자에게 직접 로그인해 달라고 하세요.");
+  }
   if (secrets.some((v) => v.length < MIN_SECRET_LENGTH)) {
     throw new Error(`아이디나 비밀번호가 ${MIN_SECRET_LENGTH}글자보다 짧아 값을 가릴 수 없어 넣지 않았습니다. 사용자에게 직접 로그인해 달라고 하세요.`);
   }
