@@ -58,7 +58,10 @@
 
 1. **대상 프레임과 출처를 브라우저에서 정한다.** 대상 칸이 있는 프레임의 `documentId`·URL(`webNavigation.getAllFrames`).
    모델이 준 주소를 쓰지 않는다. 이 대화의 작업 탭(turnTab)일 때만.
-2. **구조 조건** (content script가 그 문서에서 다시 확인):
+2. **구조 조건** (content script가 그 문서에서 다시 확인). 먼저 **단순한 로그인 양식(허용 목록)**이어야 자동으로 한다:
+   `<form>` 안이고, 양식의 컨트롤(이미지 버튼·양식 안 열린 shadow DOM 포함)이 넣을 칸·checkbox·숨은 칸·제출 버튼 하나뿐이며,
+   제출 버튼에 name·formaction·formmethod·formtarget·formenctype이 없고, 양식과 컨트롤에 htmx 속성이 없다. 그 밖의 양식은
+   카드로 묻는다. 그다음 아래 조건을 모두 본다(허용 목록 안에서도 남는 위험):
    - 비밀번호 단계: 대상이 보이는 `input[type=password]`이거나, 대상과 같은 양식(form 또는 `submitScopes` 범위)에 그런 칸이 하나 있다.
      새 비밀번호 칸(`autocomplete=new-password`)이 있으면 가입·변경 화면일 수 있으니 자동 실행하지 않고 묻는다.
    - 아이디만 먼저 받는 단계(여러 단계 로그인): 대상이 `autocomplete=username`(또는 `email`)인 보이는 칸이고 같은 범위에 다른 보이는

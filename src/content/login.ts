@@ -30,6 +30,9 @@ import {
 import { registerClickTarget } from "./clickables";
 import { inspectTargets, registeredElement } from "./targets";
 
+// 값을 넣은 뒤 페이지가 스스로 제출하는지 기다리는 시간.
+const PAGE_SUBMIT_GRACE_MS = 800;
+
 // 백그라운드가 중단을 알린 호출(값을 넣는 사이 사용자가 멈추면 제출하지 않는다).
 const cancelled = new Set<string>();
 
@@ -206,6 +209,41 @@ function paymentFieldHint(el: HTMLInputElement): boolean {
   return FIELD_PAYMENT_HINT_RE.test(`${hint} ${splitIdentifier(hint)}`);
 }
 
+// 자동 로그인을 허용하는 '단순한 로그인 양식'인지(허용 목록). 아니면 그 이유. 위험한 모양을 하나씩 찾아 막는 대신, 흔한 로그인
+// 양식의 구조만 자동으로 하고 나머지는 카드로 묻는다:
+// - <form> 안이고, 양식(form.elements·이미지 버튼·양식 안 열린 shadow DOM)의 컨트롤은 넣을 칸, checkbox(로그인 상태 유지),
+//   숨은 칸(type=hidden), 제출 버튼 하나뿐이다.
+// - 제출 버튼은 name·formaction·formmethod·formtarget·formenctype이 없다(누를 때 값·목적지를 바꾸지 않는다).
+// - 양식과 그 컨트롤에 htmx 속성(hx-*·data-hx-*)이 없다.
+const HTMX_ATTR_RE = /^(data-)?hx-/i;
+function hasHtmx(el: Element): boolean {
+  return Array.from(el.attributes).some((a) => HTMX_ATTR_RE.test(a.name));
+}
+function plainFormBlock(form: HTMLFormElement | null, mine: ReadonlyArray<HTMLInputElement | null>): string | null {
+  if (!form) return "양식(<form>) 밖의 로그인 칸";
+  if (hasHtmx(form)) return "htmx 요청이 붙은 양식";
+  const picked = new Set(mine.filter(Boolean) as Element[]);
+  const controls = [...new Set([...allSubmitters(form), ...formElements(form), ...deepQuery(form, "input, select, textarea, button")])];
+  let submitters = 0;
+  for (const c of controls) {
+    if (hasHtmx(c)) return "htmx 요청이 붙은 칸·버튼";
+    if (picked.has(c)) continue;
+    if (isSubmitControl(c) || (isTag(c, "input") && (c as HTMLInputElement).type === "image")) {
+      submitters += 1;
+      if (["name", "formaction", "formmethod", "formtarget", "formenctype"].some((a) => c.hasAttribute(a))) {
+        return "값·목적지를 바꾸는 제출 버튼";
+      }
+      continue;
+    }
+    if (isTag(c, "input") && ["hidden", "checkbox"].includes((c as HTMLInputElement).type)) continue;
+    // 제출하지 않는 일반 버튼(type=button·reset)과 fieldset·output 등은 값을 싣지 않는다.
+    if (isTag(c, "button") || isTag(c, "fieldset") || isTag(c, "output") || isTag(c, "object")) continue;
+    return "로그인 칸 밖의 입력 칸이 있는 양식";
+  }
+  if (submitters > 1) return "제출 버튼이 여러 개인 양식";
+  return null;
+}
+
 interface Picked {
   step: LoginShape["step"];
   username: HTMLInputElement | null;
@@ -221,6 +259,8 @@ interface Picked {
   otherTarget: boolean;
   // 넣을 칸과 같은 name을 가진 다른 컨트롤이 범위에 있는지(제출 값에서 넣을 칸의 값만 골라낼 수 없다).
   sharedName: boolean;
+  // 단순한 로그인 양식이 아니면 그 이유(plainFormBlock).
+  notPlain: string | null;
 }
 
 function pick(target: HTMLInputElement): Picked {
@@ -275,7 +315,7 @@ function pick(target: HTMLInputElement): Picked {
   const base = { form, newPassword, otherTarget };
   const pay = (els: Array<HTMLInputElement | null>) => els.some((e) => !!e && paymentFieldHint(e));
   if (autocompleteTokens(target).includes("one-time-code")) {
-    return { ...base, step: "otp", username: null, password: null, otp: target, otherFields: hasOtherFields([target]), paymentField: pay([target]), sharedName: sharedName([target]) };
+    return { ...base, step: "otp", username: null, password: null, otp: target, otherFields: hasOtherFields([target]), paymentField: pay([target]), sharedName: sharedName([target]), notPlain: plainFormBlock(form, [target]) };
   }
   if (target.type === "password" || passwords.length === 1) {
     const password = target.type === "password" ? target : passwords[0];
@@ -296,13 +336,14 @@ function pick(target: HTMLInputElement): Picked {
       otherFields: hasOtherFields([username, password]),
       paymentField: pay([username, password]),
       sharedName: sharedName([username, password]),
+      notPlain: plainFormBlock(form, [username, password]),
     };
   }
   if (passwords.length === 0) {
     const tokens = autocompleteTokens(target);
     const others = visible.filter((i) => i !== target && isTextInput(i));
     if ((tokens.includes("username") || tokens.includes("email")) && isTextInput(target) && others.length === 0) {
-      return { ...base, step: "username", username: target, password: null, otp: null, otherFields: hasOtherFields([target]), paymentField: pay([target]), sharedName: sharedName([target]) };
+      return { ...base, step: "username", username: target, password: null, otp: null, otherFields: hasOtherFields([target]), paymentField: pay([target]), sharedName: sharedName([target]), notPlain: plainFormBlock(form, [target]) };
     }
   }
   throw new Error(
@@ -321,6 +362,7 @@ function samePick(a: Picked, b: Picked): boolean {
     a.paymentField === b.paymentField &&
     a.otherTarget === b.otherTarget &&
     a.sharedName === b.sharedName &&
+    a.notPlain === b.notPlain &&
     a.username === b.username &&
     a.password === b.password &&
     a.otp === b.otp &&
@@ -380,6 +422,7 @@ function buildShape(
     paymentField: p.paymentField,
     fieldNames: fieldEls.map((e) => e.name).filter(Boolean),
     sharedName: p.sharedName,
+    notPlain: p.notPlain,
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],
@@ -479,6 +522,8 @@ export async function fillLogin(
     let res: Awaited<ReturnType<typeof fillFormFields>>;
     try {
       res = await fillFormFields({ fills: todo }, callId, formDrift);
+      // 입력 처리기가 조금 늦게 스스로 제출하는 페이지(일회용 코드 자동 제출 등)를 기다린다. 그사이 제출하면 다시 누르지 않는다.
+      if (!submittedByPage) await new Promise((r) => setTimeout(r, PAGE_SUBMIT_GRACE_MS));
     } finally {
       formEl?.removeEventListener("submit", onSubmit, true);
       win?.removeEventListener("beforeunload", onSubmit, true);
