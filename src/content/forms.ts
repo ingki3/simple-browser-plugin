@@ -1771,7 +1771,7 @@ export async function fillFormFields(
     if (changed) {
       // 값이 칸에 남아 있으면 알려 준다(콤보박스가 입력에 반응해 추천 목록·대화상자를 열며 이름을 바꾸는 경우). 승인한 칸인지는
       // 확인하지 못했으므로 반영으로 세지 않는다.
-      const kept = appliedValue(el, value) || (actual !== undefined && el.value === actual);
+      const kept = appliedValue(el, value) || (actual !== undefined && el.value === actual && sameIgnoringSpace(actual, value));
       result.note = kept
         ? `값은 칸에 남아 있지만 입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed}). 페이지가 입력에 반응해 목록이나 대화상자를 열었을 수 있으니, 같은 값을 다시 넣기 전에 화면을 다시 확인하세요`
         : `입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${changed})`;

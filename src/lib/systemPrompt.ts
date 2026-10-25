@@ -16,7 +16,7 @@ export function nowNote(now: Date = new Date(), timeZone: string = localTimeZone
   const utc = `UTC${off < 0 ? "-" : "+"}${p(Math.floor(Math.abs(off) / 60))}:${p(Math.abs(off) % 60)}`;
   return (
     `[확장 안내 — 사용자 글 아님] 현재 시각: ${date}(${WEEKDAYS[now.getDay()]}) ${time}, 시간대 ${timeZone ? `${timeZone} ` : ""}(${utc}). ` +
-    "날짜·시각을 정할 때 이 값을 기준으로 하고, 사용자가 연도 없이 날짜를 말하면 오늘 이후의 가장 가까운 날짜로 본다."
+    "날짜·시각을 정할 때 이 값을 기준으로 한다. 사용자가 연도 없이 날짜를 말하면 요청의 뜻에 맞게 연도를 정한다(예약·일정처럼 앞으로의 일이면 오늘 이후, 지난 내역 조회면 오늘 이전의 가장 가까운 날짜)."
   );
 }
 
