@@ -390,10 +390,11 @@ export async function captureFullPage(
     failure = err;
   }
   // 오류·중단에도 원래 스크롤 위치와 스타일로 되돌린다(시간 제한 안에서 — 응답이 없으면 페이지의 자가 복원에 맡긴다).
+  // 복원을 보내기 전에 시작이 끝났는지 본다. 아직이면(복원 응답을 기다리는 사이 끝나 늦게 세션을 열 수 있음) 끝난 뒤
+  // 한 번 더 되돌린다. 같은 세션 값을 가진 쪽만 되돌리므로 그 사이 새 캡처가 시작됐어도 그 세션은 건드리지 않는다.
+  const beginDoneBeforeRestore = beginSettled;
   const restored = await restorePage(t, token);
-  // 시작이 아직 끝나지 않았으면(늦게 세션을 열 수 있음) 끝난 뒤 한 번 더 되돌린다. 같은 세션 값을 가진 쪽만 되돌리므로
-  // 그 사이 새 캡처가 시작됐어도 그 세션은 건드리지 않는다.
-  if (!beginSettled) {
+  if (!beginDoneBeforeRestore) {
     void begin.then(
       () => restorePage(t, token),
       () => {},

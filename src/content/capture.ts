@@ -26,9 +26,11 @@ interface SavedProp {
 interface SavedAttr {
   attr: string | null;
   cssText: string;
-  // 이 세션이 마지막으로 바꾼 직후의 해석 결과. 되돌릴 때 이것과 같으면 그 사이 페이지가 inline 스타일을 건드리지 않은
-  // 것이라 원래 속성 글자를 통째로 되돌린다(shorthand를 지우면 함께 지워지는 longhand까지, #65).
+  // 이 세션이 마지막으로 바꾼 직후의 해석 결과. 되돌릴 때 이것과 같고 pageChanged가 아니면 그 사이 페이지가 inline
+  // 스타일을 건드리지 않은 것이라 원래 속성 글자를 통째로 되돌린다(shorthand를 지우면 함께 지워지는 longhand까지, #65).
   after: string;
+  // 이 세션이 다시 바꾸기 전에 페이지가 바꾼 적이 있는지(그 변경은 통째 되돌리기로 지우지 않는다).
+  pageChanged: boolean;
 }
 
 interface Session {
@@ -47,9 +49,12 @@ let session: Session | null = null;
 function setImportant(s: Session, el: HTMLElement, prop: string, value: string): void {
   let props = s.touched.get(el);
   if (!props) s.touched.set(el, (props = new Set()));
+  // 이 세션이 이미 바꾼 요소를 다시 바꾸기 전에 그 사이 페이지가 바꿨는지 기록한다(새 속성이든 같은 속성이든).
+  const known = s.attrs.get(el);
+  if (known && el.style.cssText !== known.after) known.pageChanged = true;
   if (!props.has(prop)) {
     props.add(prop);
-    if (!s.attrs.has(el)) s.attrs.set(el, { attr: el.getAttribute("style"), cssText: el.style.cssText, after: "" });
+    if (!known) s.attrs.set(el, { attr: el.getAttribute("style"), cssText: el.style.cssText, after: "", pageChanged: false });
     s.saved.push({ el, prop, value: el.style.getPropertyValue(prop), priority: el.style.getPropertyPriority(prop) });
   }
   el.style.setProperty(prop, value, "important");
@@ -137,7 +142,7 @@ function restore(): void {
   const whole = new Set<HTMLElement>();
   for (const [el, a] of s.attrs) {
     try {
-      if (el.style.cssText !== a.after) continue;
+      if (a.pageChanged || el.style.cssText !== a.after) continue;
       if (a.attr === null) el.removeAttribute("style");
       else el.setAttribute("style", a.attr);
       whole.add(el);
