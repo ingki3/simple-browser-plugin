@@ -29,10 +29,28 @@ export function Options() {
     chrome.storage.local.get(SETTINGS_KEY).then((obj) => {
       setDraft(normalizeSettings(obj[SETTINGS_KEY] as Partial<Settings> | undefined));
     });
+    // 사이드 패널에서 바꾼 모델 제공자·키·모델을 따라간다(안내·연결 테스트 버튼이 지금 선택을 보게, #97).
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== "local" || !changes[SETTINGS_KEY]) return;
+      const next = normalizeSettings(changes[SETTINGS_KEY].newValue as Partial<Settings> | undefined);
+      setDraft((cur) => ({ ...cur, provider: next.provider, apiKeys: next.apiKeys, providerModels: next.providerModels }));
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
   }, []);
 
   const save = async () => {
-    const normalized = settingsForStorage(draft);
+    // 옵션 페이지는 모델 제공자·제공자별 키·모델을 다루지 않는다(사이드 패널 설정). 열어 둔 사이 그쪽에서 바꾼 값을
+    // 처음 읽은 값으로 덮어쓰지 않게, 그 필드는 저장 직전의 최신 값을 쓴다(#97).
+    const latest = normalizeSettings(
+      (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] as Partial<Settings> | undefined,
+    );
+    const normalized = settingsForStorage({
+      ...draft,
+      provider: latest.provider,
+      apiKeys: latest.apiKeys,
+      providerModels: latest.providerModels,
+    });
     setDraft(normalized);
     await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
     await chrome.runtime.sendMessage({ kind: "settings_updated" }).catch(() => {
@@ -46,7 +64,15 @@ export function Options() {
     setTesting(true);
     setTestResult(null);
     try {
-      await providerAdapter().complete(draft.openRouterApiKey, {
+      // 이 버튼은 OpenRouter 키를 확인한다. 지금 제공자가 OpenRouter가 아니면(다른 곳에서 바꿈) 보내지 않는다.
+      const latest = normalizeSettings(
+        (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] as Partial<Settings> | undefined,
+      );
+      if (latest.provider !== "openrouter") {
+        setTestResult({ ok: false, msg: "지금 모델 제공자가 OpenRouter가 아니라 확인하지 않았습니다. 사이드 패널 설정에서 확인하세요." });
+        return;
+      }
+      await providerAdapter("openrouter").complete(draft.openRouterApiKey, {
         model: draft.model,
         messages: [{ role: "user", content: "hi" }],
         reasoning: "agent",
@@ -64,6 +90,12 @@ export function Options() {
   return (
     <div className="options">
       <h1>간편 도우미 설정</h1>
+      {draft.provider !== "openrouter" && (
+        <p className="intro">
+          ⚠ 지금 모델 제공자는 {providerAdapter(draft.provider).label}입니다. 아래 OpenRouter 키·모델은 제공자를 OpenRouter로
+          바꿀 때 쓰입니다. 제공자와 그 키·모델은 사이드 패널의 설정(⚙)에서 바꿉니다.
+        </p>
+      )}
       <p className="intro">
         OpenRouter API 키와 모델을 설정합니다. API 키는 이 기기의 chrome.storage.local에 평문으로
         저장되며, 외부로 전송되지 않습니다.
@@ -208,7 +240,7 @@ export function Options() {
         <button
           className="ghost-btn"
           onClick={testKey}
-          disabled={testing || !draft.openRouterApiKey || !draft.model}
+          disabled={testing || draft.provider !== "openrouter" || !draft.openRouterApiKey || !draft.model}
         >
           {testing ? "확인 중…" : "연결 테스트"}
         </button>

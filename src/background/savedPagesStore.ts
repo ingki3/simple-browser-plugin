@@ -18,6 +18,7 @@ import {
   type SavedLink,
 } from "@/lib/savedPages";
 import { providerAdapter } from "@/lib/providers";
+import { activeModel } from "@/lib/settings";
 import { withTimeout } from "@/lib/async";
 import { sensitiveUrlReason } from "@/lib/autoApprove";
 import { siteOf } from "@/lib/siteTrust";
@@ -155,8 +156,8 @@ export async function makeOffer(
 export async function draftLink(offerId: string): Promise<LinkDraft | null> {
   const offer = offers.get(offerId);
   if (!offer) throw new Error("저장 제안이 만료됐습니다. 다시 요청해 주세요.");
-  const { openRouterApiKey, model } = await getSettings();
-  if (!openRouterApiKey) return null;
+  const { provider, apiKey, model } = activeModel(await getSettings());
+  if (!apiKey) return null;
   if (offer.warning) return null;
   const ctx = contexts.get(offerId);
   const prompt = [
@@ -181,8 +182,8 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DRAFT_TIMEOUT_MS);
   try {
-    const text = await providerAdapter().complete(
-      openRouterApiKey,
+    const text = await providerAdapter(provider).complete(
+      apiKey,
       {
         model,
         messages: [{ role: "user", content: prompt }],

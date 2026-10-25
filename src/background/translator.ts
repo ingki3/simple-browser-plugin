@@ -1,4 +1,5 @@
 import { providerAdapter } from "@/lib/providers";
+import { activeModel } from "@/lib/settings";
 import {
   parseTranslationResponse,
   translationResponseFormat,
@@ -25,8 +26,9 @@ function cacheTranslation(key: string, value: string): void {
 }
 
 export async function translateBatch(texts: string[], targetLang: string): Promise<string[]> {
-  const { openRouterApiKey, model } = await getSettings();
-  if (!openRouterApiKey) throw new Error("OpenRouter API 키가 설정되지 않았습니다.");
+  const { provider, apiKey, model } = activeModel(await getSettings());
+  const adapter = providerAdapter(provider);
+  if (!apiKey) throw new Error(`${adapter.label} API 키가 설정되지 않았습니다.`);
   const uniqueTexts = [...new Set(texts)];
   const missingTexts = uniqueTexts.filter(
     (text) => !translationCache.has(cacheKey(model, targetLang, text)),
@@ -63,8 +65,8 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
   const timeout = setTimeout(() => controller.abort(), TRANSLATION_REQUEST_TIMEOUT_MS);
   let raw: string;
   try {
-    raw = await providerAdapter().complete(
-      openRouterApiKey,
+    raw = await adapter.complete(
+      apiKey,
       {
         model,
         messages: [{ role: "user", content: prompt }],
@@ -79,7 +81,7 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
   } catch (err) {
     const timedOut = controller.signal.aborted;
     const message = timedOut
-      ? `OpenRouter 번역 배치가 ${TRANSLATION_REQUEST_TIMEOUT_MS / 1000}초를 초과했습니다.`
+      ? `${adapter.label} 번역 배치가 ${TRANSLATION_REQUEST_TIMEOUT_MS / 1000}초를 초과했습니다.`
       : err instanceof Error
         ? err.message
         : String(err);

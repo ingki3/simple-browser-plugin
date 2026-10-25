@@ -207,8 +207,8 @@ export function PageOfferCard({ offer }: Props) {
         <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{offer.evicts}'이(가) 지워집니다.</span>
       )}
       <span className="field-help">
-        카드를 열면 이번 요청·답·페이지 글자를 모델(OpenRouter)에 보내 이름·용도·주소 값 초안을 채웁니다. 입력 자리의 지금 값은
-        저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 모델(OpenRouter)에 후보로
+        카드를 열면 이번 요청·답·페이지 글자를 설정에서 고른 모델 제공자에 보내 이름·용도·주소 값 초안을 채웁니다. 입력 자리의 지금 값은
+        저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 고른 모델 제공자에 후보로
         전송되고, 요청이 용도에 맞으면 도우미가 자리에 값을 넣어 엽니다. 설정에서 고치거나 지울 수 있습니다.
       </span>
       {state === "error" && <span className="field-help error-text">{error}</span>}

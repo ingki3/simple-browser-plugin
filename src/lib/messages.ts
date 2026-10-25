@@ -329,8 +329,12 @@ export type RuntimeMsg =
   | { kind: "translate_text_batch"; texts: string[]; targetLang: string };
 
 export interface Settings {
+  // 모델 제공자(#97). OpenRouter의 키·모델은 아래 openRouterApiKey·model(예전 설정 그대로), 다른 제공자는 apiKeys·providerModels.
+  provider: "openrouter" | "openai";
   openRouterApiKey: string;
   model: ModelId;
+  apiKeys: { openai?: string };
+  providerModels: { openai?: string };
   systemPrompt: string;
   translationTargetLang: string;
   downloadFolderPrefix: string;

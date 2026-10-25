@@ -86,6 +86,7 @@ export async function startHarness() {
       globalThis.__toolLog = [];
       globalThis.__draftReqs = [];
       globalThis.__draft = null;
+      globalThis.__modelReqs = [];
     });
     logs.length = 0;
     await panel.goto(`chrome-extension://${extId}/src/sidepanel/index.html`);
@@ -171,8 +172,10 @@ async function installMockModel(sw) {
         headers: { "content-type": "text/event-stream" },
       });
     globalThis.fetch = async (url, init) => {
-      if (!String(url).includes("openrouter.ai")) return realFetch(url, init);
+      // 모델 제공자 엔드포인트(#97)만 흉내 낸다. 요청 주소·본문은 __modelReqs에 남긴다.
+      if (!/openrouter\.ai|api\.openai\.com/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
+      (globalThis.__modelReqs ??= []).push({ url: String(url), body });
       if (body.response_format) {
         (globalThis.__draftReqs ??= []).push(body);
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(globalThis.__draft ?? {}) } }] }), {
@@ -183,7 +186,9 @@ async function installMockModel(sw) {
       let data = null;
       if (lastTool) {
         const parsed = JSON.parse(lastTool.content);
-        globalThis.__toolLog.push({ name: lastTool.name, ...parsed });
+        // 도구 이름: 결과 메시지의 name(OpenRouter) 또는 같은 id의 도구 호출(name을 보내지 않는 제공자).
+        const call = body.messages.flatMap((m) => m.tool_calls ?? []).find((c) => c.id === lastTool.tool_call_id);
+        globalThis.__toolLog.push({ name: lastTool.name ?? call?.function?.name, ...parsed });
         data = parsed.result ?? null;
       }
       if (body.tool_choice === "none") return sse([{ choices: [{ delta: { content: "정리" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }]);

@@ -2,7 +2,13 @@
 // OpenAI 호환 형식(OpenRouterMessage·OpenRouterStreamChunk)이고, 어댑터가 제공자 형식과 서로 바꾼다.
 import type { OpenRouterMessage, OpenRouterStreamChunk } from "../openrouter.ts";
 
-export type ProviderId = "openrouter";
+export type ProviderId = "openrouter" | "openai";
+
+export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai"];
+
+export function isProviderId(v: unknown): v is ProviderId {
+  return typeof v === "string" && (PROVIDER_IDS as readonly string[]).includes(v);
+}
 
 // 생각(추론) 강도의 의도. 어댑터가 모델·제공자에 맞는 설정으로 바꾼다.
 // - agent: 에이전트 기본(생각 상한을 두어 답·도구 호출 자리를 남김)
