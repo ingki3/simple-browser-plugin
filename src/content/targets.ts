@@ -452,6 +452,8 @@ function fullInfo(
 // 선택지와 그것을 펼친 트리거의 관계(#43 B). 소속을 포함 구조나 글자로 추론하지 않는다.
 // - linked: 펼쳐진(aria-expanded=true) 트리거(combobox·aria-haspopup 요소) 중 aria-controls/aria-owns로 선택지나
 //   선택지를 담은 팝업(가장 가까운 listbox·menu 조상, 없으면 선택지 자신)을 가리키는 것이 정확히 하나.
+//   aria-controls가 팝업을 감싼 요소를 가리키면(Google 항공편의 공항 추천 목록) 그 안의 팝업이 이 팝업 하나뿐이고
+//   트리거를 품지 않을 때만 같은 연결로 본다(명시적 참조를 한 단계 따라갈 뿐, 소속을 포함 구조로 추론하지 않는다).
 // - unlinked: 그런 연결이 없고, 접근 가능한 모든 문서에서 펼쳐진 트리거가 0개나 1개.
 // - 그 밖(펼쳐진 트리거가 둘 이상인데 연결 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
 // 관계는 찾을 때·승인 카드 때·실행 직전·스크롤과 포커스 뒤에 다시 계산해 같아야 한다.
@@ -520,16 +522,28 @@ export function expandedTriggers(): HTMLElement[] {
   return out;
 }
 
-// 트리거가 aria-controls/aria-owns로 대상(팝업 또는 선택지)을 가리키는지. 참조는 트리거와 같은 Document/ShadowRoot 안에서만 푼다.
-function linkVia(trigger: Element, targets: Element[]): "controls" | "owns" | null {
+// 트리거가 aria-controls/aria-owns로 팝업이나 선택지를 가리키는지. 참조는 트리거와 같은 Document/ShadowRoot 안에서만 푼다.
+// aria-controls는 팝업을 감싼 요소를 가리켜도 된다: 그 요소 안의 팝업(listbox·menu)이 이 팝업 하나뿐이고 트리거를 품지 않을 때.
+function linkVia(trigger: Element, popup: Element, el: Element): "controls" | "owns" | null {
   const root = trigger.getRootNode() as Document | ShadowRoot;
   for (const attr of ["controls", "owns"] as const) {
     for (const id of (trigger.getAttribute(`aria-${attr}`) ?? "").split(/\s+/).filter(Boolean)) {
       const ref = root.getElementById?.(id) ?? null;
-      if (ref && targets.includes(ref)) return attr;
+      if (!ref) continue;
+      if (ref === popup || ref === el) return attr;
+      if (attr === "controls" && wrapsOnly(ref, popup) && !ref.contains(trigger)) return attr;
     }
   }
   return null;
+}
+
+// ref가 popup을 담고, 그 안의 팝업 역할 요소가 popup 하나뿐인지(같은 트리 안만 본다).
+function wrapsOnly(ref: Element, popup: Element): boolean {
+  if (ref === popup || !ref.contains(popup)) return false;
+  for (const p of ref.querySelectorAll("[role]")) {
+    if (p !== popup && POPUP_ROLES.has((p.getAttribute("role") ?? "").trim().toLowerCase())) return false;
+  }
+  return true;
 }
 
 // 선택지의 관계. 정할 수 없으면 null.
@@ -538,7 +552,7 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
   if (!popup) return null;
   const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
   for (const t of expanded) {
-    const via = linkVia(t, [popup, el]);
+    const via = linkVia(t, popup, el);
     if (via) linked.push({ trigger: t, via });
   }
   const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"]): Relation => ({
