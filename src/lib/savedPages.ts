@@ -315,6 +315,16 @@ export function candidatesFor(list: readonly SavedLink[]): SavedLink[] {
 
 // 임시 데이터 메시지 본문. 지침(system)으로 올리지 않고, 고정 머리말 뒤에 JSON 데이터로만 싣는다.
 // 템플릿 주소는 보내지 않고 출처만 보낸다(고정 쿼리 값이 저장돼 있을 수 있음).
+// 후보 데이터 글자(candidatesText)에 든 링크 id. 읽지 못하면 빈 배열.
+export function candidateIdsOf(text: string): string[] {
+  try {
+    const data = JSON.parse(text.slice(text.indexOf("\n") + 1)) as Array<{ id?: unknown }>;
+    return Array.isArray(data) ? data.flatMap((d) => (typeof d?.id === "string" ? [d.id] : [])) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function candidatesText(items: readonly SavedLink[]): string {
   const data = JSON.stringify(
     items.map((l) => ({

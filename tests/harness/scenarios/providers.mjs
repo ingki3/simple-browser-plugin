@@ -132,4 +132,28 @@ export default [
       expect(!/user,user|assistant,assistant/.test(roles), `역할 번갈음(${roles})`);
     },
   },
+  {
+    name: "Claude: 대화에 보낸 저장 링크 후보를 지우면 멈추고 다음 요청은 새 대화로(기록에서 거둘 수 없음)",
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
+      await h.sw.evaluate(async () => {
+        await chrome.storage.local.set({ savedPages: [{ name: "주문 조회", url: "https://shop.example/orders", site: "https://shop.example", savedAt: 1, uses: 0 }] });
+      });
+      await h.turn([{ text: "첫 답" }], { text: "첫 요청" });
+      const first = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1).body);
+      const hasCand = (b) => JSON.stringify(b.messages).includes("저장한 링크 후보 데이터");
+      expect(hasCand(first), "첫 요청에 후보");
+      await h.sw.evaluate(async () => {
+        await chrome.storage.local.set({ savedPages: [] });
+        globalThis.__modelReqs = [];
+      });
+      await h.turn([{ text: "보내면 안 됨" }], { noReload: true, text: "둘째 요청" });
+      const second = await h.sw.evaluate(() => globalThis.__modelReqs);
+      const text = await h.panel.locator("body").innerText();
+      expect(second.length === 0 && text.includes("새 대화로 시작합니다"), `둘째 요청은 보내지 않음(${second.length})`);
+      await h.turn([{ text: "새 대화 답" }], { noReload: true, text: "셋째 요청" });
+      const third = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1).body);
+      expect(!hasCand(third) && third.messages.length === 1, `새 대화(${third.messages.length}개, 후보 ${hasCand(third)})`);
+    },
+  },
 ];

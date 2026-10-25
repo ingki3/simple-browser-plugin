@@ -2,9 +2,9 @@
 // 내부 기준 형식(OpenAI 호환 기록·스트림 조각)과 서로 바꾼다:
 // - 요청: system 메시지는 system 필드로, 도구 호출은 tool_use 블록, 도구 결과는 user 메시지의 tool_result 블록, PDF 파일
 //   조각은 document 블록. 같은 역할이 이어지면 한 메시지로 합친다(user 쪽: tool_result가 먼저 오게 순서대로).
-// - 생각: 에이전트 호출(agent·agent_low)이고 생각을 지원하는 모델이면 thinking(budget_tokens)을 켠다. 받은 생각 블록과
-//   서명은 reasoning_details(type anthropic.thinking / anthropic.redacted_thinking)로 기록에 남겨 다음 요청에 돌려준다
-//   (도구 호출이 이어질 때 필요).
+// - 생각: 에이전트 호출(agent·agent_low)이고 생각을 지원하는 모델이면 켠다. 받은 응답의 블록 배열(생각·서명·글자·도구 호출)을
+//   순서 그대로 reasoning_details(type anthropic.content)로 기록에 남겨 다음 요청에 그대로 돌려준다(서명이 블록 순서와 앞
+//   문맥까지 검사한다 — 다시 짜 맞추지 않는다).
 // - JSON 응답: response_format이 없어 system에 "JSON 객체 하나만" 지침을 붙인다(받는 쪽이 글자에서 JSON을 찾는다).
 // - 스트림: content_block_*·message_delta 이벤트를 내부 조각(content·reasoning·reasoning_details·tool_calls·finish_reason)으로.
 import type { OpenRouterContentPart, OpenRouterMessage, OpenRouterStreamChunk } from "../openrouter.ts";
@@ -81,6 +81,17 @@ function thinkingBlocks(details: unknown[] | undefined): Block[] {
   return out;
 }
 
+// 받은 응답 블록 배열(anthropic.content). 없으면 null.
+function originalBlocks(details: unknown[] | undefined): Block[] | null {
+  for (const d of details ?? []) {
+    if (d && typeof d === "object" && (d as { type?: unknown }).type === "anthropic.content") {
+      const content = (d as { content?: unknown }).content;
+      if (Array.isArray(content) && content.length) return content as Block[];
+    }
+  }
+  return null;
+}
+
 function toolInput(args: string): unknown {
   try {
     const v = JSON.parse(args || "{}");
@@ -106,6 +117,12 @@ export function anthropicMessages(messages: OpenRouterMessage[]): { system: stri
     } else if (m.role === "user") {
       push("user", textBlocks(m.content));
     } else if (m.role === "assistant") {
+      // 이 제공자에서 받은 응답이면 받은 블록 배열을 그대로 돌려준다.
+      const original = originalBlocks(m.reasoning_details);
+      if (original) {
+        push("assistant", original);
+        continue;
+      }
       const blocks: Block[] = [
         ...thinkingBlocks(m.reasoning_details),
         ...textBlocks(m.content),
@@ -162,28 +179,46 @@ export function anthropicPayload(req: ChatRequest, stream: boolean): Record<stri
   };
 }
 
-// Anthropic 스트림 이벤트 → 내부 조각(0개 이상). 블록별 상태(생각 글자·서명, 도구 호출 번호)를 지닌다.
+// Anthropic 스트림 이벤트 → 내부 조각(0개 이상). 블록별 상태(글자·생각·서명·도구 인자)를 모아, 응답이 끝날 때(message_delta)
+// 받은 블록 배열을 순서 그대로 reasoning_details(anthropic.content)로 넘긴다(text·summary가 없어 화면에 두 번 보이지 않는다).
 export function anthropicStreamConverter(): (event: Record<string, unknown>) => OpenRouterStreamChunk[] {
-  const blocks = new Map<number, { type: string; thinking: string; signature: string; data: string; tool: number; args: boolean }>();
+  const blocks = new Map<
+    number,
+    { type: string; text: string; thinking: string; signature: string; data: string; id: string; name: string; json: string; tool: number; args: boolean }
+  >();
   let nextTool = 0;
   const chunk = (delta: Record<string, unknown>, finish?: string): OpenRouterStreamChunk =>
     ({ choices: [{ delta, ...(finish ? { finish_reason: finish } : {}) }] }) as OpenRouterStreamChunk;
+  const ordered = (): Block[] => {
+    const out: Block[] = [];
+    for (const [, b] of [...blocks].sort((x, y) => x[0] - y[0])) {
+      if (b.type === "thinking") out.push({ type: "thinking", thinking: b.thinking, signature: b.signature });
+      else if (b.type === "redacted_thinking") out.push({ type: "redacted_thinking", data: b.data });
+      else if (b.type === "text") {
+        if (b.text) out.push({ type: "text", text: b.text });
+      } else if (b.type === "tool_use") out.push({ type: "tool_use", id: b.id, name: b.name, input: toolInput(b.json) });
+    }
+    return out;
+  };
   return (ev) => {
     const index = typeof ev.index === "number" ? ev.index : -1;
     if (ev.type === "content_block_start") {
       const cb = (ev.content_block ?? {}) as { type?: string; id?: string; name?: string; data?: string };
-      const state = { type: cb.type ?? "", thinking: "", signature: "", data: cb.data ?? "", tool: -1, args: false };
+      const state = { type: cb.type ?? "", text: "", thinking: "", signature: "", data: cb.data ?? "", id: cb.id ?? "", name: cb.name ?? "", json: "", tool: -1, args: false };
       blocks.set(index, state);
       if (cb.type === "tool_use") {
         state.tool = nextTool++;
-        return [chunk({ tool_calls: [{ index: state.tool, id: cb.id ?? "", type: "function", function: { name: cb.name ?? "", arguments: "" } }] })];
+        return [chunk({ tool_calls: [{ index: state.tool, id: state.id, type: "function", function: { name: state.name, arguments: "" } }] })];
       }
       return [];
     }
     if (ev.type === "content_block_delta") {
       const d = (ev.delta ?? {}) as { type?: string; text?: string; thinking?: string; signature?: string; partial_json?: string };
       const state = blocks.get(index);
-      if (d.type === "text_delta" && d.text) return [chunk({ content: d.text })];
+      if (d.type === "text_delta" && d.text) {
+        if (state) state.text += d.text;
+        return [chunk({ content: d.text })];
+      }
       if (d.type === "thinking_delta" && d.thinking) {
         if (state) state.thinking += d.thinking;
         return [chunk({ reasoning: d.thinking })];
@@ -191,35 +226,33 @@ export function anthropicStreamConverter(): (event: Record<string, unknown>) => 
       if (d.type === "signature_delta" && d.signature && state) state.signature += d.signature;
       if (d.type === "input_json_delta" && d.partial_json && state && state.tool >= 0) {
         state.args = true;
+        state.json += d.partial_json;
         return [chunk({ tool_calls: [{ index: state.tool, function: { arguments: d.partial_json } }] })];
       }
       return [];
     }
     if (ev.type === "content_block_stop") {
       const state = blocks.get(index);
-      if (!state) return [];
-      // 생각 블록은 끝날 때 서명과 함께 기록용으로 넘긴다(text·summary가 없어 화면에 두 번 보이지 않는다).
-      if (state.type === "thinking") {
-        return [chunk({ reasoning_details: [{ type: "anthropic.thinking", thinking: state.thinking, signature: state.signature }] })];
-      }
-      if (state.type === "redacted_thinking") {
-        return [chunk({ reasoning_details: [{ type: "anthropic.redacted_thinking", data: state.data }] })];
-      }
       // 인자 없는 도구 호출은 빈 객체로.
-      if (state.type === "tool_use" && !state.args) return [chunk({ tool_calls: [{ index: state.tool, function: { arguments: "{}" } }] })];
+      if (state && state.type === "tool_use" && !state.args) return [chunk({ tool_calls: [{ index: state.tool, function: { arguments: "{}" } }] })];
       return [];
     }
     if (ev.type === "message_delta") {
       const reason = ((ev.delta ?? {}) as { stop_reason?: string }).stop_reason;
-      if (!reason) return [];
-      // 출력 한도·문맥 한도로 끊긴 응답은 잘림(length)으로 알린다(정상 완료로 보지 않게).
-      const finish =
-        reason === "tool_use"
-          ? "tool_calls"
-          : reason === "max_tokens" || reason === "model_context_window_exceeded"
-            ? "length"
-            : "stop";
-      return [chunk({}, finish)];
+      const out: OpenRouterStreamChunk[] = [];
+      const content = ordered();
+      if (content.length) out.push(chunk({ reasoning_details: [{ type: "anthropic.content", content }] }));
+      if (reason) {
+        // 출력 한도·문맥 한도로 끊긴 응답은 잘림(length)으로 알린다(정상 완료로 보지 않게).
+        const finish =
+          reason === "tool_use"
+            ? "tool_calls"
+            : reason === "max_tokens" || reason === "model_context_window_exceeded"
+              ? "length"
+              : "stop";
+        out.push(chunk({}, finish));
+      }
+      return out;
     }
     return [];
   };
