@@ -18,8 +18,11 @@ interface SignInCall {
   documentId: string;
   origin: string | null;
   shape: LoginShape;
-  // null: 비밀번호 관리자가 연결되지 않음. 오류는 kpxError.
-  entries: KpxEntry[] | null;
+  // null: 비밀번호 관리자가 연결되지 않음. 오류는 kpxError. 카드에 보일 이름·아이디만 둔다(비밀번호·코드는 실행 직전에
+  // KeePassXC에서 다시 받는다 — 카드가 열린 사이 잠그거나 연결을 끊으면 넣지 않게).
+  entries: Array<Pick<KpxEntry, "uuid" | "name" | "login">> | null;
+  // 항목을 물은 주소(실행 직전에 같은 주소로 다시 묻는다).
+  lookupUrl: string;
   kpxError: string | null;
   // 카드에서 고른 항목.
   chosen: string | null;
@@ -70,7 +73,7 @@ export async function prepareSignIn(id: string, _callId: string, turnTab: TurnTa
   const origin = loginOrigin(topUrl);
   if (!origin || loginOrigin(shape.topUrl) !== origin) {
     // https가 아니거나 페이지가 알려 준 주소와 다르면 비밀번호 관리자에 묻지 않는다(손 넘기기·카드로).
-    calls.set(token, { tabId, documentId, origin: null, shape, entries: null, kpxError: null, chosen: null });
+    calls.set(token, { tabId, documentId, origin: null, shape, entries: null, kpxError: null, chosen: null, lookupUrl: "" });
     return { token, origin: null, shape, manager: "none", managerError: null, entries: [] };
   }
   let entries: KpxEntry[] | null = null;
@@ -83,7 +86,16 @@ export async function prepareSignIn(id: string, _callId: string, turnTab: TurnTa
     kpxError = err instanceof Error ? err.message : String(err);
     debugLog("keepassxc:get_logins", kpxError, "warn");
   }
-  const call: SignInCall = { tabId, documentId, origin, shape, entries, kpxError, chosen: null };
+  const call: SignInCall = {
+    tabId,
+    documentId,
+    origin,
+    shape,
+    entries: entries ? entries.map((e) => ({ uuid: e.uuid, name: e.name, login: e.login })) : null,
+    kpxError,
+    chosen: null,
+    lookupUrl,
+  };
   calls.set(token, call);
   // 카드가 오래 열려 있거나 대화가 끝나 정리되지 않아도 받은 값을 오래 두지 않는다.
   setTimeout(() => {
@@ -135,8 +147,12 @@ export async function runSignIn(token: string, uuid: string, turnTab: TurnTab, s
   if (!c || !c.origin) throw new Error("로그인 칸을 다시 확인하세요(find_form_fields로 다시 찾은 뒤 sign_in).");
   // 승인·판정한 탭이 지금 이 대화의 작업 탭이어야 한다.
   if ((await resolveTurnTab(turnTab)) !== c.tabId) throw new Error("로그인 칸을 확인한 탭이 아니어서 넣지 않았습니다. 다시 관측하세요.");
-  const entry = c.entries?.find((e) => e.uuid.toLowerCase() === uuid.toLowerCase());
-  if (!entry) throw new Error("고른 비밀번호 관리자 항목이 없습니다.");
+  if (!c.entries?.some((e) => e.uuid.toLowerCase() === uuid.toLowerCase())) throw new Error("고른 비밀번호 관리자 항목이 없습니다.");
+  // 값은 지금 KeePassXC에서 다시 받는다(잠겼거나 연결을 끊었으면 받지 못해 넣지 않는다).
+  const fresh = await keepassxcLogins(c.lookupUrl);
+  checkAbort();
+  const entry = fresh?.find((e) => e.uuid.toLowerCase() === uuid.toLowerCase());
+  if (!entry) throw new Error("비밀번호 관리자에서 고른 항목을 다시 받지 못해 넣지 않았습니다(잠김·연결 해제·항목 삭제).");
   if ((await topDocumentId(c.tabId)) !== c.documentId) throw new Error("로그인 칸을 확인한 뒤 페이지가 바뀌어 넣지 않았습니다. 다시 관측하세요.");
   const { shape } = c;
   const fills: Array<{ id: string; value: string }> = [];

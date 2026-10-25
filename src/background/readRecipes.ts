@@ -10,6 +10,7 @@ import {
 } from "@/lib/readRecipe";
 import { getSettings } from "./storage";
 import { debugLog } from "./debug";
+import { containsSecret, maskSyncDeep } from "./loginSecrets";
 import { enqueue, turnKey } from "./actionLog";
 import type { TurnTab } from "./tools/handlers";
 
@@ -26,6 +27,8 @@ export function noteRead(
   args: ReadObservation["args"],
   useful: boolean,
 ): void {
+  // 페이지 주소·인자에 자동 로그인으로 넣은 값이 보이면 이 관찰은 남기지 않는다(가리면 레시피로 쓸 수 없다).
+  if (maskSyncDeep({ page, args }).masked) return;
   const key = turnKey(turnTab);
   const list = pendingReads.get(key) ?? [];
   if (list.length >= MAX_OBS_PER_TURN) return;
@@ -48,9 +51,13 @@ export function commitReads(turnTab: TurnTab, ok: boolean): void {
   void enqueue(async () => {
     // 끈 뒤에 끝난 턴은 남기지 않는다.
     if (!(await getSettings()).actionLogEnabled) return;
+    // 저장하기 직전에도 가릴 값이 든 관찰은 뺀다(관찰한 뒤 로그인한 값 포함).
+    const safe: ReadObservation[] = [];
+    for (const o of obs) if (!(await containsSecret({ page: o.page, args: o.args }))) safe.push(o);
+    if (!safe.length) return;
     const now = Date.now();
     const obj = await chrome.storage.local.get(READ_RECIPES_KEY);
-    const next = applyObservations(pruneRecipes(obj[READ_RECIPES_KEY], now), obs, now);
+    const next = applyObservations(pruneRecipes(obj[READ_RECIPES_KEY], now), safe, now);
     await chrome.storage.local.set({ [READ_RECIPES_KEY]: next });
   }).catch((err) => {
     debugLog("read_recipe:write_fail", err instanceof Error ? err.message : String(err), "warn");

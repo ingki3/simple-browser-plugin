@@ -99,6 +99,11 @@ export function maskSyncMessages<T extends { role: string }>(messages: T[]): { v
   return maskMessages(messages, [...new Set(Object.values(cache).flat())]);
 }
 
+// 값 안에 가릴 값이 있는지(가리지 않고 버릴 곳 — 읽기 레시피처럼 글자를 바꾸면 쓸모가 없는 기록).
+export async function containsSecret(value: unknown): Promise<boolean> {
+  return maskDeep(value, await allSecrets()).masked;
+}
+
 // 디버그 로그처럼 기다릴 수 없는 곳의 글자.
 export function maskSyncText(text: string): string {
   if (!cache) return text;
