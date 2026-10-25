@@ -311,6 +311,7 @@ test("로그인 모양: 막는 구조", () => {
   // 제출 버튼이 개인정보 값을 실어 보내면 묻는다(버튼 name=value). 넣을 칸 이름의 값은 뺀다.
   assert.ok(loginShapeBlocks(shape({ submit: { ...shape().submit, submitUrl: `${ORIGIN}/s?email=new%40example.net` } }), ORIGIN).length > 0);
   assert.deepEqual(loginShapeBlocks(shape({ fieldNames: ["u"], submit: { ...shape().submit, submitUrl: `${ORIGIN}/s?u=a%40example.net` } }), ORIGIN), []);
+  assert.match(loginShapeBlock(shape({ sharedName: true }), ORIGIN), /이름이 같은/);
   // 이유를 모두 모은다(카드로 승인한 이유 뒤에 새로 생긴 결제 이유를 따로 볼 수 있게).
   const many = loginShapeBlocks(shape({ otherFields: true, fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/s?operation=pay` }] }), ORIGIN);
   assert.ok(many.length >= 2 && many.some((r) => /결제/.test(r)) && many.some((r) => /입력 칸/.test(r)));

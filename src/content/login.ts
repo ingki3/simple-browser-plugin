@@ -6,6 +6,8 @@ import { isShadowRoot, isTag } from "./docs";
 import {
   DESTRUCTIVE_REASON,
   DESTRUCTIVE_TEXT_RE,
+  decodeDeepText,
+  looksPersonalValue,
   FIELD_PAYMENT_HINT_RE,
   PAYMENT_TEXT_RE,
   destructiveRoute,
@@ -146,6 +148,9 @@ function hiddenSubmitterBlock(btn: HTMLElement, form: HTMLFormElement): string |
   const text = ["value", "alt", "aria-label", "title"].map((a) => btn.getAttribute(a) ?? "").join(" ") + ` ${btn.textContent ?? ""}`;
   const words = `${text} ${splitIdentifier(text)}`;
   if (DESTRUCTIVE_TEXT_RE.test(words)) return DESTRUCTIVE_REASON;
+  // 버튼 자신이 실어 보내는 name=value가 개인정보 모양이면(숨은 '이메일 변경' 버튼 등) 묻는다.
+  const own = (btn as HTMLButtonElement).value ?? btn.getAttribute("value") ?? "";
+  if (btn.getAttribute("name") && own && looksPersonalValue(decodeDeepText(own))) return "개인정보 값을 보내는 버튼";
   if (PAYMENT_TEXT_RE.test(words)) return "결제·주문 버튼";
   return null;
 }
@@ -201,6 +206,8 @@ interface Picked {
   // 넣을 칸의 결제 칸 단서(paymentFieldHint)와, 양식이 다른 창·프레임으로 보내는지. 입력 직전·이벤트 사이에도 비교한다.
   paymentField: boolean;
   otherTarget: boolean;
+  // 넣을 칸과 같은 name을 가진 다른 컨트롤이 범위에 있는지(제출 값에서 넣을 칸의 값만 골라낼 수 없다).
+  sharedName: boolean;
 }
 
 function pick(target: HTMLInputElement): Picked {
@@ -245,10 +252,17 @@ function pick(target: HTMLInputElement): Picked {
     return shown || personal.some((e) => !mine.has(e));
   };
   const otherTarget = !!form && formTargets(form).some((t) => t !== "" && t.toLowerCase() !== "_self");
+  const sharedName = (picked: Array<HTMLInputElement | null>): boolean => {
+    const mine = picked.filter((e): e is HTMLInputElement => !!e);
+    const names = new Set(mine.map((e) => e.name).filter(Boolean));
+    if (!names.size) return false;
+    const pool: Element[] = form ? [...new Set([...formElements(form), ...deepQuery(form, "input, select, textarea, button")])] : inputs;
+    return pool.some((c) => !mine.includes(c as HTMLInputElement) && names.has(c.getAttribute("name") ?? ""));
+  };
   const base = { form, newPassword, otherTarget };
   const pay = (els: Array<HTMLInputElement | null>) => els.some((e) => !!e && paymentFieldHint(e));
   if (autocompleteTokens(target).includes("one-time-code")) {
-    return { ...base, step: "otp", username: null, password: null, otp: target, otherFields: hasOtherFields([target]), paymentField: pay([target]) };
+    return { ...base, step: "otp", username: null, password: null, otp: target, otherFields: hasOtherFields([target]), paymentField: pay([target]), sharedName: sharedName([target]) };
   }
   if (target.type === "password" || passwords.length === 1) {
     const password = target.type === "password" ? target : passwords[0];
@@ -266,13 +280,14 @@ function pick(target: HTMLInputElement): Picked {
       otp: null,
       otherFields: hasOtherFields([username, password]),
       paymentField: pay([username, password]),
+      sharedName: sharedName([username, password]),
     };
   }
   if (passwords.length === 0) {
     const tokens = autocompleteTokens(target);
     const others = visible.filter((i) => i !== target && isTextInput(i));
     if ((tokens.includes("username") || tokens.includes("email")) && isTextInput(target) && others.length === 0) {
-      return { ...base, step: "username", username: target, password: null, otp: null, otherFields: hasOtherFields([target]), paymentField: pay([target]) };
+      return { ...base, step: "username", username: target, password: null, otp: null, otherFields: hasOtherFields([target]), paymentField: pay([target]), sharedName: sharedName([target]) };
     }
   }
   throw new Error(
@@ -290,6 +305,7 @@ function samePick(a: Picked, b: Picked): boolean {
     a.otherFields === b.otherFields &&
     a.paymentField === b.paymentField &&
     a.otherTarget === b.otherTarget &&
+    a.sharedName === b.sharedName &&
     a.username === b.username &&
     a.password === b.password &&
     a.otp === b.otp &&
@@ -339,6 +355,7 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     otherTarget: p.otherTarget,
     paymentField: p.paymentField,
     fieldNames: fieldEls.map((e) => e.name).filter(Boolean),
+    sharedName: p.sharedName,
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],

@@ -95,6 +95,8 @@ export interface LoginShape {
   submitMethods: string[];
   // 넣을 칸들의 name(제출 값 판정에서 이 이름의 값은 이번 호출이 넣는 값으로 본다).
   fieldNames?: string[];
+  // 넣을 칸과 같은 name을 가진 다른 컨트롤이 있는지(있으면 fieldNames로 그 값을 뺄 수 없어 묻는다).
+  sharedName?: boolean;
   // 칸 id(이 호출의 승인 대상으로 등록됨)와 그 기술.
   usernameId?: string;
   passwordId?: string;
@@ -134,6 +136,7 @@ export function loginShapeBlocks(shape: LoginShape, origin: string, insertedValu
   add(shape.hiddenSubmitBlock);
   for (const why of shape.otherSubmitBlocks ?? []) add(why);
   if (shape.otherTarget) add("다른 창·프레임으로 보내는 양식");
+  if (shape.sharedName) add("로그인 칸과 이름이 같은 다른 칸이 있는 양식");
   // 결제 정보 칸(카드 번호·보안 코드 등)이 넣을 칸이면 묻는다(비밀번호 칸으로 분류된 보안 코드 칸 포함 — paymentField).
   if (shape.paymentField || shape.fields.some((f) => f.sensitive === "payment")) add("결제 정보 칸");
   for (const u of shape.submitUrls) {
