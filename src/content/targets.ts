@@ -564,8 +564,10 @@ function wrapsOnly(ref: Element, popup: Element): boolean {
   if (popupOf(ref as HTMLElement) !== ref) return false;
   // ref는 일반 문서(shadow root 밖)에 있어야 하고, 조상 어디에도 shadow root가 없어야 한다(조상의 닫힌 shadow root 슬롯에
   // 배치되면 실제 조상 경로를 볼 수 없다). ref 자신이나 그 조상이 트리거면(콤보박스 안의 목록) 그 트리거가 목록을 연 것일 수 있다.
-  // 같은 출처 iframe의 문서는 이 창의 Document와 realm이 달라 instanceof로 보지 않는다.
-  if (ref.getRootNode() !== ref.ownerDocument) return false;
+  // 최상위 창의 문서만 본다(iframe 안이면 바깥 문서의 조상 트리거까지 확인해야 해서 래퍼로 보지 않는다).
+  // 같은 출처 iframe의 문서는 이 창의 Document와 realm이 달라 instanceof 대신 루트 노드를 비교한다.
+  const view = ref.ownerDocument.defaultView;
+  if (!view || view !== view.top || ref.getRootNode() !== ref.ownerDocument) return false;
   for (let cur: Element | null = ref, depth = 0; cur; cur = cur.parentElement, depth++) {
     if (depth >= 500 || isTrigger(cur) || (cur !== ref && hasHiddenTree(cur))) return false;
   }
