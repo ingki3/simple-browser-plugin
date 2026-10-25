@@ -312,7 +312,7 @@ export type BgToContent =
       callId: string;
       fills: Array<{ id: string; value: string }>;
       submit: { submitId?: string; submitUrls: string[]; submitMethods: string[] } | null;
-      approved: { origin: string; block: string | null } | null;
+      approved: { origin: string; blocks: string[] } | null;
     }
   | { kind: "login_field_shown"; id: string }
   // 도구가 중단됐다: 아직 제출하지 않았으면 이 호출의 제출을 하지 않는다.

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import nacl from "tweetnacl";
 import { incrementNonce, KpxSession, parseEntries, hostManifest } from "../src/lib/keepassxc.ts";
 import { MASK, maskDeep, maskMessages, maskText, secretForms } from "../src/lib/secretMask.ts";
-import { loginOrigin, loginShapeBlock, normalizeLoginSites, signInDecision } from "../src/lib/loginPolicy.ts";
+import { loginOrigin, loginShapeBlock, loginShapeBlocks, normalizeLoginSites, signInDecision } from "../src/lib/loginPolicy.ts";
 import { normalizeSettings } from "../src/lib/settings.ts";
 
 const b64 = (u) => Buffer.from(u).toString("base64");
@@ -265,6 +265,11 @@ test("로그인 모양: 막는 구조", () => {
   assert.match(loginShapeBlock(shape({ newPassword: true }), ORIGIN), /새 비밀번호/);
   assert.match(loginShapeBlock(shape({ otherFields: true }), ORIGIN), /입력 칸/);
   assert.match(loginShapeBlock(shape({ otherTarget: true }), ORIGIN), /다른 창/);
+  // 비밀번호 칸으로 분류된 카드 보안 코드 칸(cc-csc).
+  assert.match(loginShapeBlock(shape({ paymentField: true }), ORIGIN), /결제/);
+  // 이유를 모두 모은다(카드로 승인한 이유 뒤에 새로 생긴 결제 이유를 따로 볼 수 있게).
+  const many = loginShapeBlocks(shape({ otherFields: true, fields: [{ ...shape().fields[0], submitUrl: `${ORIGIN}/s?operation=pay` }] }), ORIGIN);
+  assert.ok(many.length >= 2 && many.some((r) => /결제/.test(r)) && many.some((r) => /입력 칸/.test(r)));
   assert.match(loginShapeBlock(shape({ fields: [{ ...shape().fields[0], sensitive: "payment" }] }), ORIGIN), /결제/);
   assert.match(loginShapeBlock(shape({ topUrl: "https://other.example/" }), ORIGIN), /끼워 넣은/);
   assert.match(loginShapeBlock(shape({ frameUrl: "http://acc.example/login" }), ORIGIN), /https/);

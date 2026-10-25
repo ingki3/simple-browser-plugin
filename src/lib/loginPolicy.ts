@@ -73,6 +73,8 @@ export interface LoginShape {
   hiddenSubmitBlock?: string | null;
   // 다른 창·프레임으로 보내는 양식(target·formtarget).
   otherTarget?: boolean;
+  // 넣을 칸에 결제용 autocomplete(cc-*)·결제 칸 단서가 있는지(비밀번호 칸으로 분류된 카드 보안 코드 칸 등).
+  paymentField?: boolean;
   // 양식(<form>) 안인지. 아니면 채우기만 하고 제출은 모델의 click_element(기존 승인 규칙)로 한다.
   hasForm: boolean;
   // 양식의 제출 주소들(action, 제출 버튼의 formaction, 범위 안 다른 양식의 action). 절대 주소.
@@ -98,51 +100,57 @@ function onlyOrigin(url: string, origin: string): boolean {
 
 // 자동 로그인을 막는 이유. null이면 구조로는 자동 실행해도 된다(사이트 승인·항목 묶음은 따로 본다).
 // origin: 값을 받을 출처(항목을 묶은 출처). 모든 제출 주소가 이 출처여야 한다(다른 승인 사이트로도 보내지 않는다).
-export function loginShapeBlock(shape: LoginShape, origin: string): string | null {
+// 자동 로그인을 막는 이유 모두(카드로 승인한 뒤 새로 생긴 이유만 골라 막으려고 각각 모은다). 빈 목록이면 구조로는 자동 실행해도 된다.
+export function loginShapeBlocks(shape: LoginShape, origin: string): string[] {
+  const out = new Set<string>();
+  const add = (why: string | null | undefined) => {
+    if (why) out.add(why);
+  };
   const frame = loginOrigin(shape.frameUrl);
-  if (!frame) return "https 페이지가 아님";
-  if (frame !== origin) return "칸이 든 문서의 출처가 다름";
-  if (loginOrigin(shape.topUrl) !== origin) return "다른 사이트 안에 끼워 넣은 로그인 칸";
-  if (shape.newPassword) return "새 비밀번호 칸이 있는 화면(가입·비밀번호 변경일 수 있음)";
-  if (shape.otherFields) return "로그인 칸 밖의 입력 칸이 함께 있는 양식(정보 수정일 수 있음)";
-  if (shape.hiddenSubmitBlock) return shape.hiddenSubmitBlock;
-  if (shape.otherTarget) return "다른 창·프레임으로 보내는 양식";
-  // 결제 정보 칸(카드 번호 등)이 넣을 칸이면 묻는다(입력 정책과 같은 분류).
-  if (shape.fields.some((f) => f.sensitive === "payment")) return "결제 정보 칸";
+  if (!frame) add("https 페이지가 아님");
+  else if (frame !== origin) add("칸이 든 문서의 출처가 다름");
+  if (loginOrigin(shape.topUrl) !== origin) add("다른 사이트 안에 끼워 넣은 로그인 칸");
+  if (shape.newPassword) add("새 비밀번호 칸이 있는 화면(가입·비밀번호 변경일 수 있음)");
+  if (shape.otherFields) add("로그인 칸 밖의 입력 칸이 함께 있는 양식(정보 수정일 수 있음)");
+  add(shape.hiddenSubmitBlock);
+  if (shape.otherTarget) add("다른 창·프레임으로 보내는 양식");
+  // 결제 정보 칸(카드 번호·보안 코드 등)이 넣을 칸이면 묻는다(비밀번호 칸으로 분류된 보안 코드 칸 포함 — paymentField).
+  if (shape.paymentField || shape.fields.some((f) => f.sensitive === "payment")) add("결제 정보 칸");
   for (const u of shape.submitUrls) {
-    if (!onlyOrigin(u, origin)) return "로그인 정보를 다른 출처로 보내는 양식";
+    if (!onlyOrigin(u, origin)) add("로그인 정보를 다른 출처로 보내는 양식");
     // 결제·개인정보 주소로 보내는 양식(결제 재인증 등)은 클릭·입력과 같은 기준으로 묻는다.
     const why = sensitiveUrlReason(u);
-    if (why) return `${why}로 보내는 양식`;
+    if (why) add(`${why}로 보내는 양식`);
   }
   // 값을 넣거나 누르면 일으킬 htmx 요청(change·click 처리기가 칸 값을 실어 보냄)도 같은 출처·같은 기준이어야 한다.
-  // 확인할 수 없는 요청(GET 아님·from: 리스너 등)은 묻는다.
+  // 확인할 수 없는 요청(GET 아님·from: 리스너 등)은 묻는다. htmx GET 요청은 칸 값을 주소에 싣는다.
   for (const t of [...shape.fields, ...(shape.submit ? [shape.submit] : [])]) {
-    if (t.opaqueRequest) return "확인할 수 없는 htmx 요청이 붙은 칸·버튼";
+    if (t.opaqueRequest) add("확인할 수 없는 htmx 요청이 붙은 칸·버튼");
     for (const u of t.requestUrls ?? []) {
-      if (!onlyOrigin(u, origin)) return "로그인 정보를 다른 출처로 보내는 요청(htmx)";
-      if (sensitiveUrlReason(u)) return `${sensitiveUrlReason(u)}로 보내는 요청(htmx)`;
+      if (!onlyOrigin(u, origin)) add("로그인 정보를 다른 출처로 보내는 요청(htmx)");
+      const why = sensitiveUrlReason(u);
+      if (why) add(`${why}로 보내는 요청(htmx)`);
     }
-    // htmx GET 요청은 칸 값을 주소에 싣는다(비밀번호가 주소창·서버 로그에 남음).
-    if ((t.requestUrls ?? []).length) return "값을 주소에 싣는 htmx GET 요청이 붙은 칸·버튼";
+    if ((t.requestUrls ?? []).length) add("값을 주소에 싣는 htmx GET 요청이 붙은 칸·버튼");
   }
   // GET 양식은 값을 주소에 실어 주소창·방문 기록·서버 로그에 남긴다.
-  if (shape.hasForm && shape.submitMethods.some((m) => m !== "post")) return "POST가 아닌 방법으로 제출하는 양식";
+  if (shape.hasForm && shape.submitMethods.some((m) => m !== "post")) add("POST가 아닌 방법으로 제출하는 양식");
   // 칸 값까지 합친 제출 주소(숨은 칸의 next=https://다른곳 등)에 실린 목적지도 같은 출처여야 한다.
   for (const t of [...shape.fields, ...(shape.submit ? [shape.submit] : [])]) {
     for (const u of [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])]) {
-      if (u && !onlyOrigin(u, origin)) return "로그인 정보를 다른 출처로 보낼 수 있는 양식(실린 주소)";
+      if (u && !onlyOrigin(u, origin)) add("로그인 정보를 다른 출처로 보낼 수 있는 양식(실린 주소)");
     }
   }
-  const fieldDestructive = destructiveFillBlock(shape.fields);
-  if (fieldDestructive) return fieldDestructive;
-  if (shape.fields.some(paymentSubmission)) return "결제 값을 함께 보내는 양식";
-  if (shape.submit) {
-    const why = submitControlBlock(shape.submit);
-    if (why) return why;
-  }
-  if (shape.fields.some((f) => f.paymentContext)) return "결제 화면의 칸";
-  return null;
+  add(destructiveFillBlock(shape.fields));
+  if (shape.fields.some(paymentSubmission)) add("결제 값을 함께 보내는 양식");
+  if (shape.submit) for (const why of submitControlBlocks(shape.submit)) add(why);
+  if (shape.fields.some((f) => f.paymentContext)) add("결제 화면의 칸");
+  return [...out];
+}
+
+// 첫 이유(카드에 보일 것). 없으면 null.
+export function loginShapeBlock(shape: LoginShape, origin: string): string | null {
+  return loginShapeBlocks(shape, origin)[0] ?? null;
 }
 
 const PAYMENT_URL_REASON = "결제·주문 주소";
@@ -153,19 +161,20 @@ function paymentSubmission(t: TargetInfo): boolean {
   return [t.submitUrl ?? "", ...(t.scopeSubmitUrls ?? [])].some((u) => !!u && sensitiveUrlReason(u) === PAYMENT_URL_REASON);
 }
 
-// 제출 버튼의 되돌리기 어려운 동작·결제 신호(승인 판정과 제출 직전 재검사가 함께 쓴다).
-export function submitControlBlock(t: TargetInfo): string | null {
-  if (paymentSubmission(t)) return "결제 값을 함께 보내는 양식";
+// 제출 버튼의 되돌리기 어려운 동작·결제 신호 모두(승인 판정과 입력·제출 직전 재검사가 함께 쓴다).
+export function submitControlBlocks(t: TargetInfo): string[] {
+  const out = new Set<string>();
+  if (paymentSubmission(t)) out.add("결제 값을 함께 보내는 양식");
   const clickDestructive = destructiveClickBlock([t]);
-  if (clickDestructive) return clickDestructive;
+  if (clickDestructive) out.add(clickDestructive);
   const raw = `${t.name} ${t.outerText ?? ""}`;
-  if (PAYMENT_TEXT_RE.test(`${raw} ${splitIdentifier(raw)}`)) return "결제·주문 버튼";
-  if (t.paymentContext) return "결제 화면의 버튼";
+  if (PAYMENT_TEXT_RE.test(`${raw} ${splitIdentifier(raw)}`)) out.add("결제·주문 버튼");
+  if (t.paymentContext) out.add("결제 화면의 버튼");
   for (const u of [t.submitTo ?? "", t.href, ...(t.scopeFormActions ?? [])]) {
     const why = u ? sensitiveUrlReason(u) : null;
-    if (why) return `${why}로 이어지는 버튼`;
+    if (why) out.add(`${why}로 이어지는 버튼`);
   }
-  return null;
+  return [...out];
 }
 
 export interface SignInDecisionInput {

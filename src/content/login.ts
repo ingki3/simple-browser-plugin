@@ -1,9 +1,9 @@
 // 자동 로그인(sign_in, docs/design/login-automation.md)의 페이지 쪽. 모델이 고른 칸 둘레의 로그인 양식을 구조로 읽고(login_inspect),
 // 백그라운드가 비밀번호 관리자에서 받은 값을 넣은 뒤 양식을 제출한다(login_fill). 판정은 칸 종류·autocomplete·양식 관계·제출
 // 주소와 메서드로만 한다(낱말로 로그인 화면을 짐작하지 않는다). 값은 이 파일에서 돌려주지 않는다.
-import { loginShapeBlock, submitControlBlock, type LoginShape } from "@/lib/loginPolicy";
+import { loginShapeBlocks, submitControlBlocks, type LoginShape } from "@/lib/loginPolicy";
 import { isShadowRoot, isTag } from "./docs";
-import { DESTRUCTIVE_REASON, DESTRUCTIVE_TEXT_RE, PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
+import { DESTRUCTIVE_REASON, DESTRUCTIVE_TEXT_RE, FIELD_PAYMENT_HINT_RE, PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import {
   declaresDelete,
   fillFormFields,
@@ -113,11 +113,26 @@ function hiddenSubmitterBlock(btn: HTMLElement, form: HTMLFormElement): string |
   return null;
 }
 
-// 기본 제출 버튼의 지금 위험(보이면 클릭 대상 기술로, 숨었으면 구조·글자로).
-function submitterRisk(btn: HTMLElement, form: HTMLFormElement, callId: string): string | null {
-  if (!layoutVisible(btn)) return hiddenSubmitterBlock(btn, form);
+// 기본 제출 버튼의 지금 위험들(보이면 클릭 대상 기술로, 숨었으면 구조·글자로).
+function submitterRisks(btn: HTMLElement, form: HTMLFormElement, callId: string): string[] {
+  if (!layoutVisible(btn)) {
+    const why = hiddenSubmitterBlock(btn, form);
+    return why ? [why] : [];
+  }
   const [info] = inspectTargets([registerClickTarget(btn)], callId, "c");
-  return submitControlBlock(info);
+  return submitControlBlocks(info);
+}
+
+// 승인 때 없던 이유(카드로 승인한 이유는 빼고).
+function newReasons(now: string[], approved: { blocks: string[] } | null): string[] {
+  return now.filter((r) => !(approved?.blocks ?? []).includes(r));
+}
+
+// 결제용 칸 단서: autocomplete cc-*, 결제 칸 이름 단서(카드 번호·보안 코드). 비밀번호 칸으로 분류돼도 따로 본다.
+function paymentFieldHint(el: HTMLInputElement): boolean {
+  if (autocompleteTokens(el).some((t) => t.startsWith("cc-"))) return true;
+  const hint = `${el.name} ${el.id} ${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("placeholder") ?? ""} ${Array.from(el.labels ?? []).map((l) => l.textContent ?? "").join(" ")}`;
+  return FIELD_PAYMENT_HINT_RE.test(`${hint} ${splitIdentifier(hint)}`);
 }
 
 interface Picked {
@@ -234,6 +249,7 @@ function buildShape(target: HTMLInputElement, targetId: string | null, p: Picked
     otherFields: p.otherFields,
     hiddenSubmitBlock,
     otherTarget,
+    paymentField: fieldEls.some(paymentFieldHint),
     hasForm: !!p.form,
     submitUrls: [...submitUrls],
     submitMethods: p.form ? submitMethods(p.form) : [],
@@ -263,7 +279,7 @@ export async function fillLogin(
   submit: { submitId?: string; submitUrls: string[]; submitMethods: string[] } | null,
   // 승인 때의 구조 판정(카드로 승인했으면 그때 보인 이유, 자동이면 null)과 값을 받을 출처. 제출 직전 다시 판정해 새 이유가 생기면
   // 제출하지 않는다.
-  approved: { origin: string; block: string | null } | null = null,
+  approved: { origin: string; blocks: string[] } | null = null,
 ): Promise<LoginFillResult> {
   // 값을 쓰기 전에 승인 때의 구조(단계·새 비밀번호 칸 유무·넣을 칸·양식)가 그대로인지 본다
   // (기다리는 사이 autocomplete가 new-password로 바뀌는 등).
@@ -297,8 +313,8 @@ export async function fillLogin(
     // 버튼이 승인 때와 같아도 기술은 바뀔 수 있어(값을 넣으면 켜짐 등) 지금 기술로 다시 등록해 위험만 본다.
     const ds = defaultSubmitter(now.form);
     if (ds) {
-      const why = submitterRisk(ds, now.form, `${callId}:guard`);
-      if (why && why !== approved?.block) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${why}).`;
+      const added = newReasons(submitterRisks(ds, now.form, `${callId}:guard`), approved);
+      if (added.length) return `제출 버튼에 위험 신호가 생겨 넣지 않았습니다(${added[0]}).`;
     }
     if (!now.form.isConnected) return "양식이 사라졌습니다.";
     const urls = formDestinations(now.form);
@@ -351,8 +367,8 @@ export async function fillLogin(
     const targetEl = registeredElement(before.targetId, "f") as HTMLInputElement;
     const recheckId = `${callId}:recheck`;
     const fresh = buildShape(targetEl, null, pick(targetEl), recheckId);
-    const why = loginShapeBlock(fresh, approved.origin);
-    if (why && why !== approved.block) {
+    const why = newReasons(loginShapeBlocks(fresh, approved.origin), approved)[0];
+    if (why) {
       return { filled: total, total, submitted: false, note: `값을 넣은 뒤 양식에 새 위험이 보여 제출하지 않았습니다(${why}).` };
     }
   }
@@ -382,8 +398,8 @@ export async function fillLogin(
     // 값을 넣으면 활성화되는 버튼(disabled 해제)처럼 기술이 바뀌는 것은 정상이라, 같은 요소를 지금 기술로 다시 등록해 위험 신호만 본다.
     const freshId = registerClickTarget(submitter);
     const [now] = inspectTargets([freshId], submitCallId(callId), "c");
-    const why = submitControlBlock(now);
-    if (why && why !== approved?.block) return { filled: total, total, submitted: false, note: `제출 버튼에 위험 신호가 생겨 제출하지 않았습니다(${why}).` };
+    const why = newReasons(submitControlBlocks(now), approved)[0];
+    if (why) return { filled: total, total, submitted: false, note: `제출 버튼에 위험 신호가 생겨 제출하지 않았습니다(${why}).` };
   } else {
     // 승인 때 보이는 제출 버튼이 없었는데 지금 생겼으면(그 버튼의 위험 신호를 보지 않았다) 제출하지 않는다.
     const appeared = defaultSubmitter(form);
