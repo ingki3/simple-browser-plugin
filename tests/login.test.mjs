@@ -232,6 +232,10 @@ test("가리기: 메시지는 본문만(역할·도구 id는 그대로)", () => 
   const blocks = raw.value[0].reasoning_details[0].content;
   assert.ok(!blocks[0].text.includes("alice.k"));
   assert.equal(blocks[1].signature, "alice.k-sig");
+  // 파일 조각(PDF 원본)은 가림 목록이 있으면 보내지 않고, 일반 reasoning 글자도 가린다.
+  const fileMsg = maskMessages([{ role: "user", content: [{ type: "text", text: "q" }, { type: "file", file: { filename: "a.pdf", file_data: "data:..." } }] }, { role: "assistant", content: "x", reasoning: "think alice.k" }], ["alice.k"]);
+  assert.ok(fileMsg.value[0].content.every((p) => p.type === "text"));
+  assert.ok(!fileMsg.value[1].reasoning.includes("alice.k"));
   // 도구 호출 인자는 JSON으로 남는다(값이 구분자 모양이어도).
   const sep = maskMessages([{ role: "assistant", content: null, tool_calls: [{ id: "a", type: "function", function: { name: "x", arguments: '{"id":"f1"}' } }] }], ['":"']);
   assert.doesNotThrow(() => JSON.parse(sep.value[0].tool_calls[0].function.arguments));

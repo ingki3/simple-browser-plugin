@@ -172,11 +172,17 @@ export function maskMessages<T extends MessageLike>(messages: readonly T[], secr
   const content = (c: unknown): unknown => {
     if (typeof c === "string") return text(c);
     if (Array.isArray(c)) {
-      return c.map((p) =>
-        p && typeof p === "object" && (p as { type?: unknown }).type === "text" && typeof (p as { text?: unknown }).text === "string"
-          ? { ...(p as object), text: text((p as { text: string }).text) }
-          : p,
-      );
+      return c.map((p) => {
+        if (!p || typeof p !== "object") return p;
+        const part = p as { type?: unknown; text?: unknown };
+        if (part.type === "text" && typeof part.text === "string") return { ...(p as object), text: text(part.text) };
+        // 파일 조각(PDF 원본)은 안을 가릴 수 없어 가림 목록이 있으면 보내지 않는다(받는 사이 넣은 값이 들었을 수 있다).
+        if (part.type === "file") {
+          masked = true;
+          return { type: "text", text: "[첨부 파일은 자동 로그인 값 보호로 보내지 않았습니다 — 필요하면 read_document로 읽으세요]" };
+        }
+        return p;
+      });
     }
     return c;
   };
@@ -195,6 +201,8 @@ export function maskMessages<T extends MessageLike>(messages: readonly T[], secr
   };
   const value = messages.map((m) => {
     const next = { ...m, ...(m.content !== undefined ? { content: content(m.content) } : {}) } as T;
+    const reasoning = (m as { reasoning?: unknown }).reasoning;
+    if (typeof reasoning === "string") (next as { reasoning?: string }).reasoning = text(reasoning);
     const details = (m as { reasoning_details?: unknown }).reasoning_details;
     if (Array.isArray(details)) (next as { reasoning_details?: unknown }).reasoning_details = raw(details);
     if (Array.isArray(m.tool_calls)) {

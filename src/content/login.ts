@@ -537,6 +537,11 @@ export async function fillLogin(
   }
   if (cancelled.has(callId)) return { filled: total, total, submitted: false, note: "중단되어 제출하지 않았습니다." };
   if (!submit) return { filled: total, total, submitted: false };
+  // 일회용 코드는 넣기만 한다: 입력 처리기가 비동기로 인증하는 페이지가 많아(제출 이벤트 없이 fetch) 확장이 다시 누르면 같은 코드를
+  // 두 번 보낼 수 있다. 페이지가 넘어가지 않으면 모델이 확인 버튼을 click_element로 누른다(일반 클릭 규칙).
+  if (before.picked.step === "otp") {
+    return { filled: total, total, submitted: false, note: "일회용 코드를 넣었습니다. 페이지가 스스로 넘어가지 않으면 확인 버튼을 눌러야 합니다." };
+  }
   const driftAfter = formDrift();
   if (driftAfter) return { filled: total, total, submitted: false, note: driftAfter.replace("넣지 않았습니다", "제출하지 않았습니다") };
   // 제출 직전에 지금 모습으로 로그인 구조를 다시 판정한다(쓰기를 건너뛴 칸이 있어도 — 기다리는 사이 숨은 값이 결제로 바뀌는 등).
