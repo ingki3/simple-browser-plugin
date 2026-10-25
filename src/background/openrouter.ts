@@ -1,6 +1,6 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
-import { popupWhere } from "@/lib/actionTarget";
+import { describePopup, popupWhere } from "@/lib/actionTarget";
 import type { ModelId } from "@/lib/models";
 import { isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
@@ -20,6 +20,13 @@ import {
 import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
+import { settlePopups, watchNewTabs } from "./popups";
+
+// 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 페이지가 기록한 클릭 시각보다 앞서
+// 본 창도 그 클릭의 것으로 보는 작은 여유(같은 시계지만 기록 순서가 어긋날 수 있다). 그보다 먼저 열린 창(기다리는 동안
+// 사용자가 다른 곳을 눌러 연 창)은 따라가지 않는다.
+const HANDOFF_POPUP_SETTLE_MS = 800;
+const HANDOFF_POPUP_LEAD_MS = 200;
 import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
 import { decideApproval, withoutChatGrant } from "@/lib/approvalDecision";
 import { detachSession, InputSession } from "./trustedInput";
@@ -29,6 +36,7 @@ import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
 import {
+  resolveTurnTab,
   captureTurnTab,
   currentToolTab,
   inheritPopups,
@@ -450,6 +458,46 @@ export class ChatAgent {
       apiKey: settings.openRouterApiKey,
       model: settings.model,
       systemPrompt: composeSystemPrompt(settings.systemPrompt),
+    };
+  }
+
+  // 손 넘기기(클릭) 동안 지금 도구 탭이 여는 새 탭·창을 지켜본다(#81). settle(clickedAt): 사용자가 대상을 누른 즈음
+  // (clickedAt 앞 HANDOFF_POPUP_LEAD_MS부터) 열린 창만 클릭과 같은 규칙(settlePopups)으로 따라가고 안내 문구를 돌려준다.
+  // 손 넘기기는 window.open을 감싸지 않으므로(오래 기다림) 따로 뜬 팝업 창만 따라간다 — 같은 창의 탭으로 열린 것은 그
+  // 기록이 없어 따라가지 않는다.
+  private async watchHandoffPopups(
+    turnTab: TurnTab,
+  ): Promise<{ stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> } | null> {
+    let tabId: number;
+    try {
+      tabId = await resolveTurnTab(turnTab);
+    } catch {
+      return null;
+    }
+    const before = (await chrome.tabs.get(tabId).catch(() => null))?.url ?? "";
+    const sourceWindowId = await chrome.tabs.get(tabId).then((t) => t.windowId, () => null);
+    const watch = watchNewTabs(tabId);
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return [];
+      stopped = true;
+      return watch.stop();
+    };
+    return {
+      stop: () => void stop(),
+      settle: async (clickedAt, stale) => {
+        // 클릭이 연 창이 만들어질 시간을 잠깐 준다.
+        await new Promise((r) => setTimeout(r, HANDOFF_POPUP_SETTLE_MS));
+        const created = stop().filter((t) => clickedAt > 0 && (t.at ?? 0) >= clickedAt - HANDOFF_POPUP_LEAD_MS);
+        if (!created.length || stale() || "error" in turnTab) return null;
+        // 따라갈 창은 사본에서 정하고, 그 사이 중단·새 요청이 없을 때만 이 턴에 반영한다(중단된 턴이 팝업을 남기지 않게).
+        const scratch = { ...turnTab, popups: [...(turnTab.popups ?? [])] };
+        const popup = await settlePopups(scratch, before, created, { calls: [], complete: false }, tabId, sourceWindowId);
+        if (stale()) return null;
+        turnTab.popups = scratch.popups;
+        turnTab.originDocumentId = scratch.originDocumentId;
+        return popup ? describePopup(popup).join(" ") : null;
+      },
     };
   }
 
@@ -992,6 +1040,9 @@ export class ChatAgent {
         let autoRan = false;
         // 직접 조작할 사이트에서 사용자에게 넘겨 마친 호출(실행하지 않는다).
         let handoffOutcome: HandoffOutcome | null = null;
+        // 손 넘기기 동안 이 탭이 여는 창 감시(#81)와 사용자가 대상을 누른 것을 안 시각.
+        let handoffPopups: { stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> } | null = null;
+        let handoffClickedAt = 0;
         // 이번 대화 허락(#53)으로 카드 없이 실행한 호출.
         let grantRan = false;
         // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
@@ -1082,10 +1133,15 @@ export class ChatAgent {
               toolName === "click_element"
                 ? [(parsedArgs as { id: string }).id]
                 : (parsedArgs as { fills: Array<{ id: string }> }).fills.map((f) => f.id);
+            // 사용자가 표시한 대상을 눌러 팝업 창을 열면 그 창을 따라간다(#81). 넘기는 동안 이 탭이 여는 창을 지켜보고,
+            // 사용자가 대상을 누른 것(clicked)으로 끝났을 때만 그 즈음 열린 창을 클릭과 같은 규칙으로 따라간다.
+            if (toolName === "click_element") handoffPopups = await this.watchHandoffPopups(turnTab);
             let shown: HandoffSession;
             try {
               shown = await showHandoff(turnTab, callId, toolName === "click_element" ? "c" : "f", ids);
             } catch (err) {
+              handoffPopups?.stop();
+              handoffPopups = null;
               if (this.isStale(turn)) return false;
               const msg = err instanceof Error ? err.message : String(err);
               logToolFail(toolName, msg);
@@ -1095,6 +1151,7 @@ export class ChatAgent {
             }
             if (this.isStale(turn)) {
               void endHandoff(shown);
+              handoffPopups?.stop();
               return false;
             }
             debugLog("tool:handoff", toolName);
@@ -1113,9 +1170,12 @@ export class ChatAgent {
             });
             let by: HandoffOutcome = "confirmed";
             let expired = false;
-            const stopWatch = watchHandoff(shown, (outcome) => {
+            const stopWatch = watchHandoff(shown, (outcome, clickedAt) => {
               if (outcome === "expired") expired = true;
               else by = outcome;
+              // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 0 — 어느 창이 그 클릭의 것인지 몰라
+              // 따라가지 않는다.
+              if (outcome === "clicked") handoffClickedAt = clickedAt ?? 0;
               this.pendingApprovals.get(callId)?.(!expired);
             });
             approved = await new Promise<boolean>((resolve) => {
@@ -1124,8 +1184,15 @@ export class ChatAgent {
             stopWatch();
             this.pendingApprovals.delete(callId);
             void endHandoff(shown);
-            if (this.isStale(turn)) return false;
+            if (this.isStale(turn)) {
+              handoffPopups?.stop();
+              return false;
+            }
             debugLog("tool:handoff_result", `${toolName} ${approved ? by : expired ? "expired" : "cancelled"}`);
+            if (!(approved && by === ("clicked" as HandoffOutcome) && handoffClickedAt > 0)) {
+              handoffPopups?.stop();
+              handoffPopups = null;
+            }
             if (expired) {
               const msg = "사용자가 표시한 대상을 오래 조작하지 않아 직접 조작 안내를 끝냈습니다. 사용자에게 계속할지 물으세요.";
               recordCancelledAction(callId, turnTab);
@@ -1233,7 +1300,13 @@ export class ChatAgent {
 
         if (handoffOutcome && (toolName === "click_element" || toolName === "fill_form_fields")) {
           recordHandedOffAction(callId, turnTab);
-          const note = handoffResultText(toolName, handoffOutcome);
+          // 사용자의 클릭이 팝업 창을 열었으면 따라가고 그 안내를 붙인다(클릭 결과와 같은 문구).
+          const popupNote = handoffPopups
+            ? await handoffPopups.settle(handoffClickedAt, () => this.isStale(turn)).catch(() => null)
+            : null;
+          handoffPopups = null;
+          if (this.isStale(turn)) return false;
+          const note = `${handoffResultText(toolName, handoffOutcome)}${popupNote ? ` ${popupNote}` : ""}`;
           this.send({ kind: "tool_result", callId, toolName, ok: true, summary: `직접 조작 · ${HANDOFF_LABELS[handoffOutcome]}` });
           this.history.push({
             role: "tool",

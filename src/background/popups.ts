@@ -197,6 +197,8 @@ interface CreatedTab {
   url: string;
   // 새로 만들어지지 않고 이동만 시작된 다른 탭(이름 있는 창을 다시 쓴 window.open 후보). 새 탭이 아니다.
   reused?: boolean;
+  // 처음 본 시각(Date.now). 오래 지켜보는 손 넘기기에서 사용자의 클릭 즈음에 열린 것만 고르는 데 쓴다(#81).
+  at?: number;
 }
 
 // 이 탭이 연 새 탭·창(target=_blank, window.open)을 지켜본다. stop()을 부르면 관찰을 끝내고 만들어진 탭들을 준다.
@@ -206,7 +208,7 @@ export function watchNewTabs(tabId: number): { stop(): CreatedTab[] } {
   const created = new Map<number, CreatedTab>();
   const add = (id: number, url: string) => {
     const prev = created.get(id);
-    created.set(id, { tabId: id, url: url || prev?.url || "" });
+    created.set(id, { tabId: id, url: url || prev?.url || "", at: prev?.at ?? Date.now() });
   };
   const onCreated = (tab: chrome.tabs.Tab) => {
     if (tab.openerTabId === tabId && tab.id !== undefined) add(tab.id, tab.pendingUrl || tab.url || "");
@@ -219,7 +221,7 @@ export function watchNewTabs(tabId: number): { stop(): CreatedTab[] } {
   const navigated: CreatedTab[] = [];
   const onBefore = (d: chrome.webNavigation.WebNavigationParentedCallbackDetails) => {
     if (d.frameId !== 0 || d.tabId === tabId || navigated.length >= 10) return;
-    navigated.push({ tabId: d.tabId, url: d.url, reused: true });
+    navigated.push({ tabId: d.tabId, url: d.url, reused: true, at: Date.now() });
   };
   chrome.tabs.onCreated.addListener(onCreated);
   chrome.webNavigation.onCreatedNavigationTarget.addListener(onTarget);

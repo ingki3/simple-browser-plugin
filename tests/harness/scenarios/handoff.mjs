@@ -69,4 +69,71 @@ export default [
       expect(!t?.result && t?.error === "user_cancelled", `취소 오류 결과(${JSON.stringify(t)})`);
     },
   },
+  {
+    name: "사용자가 누른 대상이 팝업 창을 열면 그 창을 따라간다(#81)",
+    pages: {
+      "/hp": `<title>예매</title><main><button id=open style="width:160px;height:50px" onclick="window.open('/cal','cal','popup,width=420,height=320')">달력 열기</button><p id=out></p></main>`,
+      "/cal": `<title>달력</title><main><button>10월 25일</button></main>`,
+    },
+    async run(h) {
+      await h.settings({ autoApprove: true, manualSites: [h.base] });
+      const r = await h.turn([findC, { click: "달력 열기" }, findC, { text: "끝" }], {
+        path: "/hp",
+        onCard: async (_card, n) => {
+          if (n > 1) return;
+          await h.tab.waitForTimeout(300);
+          await h.tab.locator("#open").click();
+        },
+      });
+      const res = lastTool(r, "click_element")?.result;
+      expect(res?.outcome === "clicked" && /팝업/.test(res.note ?? ""), `결과에 팝업 안내(${JSON.stringify(res)})`);
+      const found = okResult(r, "find_clickables");
+      expect(found.some((c) => c.text === "10월 25일"), `다음 도구는 팝업 창에서(${JSON.stringify(found)})`);
+    },
+  },
+  {
+    name: "팝업 없이 끝난 손 넘기기는 원래 탭에 그대로",
+    pages: { "/h": page },
+    async run(h) {
+      await h.settings({ autoApprove: true, manualSites: [h.base] });
+      const r = await h.turn([findC, { click: "조회하기" }, findC, { text: "끝" }], {
+        path: "/h",
+        onCard: async (_card, n) => {
+          if (n > 1) return;
+          await h.tab.waitForTimeout(300);
+          await h.tab.locator("#b").click();
+        },
+      });
+      const res = lastTool(r, "click_element")?.result;
+      expect(res?.outcome === "clicked" && !/팝업/.test(res.note ?? ""), `팝업 안내 없음(${JSON.stringify(res)})`);
+      const found = okResult(r, "find_clickables");
+      expect(found.some((c) => c.text === "조회하기"), `원래 탭(${JSON.stringify(found)})`);
+    },
+  },
+  {
+    name: "기다리는 동안 다른 버튼으로 연 팝업은 따라가지 않는다(#81)",
+    pages: {
+      "/hp2": `<title>예매</title><main><button id=other onclick="window.open('/ad','ad','popup,width=300,height=200')">광고 보기</button>
+<button id=go style="width:160px;height:50px" onclick="document.getElementById('out').textContent='조회됨'">조회하기</button><p id=out></p></main>`,
+      "/ad": `<title>광고</title><main><button>광고 닫기</button></main>`,
+    },
+    async run(h) {
+      await h.settings({ autoApprove: true, manualSites: [h.base] });
+      const r = await h.turn([findC, { click: "조회하기" }, findC, { text: "끝" }], {
+        path: "/hp2",
+        onCard: async (_card, n) => {
+          if (n > 1) return;
+          await h.tab.waitForTimeout(300);
+          await h.tab.locator("#other").click();
+          await h.tab.bringToFront();
+          await h.tab.waitForTimeout(500);
+          await h.tab.locator("#go").click();
+        },
+      });
+      const res = lastTool(r, "click_element")?.result;
+      expect(res?.outcome === "clicked" && !/팝업/.test(res.note ?? ""), `무관한 팝업 안내 없음(${JSON.stringify(res)})`);
+      const found = okResult(r, "find_clickables");
+      expect(found.some((c) => c.text === "조회하기"), `원래 탭에서(${JSON.stringify(found)})`);
+    },
+  },
 ];

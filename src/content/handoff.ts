@@ -9,6 +9,8 @@ const HANDOFF_MAX_MS = 15 * 60_000;
 
 interface Handoff {
   clicked: boolean;
+  // 사용자가 대상을 처음 누른 시각(Date.now). 그 클릭이 연 팝업 창을 고르는 데 쓴다(#81).
+  clickedAt: number;
   // 사용자가 HANDOFF_MAX_MS 동안 조작하지 않아 표시를 뗐음(문서 바뀜과 구분해 알린다).
   expired: boolean;
   // 같은 출처 iframe 안의 대상이면 그 프레임과 표시할 때의 문서(프레임만 이동하면 top 문서는 그대로라 따로 본다).
@@ -132,7 +134,7 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
     const frameEl = el.ownerDocument.defaultView?.frameElement;
     if (frameEl && !frames.some((f) => f.el === frameEl)) frames.push({ el: frameEl, doc: el.ownerDocument });
   }
-  const state: Handoff = { clicked: false, expired: false, frames, stop: () => {} };
+  const state: Handoff = { clicked: false, clickedAt: 0, expired: false, frames, stop: () => {} };
   const removeBoxes = drawBoxes(targets);
   const cleanups: Array<() => void> = [removeBoxes];
   if (prefix === "c") {
@@ -140,7 +142,10 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
     const win = el.ownerDocument.defaultView ?? window;
     // 사용자의 실제 클릭이 표시한 대상(또는 그 안)에 닿았는지만 본다. 막거나 바꾸지 않는다.
     const onClick = (e: MouseEvent) => {
-      if (e.isTrusted && e.composedPath().includes(el)) state.clicked = true;
+      if (e.isTrusted && e.composedPath().includes(el) && !state.clicked) {
+        state.clicked = true;
+        state.clickedAt = Date.now();
+      }
     };
     win.addEventListener("click", onClick, { capture: true, passive: true });
     cleanups.push(() => win.removeEventListener("click", onClick, { capture: true }));
@@ -161,14 +166,16 @@ export function showHandoff(token: string, ids: string[], callId: string, prefix
   shownElement(targets[0]).scrollIntoView({ block: "center", inline: "nearest" });
 }
 
-export function handoffStatus(token: string): { clicked: boolean; expired: boolean; frameChanged: boolean } | null {
+export function handoffStatus(
+  token: string,
+): { clicked: boolean; clickedAt: number; expired: boolean; frameChanged: boolean } | null {
   const state = handoffs.get(token);
   if (!state) return null;
   // 대상이 든 iframe이 다른 문서로 바뀌었거나(다른 출처로 가면 contentDocument가 null) 빠졌는지.
   const frameChanged = state.frames.some(
     ({ el, doc }) => !el.isConnected || (el as HTMLIFrameElement).contentDocument !== doc,
   );
-  return { clicked: state.clicked, expired: state.expired, frameChanged };
+  return { clicked: state.clicked, clickedAt: state.clickedAt, expired: state.expired, frameChanged };
 }
 
 export function endHandoff(token: string): void {
