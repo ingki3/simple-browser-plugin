@@ -241,7 +241,10 @@ test("Anthropic: 요청 형식 — 도구·tool_choice·생각(에이전트만)�
   assert.equal(anthropicThinkingMode("claude-sonnet-4-20250514"), "budget");
   assert.equal(anthropicThinkingMode("claude-fable-5-1"), "adaptive");
   const json = anthropicPayload({ model: "claude-haiku-5-5", messages: [{ role: "user", content: "x" }], reasoning: "off", maxTokens: 1500, temperature: 0, responseFormat: { type: "json_schema", json_schema: { schema: { type: "object" } } } }, false);
-  assert.ok(!("thinking" in json) && !("temperature" in json) && !("output_config" in json));
+  assert.ok(!("thinking" in json) && !("temperature" in json));
+  // adaptive 모델의 생각 끄기는 강도를 가장 낮게.
+  assert.deepEqual(json.output_config, { effort: "low" });
+  assert.ok(!("output_config" in anthropicPayload({ model: "claude-sonnet-4-5", messages: [{ role: "user", content: "x" }], reasoning: "off", maxTokens: 10 }, false)));
   assert.match(json.system, /JSON 객체 하나만/);
   assert.match(json.system, /"type":"object"/);
   // 생각을 지원하지 않는 옛 모델은 켜지 않는다.
@@ -285,4 +288,6 @@ test("Anthropic: 스트림 이벤트 → 내부 조각(글자·생각·서명·�
   ]);
   const c2 = anthropicStreamConverter();
   assert.equal(c2({ type: "message_delta", delta: { stop_reason: "max_tokens" } })[0].choices[0].finish_reason, "length");
+  assert.equal(c2({ type: "message_delta", delta: { stop_reason: "model_context_window_exceeded" } })[0].choices[0].finish_reason, "length");
+  assert.equal(c2({ type: "message_delta", delta: { stop_reason: "end_turn" } })[0].choices[0].finish_reason, "stop");
 });

@@ -126,8 +126,12 @@ function jsonInstruction(format: Record<string, unknown>): string {
 
 export function anthropicPayload(req: ChatRequest, stream: boolean): Record<string, unknown> {
   const { system, messages } = anthropicMessages(req.messages);
-  const mode = req.reasoning === "off" ? "none" : anthropicThinkingMode(req.model);
+  const modelMode = anthropicThinkingMode(req.model);
+  const mode = req.reasoning === "off" ? "none" : modelMode;
   const intent = req.reasoning as "agent" | "agent_low";
+  // 생각이 필요 없는 짧은 JSON 호출: adaptive 모델은 thinking을 빼도 스스로 생각할 수 있어 강도를 가장 낮게 둔다
+  // (출력 한도를 생각에 쓰지 않게).
+  const offEffort = req.reasoning === "off" && modelMode === "adaptive";
   const sys = [system, req.responseFormat ? jsonInstruction(req.responseFormat) : ""].filter(Boolean).join("\n\n");
   return {
     model: req.model,
@@ -151,7 +155,9 @@ export function anthropicPayload(req: ChatRequest, stream: boolean): Record<stri
       ? { thinking: { type: "adaptive" }, output_config: { effort: THINKING_EFFORT[intent] } }
       : mode === "budget"
         ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET[intent] } }
-        : {}),
+        : offEffort
+          ? { output_config: { effort: "low" } }
+          : {}),
     ...(stream ? { stream: true } : {}),
   };
 }
@@ -206,7 +212,13 @@ export function anthropicStreamConverter(): (event: Record<string, unknown>) => 
     if (ev.type === "message_delta") {
       const reason = ((ev.delta ?? {}) as { stop_reason?: string }).stop_reason;
       if (!reason) return [];
-      const finish = reason === "tool_use" ? "tool_calls" : reason === "max_tokens" ? "length" : "stop";
+      // 출력 한도·문맥 한도로 끊긴 응답은 잘림(length)으로 알린다(정상 완료로 보지 않게).
+      const finish =
+        reason === "tool_use"
+          ? "tool_calls"
+          : reason === "max_tokens" || reason === "model_context_window_exceeded"
+            ? "length"
+            : "stop";
       return [chunk({}, finish)];
     }
     return [];
