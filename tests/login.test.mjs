@@ -133,6 +133,14 @@ test("가리기: 값과 흔한 표현", () => {
   assert.equal(maskText("a b", ["a"]).masked, false);
 });
 
+test("가리기: JSON으로 직렬화한 글자 안의 값(따옴표·역슬래시)", () => {
+  const pw = 'a"b\\c';
+  const json = JSON.stringify({ text: `보임 ${pw}` });
+  const r = maskText(json, [pw]);
+  assert.ok(r.masked);
+  assert.ok(!JSON.parse(r.text).text.includes(pw));
+});
+
 test("가리기: JSON 값 안 깊이(키 포함)", () => {
   const r = maskDeep({ a: ["hello alice"], alice: 1, n: 3 }, ["alice"]);
   assert.ok(r.masked);
@@ -195,6 +203,9 @@ test("로그인 모양: 막는 구조", () => {
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, name: "계정 삭제", text: "계정 삭제" } }), ORIGIN));
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, deleteMethod: true } }), ORIGIN));
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, name: "결제하기", text: "결제하기" } }), ORIGIN));
+  // 결제 주소로 보내는 양식(결제 재인증), 결제 주소를 가리키는 제출 버튼은 묻는다.
+  assert.match(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/checkout/confirm`] }), ORIGIN), /결제/);
+  assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, submitTo: `${ORIGIN}/checkout/pay` } }), ORIGIN));
   // 양식이 없으면(채우기만) 메서드는 보지 않는다.
   assert.equal(loginShapeBlock(shape({ hasForm: false, submitMethods: [], submitUrls: [] }), ORIGIN), null);
 });

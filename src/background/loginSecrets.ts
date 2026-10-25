@@ -10,6 +10,17 @@ type Store = Record<string, string[]>;
 
 let cache: Store | null = null;
 let listening = false;
+// 목록 갱신(더하기·탭 지우기)을 차례로 한다(겹친 읽기·쓰기가 서로의 값을 덮어 잃지 않게).
+let queue: Promise<unknown> = Promise.resolve();
+
+function update(fn: (store: Store) => Store | null): Promise<void> {
+  const run = queue.then(async () => {
+    const next = fn({ ...(await load()) });
+    if (next) await save(next);
+  });
+  queue = run.catch(() => undefined);
+  return run;
+}
 
 async function load(): Promise<Store> {
   if (cache) return cache;
@@ -35,23 +46,23 @@ function listen(): void {
   if (listening) return;
   listening = true;
   chrome.tabs.onRemoved.addListener((tabId) => {
-    void (async () => {
-      const store = { ...(await load()) };
-      if (!(String(tabId) in store)) return;
+    void update((store) => {
+      if (!(String(tabId) in store)) return null;
       delete store[String(tabId)];
-      await save(store);
-    })();
+      return store;
+    });
   });
 }
 
 // 페이지에 넣기 직전에 부른다(넣은 뒤 관측이 먼저 오지 않게).
 export async function rememberSecrets(tabId: number, values: string[]): Promise<void> {
   listen();
-  const store = { ...(await load()) };
-  const cur = new Set(store[String(tabId)] ?? []);
-  for (const v of values) if (v) cur.add(v);
-  store[String(tabId)] = [...cur];
-  await save(store);
+  await update((store) => {
+    const cur = new Set(store[String(tabId)] ?? []);
+    for (const v of values) if (v) cur.add(v);
+    store[String(tabId)] = [...cur];
+    return store;
+  });
 }
 
 export async function allSecrets(): Promise<string[]> {
@@ -70,10 +81,11 @@ export async function maskStringForModel(text: string): Promise<{ text: string; 
   return maskText(text, await allSecrets());
 }
 
-// 동기 경로(기록에 넣는 자리)용: 마지막으로 읽은 목록으로 가린다. rememberSecrets·allSecrets가 캐시를 채운다.
-export function maskSync(text: string): { text: string; masked: boolean } {
-  if (!cache) return { text, masked: false };
-  return maskText(text, [...new Set(Object.values(cache).flat())]);
+// 동기 경로(기록에 넣는 자리)용: 마지막으로 읽은 목록으로 가린다. rememberSecrets·allSecrets·warmSecrets가 캐시를 채운다.
+// 값은 직렬화하기 전의 모양으로 가린다(JSON 이스케이프로 모양이 바뀌기 전에).
+export function maskSyncDeep<T>(value: T): { value: T; masked: boolean } {
+  if (!cache) return { value, masked: false };
+  return maskDeep(value, [...new Set(Object.values(cache).flat())]);
 }
 
 // 서비스 워커가 깨어날 때 캐시를 미리 채운다(동기 거르기가 빈 목록으로 지나가지 않게).

@@ -2,7 +2,7 @@
 // 사이트 목록(출처 → KeePassXC 항목 묶음)의 정리. 판정은 구조(정확한 출처, 칸 종류, 양식의 제출 주소)와 사용자의 명시적 승인으로만
 // 한다. 낱말은 결제·삭제처럼 "더 묻는" 기존 신호(destructiveClickBlock·PAYMENT_TEXT_RE)로만 쓴다.
 import type { TargetInfo } from "./actionTarget.ts";
-import { destructiveClickBlock, destructiveFillBlock, PAYMENT_TEXT_RE, splitIdentifier } from "./autoApprove.ts";
+import { destructiveClickBlock, destructiveFillBlock, PAYMENT_TEXT_RE, sensitiveUrlReason, splitIdentifier } from "./autoApprove.ts";
 import { httpOrigin } from "./url.ts";
 
 export const MAX_LOGIN_SITES = 50;
@@ -92,20 +92,33 @@ export function loginShapeBlock(shape: LoginShape, origin: string): string | nul
   if (shape.newPassword) return "새 비밀번호 칸이 있는 화면(가입·비밀번호 변경일 수 있음)";
   for (const u of shape.submitUrls) {
     if (httpOrigin(u) !== origin) return "로그인 정보를 다른 출처로 보내는 양식";
+    // 결제·개인정보 주소로 보내는 양식(결제 재인증 등)은 클릭·입력과 같은 기준으로 묻는다.
+    const why = sensitiveUrlReason(u);
+    if (why) return `${why}로 보내는 양식`;
   }
   // GET 양식은 값을 주소에 실어 주소창·방문 기록·서버 로그에 남긴다.
   if (shape.hasForm && shape.submitMethods.some((m) => m !== "post")) return "POST가 아닌 방법으로 제출하는 양식";
   const fieldDestructive = destructiveFillBlock(shape.fields);
   if (fieldDestructive) return fieldDestructive;
   if (shape.submit) {
-    const t = shape.submit;
-    const clickDestructive = destructiveClickBlock([t]);
-    if (clickDestructive) return clickDestructive;
-    const raw = `${t.name} ${t.outerText ?? ""}`;
-    if (PAYMENT_TEXT_RE.test(`${raw} ${splitIdentifier(raw)}`)) return "결제·주문 버튼";
-    if (t.paymentContext) return "결제 화면의 버튼";
+    const why = submitControlBlock(shape.submit);
+    if (why) return why;
   }
   if (shape.fields.some((f) => f.paymentContext)) return "결제 화면의 칸";
+  return null;
+}
+
+// 제출 버튼의 되돌리기 어려운 동작·결제 신호(승인 판정과 제출 직전 재검사가 함께 쓴다).
+export function submitControlBlock(t: TargetInfo): string | null {
+  const clickDestructive = destructiveClickBlock([t]);
+  if (clickDestructive) return clickDestructive;
+  const raw = `${t.name} ${t.outerText ?? ""}`;
+  if (PAYMENT_TEXT_RE.test(`${raw} ${splitIdentifier(raw)}`)) return "결제·주문 버튼";
+  if (t.paymentContext) return "결제 화면의 버튼";
+  for (const u of [t.submitTo ?? "", t.href, ...(t.scopeFormActions ?? [])]) {
+    const why = u ? sensitiveUrlReason(u) : null;
+    if (why) return `${why}로 이어지는 버튼`;
+  }
   return null;
 }
 

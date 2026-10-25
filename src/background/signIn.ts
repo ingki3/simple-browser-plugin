@@ -117,9 +117,14 @@ export interface SignInRunResult {
 }
 
 // 항목 uuid의 값을 넣고 제출한다. 문서가 바뀌었으면 넣지 않는다.
-export async function runSignIn(callId: string, uuid: string): Promise<SignInRunResult> {
+export async function runSignIn(callId: string, uuid: string, signal?: AbortSignal): Promise<SignInRunResult> {
   const c = calls.get(callId);
   calls.delete(callId);
+  // 기다리는 사이(일회용 코드 받기 등) 사용자가 멈췄거나 새 대화를 시작했으면 넣지 않는다.
+  const checkAbort = () => {
+    if (signal?.aborted) throw new Error("중단되어 로그인 정보를 넣지 않았습니다.");
+  };
+  checkAbort();
   if (!c || !c.origin) throw new Error("로그인 칸을 다시 확인하세요(find_form_fields로 다시 찾은 뒤 sign_in).");
   const entry = c.entries?.find((e) => e.uuid.toLowerCase() === uuid.toLowerCase());
   if (!entry) throw new Error("고른 비밀번호 관리자 항목이 없습니다.");
@@ -145,8 +150,12 @@ export async function runSignIn(callId: string, uuid: string): Promise<SignInRun
     }
   }
   if (!fills.length) throw new Error("넣을 값이 없습니다(항목에 아이디가 없음).");
+  checkAbort();
   // 넣은 뒤의 관측이 먼저 모델로 가지 않게, 넣기 전에 가림 목록에 둔다.
   await rememberSecrets(c.tabId, secrets);
+  checkAbort();
+  if ((await topDocumentId(c.tabId)) !== c.documentId) throw new Error("로그인 칸을 확인한 뒤 페이지가 바뀌어 넣지 않았습니다. 다시 관측하세요.");
+  checkAbort();
   const res = await sendTo<{ filled: number; total: number; submitted: boolean; note?: string }>(
     c.tabId,
     c.documentId,

@@ -1,7 +1,7 @@
 // 자동 로그인(sign_in, docs/design/login-automation.md)의 페이지 쪽. 모델이 고른 칸 둘레의 로그인 양식을 구조로 읽고(login_inspect),
 // 백그라운드가 비밀번호 관리자에서 받은 값을 넣은 뒤 양식을 제출한다(login_fill). 판정은 칸 종류·autocomplete·양식 관계·제출
 // 주소와 메서드로만 한다(낱말로 로그인 화면을 짐작하지 않는다). 값은 이 파일에서 돌려주지 않는다.
-import type { LoginShape } from "@/lib/loginPolicy";
+import { submitControlBlock, type LoginShape } from "@/lib/loginPolicy";
 import { isTag } from "./docs";
 import { fillFormFields, formDestinations, formElements, layoutVisible, registerFieldTarget, isSubmitControl } from "./forms";
 import { registerClickTarget } from "./clickables";
@@ -172,6 +172,16 @@ export async function fillLogin(
     submitter = registeredElement(submit.submitId, "c");
     if (defaultSubmitter(form) !== submitter || !layoutVisible(submitter)) {
       return { filled: total, total, submitted: false, note: "제출 버튼이 바뀌어 제출하지 않았습니다." };
+    }
+    // 승인 뒤 제출 버튼에 삭제 선언·결제 신호가 생겼는지 지금 모습으로 다시 본다(넣은 값은 개인정보 변화가 아니라 이 호출이 넣은 것).
+    const [now] = inspectTargets([submit.submitId], submitCallId(callId), "c");
+    const why = submitControlBlock(now);
+    if (why) return { filled: total, total, submitted: false, note: `제출 버튼에 위험 신호가 생겨 제출하지 않았습니다(${why}).` };
+  } else {
+    // 승인 때 보이는 제출 버튼이 없었는데 지금 생겼으면(그 버튼의 위험 신호를 보지 않았다) 제출하지 않는다.
+    const appeared = defaultSubmitter(form);
+    if (appeared && layoutVisible(appeared)) {
+      return { filled: total, total, submitted: false, note: "제출 버튼이 새로 생겨 제출하지 않았습니다." };
     }
   }
   form.requestSubmit(submitter);

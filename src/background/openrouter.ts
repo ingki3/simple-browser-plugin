@@ -32,7 +32,7 @@ import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } 
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
 import { loginSiteFor, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
 import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "./signIn";
-import { maskForModel, maskSync, warmSecrets } from "./loginSecrets";
+import { maskForModel, maskSyncDeep, warmSecrets } from "./loginSecrets";
 import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
 import { applySettingsUpdate, getSettings, readFlags, setFlag } from "./storage";
@@ -451,14 +451,15 @@ export class ChatAgent {
     if (note) debugLog("popup:note", note);
     // 자동 로그인으로 넣은 값이 페이지 글자로 다시 보이면 기록에 넣기 전에 가린다(탭을 닫아 가림 목록이 지워져도 기록에 원문이
     // 남지 않게). 가렸으면 그렇다고 알리고 이 대화에서는 자동 로그인을 하지 않는다.
-    const raw = JSON.stringify(note ? { ...payload, tab: note } : payload);
-    const masked = maskSync(raw);
-    if (!masked.masked) return raw;
+    // 직렬화하기 전의 값으로 가린다(JSON 이스케이프로 모양이 바뀐 값을 놓치지 않게).
+    const full = note ? { ...payload, tab: note } : payload;
+    const masked = maskSyncDeep(full);
+    if (!masked.masked) return JSON.stringify(full);
     this.secretsMasked = true;
     debugLog("login:masked", "도구 결과에서 넣은 로그인 값을 가림", "warn");
     return JSON.stringify({
+      ...masked.value,
       masked: "페이지가 도우미가 넣은 로그인 정보를 화면에 다시 보여 주어 그 부분을 가렸습니다.",
-      content: masked.text,
     });
   }
 
@@ -753,7 +754,13 @@ export class ChatAgent {
         return;
       }
       this.closeDanglingToolCalls();
-      this.history.push({ role: "user", content: userContent });
+      // 사용자 글·탭 문맥(제목 등)도 기록에 넣기 전에 가린다(탭을 닫아 가림 목록이 지워진 뒤에도 원문이 남지 않게).
+      const maskedUser = maskSyncDeep(userContent);
+      if (maskedUser.masked) {
+        this.secretsMasked = true;
+        debugLog("login:masked", "사용자 요청 문맥에서 넣은 로그인 값을 가림", "warn");
+      }
+      this.history.push({ role: "user", content: maskedUser.value });
 
       const completed = await this.streamLoop(apiKey, model, systemPrompt, turn);
       // 읽기 레시피: 답을 마친 턴에서 통한 읽기 방법만 남긴다(중단·도구 호출 한도 초과는 버림).
@@ -842,11 +849,12 @@ export class ChatAgent {
       }
       if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
     }
-    const sentNotes: OpenRouterMessage[] = [
+    const sentNotes: OpenRouterMessage[] = maskSyncDeep<OpenRouterMessage[]>([
       ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
       ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
       ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
-    ];
+      // 문맥을 서명하는 제공자는 이 안내를 기록에 남기므로 남기기 전에 가린다.
+    ]).value;
     // 자동 로그인으로 넣은 값은 어디서 왔든(기록·메모·안내) 모델로 보내지 않는다(기록에 넣을 때 이미 가렸고, 여기는 마지막 거르기).
     const outgoing = await maskForModel<OpenRouterMessage[]>([
       { role: "system", content: systemPrompt },
@@ -1163,6 +1171,8 @@ export class ChatAgent {
         let grantRan = false;
         // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
         let execArgs: unknown = parsedArgs;
+        // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
+        let signInAttempt: string | null = null;
         // 이번 대화 허락으로 저장할 이미지를 이 호출을 위해 쿠키 없이 미리 받은 것(실행 옵션으로 직접 넘긴다).
         let grantImages: Map<string, string> | undefined;
         // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
@@ -1225,6 +1235,7 @@ export class ChatAgent {
           let signInHandoffWhy: string | null = null;
           if (toolName === "sign_in" && preview.signIn) {
             const sp = preview.signIn;
+            if (sp.origin) signInAttempt = `${sp.origin}|${sp.shape.step}`;
             const asMode = (mode: ApprovalDecision["mode"], block: string | null): ApprovalDecision => ({
               mode,
               autoMode: mode === "card",
@@ -1556,6 +1567,8 @@ export class ChatAgent {
         if (TOOL_POLICY[toolName].bringsExternal) {
           this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
         }
+        // 자동 로그인: 값을 넣기 시작하기 전에 시도를 기록한다(넣은 뒤 응답이 끊기거나 늦어도 같은 출처·단계를 다시 자동으로 하지 않게).
+        if (signInAttempt) this.loginAttempts.add(signInAttempt);
         try {
           const result = await executeTool(toolName, execArgs, callId, turnTab, toolAbort.signal, {
             viaGrant: grantRan,
@@ -1589,10 +1602,6 @@ export class ChatAgent {
             toolName === "click_element" &&
             clickObservedChange((result.data as { effect?: ClickEffectLike } | null)?.effect);
           record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, { changed });
-          if (toolName === "sign_in") {
-            const d = result.data as { origin?: string; step?: string } | null;
-            if (d?.origin && d.step) this.loginAttempts.add(`${d.origin}|${d.step}`);
-          }
           if (internalNavSite && result.ok && !this.turnSite) {
             this.turnSite = internalNavSite;
             debugLog("turn:site", `${internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);

@@ -35,6 +35,9 @@ export function secretForms(value: string): string[] {
   forms.add(b.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
   // URL 인코딩은 대소문자를 섞어 쓸 수 있다(%2f).
   forms.add(uri.toLowerCase());
+  // JSON 문자열 안에 든 모양(따옴표·역슬래시·제어 문자가 이스케이프됨). 도구 결과는 JSON으로 직렬화해 기록에 넣는다.
+  forms.add(JSON.stringify(value).slice(1, -1));
+  forms.add(JSON.stringify(htmlEscape(value)).slice(1, -1));
   return [...forms].filter((f) => f.length >= MIN_SECRET_LENGTH);
 }
 
