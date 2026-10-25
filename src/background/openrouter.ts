@@ -2,17 +2,9 @@ import { SENSITIVE_TOOLS, type BgToPanel, type ToolName } from "@/lib/messages";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { popupWhere } from "@/lib/actionTarget";
 import type { ModelId } from "@/lib/models";
-import { autoApproveBlock, grantableLink } from "@/lib/autoApprove";
-import {
-  internalNavigateAutoBlock,
-  isBrowserInternalUrl,
-  navigateAutoBlock,
-  pageActionSiteBlock,
-  siteOf,
-  userNamedSites,
-} from "@/lib/siteTrust";
+import { isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
-import { chatGrantDecision, isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
+import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
 import { discardLinkCall, setChosenLinks } from "./linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "./downloadChoices";
@@ -29,6 +21,7 @@ import { functionDeclarations } from "./tools/declarations";
 import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
 import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
+import { decideApproval, withoutChatGrant } from "@/lib/approvalDecision";
 import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
 import { getSettings, readFlags, setFlag } from "./storage";
@@ -1039,87 +1032,29 @@ export class ChatAgent {
             }
             if (this.isStale(turn)) return false;
           }
-          // 사용자가 '직접 조작할 사이트'로 정한 사이트면 클릭·입력을 실행하지 않고 대상을 표시해 사용자에게 넘긴다(0.2.2).
-          const handOff =
-            (toolName === "click_element" || toolName === "fill_form_fields") && isManualSite(manualSites, pageUrl);
-          // 클릭·입력은 지금 페이지와 링크가 사용자가 고른 사이트 안일 때만 자동 실행한다.
-          // 입력값의 상대 주소는 탭 주소와, 페이지가 실제로 쓰는 기준 주소(<base href>) 모두로 풀어 본다.
-          const siteBlock = (sites: ReadonlySet<string>): string | null => {
-            for (const base of [pageUrl, ...(preview.baseUrls ?? [])]) {
-              const why = pageActionSiteBlock(sites, base, preview.linkHrefs ?? [], preview.fillValues ?? []);
-              if (why) return why;
-            }
-            return null;
-          };
-          // 구조상 일반 링크(grantableLink)이고 지금 페이지와 같은 사이트 안으로 가는 클릭이면 카드에 "이번 요청 동안
-          // 링크 이동 묻지 않기"를 제안한다. 이번 요청에서 같은 사이트에 그렇게 허락받았으면 결제 문구 판정 없이 실행한다.
-          // 사이트 경계는 대화 전체의 신뢰 사이트가 아니라 지금 페이지의 사이트 하나로만 본다.
-          const pageSite = pageUrl ? siteOf(pageUrl) : null;
-          // 되돌리기 어려운 동작(#62, preview.alwaysAsk)은 링크 이동 허락을 제안하지도 쓰지도 않는다.
-          const linkOffer =
-            !guarded &&
-            !preview.alwaysAsk &&
-            toolName === "click_element" &&
-            !!pageSite &&
-            !!preview.clickTarget &&
-            grantableLink(preview.clickTarget, pageUrl) &&
-            siteBlock(new Set([pageSite])) === null;
-          // 허락은 최초 승인 페이지의 출처로 보관하고, 지금 페이지와 목적지가 그 출처의 같은 사이트(등록 도메인) 안일 때만 쓴다.
-          // 허락 범위를 이동할 때마다 새 사이트로 넓히지 않는다.
-          const grant = this.linkGrant;
-          const linkGranted =
-            linkOffer && !!grant && grant.turn === turn && siteBlock(new Set([grant.site])) === null;
-          // 외부 본문 보호 중에는 자동 실행·링크 허락을 쓰지 않는다.
-          const autoMode = !guarded && (autoApprove || linkGranted);
           // 턴 탭이 지금 내부 페이지(새 탭·설정)면 이동은 요청 글에 사용자가 적은 사이트·카드로 허락한 사이트 안에서만
           // 자동 실행한다(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이 끼어들 수 없다.
           const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(turnTab));
           if (this.isStale(turn)) return false;
-          // 개인정보 모양만 걸린 주소를 모두 사용자가 이번 대화에서 허용했으면 그 신호를 뺀 판정을 쓴다.
-          const personalUrlKeys = preview.personalUrlKeys ?? [];
-          const urlsAllowed =
-            personalUrlKeys.length > 0 && personalUrlKeys.every((k) => this.allowedPersonalUrls.has(k));
-          // 되돌리기 어려운 동작(#62)은 링크 이동 허락이 있어도 늘 묻는다.
-          let block = preview.alwaysAsk
-            ? preview.alwaysAsk
-            : linkGranted
-              ? null
-              : toolName === "navigate_to_url"
-                ? fromInternal
-                  ? internalNavigateAutoBlock(trusted, this.turnNamedSites, String(preview.details ?? ""))
-                  : navigateAutoBlock(trusted, String(preview.details ?? ""))
-                : preview.autoBlock !== undefined
-                  ? urlsAllowed && preview.autoBlockIfUrlsAllowed !== undefined
-                    ? preview.autoBlockIfUrlsAllowed
-                    : preview.autoBlock
-                  : autoApproveBlock(toolName, []);
-          // 링크 허락으로 실행하는 클릭은 위에서 지금 페이지의 사이트 안인지 이미 봤다.
-          if (autoMode && !linkGranted && !block && (toolName === "click_element" || toolName === "fill_form_fields")) {
-            block = siteBlock(trusted);
-          }
-          // 카드가 뜨는 이유가 개인정보 모양 주소뿐이면(그 주소들을 허용하면 자동 실행되는 호출) 그 주소를 이번 대화에서
-          // 다시 묻지 않는 선택지를 함께 보인다. 자동 실행이 꺼져 있거나 보호 중이면 어차피 묻으므로 제안하지 않는다.
-          const urlOffer =
-            autoMode &&
-            !linkGranted &&
-            !preview.alwaysAsk &&
-            !urlsAllowed &&
-            personalUrlKeys.length > 0 &&
-            preview.autoBlockIfUrlsAllowed === null &&
-            (toolName === "click_element" || toolName === "fill_form_fields") &&
-            siteBlock(trusted) === null;
-          // 이번 대화 동안 묻지 않기(#53): 대상 도구이고, 이 호출에 경고가 없고(grantBlock), 범위가 같으면 카드 없이 실행한다.
-          // 외부 전송 도구는 외부 본문 보호 중에 허락을 쓰지 않는다(src/lib/chatGrant.ts).
-          let chatGrant = chatGrantDecision(this.chatGrants, {
-            tool: toolName,
-            protected: guarded,
-            // 늘 묻는 동작(#62)은 이번 대화 허락으로도 덮지 않는다(지금은 클릭이 허락 대상이 아니지만 대상이 늘어도 지키게).
-            block: preview.alwaysAsk ?? preview.grantBlock ?? null,
-            scope: preview.grantScope ?? "",
+          // 승인 판정(손 넘기기·이번 대화 허락·자동 실행·카드)과 카드에 함께 보일 제안. 규칙은 src/lib/approvalDecision.ts.
+          let decision = decideApproval({
+            toolName,
+            preview,
+            guarded,
+            autoApprove,
+            pageUrl,
+            manualSite: isManualSite(manualSites, pageUrl),
+            trusted,
+            turn,
+            linkGrant: this.linkGrant,
+            fromInternal,
+            namedSites: this.turnNamedSites,
+            allowedPersonalUrls: this.allowedPersonalUrls,
+            chatGrants: this.chatGrants,
           });
           // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
           // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
-          if (chatGrant.covered && toolName === "download_images") {
+          if (decision.chatGrant.covered && toolName === "download_images") {
             // 허락으로 받는 것은 모델이 넘긴 주소의 고정 후보뿐이다(카드에 선택 해제로 함께 보일 페이지의 다른 이미지는 아님).
             // 카드로 넘어가면 사용자가 고른 것으로 다시 정한다.
             setChosenDownloads(callId, preview.grantChoiceIds ?? []);
@@ -1136,11 +1071,13 @@ export class ChatAgent {
               if (this.activeTool === prefetchAbort) this.activeTool = null;
             }
             if (this.isStale(turn)) return false;
-            if ("why" in got) chatGrant = { covered: false, offer: false, reason: got.why };
+            if ("why" in got) decision = withoutChatGrant(decision, got.why);
             else grantImages = got.images;
           }
+          const { autoMode, block, linkOffer, linkGranted, urlOffer, pageSite, chatGrant } = decision;
+          const personalUrlKeys = preview.personalUrlKeys ?? [];
           let approved: boolean;
-          if (handOff) {
+          if (decision.mode === "handoff") {
             const ids =
               toolName === "click_element"
                 ? [(parsedArgs as { id: string }).id]
@@ -1196,7 +1133,7 @@ export class ChatAgent {
               continue;
             }
             if (approved) handoffOutcome = by;
-          } else if (chatGrant.covered && isChatGrantTool(toolName)) {
+          } else if (decision.mode === "grant") {
             debugLog("tool:chat_grant_approved", toolName);
             // 선택 카드는 미리보기가 정한 후보를 고른 것으로 한다(링크 읽기는 고정한 후보 전부, 이미지 저장은 모델이 넘긴
             // 주소의 후보). 경고가 붙은 후보가 있으면 위에서 덮지 않았다.
@@ -1206,7 +1143,7 @@ export class ChatAgent {
             }
             approved = true;
             grantRan = true;
-          } else if (autoMode && !block) {
+          } else if (decision.mode === "auto") {
             debugLog(
               "tool:auto_approved",
               `${toolName}${linkGranted && !autoApprove ? " (link grant)" : ""}${fromInternal ? " (내부 페이지에서)" : ""}`,
