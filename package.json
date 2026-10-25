@@ -1,6 +1,6 @@
 {
   "name": "simple-browser-plugin",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "private": true,
   "description": "OpenRouter 기반 Chrome Side Panel LLM 채팅 에이전트",
   "type": "module",
@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "harness": "node tests/harness/run.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "vendor:kordoc": "npm --prefix vendor/kordoc ci --ignore-scripts && npm --prefix vendor/kordoc run build"
@@ -30,6 +31,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "playwright-core": "1.64.1",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }

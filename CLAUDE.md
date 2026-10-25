@@ -77,4 +77,8 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 ## 테스트 메모
 
 - `npm test`는 Node 타입 제거 실행이라 확장자 없는 import가 있는 모듈(`src/lib/schemas.ts` 등)은 불러오지 못한다.
-- content script(DOM) 쪽은 자동 테스트 환경이 없다. 확장을 로드해 수동 확인한다.
+- content script(DOM)·승인 규칙은 하네스로 확인한다: `npm run build && npm run harness [이름 일부]`(`tests/harness/`).
+  빌드한 `dist`를 Chrome for Testing에 올리고, 로컬 시험 서버 두 개(다른 출처)와 모의 모델로 실제 사이드 패널을 조작한다.
+  content script·승인 판정·도구 결과를 바꿨으면 머지 전에 돌리고, 새 동작은 `tests/harness/scenarios/`에 시나리오를 더한다.
+  Chrome은 `HARNESS_CHROME` 또는 Playwright 캐시에서 찾고, 없으면 건너뛴다(`npx playwright-core install chromium`).
+  실제 사이트 동작(봇 차단·사이트 구조)은 하네스로 다 볼 수 없으니 확장을 로드해 수동 확인한다.

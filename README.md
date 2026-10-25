@@ -129,7 +129,11 @@ Chrome Side Panel에 탑재되는 OpenRouter 기반 채팅 에이전트입니다
 npm run dev          # Vite 개발 서버 (HMR)
 npm run build        # 프로덕션 빌드 → dist/
 npm run typecheck    # 타입 체크만
+npm test             # 단위 테스트(Node)
+npm run harness      # 확장 하네스(dist를 Chrome for Testing에 올려 시나리오 실행, 먼저 build)
 ```
+
+하네스(`tests/harness/`)는 로컬 시험 서버와 모의 모델로 사이드 패널을 조작해 승인 규칙·실제 입력 클릭·손 넘기기·저장 링크·선택지·입력값 보호를 확인한다. Chrome 경로는 `HARNESS_CHROME`(없으면 Playwright 캐시), 확장 경로는 `HARNESS_EXT`(기본 `dist`), 화면을 보려면 `HARNESS_HEADED=1`.
 
 ### 기여 워크플로
 
