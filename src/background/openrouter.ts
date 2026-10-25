@@ -22,10 +22,11 @@ import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction, re
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
 import { settlePopups, watchNewTabs } from "./popups";
 
-// 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 클릭을 안 시각보다 앞서 열린 창도
-// 그 클릭의 것으로 보는 폭(클릭 감지는 0.5초 간격 확인이라 늦게 안다).
+// 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 페이지가 기록한 클릭 시각보다 앞서
+// 본 창도 그 클릭의 것으로 보는 작은 여유(같은 시계지만 기록 순서가 어긋날 수 있다). 그보다 먼저 열린 창(기다리는 동안
+// 사용자가 다른 곳을 눌러 연 창)은 따라가지 않는다.
 const HANDOFF_POPUP_SETTLE_MS = 800;
-const HANDOFF_POPUP_LEAD_MS = 2000;
+const HANDOFF_POPUP_LEAD_MS = 200;
 import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
 import { decideApproval, withoutChatGrant } from "@/lib/approvalDecision";
 import { detachSession, InputSession } from "./trustedInput";
@@ -1172,8 +1173,9 @@ export class ChatAgent {
             const stopWatch = watchHandoff(shown, (outcome, clickedAt) => {
               if (outcome === "expired") expired = true;
               else by = outcome;
-              // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 확인한 시각.
-              if (outcome === "clicked") handoffClickedAt = clickedAt || Date.now();
+              // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 0 — 어느 창이 그 클릭의 것인지 몰라
+              // 따라가지 않는다.
+              if (outcome === "clicked") handoffClickedAt = clickedAt ?? 0;
               this.pendingApprovals.get(callId)?.(!expired);
             });
             approved = await new Promise<boolean>((resolve) => {
@@ -1187,7 +1189,7 @@ export class ChatAgent {
               return false;
             }
             debugLog("tool:handoff_result", `${toolName} ${approved ? by : expired ? "expired" : "cancelled"}`);
-            if (!(approved && handoffClickedAt > 0)) {
+            if (!(approved && by === ("clicked" as HandoffOutcome) && handoffClickedAt > 0)) {
               handoffPopups?.stop();
               handoffPopups = null;
             }

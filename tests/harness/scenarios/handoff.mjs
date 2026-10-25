@@ -110,4 +110,30 @@ export default [
       expect(found.some((c) => c.text === "조회하기"), `원래 탭(${JSON.stringify(found)})`);
     },
   },
+  {
+    name: "기다리는 동안 다른 버튼으로 연 팝업은 따라가지 않는다(#81)",
+    pages: {
+      "/hp2": `<title>예매</title><main><button id=other onclick="window.open('/ad','ad','popup,width=300,height=200')">광고 보기</button>
+<button id=go style="width:160px;height:50px" onclick="document.getElementById('out').textContent='조회됨'">조회하기</button><p id=out></p></main>`,
+      "/ad": `<title>광고</title><main><button>광고 닫기</button></main>`,
+    },
+    async run(h) {
+      await h.settings({ autoApprove: true, manualSites: [h.base] });
+      const r = await h.turn([findC, { click: "조회하기" }, findC, { text: "끝" }], {
+        path: "/hp2",
+        onCard: async (_card, n) => {
+          if (n > 1) return;
+          await h.tab.waitForTimeout(300);
+          await h.tab.locator("#other").click();
+          await h.tab.bringToFront();
+          await h.tab.waitForTimeout(500);
+          await h.tab.locator("#go").click();
+        },
+      });
+      const res = lastTool(r, "click_element")?.result;
+      expect(res?.outcome === "clicked" && !/팝업/.test(res.note ?? ""), `무관한 팝업 안내 없음(${JSON.stringify(res)})`);
+      const found = okResult(r, "find_clickables");
+      expect(found.some((c) => c.text === "조회하기"), `원래 탭에서(${JSON.stringify(found)})`);
+    },
+  },
 ];
