@@ -1,3 +1,4 @@
+import { maskSyncDeep, maskValue } from "./loginSecrets";
 import { ACTION_LOG_KEY, LEGACY_READ_RECIPES_KEYS, READ_RECIPES_KEY } from "@/lib/messages";
 import {
   capTargets,
@@ -49,7 +50,8 @@ export function notePendingAction(
 ): void {
   const key = keyOf(turnTab, callId);
   pending.delete(key);
-  pending.set(key, { tool, page, targets, at: Date.now() });
+  // 보관할 때 가린다(저장 전에 탭이 닫혀 가림 목록이 지워져도 원문이 남지 않게). 저장할 때 한 번 더 가린다.
+  pending.set(key, { tool, page: maskSyncDeep(page).value, targets: maskSyncDeep(targets).value, at: Date.now() });
   while (pending.size > MAX_PENDING) {
     const oldest = pending.keys().next().value;
     if (oldest === undefined) break;
@@ -92,7 +94,8 @@ export function finishAction(
     const now = Date.now();
     const obj = await chrome.storage.local.get(ACTION_LOG_KEY);
     const entries = pruneLog(obj[ACTION_LOG_KEY], now);
-    entries.push(entry);
+    // 대상 이름·페이지 글자에 자동 로그인으로 넣은 값이 보였으면 저장하기 전에 가린다.
+    entries.push(await maskValue(entry));
     const next = pruneLog(entries, now);
     try {
       await chrome.storage.local.set({ [ACTION_LOG_KEY]: next });

@@ -83,6 +83,9 @@ import {
 import { finishAction, notePendingAction } from "../actionLog";
 import { noteRead, readHintsFor } from "../readRecipes";
 import { recipeArgs, usefulResult } from "@/lib/readRecipe";
+import { prepareSignIn, runSignIn, stepLabel, type SignInPreview } from "../signIn";
+import { loginShapeBlocks } from "@/lib/loginPolicy";
+import { httpOrigin } from "@/lib/url";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -127,6 +130,8 @@ export interface ToolPreview {
   autoBlockIfUrlsAllowed?: string | null;
   // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
   execArgs?: unknown;
+  // sign_in: 로그인 양식 모양·출처·비밀번호 관리자 항목(이름·아이디만, 값 없음). 승인 판정은 openrouter.ts가 한다.
+  signIn?: SignInPreview;
 }
 
 function personalUrlFields(
@@ -273,6 +278,28 @@ export async function buildToolPreview(
           .filter(Boolean),
         fillValues: args.fills.map((f) => f.value),
         baseUrls: [...new Set(infos.map((info) => info.baseUri ?? "").filter(Boolean))],
+      };
+    }
+    case "sign_in": {
+      const args = parsedArgs as ToolArgs["sign_in"];
+      const signIn = await prepareSignIn(args.id, callId, turnTab);
+      const where = signIn.origin ?? "이 페이지";
+      // 카드에는 실제로 보낼 곳과 구조상 위험을 모두 보인다(사용자가 본 위험만 승인한 것으로 친다 — runSignIn이 같은 목록을 쓴다).
+      const dests = [...new Set(signIn.shape.submitUrls.map((u) => httpOrigin(u) ?? u))];
+      const risks = signIn.origin ? loginShapeBlocks(signIn.shape, signIn.origin) : [];
+      return {
+        summary: `${where}의 로그인 화면에 비밀번호 관리자(KeePassXC)의 ${stepLabel(signIn.shape.step)}를 넣고 ${
+          signIn.shape.hasForm ? "제출합니다" : "넣습니다(제출은 하지 않음)"
+        }. 넣을 항목을 고르세요.`,
+        details: [
+          "값은 도우미가 직접 넣고 모델에는 보내지 않습니다.",
+          ...(dests.length ? [`보내는 곳: ${dests.join(", ")}`] : []),
+          ...risks.map((r) => `⚠ ${r}`),
+        ].join("\n"),
+        choices: signIn.entries.map((e) => ({ id: e.uuid, label: e.name || e.login || "(이름 없음)", sub: e.login })),
+        choiceLimit: 1,
+        choiceDefaults: [],
+        signIn,
       };
     }
     case "download_images":
@@ -803,6 +830,12 @@ async function runTool(
         summary: `${progressSummary}${collectedHint}.${breakdown}`,
         data,
       };
+    }
+    case "sign_in": {
+      // 승인 판정에서 정한 항목(execArgs.uuid)만 쓴다. 모델 인자에는 항목이 없다.
+      const { uuid, token } = parsedArgs as { uuid?: unknown; token?: unknown };
+      if (typeof uuid !== "string" || !uuid || typeof token !== "string") throw new Error("넣을 비밀번호 관리자 항목을 정하지 못했습니다.");
+      return runSignIn(token, uuid, turnTab, signal);
     }
     case "find_form_fields": {
       const data = await callContentTool<FormField[]>(toolName, parsedArgs, callId, turnTab);

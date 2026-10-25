@@ -29,6 +29,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   translate_page: ACTION,
   fill_form_fields: ACTION,
   click_element: ACTION,
+  // 로그인 정보를 페이지에 넣고 제출한다. 결과에는 값을 싣지 않는다.
+  sign_in: ACTION,
   navigate_to_url: ACTION,
   // 모델이 만든 자리 값을 저장한 링크의 사이트로 보낸다(외부 본문 보호 중에는 늘 묻는다).
   open_saved_link: ACTION,

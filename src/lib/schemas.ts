@@ -144,6 +144,12 @@ export const clickElementArgs = z
   })
   .strict();
 
+export const signInArgs = z
+  .object({
+    id: z.string().min(1).max(50),
+  })
+  .strict();
+
 const spreadsheetIdSchema = z.string().min(20).max(200);
 
 export const googleSheetsListArgs = z
@@ -234,6 +240,7 @@ export const toolArgsSchemas = {
   open_saved_link: openSavedLinkArgs,
   find_clickables: findClickablesArgs,
   click_element: clickElementArgs,
+  sign_in: signInArgs,
   google_sheets_list: googleSheetsListArgs,
   google_sheets_read_range: googleSheetsReadRangeArgs,
   google_sheets_write_range: googleSheetsWriteRangeArgs,

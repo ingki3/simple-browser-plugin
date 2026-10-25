@@ -237,6 +237,11 @@ const CLICK_KIND: TargetKind = {
   risk: (el) => withToggleRisk(el, clickOnlyRisk(el)),
 };
 
+// 자동 로그인(login.ts)이 로그인 양식의 제출 버튼을 클릭 대상으로 등록한다(되돌리기 어려운 동작·결제 신호를 같은 기준으로 보려고).
+export function registerClickTarget(el: HTMLElement): string {
+  return registerTarget(CLICK_KIND, el);
+}
+
 type ClickRisk = NonNullable<ReturnType<NonNullable<TargetKind["risk"]>>>;
 
 function isToggleEl(c: Element | null | undefined): c is HTMLInputElement {

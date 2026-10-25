@@ -24,6 +24,17 @@ export function applySettingsPatch(patch: Partial<Settings>): Promise<void> {
   return run;
 }
 
+// 지금 설정을 읽어 바꿀 필드를 정하는 patch(목록에 항목 하나 더하기 등). 같은 차례 안에서 읽고 써서 다른 저장과 엇갈리지 않는다.
+export function applySettingsUpdate(fn: (cur: Settings) => Partial<Settings>): Promise<void> {
+  const run = patchQueue.then(async () => {
+    const cur = await readSettings();
+    await writeSettings(mergeSettingsPatch(cur, fn(cur)));
+    invalidateSettingsCache();
+  });
+  patchQueue = run.catch(() => {});
+  return run;
+}
+
 let cache: Settings | null = null;
 
 export async function getSettings(): Promise<Settings> {

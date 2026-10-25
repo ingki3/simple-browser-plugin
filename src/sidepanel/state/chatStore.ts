@@ -23,6 +23,8 @@ export type ChatMessage =
       linkGrantOffer?: boolean;
       chatGrantOffer?: boolean;
       personalUrlOffer?: boolean;
+      // 자동 로그인 승인 제안(sign_in 카드): 고른 항목을 이 출처에 묶을지.
+      loginSiteOffer?: string;
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;
       choiceDefaults?: string[];

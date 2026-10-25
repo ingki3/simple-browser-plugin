@@ -1,9 +1,10 @@
 // content script·승인 규칙 하네스: 빌드한 확장(dist)을 Chrome for Testing에 올리고, 로컬 시험 서버 두 개(다른 출처)와
 // 모의 모델(OpenRouter 응답을 단계 목록으로 흉내)로 실제 사이드 패널을 조작한다. `npm run harness`가 쓴다.
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const EXT = resolve(process.env.HARNESS_EXT ?? "dist");
 
@@ -53,10 +54,19 @@ export async function startHarness() {
   await new Promise((r) => srv2.listen(0, "localhost", r));
   const base = `http://127.0.0.1:${srv.address().port}`;
   const base2 = `http://localhost:${srv2.address().port}`;
-  const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "sbp-harness-")), {
+  // 시험용 사본: 자동 로그인의 KeePassXC 연결(nativeMessaging)은 선택 권한이라 권한 대화상자가 뜬다. 사본의 manifest에서만
+  // 필수 권한으로 옮겨 대화상자 없이 시험한다(배포 빌드는 그대로).
+  const ext = mkdtempSync(join(tmpdir(), "sbp-ext-"));
+  cpSync(EXT, ext, { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(ext, "manifest.json"), "utf8"));
+  manifest.permissions = [...new Set([...(manifest.permissions ?? []), "nativeMessaging"])];
+  manifest.optional_permissions = (manifest.optional_permissions ?? []).filter((p) => p !== "nativeMessaging");
+  writeFileSync(join(ext, "manifest.json"), JSON.stringify(manifest));
+  const userDataDir = mkdtempSync(join(tmpdir(), "sbp-harness-"));
+  const ctx = await chromium.launchPersistentContext(userDataDir, {
     executablePath: chrome,
     headless: !process.env.HARNESS_HEADED,
-    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
+    args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
   });
   let [sw] = ctx.serviceWorkers();
   if (!sw) sw = await ctx.waitForEvent("serviceworker");
@@ -147,7 +157,27 @@ export async function startHarness() {
     srv2.close();
   }
 
-  return { base, base2, pages, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs };
+  // 가짜 KeePassXC를 native messaging 호스트로 설치한다(이 브라우저의 사용자 데이터 폴더에). 상태 파일로 항목·기록을 주고받는다.
+  function installKeePassXC(initial) {
+    const dir = join(userDataDir, "NativeMessagingHosts");
+    mkdirSync(dir, { recursive: true });
+    const statePath = join(userDataDir, "keepassxc-state.json");
+    writeFileSync(statePath, JSON.stringify({ log: [], ...initial }));
+    const wrapper = join(userDataDir, "keepassxc-mock.sh");
+    const script = join(dirname(fileURLToPath(import.meta.url)), "mockKeePassXC.mjs");
+    writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${script}" "${statePath}"\n`);
+    chmodSync(wrapper, 0o755);
+    writeFileSync(
+      join(dir, "com.simple_browser_helper.keepassxc.json"),
+      JSON.stringify({ name: "com.simple_browser_helper.keepassxc", description: "harness", path: wrapper, type: "stdio", allowed_origins: [`chrome-extension://${extId}/`] }),
+    );
+    return {
+      state: () => JSON.parse(readFileSync(statePath, "utf8")),
+      set: (patch) => writeFileSync(statePath, JSON.stringify({ ...JSON.parse(readFileSync(statePath, "utf8")), ...patch })),
+    };
+  }
+
+  return { base, base2, pages, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, installKeePassXC, userDataDir };
 }
 
 // 모의 모델: 단계마다 직전 도구 결과를 보고 다음 호출을 만든다. 도구 결과(모델에 간 그대로)는 __toolLog에 남긴다.
@@ -233,6 +263,11 @@ async function installMockModel(sw) {
       else if (step?.fillType) {
         const id = list.find((f) => f.type === step.fillType)?.id ?? "f-missing";
         out = { tool: "fill_form_fields", args: { fills: [{ id, value: step.value }] } };
+      }
+      else if (step?.signIn) {
+        // 로그인 칸: type(password 등) 또는 라벨 일부로 찾는다.
+        const id = list.find((f) => f.type === step.signIn || (f.label ?? "").includes(step.signIn))?.id ?? "f-missing";
+        out = { tool: "sign_in", args: { id } };
       }
       else if (step?.click) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));

@@ -41,7 +41,7 @@ function isFieldElement(el: Element): el is FieldElement {
 
 // 레이아웃 기준의 보임: 크기가 있고 display·visibility·opacity로 숨기지 않았다. aria-hidden은 보지 않는다
 // (보조 기술에서만 숨긴 칸도 화면에는 있다 — 숨긴 영역의 글자를 보내지 않는 판정은 inProtectedArea, 대리 위젯은 selectProxyOf).
-function layoutVisible(el: HTMLElement): boolean {
+export function layoutVisible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   const style = el.ownerDocument.defaultView?.getComputedStyle(el);
@@ -220,6 +220,10 @@ export function declaresDelete(
 }
 
 // 눌렀을 때만 이름·값이 제출에 실리는 컨트롤(제출 버튼).
+export function isSubmitControl(c: Element): boolean {
+  return isSubmitter(c);
+}
+
 function isSubmitter(c: Element): boolean {
   if (isTag(c, "button")) return (c as HTMLButtonElement).type === "submit";
   return isTag(c, "input") && ["submit", "image"].includes((c as HTMLInputElement).type);
@@ -934,7 +938,7 @@ export function scopeSubmitUrls(scopes: Array<{ node: Element | ShadowRoot }>): 
 }
 
 // 양식 밖 입력 칸의 범위: change 처리기가 다른 양식을 requestSubmit할 수 있으니 클릭처럼 범위 안 양식 칸까지 본다.
-function fieldFormlessScopes(el: Element) {
+export function fieldFormlessScopes(el: Element) {
   return formlessScopes(el).map((s) => ({ ...s, includeFormFields: true }));
 }
 
@@ -1061,6 +1065,11 @@ const FIELD_KIND: TargetKind = {
     return !label || !declaresDelete(label, [], closestAcross(label, "form") as HTMLFormElement | null, skip);
   },
 };
+
+// 자동 로그인(login.ts)이 찾기 결과에 없던 짝 칸(비밀번호 칸 옆의 아이디 칸)을 입력 칸 대상으로 등록한다.
+export function registerFieldTarget(el: HTMLElement): string {
+  return registerTarget(FIELD_KIND, el);
+}
 
 // 입력 묶음이 쓴 선택 칸 중 지금 상태가 쓴 상태와 그대로 같은 칸들(재검사에서 예상된 변화로 뺄 칸).
 function unchangedWrites(writes: ReadonlyMap<Element, ChoiceState>): Set<Element> {
@@ -1561,9 +1570,12 @@ export interface FillResult {
 const SETTLE_MS = 150;
 
 // 승인 카드에서 확인한 칸들이 모두 그대로일 때만 채운다. 하나라도 바뀌었으면 아무것도 채우지 않는다.
+// extraGuard: 칸마다 쓰기 직전과 input 처리기가 돈 뒤(change 전)에 부르는 추가 검사(자동 로그인이 양식의 제출 방법·주소가 그대로인지
+// 보려고). 이유를 돌려주면 그 칸과 남은 칸을 채우지 않는다.
 export async function fillFormFields(
   args: { fills: Array<{ id: string; value: string }> },
   callId: string,
+  extraGuard?: () => string | null,
 ): Promise<{ filledCount: number; results: FillResult[] }> {
   const ids = args.fills.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("같은 칸 id가 두 번 들어 있습니다. 칸마다 한 번만 지정하세요.");
@@ -1619,6 +1631,11 @@ export async function fillFormFields(
     // 브라우저가 정리한 실제 값(onSet에서 받는다). change 전 재검사의 허용 값에도 넣는다.
     let actual: string | undefined;
     const driftReason = (): string | null => {
+      const guarded = extraGuard?.();
+      if (guarded) {
+        halted = true;
+        return guarded;
+      }
       if (el.name !== startName) return "입력 중 칸 이름이 바뀌어 채우지 않았습니다. 다시 찾으세요.";
       const nowRisk = FIELD_KIND.risk?.(el);
       // 같은 칸의 양식 제출 주소와, 양식 밖 칸이면 주변 양식들의 제출 주소를 함께 본다.

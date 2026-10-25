@@ -1,6 +1,7 @@
 // 설정의 기본값·읽기 정리·저장 정리를 한곳에 둔다. 백그라운드(storage.ts)·사이드 패널(useSettings)·옵션 페이지가 함께 써서,
 // 새 설정을 넣을 때 세 곳이 따로 어긋나지 않게 한다.
 import { normalizeManualSites } from "./manualSites.ts";
+import { normalizeLoginSites } from "./loginPolicy.ts";
 import { isProviderId, type ProviderId } from "./providers/types.ts";
 import { OPENAI_DEFAULT_MODEL } from "./providers/openai.ts";
 import { GEMINI_DEFAULT_MODEL } from "./providers/gemini.ts";
@@ -33,6 +34,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rememberPages: true,
   trustedInput: false,
   manualSites: [],
+  loginSites: [],
 };
 
 // 저장소에서 읽은 값(없거나 일부만 있거나 형식이 틀릴 수 있음)을 완전한 설정으로 정리한다.
@@ -61,6 +63,7 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     rememberPages: r.rememberPages !== false,
     trustedInput: r.trustedInput === true,
     manualSites: normalizeManualSites(r.manualSites),
+    loginSites: normalizeLoginSites(r.loginSites),
   };
 }
 
@@ -73,6 +76,7 @@ export function settingsForStorage(next: Settings): Settings {
     maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
     csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     manualSites: normalizeManualSites(next.manualSites),
+    loginSites: normalizeLoginSites(next.loginSites),
     apiKeys: stringFields(next.apiKeys, ["openai", "gemini", "anthropic"]),
     providerModels: stringFields(next.providerModels, ["openai", "gemini", "anthropic"]),
   };

@@ -9,12 +9,13 @@ type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
     choiceIds?: string[],
     allowToolThisChat?: boolean,
     allowUrlsThisChat?: boolean,
+    rememberLoginSite?: boolean,
   ) => void;
   onCancel: (callId: string) => void;
 };
 
 export function ToolPreviewCard(props: Props) {
-  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, chatGrantOffer, personalUrlOffer, choices, choiceLimit, choiceDefaults, handoff, resolved, onApprove, onCancel } =
+  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, chatGrantOffer, personalUrlOffer, loginSiteOffer, choices, choiceLimit, choiceDefaults, handoff, resolved, onApprove, onCancel } =
     props;
   const disabled = resolved !== null;
   // 선택 카드(다른 탭·링크 고르기): choiceDefaults만 체크한 상태에서 시작하고, 고른 id만 승인으로 보낸다.
@@ -79,6 +80,16 @@ export function ToolPreviewCard(props: Props) {
                 {KO.approveUrlsThisChat}
               </button>
             )}
+            {loginSiteOffer && choices && (
+              <button
+                className="btn-approve-login-site"
+                title={KO.approveLoginSiteHelp}
+                disabled={picked.length === 0}
+                onClick={() => onApprove(callId, false, picked, false, false, true)}
+              >
+                {KO.approveLoginSite}
+              </button>
+            )}
             {chatGrantOffer && (
               <button
                 className="btn-approve-chat"
@@ -95,7 +106,11 @@ export function ToolPreviewCard(props: Props) {
               </button>
             ) : choices ? (
               <button className="btn-approve" disabled={picked.length === 0} onClick={() => onApprove(callId, false, picked)}>
-                {toolName === "download_images" || toolName === "download_files" ? KO.approveChoicesSave : KO.approveChoices}
+                {toolName === "download_images" || toolName === "download_files"
+                  ? KO.approveChoicesSave
+                  : toolName === "sign_in"
+                    ? KO.approveSignIn
+                    : KO.approveChoices}
               </button>
             ) : (
               <button className="btn-approve" onClick={() => onApprove(callId)}>
