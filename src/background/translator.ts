@@ -1,5 +1,4 @@
-import { openRouterJson } from "@/lib/openrouter";
-import { translationReasoningConfig } from "@/lib/models";
+import { providerAdapter } from "@/lib/providers";
 import {
   parseTranslationResponse,
   translationResponseFormat,
@@ -62,18 +61,21 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
   );
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TRANSLATION_REQUEST_TIMEOUT_MS);
-  let res: { choices?: Array<{ message?: { content?: string | null } }> };
+  let raw: string;
   try {
-    res = await openRouterJson(openRouterApiKey, {
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0,
-      max_tokens: Math.min(8192, Math.max(1024, Math.ceil(charCount * 3))),
-      reasoning: translationReasoningConfig(model),
-      response_format: translationResponseFormat(missingTexts.length),
-      plugins: [{ id: "response-healing" }],
-      provider: { sort: "throughput", require_parameters: true },
-    }, controller.signal);
+    raw = await providerAdapter().complete(
+      openRouterApiKey,
+      {
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0,
+        maxTokens: Math.min(8192, Math.max(1024, Math.ceil(charCount * 3))),
+        reasoning: "off",
+        responseFormat: translationResponseFormat(missingTexts.length),
+        strictJson: true,
+      },
+      controller.signal,
+    );
   } catch (err) {
     const timedOut = controller.signal.aborted;
     const message = timedOut
@@ -91,7 +93,6 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
     clearTimeout(timeout);
   }
 
-  const raw = res.choices?.[0]?.message?.content ?? "";
   let translated: string[];
   try {
     translated = parseTranslationResponse(raw, missingTexts.length);

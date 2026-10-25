@@ -17,9 +17,8 @@ import {
   type ParamChoice,
   type SavedLink,
 } from "@/lib/savedPages";
-import { openRouterJson } from "@/lib/openrouter";
+import { providerAdapter } from "@/lib/providers";
 import { withTimeout } from "@/lib/async";
-import { translationReasoningConfig } from "@/lib/models";
 import { sensitiveUrlReason } from "@/lib/autoApprove";
 import { siteOf } from "@/lib/siteTrust";
 import { getSettings } from "./storage";
@@ -182,20 +181,20 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DRAFT_TIMEOUT_MS);
   try {
-    const res = await openRouterJson<{ choices?: Array<{ message?: { content?: string | null } }> }>(
+    const text = await providerAdapter().complete(
       openRouterApiKey,
       {
         model,
         messages: [{ role: "user", content: prompt }],
         temperature: 0,
         // 생각을 쓰는 모델이 상한을 생각에 다 써 답이 비지 않게 생각을 끄거나 줄인다(번역과 같은 설정).
-        reasoning: translationReasoningConfig(model),
-        max_tokens: 1500,
-        response_format: { type: "json_object" },
+        reasoning: "off",
+        maxTokens: 1500,
+        responseFormat: { type: "json_object" },
       },
       controller.signal,
     );
-    const draft = parseLinkDraft(res.choices?.[0]?.message?.content ?? "", offer.params.length, offer.title);
+    const draft = parseLinkDraft(text, offer.params.length, offer.title);
     if (!draft) debugLog("saved_link:draft_empty", model, "warn");
     return draft;
   } catch (err) {

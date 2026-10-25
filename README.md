@@ -162,6 +162,7 @@ gh pr create --base main --title "..." --body "..."
 ### 주요 구성
 
 - **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation`, `identity`, `offscreen`, `webRequest`, `debugger`(실제 입력 클릭, 설정에서 켤 때만 사용) 권한 + `host_permissions: ["<all_urls>"]`
+- **모델 제공자 어댑터** (#97) — 에이전트 루프·번역·저장 링크 초안·키 확인은 `src/lib/providers`의 공통 인터페이스(`openStream`·`complete`)만 씀. 대화 기록·스트림 조각의 내부 기준은 OpenAI 호환 형식이고, 생각 강도는 의도(`agent`·`agent_low`·`off`)로 넘겨 어댑터가 제공자 설정으로 바꿈. 지금은 OpenRouter 어댑터 하나
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
 - **webNavigation 기반 settle 대기** — URL 이동·클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록

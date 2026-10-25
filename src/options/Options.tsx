@@ -7,11 +7,8 @@ import { ManualSitesField } from "@/sidepanel/components/ManualSitesField";
 import { DEFAULT_SETTINGS, normalizeSettings, settingsForStorage } from "@/lib/settings";
 import { ShowThinkingField } from "@/sidepanel/components/ShowThinkingField";
 import { CsvMaxCharsField } from "@/sidepanel/components/CsvMaxCharsField";
-import {
-  MODEL_IDS,
-  MODEL_LABELS,
-  agentReasoningConfig,
-} from "@/lib/models";
+import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
+import { providerAdapter } from "@/lib/providers";
 import {
   MAX_MAX_TOOL_HOPS,
   MAX_SYSTEM_PROMPT_LENGTH,
@@ -49,30 +46,13 @@ export function Options() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${draft.openRouterApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: draft.model,
-          messages: [{ role: "user", content: "hi" }],
-          reasoning: agentReasoningConfig(draft.model),
-          max_tokens: 5,
-        }),
+      await providerAdapter().complete(draft.openRouterApiKey, {
+        model: draft.model,
+        messages: [{ role: "user", content: "hi" }],
+        reasoning: "agent",
+        maxTokens: 5,
       });
-      if (res.ok) {
-        setTestResult({ ok: true, msg: "연결 확인됨" });
-      } else {
-        const body = (await res.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setTestResult({
-          ok: false,
-          msg: body?.error?.message ?? `OpenRouter HTTP ${res.status}`,
-        });
-      }
+      setTestResult({ ok: true, msg: "연결 확인됨" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setTestResult({ ok: false, msg });
