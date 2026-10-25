@@ -2,9 +2,9 @@
 // OpenAI 호환 형식(OpenRouterMessage·OpenRouterStreamChunk)이고, 어댑터가 제공자 형식과 서로 바꾼다.
 import type { OpenRouterMessage, OpenRouterStreamChunk } from "../openrouter.ts";
 
-export type ProviderId = "openrouter" | "openai";
+export type ProviderId = "openrouter" | "openai" | "gemini";
 
-export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai", "gemini"];
 
 export function isProviderId(v: unknown): v is ProviderId {
   return typeof v === "string" && (PROVIDER_IDS as readonly string[]).includes(v);
@@ -45,6 +45,8 @@ export interface ChatStream {
 export interface ProviderAdapter {
   id: ProviderId;
   label: string;
+  // 사용자 메시지의 파일 조각(type "file", PDF 첨부)을 받는지. 받지 않으면 PDF는 첨부하지 않고 read_document로 읽게 한다.
+  supportsFileParts: boolean;
   // 스트림 요청을 연다(연결·HTTP 오류는 여기서). 읽기는 돌려준 ChatStream으로.
   openStream(apiKey: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatStream>;
   // 스트림 없이 한 번 받는다. 응답 본문 글자(없으면 "").

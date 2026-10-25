@@ -603,6 +603,10 @@ export class ChatAgent {
       // PDF 본문(또는 주소·파일 이름이 실릴 수 있는 자동 로드 실패 안내)이 문맥에 들어간다.
       this.noteExternalContent("PDF 문서를 대화에 붙였습니다.");
       await this.maybeShowPdfGuidance();
+      // 파일 첨부를 받지 않는 제공자(Gemini 호환 엔드포인트)면 첨부하지 않고 read_document로 읽게 한다.
+      if (!providerAdapter(this.provider).supportsFileParts) {
+        return `[현재 탭: PDF 문서 — ${pdfInfo.url}]\n지금 모델 제공자는 PDF 첨부를 받지 않는다. 이 PDF 내용이 필요하면 read_document로 위 주소를 읽어 답한다(페이지 조작 도구는 쓸 수 없다).\n\n[사용자 요청]\n${userText}`;
+      }
       const alreadyAttached = pdfInfo.url === this.lastAttachedPdfUrl;
       if (alreadyAttached) {
         debugLog("pdf:already_attached", pdfInfo.url);
@@ -852,6 +856,8 @@ export class ChatAgent {
             if (part.function?.arguments) {
               current.function.arguments += part.function.arguments;
             }
+            // 다음 요청에 돌려줘야 하는 제공자 값(Gemini thought_signature)은 그대로 둔다.
+            if (part.extra_content !== undefined) current.extra_content = part.extra_content;
             functionCallParts.set(part.index, current);
           }
           if (choice?.finish_reason) finishReason = choice.finish_reason;

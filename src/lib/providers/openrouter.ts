@@ -9,11 +9,20 @@ export function openRouterReasoning(model: string, intent: ReasoningIntent): Rea
   return translationReasoningConfig(model);
 }
 
+// 다른 제공자(Gemini)가 도구 호출에 붙인 값은 보내지 않는다(제공자가 바뀌면 기록을 새로 시작하지만 한 번 더 막는다).
+function withoutExtraContent(messages: ChatRequest["messages"]): ChatRequest["messages"] {
+  return messages.map((m) =>
+    m.role === "assistant" && m.tool_calls?.some((c) => c.extra_content !== undefined)
+      ? { ...m, tool_calls: m.tool_calls.map(({ extra_content: _x, ...c }) => c) }
+      : m,
+  );
+}
+
 // 내부 요청 → OpenRouter 요청 본문.
 export function openRouterPayload(req: ChatRequest, stream: boolean): Record<string, unknown> {
   return {
     model: req.model,
-    messages: req.messages,
+    messages: withoutExtraContent(req.messages),
     ...(req.tools ? { tools: req.tools } : {}),
     ...(req.toolChoice ? { tool_choice: req.toolChoice } : {}),
     ...(req.parallelToolCalls !== undefined ? { parallel_tool_calls: req.parallelToolCalls } : {}),
@@ -32,6 +41,7 @@ export function openRouterPayload(req: ChatRequest, stream: boolean): Record<str
 export const openRouterAdapter: ProviderAdapter = {
   id: "openrouter",
   label: "OpenRouter",
+  supportsFileParts: true,
   async openStream(apiKey, req, signal) {
     const response = await openRouterRequest(apiKey, openRouterPayload(req, true), signal);
     return { read: (onChunk, inactivityMs) => readOpenRouterStream(response, onChunk, inactivityMs) };

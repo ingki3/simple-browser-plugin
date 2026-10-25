@@ -29,10 +29,14 @@ function effort(model: string, intent: ReasoningIntent): string {
 }
 
 // 내부 기록 → OpenAI 메시지(받지 않는 필드를 뺀다).
-export function openAiMessages(messages: OpenRouterMessage[]): Array<Record<string, unknown>> {
+// keepExtra: 도구 호출의 extra_content를 남길지(그것을 돌려받는 제공자 — Gemini).
+export function openAiMessages(messages: OpenRouterMessage[], keepExtra = false): Array<Record<string, unknown>> {
   return messages.map((m) => {
     if (m.role === "assistant") {
-      return { role: "assistant", content: m.content, ...(m.tool_calls?.length ? { tool_calls: m.tool_calls } : {}) };
+      const calls = m.tool_calls?.map(({ extra_content, ...c }) =>
+        keepExtra && extra_content !== undefined ? { ...c, extra_content } : c,
+      );
+      return { role: "assistant", content: m.content, ...(calls?.length ? { tool_calls: calls } : {}) };
     }
     if (m.role === "tool") return { role: "tool", tool_call_id: m.tool_call_id, content: m.content };
     return { role: m.role, content: m.content };
@@ -61,6 +65,7 @@ export function openAiPayload(req: ChatRequest, stream: boolean): Record<string,
 export const openAiAdapter: ProviderAdapter = {
   id: "openai",
   label: LABEL,
+  supportsFileParts: true,
   async openStream(apiKey, req, signal) {
     const response = await chatRequest(OPENAI_CHAT_URL, { Authorization: `Bearer ${apiKey}` }, openAiPayload(req, true), signal, LABEL);
     return { read: (onChunk, inactivityMs) => readOpenRouterStream(response, onChunk, inactivityMs, LABEL) };

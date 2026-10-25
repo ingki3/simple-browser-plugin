@@ -7,6 +7,9 @@ export interface OpenRouterToolCall {
     name: string;
     arguments: string;
   };
+  // 제공자가 도구 호출에 붙여 보내 다음 요청에 그대로 돌려줘야 하는 값(Gemini의 thought_signature, #97). 그 제공자의
+  // 어댑터만 보내고, 다른 어댑터는 뺀다.
+  extra_content?: unknown;
 }
 
 export type OpenRouterContentPart =
@@ -39,6 +42,7 @@ export interface OpenRouterStreamChunk {
         id?: string;
         type?: "function";
         function?: { name?: string; arguments?: string };
+        extra_content?: unknown;
       }>;
     };
     finish_reason?: string | null;

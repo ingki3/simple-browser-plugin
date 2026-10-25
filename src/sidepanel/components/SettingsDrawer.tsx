@@ -8,6 +8,27 @@ import { ShowThinkingField } from "./ShowThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import { OPENAI_DEFAULT_MODEL, OPENAI_MODEL_SUGGESTIONS } from "@/lib/providers/openai";
+import { GEMINI_DEFAULT_MODEL, GEMINI_MODEL_SUGGESTIONS } from "@/lib/providers/gemini";
+
+// OpenRouter 밖에서 직접 연결하는 제공자의 설정 칸(#97).
+const DIRECT_PROVIDERS = {
+  openai: {
+    id: "openai",
+    label: "OpenAI",
+    keyPlaceholder: "sk-...",
+    keyHelp: "platform.openai.com의 API 키.",
+    defaultModel: OPENAI_DEFAULT_MODEL,
+    suggestions: OPENAI_MODEL_SUGGESTIONS as readonly string[],
+  },
+  gemini: {
+    id: "gemini",
+    label: "Gemini",
+    keyPlaceholder: "AIza...",
+    keyHelp: "Google AI Studio(aistudio.google.com)의 API 키.",
+    defaultModel: GEMINI_DEFAULT_MODEL,
+    suggestions: GEMINI_MODEL_SUGGESTIONS as readonly string[],
+  },
+} as const;
 import {
   DEFAULT_MAX_TOOL_HOPS,
   MAX_MAX_TOOL_HOPS,
@@ -38,6 +59,7 @@ interface GoogleStatus {
 export function SettingsDrawer({ open, onClose }: Props) {
   const { settings, loaded, save } = useSettings();
   const [draft, setDraft] = useState(settings);
+  const direct = draft.provider === "openrouter" ? null : DIRECT_PROVIDERS[draft.provider];
   const [showKey, setShowKey] = useState(false);
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
   const [googleBusy, setGoogleBusy] = useState<"connect" | "disconnect" | null>(null);
@@ -193,6 +215,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
             >
               <option value="openrouter">OpenRouter (여러 회사 모델)</option>
               <option value="openai">OpenAI (ChatGPT API 키)</option>
+              <option value="gemini">Google Gemini (AI Studio API 키)</option>
             </select>
             <span className="field-help">
               대화·페이지 내용은 고른 제공자로만 보냅니다. 제공자나 모델을 바꾸면 대화를 새로 시작합니다.
@@ -200,19 +223,19 @@ export function SettingsDrawer({ open, onClose }: Props) {
           </label>
 
           <label className="field">
-            <span className="field-label">{draft.provider === "openai" ? "OpenAI API 키" : KO.apiKeyLabel}</span>
+            <span className="field-label">{direct ? `${direct.label} API 키` : KO.apiKeyLabel}</span>
             <div className="key-row">
               <input
                 type={showKey ? "text" : "password"}
-                value={draft.provider === "openai" ? (draft.apiKeys.openai ?? "") : draft.openRouterApiKey}
+                value={direct ? (draft.apiKeys[direct.id] ?? "") : draft.openRouterApiKey}
                 onChange={(e) =>
                   setDraft(
-                    draft.provider === "openai"
-                      ? { ...draft, apiKeys: { ...draft.apiKeys, openai: e.target.value } }
+                    direct
+                      ? { ...draft, apiKeys: { ...draft.apiKeys, [direct.id]: e.target.value } }
                       : { ...draft, openRouterApiKey: e.target.value },
                   )
                 }
-                placeholder={draft.provider === "openai" ? "sk-..." : "sk-or-v1-..."}
+                placeholder={direct ? direct.keyPlaceholder : "sk-or-v1-..."}
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -221,7 +244,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
               </button>
             </div>
             <span className="field-help">
-              {draft.provider === "openai" ? "platform.openai.com의 API 키. 이 브라우저에만 저장됩니다." : KO.apiKeyHelp}
+              {direct ? `${direct.keyHelp} 이 브라우저에만 저장됩니다.` : KO.apiKeyHelp}
             </span>
           </label>
 
@@ -239,22 +262,26 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
           <label className="field">
             <span className="field-label">{KO.modelLabel}</span>
-            {draft.provider === "openai" ? (
+            {direct ? (
               <>
                 <input
                   type="text"
-                  list="openai-models"
-                  value={draft.providerModels.openai ?? ""}
-                  onChange={(e) => setDraft({ ...draft, providerModels: { ...draft.providerModels, openai: e.target.value } })}
-                  placeholder={OPENAI_DEFAULT_MODEL}
+                  list={`${direct.id}-models`}
+                  value={draft.providerModels[direct.id] ?? ""}
+                  onChange={(e) =>
+                    setDraft({ ...draft, providerModels: { ...draft.providerModels, [direct.id]: e.target.value } })
+                  }
+                  placeholder={direct.defaultModel}
                   spellCheck={false}
                 />
-                <datalist id="openai-models">
-                  {OPENAI_MODEL_SUGGESTIONS.map((id) => (
+                <datalist id={`${direct.id}-models`}>
+                  {direct.suggestions.map((id) => (
                     <option key={id} value={id} />
                   ))}
                 </datalist>
-                <span className="field-help">OpenAI 모델 ID(비우면 {OPENAI_DEFAULT_MODEL}). 도구 호출을 지원하는 모델이어야 합니다.</span>
+                <span className="field-help">
+                  {direct.label} 모델 ID(비우면 {direct.defaultModel}). 도구 호출을 지원하는 모델이어야 합니다.
+                </span>
               </>
             ) : (
               <>
