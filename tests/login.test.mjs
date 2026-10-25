@@ -319,6 +319,10 @@ test("로그인 모양: 막는 구조", () => {
   assert.match(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/redirect?next=https%3A%2F%2Fevil.test%2Fcollect`] }), ORIGIN), /다른 출처/);
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, submitUrl: `${ORIGIN}/session?next=https://evil.test/c` } }), ORIGIN));
   assert.equal(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/session?next=${encodeURIComponent(`${ORIGIN}/home`)}`] }), ORIGIN), null);
+  // 네 번 인코딩해 끝까지 풀지 못한 목적지는 같은 출처로 보지 않는다.
+  let deep = "https://evil.test/c";
+  for (let i = 0; i < 4; i++) deep = encodeURIComponent(deep);
+  assert.match(loginShapeBlock(shape({ submitUrls: [`${ORIGIN}/proxy?next=${deep}`] }), ORIGIN) ?? "", /다른 출처/);
   // 계정 삭제 재인증처럼 삭제 신호가 있는 제출 버튼, 결제 버튼은 묻는다.
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, name: "계정 삭제", text: "계정 삭제" } }), ORIGIN));
   assert.ok(loginShapeBlock(shape({ submit: { ...shape().submit, deleteMethod: true } }), ORIGIN));

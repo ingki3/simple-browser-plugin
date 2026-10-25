@@ -80,16 +80,21 @@ function usernameCandidate(el: HTMLInputElement): boolean {
 }
 
 // 양식이 실제로 쓰는 제출 메서드들(양식의 method와 제출 버튼들의 formmethod). 소문자.
+// 브라우저가 해석한 값(속성 글자를 직접 고치지 않는다 — 공백이 붙은 " post "는 GET이다). name="method" 칸이 양식의 속성을
+// 가리지 못하게 플랫폼 접근자로 읽는다.
+function nativeProp(proto: object, prop: string, obj: object): string {
+  const get = Object.getOwnPropertyDescriptor(proto, prop)?.get;
+  const v = get ? get.call(obj) : undefined;
+  return typeof v === "string" ? v.toLowerCase() : "get";
+}
+
+// 양식이 실제로 쓰는 제출 메서드들(양식의 method와 제출 버튼들의 formmethod). get·post·dialog.
 function submitMethods(form: HTMLFormElement): string[] {
-  const out = new Set<string>([(form.getAttribute("method") ?? "get").trim().toLowerCase() || "get"]);
-  for (const c of formElements(form)) {
-    if (isSubmitControl(c) && c.hasAttribute("formmethod")) out.add((c.getAttribute("formmethod") ?? "").trim().toLowerCase() || "get");
-  }
-  // form.elements는 이미지 버튼을 빼므로 양식이 든 루트(shadow root 포함)에서 따로 찾는다.
-  for (const img of Array.from((form.getRootNode() as Document | ShadowRoot).querySelectorAll('input[type="image" i]'))) {
-    if ((img as HTMLInputElement).form === form && img.hasAttribute("formmethod")) {
-      out.add((img.getAttribute("formmethod") ?? "").trim().toLowerCase() || "get");
-    }
+  const out = new Set<string>([nativeProp(HTMLFormElement.prototype, "method", form)]);
+  for (const c of allSubmitters(form)) {
+    if (!c.hasAttribute("formmethod")) continue;
+    const proto = isTag(c, "button") ? HTMLButtonElement.prototype : HTMLInputElement.prototype;
+    out.add(nativeProp(proto, "formMethod", c));
   }
   return [...out].map((m) => (m === "post" || m === "dialog" ? m : "get"));
 }

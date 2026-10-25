@@ -172,6 +172,22 @@ export default [
     },
   },
   {
+    name: "공백이 붙은 method(' post ')는 브라우저가 GET으로 보므로 묻는다",
+    pages: { "/login": loginPage({ method: " post " }) },
+    async run(h) {
+      await connect(h);
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1 && /POST/.test(summary), `카드에 이유(${summary})`);
+    },
+  },
+  {
     name: "GET 양식은 승인한 사이트라도 묻고, 취소하면 넣지 않는다",
     pages: { "/login": loginPage({ method: "get" }) },
     async run(h) {

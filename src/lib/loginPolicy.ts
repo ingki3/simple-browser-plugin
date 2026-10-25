@@ -107,7 +107,8 @@ function onlyOrigin(url: string, origin: string): boolean {
   if (httpOrigin(url) !== origin) return false;
   const { urls, overflow } = expandUrls(url);
   if (overflow) return false;
-  return urls.every((u) => !/^https?:$/.test(u.protocol) || u.origin === origin);
+  // 끝까지 풀지 못한 표시(about:undecodable 등)나 http(s)가 아닌 주소가 실려 있으면 목적지를 확인할 수 없어 같은 출처로 보지 않는다.
+  return urls.every((u) => /^https?:$/.test(u.protocol) && u.origin === origin);
 }
 
 // 자동 로그인을 막는 이유. null이면 구조로는 자동 실행해도 된다(사이트 승인·항목 묶음은 따로 본다).
