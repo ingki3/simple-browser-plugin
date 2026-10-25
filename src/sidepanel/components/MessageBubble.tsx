@@ -17,6 +17,7 @@ interface Props {
     choiceIds?: string[],
     allowToolThisChat?: boolean,
     allowUrlsThisChat?: boolean,
+    rememberLoginSite?: boolean,
   ) => void;
   onCancel: (callId: string) => void;
   showThinking: boolean;

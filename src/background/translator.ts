@@ -1,3 +1,4 @@
+import { maskStringForModel } from "./loginSecrets";
 import { providerAdapter } from "@/lib/providers";
 import { activeModel } from "@/lib/settings";
 import {
@@ -69,7 +70,8 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
       apiKey,
       {
         model,
-        messages: [{ role: "user", content: prompt }],
+        // 자동 로그인으로 넣은 값이 페이지 글자로 옮겨졌어도 모델로 보내지 않는다(loginSecrets).
+        messages: [{ role: "user", content: (await maskStringForModel(prompt)).text }],
         temperature: 0,
         maxTokens: Math.min(8192, Math.max(1024, Math.ceil(charCount * 3))),
         reasoning: "off",

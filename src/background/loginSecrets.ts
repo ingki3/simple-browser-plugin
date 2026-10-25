@@ -1,0 +1,83 @@
+// 자동 로그인으로 페이지에 넣은 값(아이디·비밀번호·일회용 코드)의 가림 목록(docs/design/login-automation.md "비밀 값 가리기").
+// - 수명은 대화가 아니라 값을 넣은 탭: 새 대화를 시작해도 페이지에 복사본이 남을 수 있어 지우지 않고, 탭이 닫히면 지운다.
+// - 서비스 워커가 다시 시작돼도 잃지 않게 chrome.storage.session(메모리 전용, 디스크에 쓰지 않음, content script는 못 읽음)에 둔다.
+// - 거르기는 탭과 관계없이 모든 모델 요청에 쓴다.
+import { maskDeep, maskText } from "@/lib/secretMask";
+
+const KEY = "loginSecrets";
+
+type Store = Record<string, string[]>;
+
+let cache: Store | null = null;
+let listening = false;
+
+async function load(): Promise<Store> {
+  if (cache) return cache;
+  try {
+    const raw = (await chrome.storage.session.get(KEY))[KEY];
+    cache = raw && typeof raw === "object" ? (raw as Store) : {};
+  } catch {
+    cache = {};
+  }
+  return cache;
+}
+
+async function save(store: Store): Promise<void> {
+  cache = store;
+  try {
+    await chrome.storage.session.set({ [KEY]: store });
+  } catch {
+    /* 메모리 캐시로 이어 간다 */
+  }
+}
+
+function listen(): void {
+  if (listening) return;
+  listening = true;
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    void (async () => {
+      const store = { ...(await load()) };
+      if (!(String(tabId) in store)) return;
+      delete store[String(tabId)];
+      await save(store);
+    })();
+  });
+}
+
+// 페이지에 넣기 직전에 부른다(넣은 뒤 관측이 먼저 오지 않게).
+export async function rememberSecrets(tabId: number, values: string[]): Promise<void> {
+  listen();
+  const store = { ...(await load()) };
+  const cur = new Set(store[String(tabId)] ?? []);
+  for (const v of values) if (v) cur.add(v);
+  store[String(tabId)] = [...cur];
+  await save(store);
+}
+
+export async function allSecrets(): Promise<string[]> {
+  listen();
+  const store = await load();
+  return [...new Set(Object.values(store).flat())];
+}
+
+// 모델로 가는 글자·값을 가린다. masked: 하나라도 가렸는지.
+export async function maskForModel<T>(value: T): Promise<{ value: T; masked: boolean }> {
+  const secrets = await allSecrets();
+  return maskDeep(value, secrets);
+}
+
+export async function maskStringForModel(text: string): Promise<{ text: string; masked: boolean }> {
+  return maskText(text, await allSecrets());
+}
+
+// 동기 경로(기록에 넣는 자리)용: 마지막으로 읽은 목록으로 가린다. rememberSecrets·allSecrets가 캐시를 채운다.
+export function maskSync(text: string): { text: string; masked: boolean } {
+  if (!cache) return { text, masked: false };
+  return maskText(text, [...new Set(Object.values(cache).flat())]);
+}
+
+// 서비스 워커가 깨어날 때 캐시를 미리 채운다(동기 거르기가 빈 목록으로 지나가지 않게).
+export function warmSecrets(): Promise<unknown> {
+  listen();
+  return load();
+}

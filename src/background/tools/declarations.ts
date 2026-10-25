@@ -445,4 +445,16 @@ export const functionDeclarations: FunctionDeclaration[] = [
       required: ["id"],
     },
   },
+  {
+    name: "sign_in",
+    description:
+      "로그인 화면에서 사용자의 비밀번호 관리자(KeePassXC)에 저장된 로그인 정보를 넣고 제출한다. 아이디·비밀번호·일회용 코드 값은 도우미가 직접 넣으며 모델에는 보이지 않는다(인자로 주지 않는다). id는 find_form_fields가 준 비밀번호 칸, 아이디만 먼저 받는 화면이면 아이디 칸(autocomplete=username), 2단계 인증 화면이면 일회용 코드 칸의 id다. 사용자가 자동 로그인을 승인한 사이트면 카드 없이 실행되고, 아니면 승인 카드에서 사용자가 항목을 고른다. 비밀번호 관리자가 연결되지 않았거나 맞는 항목이 없거나 '직접 조작할 사이트'면 칸을 화면에 표시해 사용자가 직접 로그인하게 한다(결과에 handedOff). 결과는 '제출함'까지만 알려 주므로 로그인이 끝났는지는 페이지를 다시 관측해 확인한다(2단계 인증·보안 문자 화면이 이어질 수 있다). 같은 사이트에서 실패했으면 다시 부르지 말고 사용자에게 알린다.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "find_form_fields가 반환한 로그인 칸 id(비밀번호·아이디·일회용 코드 칸)" },
+      },
+      required: ["id"],
+    },
+  },
 ];

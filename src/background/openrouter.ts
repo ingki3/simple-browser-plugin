@@ -29,10 +29,13 @@ import { settlePopups, watchNewTabs } from "./popups";
 const HANDOFF_POPUP_SETTLE_MS = 800;
 const HANDOFF_POPUP_LEAD_MS = 200;
 import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
-import { decideApproval, withoutChatGrant } from "@/lib/approvalDecision";
+import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
+import { loginSiteFor, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
+import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "./signIn";
+import { maskForModel, maskSync, warmSecrets } from "./loginSecrets";
 import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
-import { getSettings, readFlags, setFlag } from "./storage";
+import { applySettingsUpdate, getSettings, readFlags, setFlag } from "./storage";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
@@ -83,7 +86,7 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
    (c) 다음에 부를 툴과 그 이유.
    navigate_to_url을 바로 호출하는 예외에서는 현재 페이지 관측 대신 사용자가 요청한 목적지와 사용할 공식 URL을 밝힌다.
 3. 관측 결과가 예상과 다르거나 후보가 여러 개면 바로 행동하지 말고, Thought에서 이유를 밝힌 뒤 다른 필터/도구로 재관측하거나 사용자에게 되묻는다. 단, 아래 '목표 페이지 찾아가기 모드'에서 경로 중간의 링크를 고를 때는 되묻지 않고 가장 그럴듯한 후보를 고른다.
-4. 민감 툴(navigate_to_url, open_saved_link, click_element, fill_form_fields, download_images, download_files, capture_page)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다(목표 페이지 찾아가기 모드의 경로 중간 링크는 예외). 사용자가 '직접 조작할 사이트'로 정한 사이트에서는 click_element·fill_form_fields를 불러도 확장이 대신 누르거나 입력하지 않고, 대상을 화면에 표시해 사용자가 직접 하게 한다(결과에 handedOff). 이때도 평소처럼 대상을 하나씩 정해 부르고, 결과를 받으면 페이지를 다시 관측해 사용자가 한 일을 확인한다.
+4. 민감 툴(navigate_to_url, open_saved_link, click_element, fill_form_fields, sign_in, download_images, download_files, capture_page)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다(목표 페이지 찾아가기 모드의 경로 중간 링크는 예외). 사용자가 '직접 조작할 사이트'로 정한 사이트에서는 click_element·fill_form_fields를 불러도 확장이 대신 누르거나 입력하지 않고, 대상을 화면에 표시해 사용자가 직접 하게 한다(결과에 handedOff). 이때도 평소처럼 대상을 하나씩 정해 부르고, 결과를 받으면 페이지를 다시 관측해 사용자가 한 일을 확인한다.
 5. 페이지 내용을 지어내지 않는다. 모르면 관측 후 말하거나 "확실하지 않다"고 말한다.
 6. 툴이 ok:false로 실패하거나 에러를 반환하면:
    - 같은 툴을 같은 인자로 재시도하지 않는다. 같은 호출이 같은 결과로 3번 이어지거나(화면 변화가 관측된 클릭은 제외) 한 툴이 성공 없이 3번 실패하면 확장이 도구 사용을 멈춘다.
@@ -91,7 +94,8 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
    - 특히 click_element 이후 페이지가 이동해 후속 툴이 "컨텐트 스크립트 응답이 … 오지 않았습니다" 같은 타임아웃을 내면 네비게이션이 이미 일어난 것으로 간주하고 describe_page로 한 번 더 관측한다. 그래도 응답이 없을 때만 "페이지 이동이 진행 중입니다. 새 페이지가 로드된 뒤 다시 요청해 주세요."로 사용자에게 알린다.
    - click_element·fill_form_fields가 "다시 찾으세요"로 실패하면 페이지가 바뀌어 예전 id를 쓸 수 없다는 뜻이다. find_clickables·find_form_fields로 다시 찾아 같은 대상이 맞는지 확인한 뒤에만 새 id로 다시 시도한다.
    - fill_form_fields가 입력 도중 멈췄으면(예: "행 내용이 바뀜") 일부 칸의 입력 이벤트가 이미 발생했을 수 있다. 같은 묶음을 그대로 반복하지 않는다. describe_page·find_form_fields로 다시 관측해 같은 대상(상품·행)인지와 이미 반영된 칸(hasValue·checked·selectedIndex)을 확인한 뒤 필요한 칸만 다시 채운다. 대상이 같은지나 앞선 입력이 반영됐는지 확인할 수 없으면(글자 칸은 값 내용을 볼 수 없다) 다시 시도하지 않고 사용자에게 알린다.
-7. 현재 가지고 있는 툴로 할 수 없는 작업(예: 페이지 스크롤, 복잡한 편집, 외부 API 호출, 탭 열기·닫기 등)은 지원 범위를 밝히고 불가능함을 말한다. 억지로 다른 툴을 조합하지 않는다.
+7. 로그인: 작업 도중 로그인 화면(보이는 비밀번호 칸이 있는 양식)을 만나면 비밀번호를 사용자에게 묻거나 fill_form_fields로 넣지 말고, find_form_fields로 칸 id를 확인한 뒤 sign_in을 부른다(비밀번호 칸, 아이디만 먼저 받는 화면이면 아이디 칸, 2단계 인증 코드 화면이면 코드 칸). 값은 도우미가 비밀번호 관리자에서 직접 넣으므로 모델은 값을 알 수 없고 알려 하지도 않는다. 결과가 '제출함'이면 describe_page로 다음 화면을 관측해 이어 가고, 보안 문자·문자 인증·패스키처럼 도우미가 할 수 없는 화면이면 사용자에게 직접 해 달라고 알린다. sign_in이 실패하거나 이미 시도한 사이트라고 하면 다시 부르지 않는다. 사용자가 로그인을 원하지 않는다고 했거나 로그인이 필요 없는 일이면 부르지 않는다.
+8. 현재 가지고 있는 툴로 할 수 없는 작업(예: 페이지 스크롤, 복잡한 편집, 외부 API 호출, 탭 열기·닫기 등)은 지원 범위를 밝히고 불가능함을 말한다. 억지로 다른 툴을 조합하지 않는다.
 
 describe_page 결과를 읽는 법:
 - landmarks 배열: region(main/article/nav/aside/header/footer) 별로 textPreview(본문 요약)와 sampleClickables(대표 링크·버튼). 어떤 region이 본문 컨텐츠를 담고 있는지, 어떤 region이 사이트 크롬(메뉴, 툴바)인지 여기서 판단한다.
@@ -289,6 +293,12 @@ export class ChatAgent {
   private allowedPersonalUrls = new Set<string>();
   private personalUrlOffers = new Map<string, { turn: number; keys: string[] }>();
   private chatGrantOffers = new Map<string, { tool: ChatGrantTool; scope: string }>();
+  // 자동 로그인(sign_in): 카드가 제안한 출처(호출별), 사용자가 그 제안을 고른 호출, 이 대화에서 이미 시도한 출처·단계
+  // (다시 자동으로 하지 않는다), 페이지가 넣은 값을 다시 보여 가린 적이 있는지(그러면 이 대화에서는 자동 로그인하지 않는다).
+  private loginSiteOffers = new Map<string, string>();
+  private rememberLogin = new Set<string>();
+  private loginAttempts = new Set<string>();
+  private secretsMasked = false;
   // 외부 본문 보호: 파일·Google 문서·PDF처럼 외부 유래 데이터가 이 대화의 모델 문맥에 들어오면 켠다(새 대화까지).
   // 켜진 동안은 관측 전용 도구(TOOL_POLICY.observeOnly) 밖의 모든 도구를 자동 실행·링크 허락 없이 승인 카드로 묻는다
   // (외부 내용을 신뢰 사이트의 검색어·입력값·번역 언어·Google 검색어 등으로 내보내지 않게).
@@ -374,12 +384,17 @@ export class ChatAgent {
     choiceIds?: string[],
     allowToolThisChat = false,
     allowUrlsThisChat = false,
+    rememberLoginSite = false,
   ): void {
     // 선택 카드의 선택은 백그라운드가 고정한 후보의 부분집합만 남긴다(otherTabs.setChosen).
     if (choiceIds && this.pendingApprovals.has(callId)) {
       setChosenTabs(callId, choiceIds);
       setChosenLinks(callId, choiceIds);
       setChosenDownloads(callId, choiceIds);
+      chooseSignInEntry(callId, choiceIds);
+    }
+    if (rememberLoginSite && this.pendingApprovals.has(callId) && this.loginSiteOffers.has(callId)) {
+      this.rememberLogin.add(callId);
     }
     const offer = this.linkGrantOffers.get(callId);
     if (allowLinksThisTurn && this.pendingApprovals.has(callId) && offer?.turn === this.currentTurn) {
@@ -434,7 +449,17 @@ export class ChatAgent {
   private toolContent(turnTab: TurnTab, payload: Record<string, unknown>): string {
     const note = takeTabNote(turnTab);
     if (note) debugLog("popup:note", note);
-    return JSON.stringify(note ? { ...payload, tab: note } : payload);
+    // 자동 로그인으로 넣은 값이 페이지 글자로 다시 보이면 기록에 넣기 전에 가린다(탭을 닫아 가림 목록이 지워져도 기록에 원문이
+    // 남지 않게). 가렸으면 그렇다고 알리고 이 대화에서는 자동 로그인을 하지 않는다.
+    const raw = JSON.stringify(note ? { ...payload, tab: note } : payload);
+    const masked = maskSync(raw);
+    if (!masked.masked) return raw;
+    this.secretsMasked = true;
+    debugLog("login:masked", "도구 결과에서 넣은 로그인 값을 가림", "warn");
+    return JSON.stringify({
+      masked: "페이지가 도우미가 넣은 로그인 정보를 화면에 다시 보여 주어 그 부분을 가렸습니다.",
+      content: masked.text,
+    });
   }
 
   // 지금 도구가 동작하는 탭(따라가는 팝업 창이 있으면 그 창)의 주소.
@@ -688,6 +713,8 @@ export class ChatAgent {
     const endTurn = timeSpan("turn");
     const prevTurnTab = this.turnTab;
     this.turnTab = await captureTurnTab();
+    // 기록에 넣을 때 쓰는 가림 목록을 미리 읽어 둔다(서비스 워커가 다시 시작된 뒤 첫 결과도 가리게).
+    await warmSecrets().catch(() => undefined);
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
     // 앞 턴에서 우리 클릭으로 열려 따라가던 팝업 창이 아직 열려 있으면 같은 탭에서 시작한 이번 턴도 그 창에서 이어 간다.
@@ -820,18 +847,28 @@ export class ChatAgent {
       ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
       ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
     ];
+    // 자동 로그인으로 넣은 값은 어디서 왔든(기록·메모·안내) 모델로 보내지 않는다(기록에 넣을 때 이미 가렸고, 여기는 마지막 거르기).
+    const outgoing = await maskForModel<OpenRouterMessage[]>([
+      { role: "system", content: systemPrompt },
+      ...this.history,
+      // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).
+      ...sentNotes,
+    ]);
+    if (outgoing.masked) {
+      this.secretsMasked = true;
+      debugLog("login:masked", "모델 요청에서 넣은 로그인 값을 가림", "warn");
+    }
+    if (this.isStale(turn)) {
+      clearTimeout(connectTimer);
+      return null;
+    }
     let stream: ChatStream;
     try {
       stream = await providerAdapter(this.provider).openStream(
         apiKey,
         {
           model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...this.history,
-            // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).
-            ...sentNotes,
-          ],
+          messages: outgoing.value,
           tools: availableTools().map((fn) => ({
             type: "function" as const,
             function: fn,
@@ -1153,7 +1190,7 @@ export class ChatAgent {
           const trusted = new Set(this.approvedSites);
           if (this.turnSite) trusted.add(this.turnSite);
           let pageUrl: string | undefined;
-          if (toolName === "click_element" || toolName === "fill_form_fields") {
+          if (toolName === "click_element" || toolName === "fill_form_fields" || toolName === "sign_in") {
             try {
               // 팝업 창을 따라가는 중이면 그 창의 주소로 사이트 경계를 본다(다른 사이트의 팝업은 이동과 같게 묻는다).
               pageUrl = await this.toolTabUrl(turnTab);
@@ -1182,6 +1219,59 @@ export class ChatAgent {
             allowedPersonalUrls: this.allowedPersonalUrls,
             chatGrants: this.chatGrants,
           });
+          // 자동 로그인(sign_in): 판정은 출처 → 항목 승인(설정)과 로그인 양식의 구조로 따로 한다(src/lib/loginPolicy.ts).
+          // 비밀번호 관리자를 쓸 수 없거나 직접 조작할 사이트면 칸을 표시해 사용자가 직접 로그인하게 한다.
+          let loginOffer: string | null = null;
+          let signInHandoffWhy: string | null = null;
+          if (toolName === "sign_in" && preview.signIn) {
+            const sp = preview.signIn;
+            const asMode = (mode: ApprovalDecision["mode"], block: string | null): ApprovalDecision => ({
+              mode,
+              autoMode: mode === "card",
+              block,
+              linkOffer: false,
+              linkGranted: false,
+              urlOffer: false,
+              pageSite: null,
+              chatGrant: { covered: false, offer: false, reason: null },
+            });
+            signInHandoffWhy = isManualSite(manualSites, pageUrl)
+              ? "사용자가 '직접 조작할 사이트'로 정한 사이트입니다"
+              : !sp.origin
+                ? "https 로그인 페이지가 아니어서 비밀번호 관리자를 쓰지 않습니다"
+                : sp.manager === "none"
+                  ? "비밀번호 관리자(KeePassXC)가 연결되지 않았습니다(설정 → 자동 로그인)"
+                  : sp.manager === "error"
+                    ? `비밀번호 관리자에서 항목을 받지 못했습니다(${sp.managerError ?? "오류"})`
+                    : sp.entries.length === 0
+                      ? "비밀번호 관리자에 이 주소의 항목이 없습니다"
+                      : null;
+            if (signInHandoffWhy || !sp.origin) {
+              decision = asMode("handoff", signInHandoffWhy);
+            } else {
+              const { loginSites } = await getSettings();
+              if (this.isStale(turn)) return false;
+              const site = loginSiteFor(loginSites, sp.origin);
+              const d = signInDecision({
+                shape: sp.shape,
+                origin: sp.origin,
+                site,
+                entryUuids: sp.entries.map((e) => e.uuid),
+                attempted: this.loginAttempts.has(`${sp.origin}|${sp.shape.step}`),
+                maskedHere: this.secretsMasked,
+                guarded,
+              });
+              if (d.auto && site) {
+                decision = asMode("auto", null);
+                execArgs = { ...(parsedArgs as object), uuid: site.uuid };
+              } else {
+                decision = asMode("card", d.auto ? null : d.reason);
+                // 승인한 항목이 있으면 처음부터 골라 둔다. 승인 목록에 없거나 다른 항목이면 사용자가 직접 고른다.
+                if (site && sp.entries.some((e) => e.uuid === site.uuid)) preview.choiceDefaults = [site.uuid];
+                if (!site || sp.entries.every((e) => e.uuid !== site.uuid)) loginOffer = sp.origin;
+              }
+            }
+          }
           // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
           // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
           if (decision.chatGrant.covered && toolName === "download_images") {
@@ -1209,7 +1299,7 @@ export class ChatAgent {
           let approved: boolean;
           if (decision.mode === "handoff") {
             const ids =
-              toolName === "click_element"
+              toolName === "click_element" || toolName === "sign_in"
                 ? [(parsedArgs as { id: string }).id]
                 : (parsedArgs as { fills: Array<{ id: string }> }).fills.map((f) => f.id);
             // 사용자가 표시한 대상을 눌러 팝업 창을 열면 그 창을 따라간다(#81). 넘기는 동안 이 탭이 여는 창을 지켜보고,
@@ -1242,14 +1332,18 @@ export class ChatAgent {
               previewSummary:
                 toolName === "click_element"
                   ? "페이지에 표시한 대상을 직접 눌러 주세요. 누르면 이어서 진행합니다."
-                  : `페이지에 표시한 칸에 아래 값을 직접 입력하고 "했어요"를 눌러 주세요.`,
+                  : toolName === "sign_in"
+                    ? `페이지에 표시한 로그인 칸에서 직접 로그인해 주세요(브라우저·비밀번호 관리자의 자동 채우기를 써도 됩니다). 로그인을 마치면 "했어요"를 눌러 주세요.`
+                    : `페이지에 표시한 칸에 아래 값을 직접 입력하고 "했어요"를 눌러 주세요.`,
               // 사용자가 직접 입력하므로 값을 자르지 않은 전체 목록을 보인다(승인 카드 요약은 10칸·80자까지).
-              previewDetails: preview.handoffDetails ?? preview.details,
+              previewDetails: toolName === "sign_in" ? (signInHandoffWhy ?? "") : (preview.handoffDetails ?? preview.details),
               handoff: true,
             });
             let by: HandoffOutcome = "confirmed";
             let expired = false;
             const stopWatch = watchHandoff(shown, (outcome, clickedAt) => {
+              // 로그인은 문서가 바뀌어도(2단계 인증 화면 등) 끝난 것이 아니다. 사용자가 "했어요"를 누를 때까지 기다린다.
+              if (toolName === "sign_in" && outcome !== "expired") return;
               if (outcome === "expired") expired = true;
               else by = outcome;
               // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 0 — 어느 창이 그 클릭의 것인지 몰라
@@ -1321,6 +1415,7 @@ export class ChatAgent {
                 : preview.details,
               ...(linkOffer ? { linkGrantOffer: true } : {}),
               ...(urlOffer ? { personalUrlOffer: true } : {}),
+              ...(loginOffer ? { loginSiteOffer: loginOffer } : {}),
               ...(chatGrant.offer ? { chatGrantOffer: true } : {}),
               ...(preview.choices
                 ? { choices: preview.choices, choiceLimit: preview.choiceLimit, choiceDefaults: preview.choiceDefaults }
@@ -1328,6 +1423,7 @@ export class ChatAgent {
             });
             if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
             if (urlOffer) this.personalUrlOffers.set(callId, { turn, keys: personalUrlKeys });
+            if (loginOffer) this.loginSiteOffers.set(callId, loginOffer);
             if (chatGrant.offer && isChatGrantTool(toolName)) {
               this.chatGrantOffers.set(callId, { tool: toolName, scope: preview.grantScope ?? "" });
             }
@@ -1338,11 +1434,42 @@ export class ChatAgent {
             this.linkGrantOffers.delete(callId);
             this.chatGrantOffers.delete(callId);
             this.personalUrlOffers.delete(callId);
-            if (this.isStale(turn)) return false;
+            const rememberOrigin = this.rememberLogin.has(callId) ? this.loginSiteOffers.get(callId) : undefined;
+            this.loginSiteOffers.delete(callId);
+            this.rememberLogin.delete(callId);
+            if (this.isStale(turn)) {
+              discardSignIn(callId);
+              return false;
+            }
             debugLog(
               "tool:approval_result",
               `${toolName} ${approved ? "approved" : "cancelled"}`,
             );
+            // 자동 로그인: 카드에서 고른 항목으로 실행한다. "앞으로 자동 로그인"을 골랐으면 그 출처에 이 항목을 묶어 둔다.
+            if (approved && toolName === "sign_in") {
+              const uuid = chosenSignInEntry(callId);
+              if (!uuid) {
+                discardSignIn(callId);
+                recordCancelledAction(callId, turnTab);
+                failCall("로그인할 항목을 고르지 않아 넣지 않았습니다.", argsKey);
+                continue;
+              }
+              execArgs = { ...(parsedArgs as object), uuid };
+              const entry = preview.signIn?.entries.find((e) => e.uuid === uuid);
+              if (rememberOrigin && entry) {
+                await applySettingsUpdate((cur) => ({
+                  loginSites: [
+                    ...cur.loginSites.filter((s) => s.origin !== rememberOrigin),
+                    { origin: rememberOrigin, uuid, entryName: entry.name || entry.login, totp: false },
+                  ].slice(-MAX_LOGIN_SITES),
+                })).catch((err) => debugLog("login:remember_failed", err instanceof Error ? err.message : String(err), "warn"));
+                debugLog("login:site_approved", rememberOrigin);
+                if (this.isStale(turn)) {
+                  discardSignIn(callId);
+                  return false;
+                }
+              }
+            }
             // 사용자가 카드로 허락한 이동의 출처는 이 대화에서 자동 이동해도 되는 곳으로 둔다.
             if (approved && toolName === "navigate_to_url") {
               try {
@@ -1356,6 +1483,7 @@ export class ChatAgent {
 
           if (!approved) {
             recordCancelledAction(callId, turnTab);
+            discardSignIn(callId);
             discardTabChoices(callId);
             discardLinkCall(callId);
             discardDownloadCall(callId);
@@ -1375,6 +1503,20 @@ export class ChatAgent {
             record(toolName, argsKey, false, "user_cancelled", "사용자가 취소했습니다.", { cancelled: true });
             continue;
           }
+        }
+
+        if (handoffOutcome && toolName === "sign_in") {
+          discardSignIn(callId);
+          const note = "사용자가 직접 로그인을 마쳤다고 알렸습니다. 결과는 페이지를 다시 관측해 확인하세요.";
+          this.send({ kind: "tool_result", callId, toolName, ok: true, summary: "직접 로그인 · 사용자가 마쳤다고 알림" });
+          this.history.push({
+            role: "tool",
+            tool_call_id: callId,
+            name: toolName,
+            content: this.toolContent(turnTab, { result: { handedOff: true, outcome: handoffOutcome, note } }),
+          });
+          record(toolName, argsKey, true, `handoff:${handoffOutcome}`, note, { changed: true });
+          continue;
         }
 
         if (handoffOutcome && (toolName === "click_element" || toolName === "fill_form_fields")) {
@@ -1447,6 +1589,10 @@ export class ChatAgent {
             toolName === "click_element" &&
             clickObservedChange((result.data as { effect?: ClickEffectLike } | null)?.effect);
           record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, { changed });
+          if (toolName === "sign_in") {
+            const d = result.data as { origin?: string; step?: string } | null;
+            if (d?.origin && d.step) this.loginAttempts.add(`${d.origin}|${d.step}`);
+          }
           if (internalNavSite && result.ok && !this.turnSite) {
             this.turnSite = internalNavSite;
             debugLog("turn:site", `${internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);

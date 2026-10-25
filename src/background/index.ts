@@ -1,3 +1,4 @@
+import { keepassxcAssociate, keepassxcForget, keepassxcStatus } from "./keepassxc";
 import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
@@ -60,6 +61,7 @@ chrome.runtime.onConnect.addListener((port) => {
           Array.isArray(msg.choiceIds) ? msg.choiceIds.filter((x): x is string => typeof x === "string") : undefined,
           msg.allowToolThisChat === true,
           msg.allowUrlsThisChat === true,
+          msg.rememberLoginSite === true,
         );
         return;
       case "revoke_chat_grant":
@@ -158,6 +160,24 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     }
     applySettingsPatch(patch as Partial<Settings>)
       .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 자동 로그인의 KeePassXC 연결(설정 화면). 이 확장의 화면에서만 받는다.
+  if (m.kind === "keepassxc_status" || m.kind === "keepassxc_associate" || m.kind === "keepassxc_forget") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const job =
+      m.kind === "keepassxc_associate"
+        ? keepassxcAssociate()
+        : m.kind === "keepassxc_forget"
+          ? keepassxcForget().then(() => keepassxcStatus())
+          : keepassxcStatus();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
     return true;
   }

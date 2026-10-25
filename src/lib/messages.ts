@@ -1,6 +1,7 @@
 import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
 import type { ReadHint } from "./readRecipe";
+import type { LoginSite } from "./loginPolicy";
 
 export type ToolName =
   | "describe_page"
@@ -21,6 +22,8 @@ export type ToolName =
   | "open_saved_link"
   | "find_clickables"
   | "click_element"
+  // 로그인 양식에 KeePassXC의 로그인 정보를 넣고 제출한다(docs/design/login-automation.md). 값은 모델에 가지 않는다.
+  | "sign_in"
   | "google_sheets_list"
   | "google_sheets_read_range"
   | "google_sheets_write_range"
@@ -43,6 +46,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   // 저장한 링크를 연다(#86). 모델이 만든 자리 값이 그 사이트로 전송된다. 자동 실행이 켜져 있으면 카드 없이(보호 중·개인정보 모양은 묻기).
   "open_saved_link",
   "click_element",
+  // 승인한 사이트(출처 → KeePassXC 항목)에서만 카드 없이, 그 밖에는 카드에서 항목을 고른다.
+  "sign_in",
   // 모델이 고른 URL로 쿠키를 실어 GET을 보낸다. 프롬프트 주입이 쿼리에 대화 내용을 담아 외부로 보낼 수 있다.
   "read_document",
   // 사용자가 고른 다른 탭의 본문(다른 사이트의 정보)을 모델 제공자로 보낸다. 늘 사용자가 탭을 고른다.
@@ -188,6 +193,8 @@ export type PanelToBg =
       choiceIds?: string[];
       allowToolThisChat?: boolean;
       allowUrlsThisChat?: boolean;
+      // 자동 로그인 카드(loginSiteOffer)에서 고른 항목을 이 출처에 묶어 다음부터 자동 로그인한다.
+      rememberLoginSite?: boolean;
     }
   | { kind: "cancel_tool"; callId: string }
   // 이 대화에서 허락한 도구를 취소한다(#53).
@@ -236,6 +243,8 @@ export type BgToPanel =
       chatGrantOffer?: boolean;
       // 카드가 뜬 이유가 개인정보 모양 주소뿐이면 true: "승인 + 이 주소는 이번 대화에서 다시 묻지 않기"를 함께 보여 준다.
       personalUrlOffer?: boolean;
+      // sign_in 카드: 이 출처(정확한 출처)를 자동 로그인 사이트로 묶자는 제안. 값은 표시할 출처.
+      loginSiteOffer?: string;
       // 선택 카드(다른 탭 고르기): 후보와 최대 선택 수. 고른 id만 승인 메시지로 돌려준다.
       choices?: Array<{ id: string; label: string; sub: string }>;
       choiceLimit?: number;
@@ -295,6 +304,16 @@ export type BgToContent =
   // 승인 카드용: id들이 find_* 때와 같은 요소인지 확인하고 이 호출의 승인 대상으로 남긴다.
   // prefix는 기대하는 대상 종류("c" 클릭, "f" 입력 칸).
   | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f"; values?: string[] }
+  // 자동 로그인(sign_in): 칸 둘레의 로그인 양식 모양을 읽고 넣을 칸·제출 버튼을 이 호출의 승인 대상으로 남긴다(login_inspect),
+  // 비밀번호 관리자의 값을 넣고 제출한다(login_fill — 값은 백그라운드에서만 오고 응답에 싣지 않는다), 제출 뒤 칸이 그대로인지 본다.
+  | { kind: "login_inspect"; id: string; callId: string }
+  | {
+      kind: "login_fill";
+      callId: string;
+      fills: Array<{ id: string; value: string }>;
+      submit: { submitId?: string; submitUrls: string[]; submitMethods: string[] } | null;
+    }
+  | { kind: "login_field_shown"; id: string }
   // click_element 뒤 같은 문서에서 관찰한 변화를 읽는다.
   | { kind: "action_effect"; token: string }
   // 동작 기록용 페이지 뼈대 해시(최상위 문서).
@@ -357,6 +376,9 @@ export interface Settings {
   trustedInput: boolean;
   // 직접 조작할 사이트(출처 목록, 0.2.2). 이 사이트에서는 클릭·입력을 대신하지 않고 대상을 표시해 사용자가 직접 한다.
   manualSites: string[];
+  // 자동 로그인을 승인한 사이트(정확한 출처 → KeePassXC 항목 묶음, docs/design/login-automation.md). 사용자가 카드나 설정에서
+  // 고른 것만 들어간다. 아이디·비밀번호는 두지 않는다.
+  loginSites: LoginSite[];
 }
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;

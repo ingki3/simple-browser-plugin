@@ -745,6 +745,12 @@ function entryOf(id: string, prefix: string): Entry {
   return entry;
 }
 
+// 등록한 그 요소(지금 접근할 수 있는 문서 안에 붙어 있을 때만). 승인 상태는 보지도 바꾸지도 않는다.
+export function registeredElement(id: string, prefix: string): HTMLElement {
+  entryOf(id, prefix);
+  return resolve(id).el;
+}
+
 function checkVisible(entry: Entry, el: HTMLElement, name: string, acting: boolean): void {
   if (entry.kind.requireVisible && !entry.kind.visible(el)) {
     throw new Error(`대상 '${name}'이(가) 지금 화면에 보이지 않${acting ? "아 실행하지 않았" : ""}습니다.`);

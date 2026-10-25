@@ -1,4 +1,5 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
+import { fillLogin, inspectLogin, loginFieldStillShown } from "./login";
 import { extractMainContent } from "./extract";
 import { lookupLinks } from "./links";
 import { stopTranslation, translatePage } from "./translate";
@@ -76,6 +77,25 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
         ...(err instanceof TargetDriftError ? { diag: err.diag } : {}),
       } satisfies ContentResponse);
     }
+    return false;
+  }
+  if (msg.kind === "login_inspect") {
+    try {
+      sendResponse({ ok: true, data: inspectLogin(msg.id, msg.callId) } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
+  if (msg.kind === "login_fill") {
+    fillLogin(msg.callId, msg.fills, msg.submit).then(
+      (data) => sendResponse({ ok: true, data } satisfies ContentResponse),
+      (err) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse),
+    );
+    return true;
+  }
+  if (msg.kind === "login_field_shown") {
+    sendResponse({ ok: true, data: loginFieldStillShown(msg.id) } satisfies ContentResponse);
     return false;
   }
   if (msg.kind === "trusted_click_check") {

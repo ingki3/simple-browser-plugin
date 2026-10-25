@@ -72,6 +72,7 @@ export function useChatSession() {
             linkGrantOffer: msg.linkGrantOffer === true,
             chatGrantOffer: msg.chatGrantOffer === true,
             personalUrlOffer: msg.personalUrlOffer === true,
+            ...(typeof msg.loginSiteOffer === "string" ? { loginSiteOffer: msg.loginSiteOffer } : {}),
             handoff: msg.handoff === true,
             ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit, choiceDefaults: msg.choiceDefaults } : {}),
             resolved: null,
@@ -228,6 +229,7 @@ export function useChatSession() {
     choiceIds?: string[],
     allowToolThisChat = false,
     allowUrlsThisChat = false,
+    rememberLoginSite = false,
   ) => {
     useChatStore.getState().resolveToolPending(callId, "approved");
     localDebug("approve_tool", `${callId}${allowLinksThisTurn ? " +links" : ""}${allowToolThisChat ? " +chat" : ""}${allowUrlsThisChat ? " +urls" : ""}`);
@@ -238,6 +240,7 @@ export function useChatSession() {
       ...(choiceIds ? { choiceIds } : {}),
       ...(allowToolThisChat ? { allowToolThisChat: true } : {}),
       ...(allowUrlsThisChat ? { allowUrlsThisChat: true } : {}),
+      ...(rememberLoginSite ? { rememberLoginSite: true } : {}),
     });
   };
 

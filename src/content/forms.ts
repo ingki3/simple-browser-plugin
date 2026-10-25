@@ -41,7 +41,7 @@ function isFieldElement(el: Element): el is FieldElement {
 
 // 레이아웃 기준의 보임: 크기가 있고 display·visibility·opacity로 숨기지 않았다. aria-hidden은 보지 않는다
 // (보조 기술에서만 숨긴 칸도 화면에는 있다 — 숨긴 영역의 글자를 보내지 않는 판정은 inProtectedArea, 대리 위젯은 selectProxyOf).
-function layoutVisible(el: HTMLElement): boolean {
+export function layoutVisible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   const style = el.ownerDocument.defaultView?.getComputedStyle(el);
@@ -220,6 +220,10 @@ export function declaresDelete(
 }
 
 // 눌렀을 때만 이름·값이 제출에 실리는 컨트롤(제출 버튼).
+export function isSubmitControl(c: Element): boolean {
+  return isSubmitter(c);
+}
+
 function isSubmitter(c: Element): boolean {
   if (isTag(c, "button")) return (c as HTMLButtonElement).type === "submit";
   return isTag(c, "input") && ["submit", "image"].includes((c as HTMLInputElement).type);
@@ -1061,6 +1065,11 @@ const FIELD_KIND: TargetKind = {
     return !label || !declaresDelete(label, [], closestAcross(label, "form") as HTMLFormElement | null, skip);
   },
 };
+
+// 자동 로그인(login.ts)이 찾기 결과에 없던 짝 칸(비밀번호 칸 옆의 아이디 칸)을 입력 칸 대상으로 등록한다.
+export function registerFieldTarget(el: HTMLElement): string {
+  return registerTarget(FIELD_KIND, el);
+}
 
 // 입력 묶음이 쓴 선택 칸 중 지금 상태가 쓴 상태와 그대로 같은 칸들(재검사에서 예상된 변화로 뺄 칸).
 function unchangedWrites(writes: ReadonlyMap<Element, ChoiceState>): Set<Element> {

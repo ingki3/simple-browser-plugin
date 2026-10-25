@@ -1,3 +1,4 @@
+import { maskStringForModel } from "./loginSecrets";
 import {
   addLink,
   candidatesFor,
@@ -186,7 +187,8 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
       apiKey,
       {
         model,
-        messages: [{ role: "user", content: prompt }],
+        // 자동 로그인으로 넣은 값이 페이지 글자로 옮겨졌어도 모델로 보내지 않는다(loginSecrets).
+        messages: [{ role: "user", content: (await maskStringForModel(prompt)).text }],
         temperature: 0,
         // 생각을 쓰는 모델이 상한을 생각에 다 써 답이 비지 않게 생각을 끄거나 줄인다(번역과 같은 설정).
         reasoning: "off",

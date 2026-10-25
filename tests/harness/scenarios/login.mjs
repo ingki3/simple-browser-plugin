@@ -1,0 +1,144 @@
+// 자동 로그인(sign_in, docs/design/login-automation.md): 가짜 KeePassXC(native messaging 호스트)로 승인 사이트 자동 로그인,
+// 카드에서 고르고 승인 사이트로 묶기, 구조로 막는 경우(GET·다른 출처), 연결 전 손 넘기기, 값 가리기를 본다.
+import { expect, lastTool, okResult } from "../lib.mjs";
+
+const UUID = "0123456789abcdef0123456789abcdef";
+const PW = "Harness-Pw-7731!";
+const USER = "alice.harness";
+const findF = { tool: "find_form_fields", args: {} };
+const describe = { tool: "describe_page", args: {} };
+
+// action·method를 바꿔 쓰는 로그인 양식. 제출하면 양식을 지우고 받은 값을 화면에 다시 보여 준다(가리기 시험).
+const loginPage = ({ action = "/session", method = "post" } = {}) => `<title>Login</title><main>
+<form id=f action="${action}" method="${method}" onsubmit="event.preventDefault();const u=this.u.value,p=this.p.value;this.remove();document.getElementById('out').textContent='로그인됨 '+u+' / '+p">
+<label>아이디 <input name=u autocomplete=username></label>
+<label>비밀번호 <input name=p type=password autocomplete=current-password></label>
+<button>로그인</button></form><p id=out></p></main>`;
+
+async function connect(h, { approve = true } = {}) {
+  const kp = h.installKeePassXC({
+    entries: [{ url: `${h.base}/`, uuid: UUID, name: "Harness", login: USER, password: PW }],
+    associations: { harness: "IDKEY" },
+    totp: "424242",
+  });
+  await h.sw.evaluate(async () => {
+    await chrome.storage.local.set({ keepassxcAssociation: { id: "harness", idKey: "IDKEY" } });
+  });
+  if (approve) await h.settings({ loginSites: [{ origin: h.base, uuid: UUID, entryName: "Harness", totp: false }] });
+  return kp;
+}
+
+const modelSaw = (h, needle) =>
+  h.sw.evaluate((n) => (globalThis.__modelReqs ?? []).some((r) => JSON.stringify(r.body).includes(n)), needle);
+
+export default [
+  {
+    name: "승인한 사이트: 카드 없이 넣고 제출하며, 화면에 다시 보인 값은 모델에 가지 않는다",
+    pages: { "/login": loginPage() },
+    async run(h) {
+      await connect(h);
+      const r = await h.turn([findF, { signIn: "password" }, describe], { path: "/login" });
+      expect(r.cards === 0, `카드 없이 실행(cards=${r.cards})`);
+      expect(r.out === `로그인됨 ${USER} / ${PW}`, `값이 들어가 제출됨(out='${r.out}')`);
+      const res = okResult(r, "sign_in");
+      expect(res.submitted === true && res.step === "password", `제출함(${JSON.stringify(res)})`);
+      const d = lastTool(r, "describe_page");
+      expect(d && JSON.stringify(d).includes("[가린 값]"), "관측 결과에서 값을 가림");
+      expect(!(await modelSaw(h, PW)), "비밀번호가 모델 요청에 없다");
+      expect(!(await modelSaw(h, USER)), "아이디가 모델 요청에 없다");
+    },
+  },
+  {
+    name: "승인하지 않은 사이트: 카드에서 항목을 골라 로그인하고 앞으로 자동 로그인으로 묶는다",
+    pages: { "/login": loginPage() },
+    async run(h) {
+      await connect(h, { approve: false });
+      let sawChoice = false;
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        onCard: async (card) => {
+          sawChoice = (await card.locator(".tool-card-choices li").count()) === 1;
+          await card.locator(".tool-card-choices input").check();
+          await card.locator(".btn-approve-login-site").click();
+        },
+      });
+      expect(sawChoice, "항목 하나를 고르는 카드");
+      expect(r.out === `로그인됨 ${USER} / ${PW}`, `값이 들어가 제출됨(out='${r.out}')`);
+      const sites = await h.sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings.loginSites);
+      expect(sites?.length === 1 && sites[0].origin === h.base && sites[0].uuid === UUID, `승인 사이트로 묶음(${JSON.stringify(sites)})`);
+    },
+  },
+  {
+    name: "GET 양식은 승인한 사이트라도 묻고, 취소하면 넣지 않는다",
+    pages: { "/login": loginPage({ method: "get" }) },
+    async run(h) {
+      await connect(h);
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1 && /POST/.test(summary), `카드에 이유(${summary})`);
+      expect(r.out === "", `넣지 않음(out='${r.out}')`);
+      const v = await h.tab.locator("input[name=p]").inputValue();
+      expect(v === "", "비밀번호 칸이 비어 있다");
+    },
+  },
+  {
+    name: "다른 출처로 보내는 양식은 묻는다",
+    pages: { "/login": "" },
+    async run(h) {
+      h.pages.set("1/login", loginPage({ action: `${h.base2}/collect` }));
+      await connect(h);
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1 && /다른 출처/.test(summary), `카드에 이유(${summary})`);
+      expect(r.out === "", "넣지 않음");
+    },
+  },
+  {
+    name: "비밀번호 관리자를 연결하지 않았으면 칸을 표시해 직접 로그인하게 한다",
+    pages: { "/login": loginPage() },
+    async run(h) {
+      let handoff = false;
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        onCard: async (card, n) => {
+          if (n > 1) return;
+          handoff = (await card.locator(".tool-card-title").innerText()).length > 0 && (await card.locator(".tool-card-summary").innerText()).includes("직접 로그인");
+          await card.locator(".btn-approve").click();
+        },
+      });
+      expect(handoff, "직접 로그인 안내 카드");
+      const res = okResult(r, "sign_in");
+      expect(res.handedOff === true, `손 넘기기 결과(${JSON.stringify(res)})`);
+      expect(r.out === "", "값을 넣지 않음");
+    },
+  },
+  {
+    name: "같은 대화에서 같은 사이트를 다시 자동으로 하지 않는다",
+    pages: { "/login": loginPage() },
+    async run(h) {
+      await connect(h);
+      await h.turn([findF, { signIn: "password" }], { path: "/login" });
+      let summary = "";
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r.cards === 1 && /이미 자동 로그인/.test(summary), `두 번째는 묻는다(${summary})`);
+    },
+  },
+];

@@ -4,6 +4,7 @@ import { AutoApproveField } from "./AutoApproveField";
 import { RememberPagesField } from "./RememberPagesField";
 import { TrustedInputField } from "./TrustedInputField";
 import { ManualSitesField } from "./ManualSitesField";
+import { LoginSitesField } from "./LoginSitesField";
 import { ShowThinkingField } from "./ShowThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
@@ -396,6 +397,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
             <AutoApproveField enabled={draft.autoApprove} onToggle={(autoApprove) => update({ autoApprove })} />
             <ManualSitesField sites={draft.manualSites} onChange={(manualSites) => update({ manualSites })} currentTabButton />
             <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
+          </details>
+
+          <details className="settings-group">
+            <summary>자동 로그인</summary>
+            <LoginSitesField sites={draft.loginSites} onChange={(loginSites) => update({ loginSites })} />
           </details>
 
           <details className="settings-group">
