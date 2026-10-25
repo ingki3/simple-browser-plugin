@@ -20,7 +20,9 @@ import {
   formElements,
   isSubmitControl,
   layoutVisible,
+  fieldFormlessScopes,
   personalValuedElements,
+  personalValuedInScopes,
   registerFieldTarget,
 } from "./forms";
 import { registerClickTarget } from "./clickables";
@@ -184,6 +186,8 @@ interface Picked {
 }
 
 function pick(target: HTMLInputElement): Picked {
+  // 대상 칸이 지금 보이고 쓸 수 있어야 한다(승인 뒤 숨겨진 로그인 칸에 넣지 않게 — 넣기 직전 재검사도 이 함수를 쓴다).
+  if (!usable(target)) throw new Error("로그인 칸이 보이지 않거나 비활성입니다.");
   const { form, inputs } = scopeInputs(target);
   const visible = inputs.filter(usable);
   const passwords = visible.filter((i) => i.type === "password");
@@ -195,7 +199,15 @@ function pick(target: HTMLInputElement): Picked {
   const hasOtherFields = (picked: Array<HTMLInputElement | null>): boolean => {
     const mine = new Set(picked.filter(Boolean) as Element[]);
     // 양식이 없는 화면은 같은 범위(대화상자 또는 문서 본문)의 모든 칸을 본다(정보 수정 화면의 change 처리기가 바로 저장할 수 있다).
-    const controls: Element[] = form ? formElements(form) : Array.from(formlessRoot(target).querySelectorAll("input, select, textarea"));
+    // 양식이 없으면 칸이 든 루트와 칸의 범위들(대화상자·shadow host·slot 너머 — formlessScopes)의 칸을 모두 본다.
+    const controls: Element[] = form
+      ? formElements(form)
+      : [
+          ...new Set([
+            ...Array.from(formlessRoot(target).querySelectorAll("input, select, textarea")),
+            ...fieldFormlessScopes(target).flatMap((sc) => Array.from(sc.node.querySelectorAll("input, select, textarea"))),
+          ]),
+        ];
     const shown = controls.some((c) => {
       if (mine.has(c)) return false;
       if (isTag(c, "select") || isTag(c, "textarea")) return layoutVisible(c as HTMLElement);
@@ -206,7 +218,11 @@ function pick(target: HTMLInputElement): Picked {
     });
     // 값이 채워진 개인정보 칸(숨은 칸 포함)은 양식이 없는 화면에서도 같은 범위에서 본다(change 처리기가 함께 보낼 수 있다).
     // 양식이 없는 화면은 범위 안 다른 양식의 칸까지 본다(칸의 처리기가 그 양식을 제출할 수 있다).
-    return shown || (form ? personalValuedElements(form) : personalValuedElements(formlessRoot(target), true)).some((e) => !mine.has(e));
+    // 양식이 없는 화면은 칸의 범위들(대화상자·shadow host·slot 너머 — formlessScopes)과 그 안 다른 양식의 칸까지 본다.
+    const personal = form
+      ? personalValuedElements(form)
+      : [...personalValuedElements(formlessRoot(target), true), ...personalValuedInScopes(fieldFormlessScopes(target))];
+    return shown || personal.some((e) => !mine.has(e));
   };
   const otherTarget = !!form && formTargets(form).some((t) => t !== "" && t.toLowerCase() !== "_self");
   const base = { form, newPassword, otherTarget };

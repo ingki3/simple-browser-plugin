@@ -938,7 +938,7 @@ export function scopeSubmitUrls(scopes: Array<{ node: Element | ShadowRoot }>): 
 }
 
 // 양식 밖 입력 칸의 범위: change 처리기가 다른 양식을 requestSubmit할 수 있으니 클릭처럼 범위 안 양식 칸까지 본다.
-function fieldFormlessScopes(el: Element) {
+export function fieldFormlessScopes(el: Element) {
   return formlessScopes(el).map((s) => ({ ...s, includeFormFields: true }));
 }
 
