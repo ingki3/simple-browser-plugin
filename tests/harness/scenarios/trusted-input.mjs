@@ -70,4 +70,20 @@ export default [
       expect(state === "a1=true b1=false b2=false", `그룹 b 상태(${state})`);
   },
   },
+  {
+    name: "누르는 사이 페이지가 같은 그룹의 다른 라디오를 체크해도 그 체크를 되살린다(#83 회귀 방지)",
+    // 이미 체크된 A를 누르는데 페이지의 window 캡처 리스너가 click 때 같은 그룹 B를 체크한다. 확장이 확인을 위해 A를
+    // 승인 때(체크)로 되돌리면 B가 풀리므로, 되살릴 때 B를 다시 체크해야 사람이 누른 것과 같다.
+    pages: {
+      "/r2": `<title>R2</title><main><form>
+<label><input type=radio name=g id=ra checked>RA</label><label><input type=radio name=g id=rb>RB</label></form>
+<script>window.addEventListener('click',(e)=>{if(e.target.id==='ra')document.getElementById('rb').checked=true},true)</script><p id=out></p></main>`,
+    },
+    async run(h) {
+      await h.settings({ autoApprove: true, trustedInput: true });
+      await h.turn([findC, { click: "RA" }], { path: "/r2" });
+      const state = await h.tab.evaluate(() => ["ra", "rb"].map((id) => `${id}=${document.getElementById(id).checked}`).join(" "));
+      expect(state === "ra=false rb=true", `그룹 상태(${state})`);
+    },
+  },
 ];

@@ -602,11 +602,10 @@ function withToggleReverted(
   const prev = el.type === "radio" && before.prevRadio && sameRadioGroup(before.prevRadio, el) ? before.prevRadio : null;
   const restore = () => {
     if (el.type === "radio") {
-      // 직전 체크를 되돌렸으면(같은 그룹) 지금 그룹의 체크로 되살린다. 그 사이 다른 칸이 체크돼 있었으면 그것을, 없으면 해제.
-      if (prev) {
-        if (now.prev) setNativeProperty(now.prev, "checked", true);
-        else setNativeProperty(prev, "checked", false);
-      }
+      // 지금 그룹에서 체크돼 있던 칸은 되돌리기(대상 체크 등)로 풀렸을 수 있어 늘 되살린다. 없으면 되돌리며 체크한 직전
+      // 칸(같은 그룹일 때만 건드렸다)을 해제한다.
+      if (now.prev) setNativeProperty(now.prev, "checked", true);
+      else if (prev) setNativeProperty(prev, "checked", false);
       setNativeProperty(el, "checked", now.checked);
     } else {
       setNativeProperty(el, "checked", now.checked);
