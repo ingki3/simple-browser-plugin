@@ -83,6 +83,8 @@ export type TrustedClickStatus =
 export type TrustedClickReport = TrustedClickStatus & {
   seen: string[];
   viewport: { width: number; height: number };
+  // 결과를 읽을 때 탭이 화면에 보이지 않았는지(뒤에 있는 탭에는 실제 입력이 오지 않을 수 있다).
+  hidden?: boolean;
 };
 
 // 실제 입력이 대상에 오지 않았을 때(none) 원인을 좁히는 설명. frameBlocked: 다른 프레임 가드가 막은 입력 수.
@@ -91,8 +93,10 @@ export function describeMissedClick(r: {
   viewport: { width: number; height: number };
   point: Point;
   frameBlocked: number;
+  hidden?: boolean;
 }): string {
   const parts: string[] = [];
+  if (r.hidden) parts.push("탭이 화면에 보이지 않음(뒤에 있는 탭)");
   if (r.frameBlocked > 0) parts.push(`그 자리의 다른 프레임이 입력 ${r.frameBlocked}개를 받아 막음`);
   const { x, y } = r.point;
   if (x < 0 || y < 0 || x >= r.viewport.width || y >= r.viewport.height) {

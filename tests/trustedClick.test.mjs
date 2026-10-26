@@ -68,6 +68,9 @@ test("describeMissedClick: 다른 프레임이 막은 입력·화면 밖 점·�
   assert.equal(
     describeMissedClick({ seen: ["pointerdown", "mousedown", "pointerup"], viewport, point: { x: 10, y: 10 }, frameBlocked: 0 }),
     "이 문서가 받은 입력: pointerdown, mousedown, pointerup — click이 생기지 않음",
+  );  assert.equal(
+    describeMissedClick({ seen: [], viewport, point: { x: 10, y: 10 }, frameBlocked: 0, hidden: true }),
+    "탭이 화면에 보이지 않음(뒤에 있는 탭); 이 문서에 입력이 오지 않음",
   );
 });
 

@@ -542,6 +542,9 @@ export function clickElement(
     let point: { x: number; y: number } | null = null;
     let reason: string | null = null;
     if (el.ownerDocument !== document) reason = "iframe 안의 대상";
+    // 뒤에 있는 탭(다른 탭이 앞에 있거나 창이 최소화됨)은 실제 입력이 문서에 오지 않을 수 있다(그동안 다른 사이트로 이동해
+    // 새 프로세스가 된 문서는 그리지 않아 입력이 갈 곳을 찾지 못함 — 브라우저 동작). 탭을 앞으로 가져오지 않고 스크립트로 누른다.
+    else if (document.visibilityState === "hidden") reason = "탭이 화면에 보이지 않음(뒤에 있는 탭)";
     else {
       const chosen = choosePoint(el);
       if (!chosen) reason = "화면에 보이는 사각형이 없는 대상";

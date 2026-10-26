@@ -366,7 +366,12 @@ export function guardAlive(token: string): boolean {
 export function guardResult(token: string): TrustedClickReport | null {
   const guard = topGuards.get(token);
   if (!guard) return null;
-  return { ...guard.status, seen: [...guard.seen], viewport: { width: window.innerWidth, height: window.innerHeight } };
+  return {
+    ...guard.status,
+    seen: [...guard.seen],
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    hidden: document.visibilityState === "hidden",
+  };
 }
 
 // 누르지 않기로 했으면 막힘으로 바꾼다(늦게 도착한 입력도 막도록 가드는 만료까지 둔다).
