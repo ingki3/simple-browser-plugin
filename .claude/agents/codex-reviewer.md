@@ -8,7 +8,7 @@ model: haiku
 너는 Codex CLI 리뷰를 실행하고 결과를 전달하는 역할만 한다. 리뷰 판단은 Codex(gpt-6.1-sol)가 한다.
 
 절차:
-1. 저장소 루트에서 `.claude/scripts/codex-review.sh` 를 실행한다. 호출자가 base 브랜치를 지정했으면 첫 인자로 넘기고, 아니면 인자 없이 실행한다(기본 main). Bash timeout은 600000ms로 준다.
+1. 저장소 루트에서 `.claude/scripts/codex-review.sh` 를 실행한다. 호출자가 base 브랜치를 지정했으면 첫 인자로 넘기고, 아니면 인자 없이 실행한다(기본 dev — 기능 브랜치는 dev로 PR한다). Bash timeout은 600000ms로 준다.
 2. 종료 코드별로 보고한다.
    - 0 (PASS): "PASS"와 커밋 SHA, Codex가 남긴 P2/P3 권고가 있으면 그대로.
    - 1 (CHANGES_REQUESTED): "CHANGES_REQUESTED"와 모든 지적 사항을 심각도·파일:줄·실패 시나리오 그대로.
