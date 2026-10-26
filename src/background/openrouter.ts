@@ -75,6 +75,62 @@ interface ModelReply {
   thoughtChars: number;
 }
 
+// 이번 요청의 실행 기록에 호출 하나를 더한다(헛돌기 판정과 이어 가기 카드의 요약).
+type RecordRun = (
+  tool: string,
+  argsKey: string,
+  ok: boolean,
+  result: string,
+  summary: string,
+  extra?: { changed?: boolean; cancelled?: boolean },
+) => void;
+
+type ToolPreview = Awaited<ReturnType<typeof buildToolPreview>>;
+
+// 손 넘기기(클릭) 동안 지금 도구 탭이 여는 창 감시(#81).
+type HandoffPopups = { stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> };
+
+// 도구 호출 하나를 처리하는 동안 함께 쓰는 값.
+interface ToolCallContext {
+  turn: number;
+  // 이 요청의 탭(this.turnTab은 새 요청이 바꿀 수 있다).
+  turnTab: TurnTab;
+  callId: string;
+  toolName: ToolName;
+  parsedArgs: unknown;
+  argsKey: string;
+  // 이 호출을 실패로 끝낸다(패널 결과 줄·대화 기록·헛돌기 기록).
+  failCall(msg: string, key: string, panelSummary?: string): void;
+  record: RecordRun;
+}
+
+// 승인 단계의 결론. stale: 이 요청이 끝났다(중단·새 요청). done: 결과를 이미 남겼다(실패·취소).
+const STALE = { kind: "stale" } as const;
+const DONE = { kind: "done" } as const;
+// 사용자가 직접 조작해 마쳤다(실행하지 않는다).
+interface HandedOff {
+  kind: "handoff";
+  outcome: HandoffOutcome;
+  // sign_in 준비의 열쇠(받은 값을 버린다).
+  signInToken: string | null;
+  // 사용자가 대상을 누른 것으로 끝났을 때만 남긴 창 감시와 그 클릭 시각.
+  popups: HandoffPopups | null;
+  clickedAt: number;
+}
+// 실행한다. via: 카드 없이 실행한 이유(이번 대화 허락·자동 실행). 카드로 승인했거나 승인 대상이 아니면 null.
+interface AuthorizedRun {
+  kind: "run";
+  execArgs: unknown;
+  via: "grant" | "auto" | null;
+  // 이번 대화 허락으로 저장할 이미지를 쿠키 없이 미리 받은 것.
+  grantImages?: Map<string, string>;
+  // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
+  signInAttempt: string | null;
+  // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
+  internalNavSite: string | null;
+}
+type CallAuthorization = typeof STALE | typeof DONE | HandedOff | AuthorizedRun;
+
 const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 탭을 돕는 한국어 에이전트다.
 동작 방식은 ReAct 패턴을 따른다: 생각(Thought) → 행동(Action, 툴 호출) → 관측(Observation, 툴 결과) → 다시 생각 → … → 최종 답.
 
@@ -525,7 +581,7 @@ export class ChatAgent {
   // 기록이 없어 따라가지 않는다.
   private async watchHandoffPopups(
     turnTab: TurnTab,
-  ): Promise<{ stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> } | null> {
+  ): Promise<HandoffPopups | null> {
     let tabId: number;
     try {
       tabId = await resolveTurnTab(turnTab);
@@ -1052,6 +1108,578 @@ export class ChatAgent {
     }
   }
 
+  // 도구 호출 하나: 인자 해석 → 승인(손 넘기기·이번 대화 허락·자동 실행·카드) → 실행 → 결과 기록.
+  // false: 이 요청이 끝났다(중단·새 요청). true: 결과를 남겼으니 다음 호출로 간다.
+  private async handleCall(
+    fc: OpenRouterToolCall,
+    turn: number,
+    turnTab: TurnTab,
+    record: RecordRun,
+    reads: { documents: number; otherTabs: number },
+  ): Promise<boolean> {
+    const toolName = fc.function.name as ToolName;
+    const callId = fc.id;
+    // 이 호출을 실패로 끝낸다: 패널 결과 줄, 대화 기록(모델이 보는 오류), 헛돌기 감지 기록을 함께 남긴다.
+    // panelSummary: 패널에만 다르게 보일 문구(허락으로 실행한 호출 등).
+    const failCall = (msg: string, key: string, panelSummary = msg): void => {
+      this.send({ kind: "tool_result", callId, toolName, ok: false, summary: panelSummary });
+      this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
+      record(toolName, key, false, `error:${msg}`, msg);
+    };
+
+    let parsedArgs: unknown;
+    try {
+      parsedArgs = parseToolArgs(toolName, JSON.parse(fc.function.arguments || "{}"));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logToolFail(toolName, msg);
+      failCall(msg, fc.function.arguments);
+      return true;
+    }
+    const argsKey = canonicalJson(parsedArgs);
+
+    if (toolName === "read_other_tabs" && ++reads.otherTabs > MAX_OTHER_TAB_READS_PER_TURN) {
+      const msg = `한 요청에서 다른 탭 읽기는 최대 ${MAX_OTHER_TAB_READS_PER_TURN}번입니다. 지금까지 읽은 내용으로 답하세요.`;
+      failCall(msg, argsKey);
+      return true;
+    }
+
+    if (toolName === "read_document" && ++reads.documents > MAX_DOCUMENT_READS_PER_TURN) {
+      const msg = `한 요청에서 파일은 최대 ${MAX_DOCUMENT_READS_PER_TURN}개까지 읽을 수 있습니다. 지금까지 읽은 내용으로 답하고, 더 필요하면 사용자에게 다음 요청으로 나눠 달라고 하세요.`;
+      failCall(msg, argsKey);
+      return true;
+    }
+
+    const call: ToolCallContext = { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall, record };
+    const auth = await this.authorizeCall(call);
+    if (auth.kind === "stale") return false;
+    if (auth.kind === "done") return true;
+    if (auth.kind === "handoff") return this.finishHandoff(call, auth);
+    return this.runAuthorized(call, auth);
+  }
+
+  // 승인 단계. 승인 대상이 아닌 도구는 그대로 실행하고, 대상이면 판정(src/lib/approvalDecision.ts)에 따라
+  // 손 넘기기·이번 대화 허락·자동 실행·카드 중 하나로 정한다. 취소·실패는 여기서 결과를 남기고 done을 돌려준다.
+  private async authorizeCall(call: ToolCallContext): Promise<CallAuthorization> {
+    const { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall } = call;
+    // 외부 본문 보호가 켜졌으면 관측 전용이 아닌 도구는 평소 승인 대상이 아니어도(번역·Google 읽기 등) 묻는다.
+    const guarded = this.externalContent && needsApprovalWhenProtected(toolName);
+    if (!SENSITIVE_TOOLS.has(toolName) && !guarded) {
+      return { kind: "run", execArgs: parsedArgs, via: null, signInAttempt: null, internalNavSite: null };
+    }
+    let preview: ToolPreview;
+    try {
+      preview = await buildToolPreview(toolName, parsedArgs, callId, turnTab);
+    } catch (err) {
+      // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
+      if (this.isStale(turn)) return STALE;
+      const msg = err instanceof Error ? err.message : String(err);
+      logToolFail(toolName, msg);
+      failCall(msg, argsKey);
+      return DONE;
+    }
+    // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
+    if (this.isStale(turn)) return STALE;
+    // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
+    let execArgs: unknown = preview.execArgs !== undefined ? preview.execArgs : parsedArgs;
+    // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
+    const { autoApprove, manualSites } = await getSettings();
+    if (this.isStale(turn)) return STALE;
+    const trusted = new Set(this.approvedSites);
+    if (this.turnSite) trusted.add(this.turnSite);
+    let pageUrl: string | undefined;
+    if (toolName === "click_element" || toolName === "fill_form_fields" || toolName === "sign_in") {
+      try {
+        // 팝업 창을 따라가는 중이면 그 창의 주소로 사이트 경계를 본다(다른 사이트의 팝업은 이동과 같게 묻는다).
+        pageUrl = await this.toolTabUrl(turnTab);
+      } catch {
+        pageUrl = undefined;
+      }
+      if (this.isStale(turn)) return STALE;
+    }
+    // 턴 탭이 지금 내부 페이지(새 탭·설정)면 이동은 요청 글에 사용자가 적은 사이트·카드로 허락한 사이트 안에서만
+    // 자동 실행한다(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이 끼어들 수 없다.
+    const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(turnTab));
+    if (this.isStale(turn)) return STALE;
+    // 승인 판정(손 넘기기·이번 대화 허락·자동 실행·카드)과 카드에 함께 보일 제안. 규칙은 src/lib/approvalDecision.ts.
+    let decision = decideApproval({
+      toolName,
+      preview,
+      guarded,
+      autoApprove,
+      pageUrl,
+      manualSite: isManualSite(manualSites, pageUrl),
+      trusted,
+      turn,
+      linkGrant: this.linkGrant,
+      fromInternal,
+      namedSites: this.turnNamedSites,
+      allowedPersonalUrls: this.allowedPersonalUrls,
+      chatGrants: this.chatGrants,
+    });
+    // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
+    let signInAttempt: string | null = null;
+    // sign_in 준비의 열쇠(취소·손 넘기기로 끝나면 받은 값을 버린다).
+    let signInToken: string | null = null;
+    let loginOffer: string | null = null;
+    let signInHandoffWhy: string | null = null;
+    if (toolName === "sign_in" && preview.signIn) {
+      const sp = preview.signIn;
+      if (sp.origin) signInAttempt = `${sp.origin}|${sp.shape.step}`;
+      signInToken = sp.token;
+      const login = await this.signInApproval(call, preview, guarded, isManualSite(manualSites, pageUrl));
+      if (!login) return STALE;
+      decision = login.decision;
+      loginOffer = login.loginOffer;
+      signInHandoffWhy = login.handoffWhy;
+      if (login.execArgs !== undefined) execArgs = login.execArgs;
+    }
+    // 이번 대화 허락으로 저장할 이미지를 이 호출을 위해 쿠키 없이 미리 받은 것(실행 옵션으로 직접 넘긴다).
+    let grantImages: Map<string, string> | undefined;
+    // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
+    // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
+    if (decision.chatGrant.covered && toolName === "download_images") {
+      // 허락으로 받는 것은 모델이 넘긴 주소의 고정 후보뿐이다(카드에 선택 해제로 함께 보일 페이지의 다른 이미지는 아님).
+      // 카드로 넘어가면 사용자가 고른 것으로 다시 정한다.
+      setChosenDownloads(callId, preview.grantChoiceIds ?? []);
+      // 받는 동안 중단·새 대화·패널 닫힘이면(cancelInFlight가 activeTool을 끊는다) 남은 주소로 요청하지 않는다.
+      const prefetchAbort = new AbortController();
+      this.activeTool = prefetchAbort;
+      let got: Awaited<ReturnType<typeof prepareGrantImages>>;
+      try {
+        got = await prepareGrantImages(
+          chosenDownloads(callId, "image").map((c) => c.url),
+          prefetchAbort.signal,
+        );
+      } finally {
+        if (this.activeTool === prefetchAbort) this.activeTool = null;
+      }
+      if (this.isStale(turn)) return STALE;
+      if ("why" in got) decision = withoutChatGrant(decision, got.why);
+      else grantImages = got.images;
+    }
+
+    if (decision.mode === "handoff") {
+      const handed = await this.handOff(call, preview, signInToken, signInHandoffWhy);
+      if (handed.kind !== "cancelled") return handed;
+      return this.cancelCall(call, signInToken);
+    }
+    if (decision.mode === "grant") {
+      debugLog("tool:chat_grant_approved", toolName);
+      // 선택 카드는 미리보기가 정한 후보를 고른 것으로 한다(링크 읽기는 고정한 후보 전부, 이미지 저장은 모델이 넘긴
+      // 주소의 후보). 경고가 붙은 후보가 있으면 위에서 덮지 않았다.
+      if (preview.grantChoiceIds) {
+        setChosenLinks(callId, preview.grantChoiceIds);
+        setChosenDownloads(callId, preview.grantChoiceIds);
+      }
+      return { kind: "run", execArgs, via: "grant", grantImages, signInAttempt, internalNavSite: null };
+    }
+    if (decision.mode === "auto") {
+      debugLog(
+        "tool:auto_approved",
+        `${toolName}${decision.linkGranted && !autoApprove ? " (link grant)" : ""}${fromInternal ? " (내부 페이지에서)" : ""}`,
+      );
+      // 내부 페이지에서 사용자가 적은 사이트로 자동 이동했으면, 이동이 성공한 뒤 그 사이트를 이 턴의 사이트로 삼아
+      // 이후 클릭·입력의 자동 실행 범위로 쓴다(카드로 허락한 이동이 approvedSites가 되는 것과 같은 범위).
+      const internalNavSite = fromInternal && !this.turnSite ? siteOf(String(preview.details ?? "")) : null;
+      return { kind: "run", execArgs, via: "auto", signInAttempt, internalNavSite };
+    }
+    const asked = await this.askByCard(call, preview, decision, guarded, loginOffer);
+    if (asked.kind === "cancelled") return this.cancelCall(call, signInToken);
+    if (asked.kind !== "approved") return asked;
+    return {
+      kind: "run",
+      execArgs: asked.execArgs ?? execArgs,
+      via: null,
+      signInAttempt,
+      internalNavSite: null,
+    };
+  }
+
+  // 자동 로그인(sign_in)의 승인 판정: 출처 → 항목 승인(설정)과 로그인 양식의 구조로 따로 정한다(src/lib/loginPolicy.ts).
+  // 비밀번호 관리자를 쓸 수 없거나 직접 조작할 사이트면 칸을 표시해 사용자가 직접 로그인하게 한다(손 넘기기).
+  // null: 이 요청이 끝났다.
+  private async signInApproval(
+    call: ToolCallContext,
+    preview: ToolPreview,
+    guarded: boolean,
+    manualSite: boolean,
+  ): Promise<{ decision: ApprovalDecision; loginOffer: string | null; handoffWhy: string | null; execArgs?: unknown } | null> {
+    const sp = preview.signIn!;
+    const asMode = (mode: ApprovalDecision["mode"], block: string | null): ApprovalDecision => ({
+      mode,
+      autoMode: mode === "card",
+      block,
+      linkOffer: false,
+      linkGranted: false,
+      urlOffer: false,
+      pageSite: null,
+      chatGrant: { covered: false, offer: false, reason: null },
+    });
+    const handoffWhy = manualSite
+      ? "사용자가 '직접 조작할 사이트'로 정한 사이트입니다"
+      : !sp.origin
+        ? "https 로그인 페이지가 아니어서 비밀번호 관리자를 쓰지 않습니다"
+        : sp.manager === "none"
+          ? "비밀번호 관리자(KeePassXC)가 연결되지 않았습니다(설정 → 자동 로그인)"
+          : sp.manager === "error"
+            ? `비밀번호 관리자에서 항목을 받지 못했습니다(${sp.managerError ?? "오류"})`
+            : sp.entries.length === 0
+              ? "비밀번호 관리자에 이 주소의 항목이 없습니다"
+              : null;
+    if (handoffWhy || !sp.origin) return { decision: asMode("handoff", handoffWhy), loginOffer: null, handoffWhy };
+    const { loginSites } = await getSettings();
+    if (this.isStale(call.turn)) return null;
+    const site = loginSiteFor(loginSites, sp.origin);
+    const d = signInDecision({
+      shape: sp.shape,
+      origin: sp.origin,
+      site,
+      entryUuids: sp.entries.map((e) => e.uuid),
+      attempted: this.loginAttempts.has(`${sp.origin}|${sp.shape.step}`),
+      maskedHere: this.secretsMasked,
+      guarded,
+    });
+    if (d.auto && site) {
+      return {
+        decision: asMode("auto", null),
+        loginOffer: null,
+        handoffWhy: null,
+        execArgs: { ...(call.parsedArgs as object), uuid: site.uuid, token: sp.token },
+      };
+    }
+    // 승인한 항목이 있으면 처음부터 골라 둔다. 승인 목록에 없거나 다른 항목이면 사용자가 직접 고른다.
+    if (site && sp.entries.some((e) => e.uuid === site.uuid)) preview.choiceDefaults = [site.uuid];
+    const loginOffer = !site || sp.entries.every((e) => e.uuid !== site.uuid) ? sp.origin : null;
+    return { decision: asMode("card", d.auto ? null : d.reason), loginOffer, handoffWhy: null };
+  }
+
+  // 손 넘기기: 페이지에 대상을 표시하고 사용자가 직접 조작(클릭·입력·로그인)하기를 기다린다.
+  private async handOff(
+    call: ToolCallContext,
+    preview: ToolPreview,
+    signInToken: string | null,
+    signInHandoffWhy: string | null,
+  ): Promise<typeof STALE | typeof DONE | { kind: "cancelled" } | HandedOff> {
+    const { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall } = call;
+    const ids =
+      toolName === "click_element" || toolName === "sign_in"
+        ? [(parsedArgs as { id: string }).id]
+        : (parsedArgs as { fills: Array<{ id: string }> }).fills.map((f) => f.id);
+    // 사용자가 표시한 대상을 눌러 팝업 창을 열면 그 창을 따라간다(#81). 넘기는 동안 이 탭이 여는 창을 지켜보고,
+    // 사용자가 대상을 누른 것(clicked)으로 끝났을 때만 그 즈음 열린 창을 클릭과 같은 규칙으로 따라간다.
+    const popups = toolName === "click_element" ? await this.watchHandoffPopups(turnTab) : null;
+    let shown: HandoffSession;
+    try {
+      // sign_in은 칸을 준비 열쇠(token)로 승인 대상에 남겼다.
+      shown = await showHandoff(turnTab, (toolName === "sign_in" && signInToken) || callId, toolName === "click_element" ? "c" : "f", ids);
+    } catch (err) {
+      popups?.stop();
+      if (this.isStale(turn)) return STALE;
+      const msg = err instanceof Error ? err.message : String(err);
+      logToolFail(toolName, msg);
+      recordCancelledAction(callId, turnTab);
+      failCall(msg, argsKey);
+      return DONE;
+    }
+    if (this.isStale(turn)) {
+      void endHandoff(shown);
+      popups?.stop();
+      return STALE;
+    }
+    debugLog("tool:handoff", toolName);
+    this.send({
+      kind: "tool_pending",
+      callId,
+      toolName,
+      args: parsedArgs,
+      previewSummary:
+        toolName === "click_element"
+          ? "페이지에 표시한 대상을 직접 눌러 주세요. 누르면 이어서 진행합니다."
+          : toolName === "sign_in"
+            ? `페이지에 표시한 로그인 칸에서 직접 로그인해 주세요(브라우저·비밀번호 관리자의 자동 채우기를 써도 됩니다). 로그인을 마치면 "했어요"를 눌러 주세요.`
+            : `페이지에 표시한 칸에 아래 값을 직접 입력하고 "했어요"를 눌러 주세요.`,
+      // 사용자가 직접 입력하므로 값을 자르지 않은 전체 목록을 보인다(승인 카드 요약은 10칸·80자까지).
+      previewDetails: toolName === "sign_in" ? (signInHandoffWhy ?? "") : (preview.handoffDetails ?? preview.details),
+      handoff: true,
+    });
+    let by: HandoffOutcome = "confirmed";
+    let expired = false;
+    // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 0 — 어느 창이 그 클릭의 것인지 몰라
+    // 따라가지 않는다.
+    let clickedAt = 0;
+    const stopWatch = watchHandoff(shown, (outcome, at) => {
+      // 로그인은 문서가 바뀌어도(2단계 인증 화면 등) 끝난 것이 아니다. 사용자가 "했어요"를 누를 때까지 기다린다.
+      if (toolName === "sign_in" && outcome !== "expired") return;
+      if (outcome === "expired") expired = true;
+      else by = outcome;
+      if (outcome === "clicked") clickedAt = at ?? 0;
+      this.pendingApprovals.get(callId)?.(!expired);
+    });
+    const approved = await new Promise<boolean>((resolve) => {
+      this.pendingApprovals.set(callId, resolve);
+    });
+    stopWatch();
+    this.pendingApprovals.delete(callId);
+    void endHandoff(shown);
+    if (this.isStale(turn)) {
+      popups?.stop();
+      return STALE;
+    }
+    debugLog("tool:handoff_result", `${toolName} ${approved ? by : expired ? "expired" : "cancelled"}`);
+    const keepPopups = approved && by === ("clicked" as HandoffOutcome) && clickedAt > 0;
+    if (!keepPopups) popups?.stop();
+    if (expired) {
+      const msg = "사용자가 표시한 대상을 오래 조작하지 않아 직접 조작 안내를 끝냈습니다. 사용자에게 계속할지 물으세요.";
+      recordCancelledAction(callId, turnTab);
+      failCall(msg, argsKey);
+      return DONE;
+    }
+    if (!approved) return { kind: "cancelled" };
+    return { kind: "handoff", outcome: by, signInToken, popups: keepPopups ? popups : null, clickedAt };
+  }
+
+  // 승인 카드로 묻고 답을 기다린다. 카드에 함께 보인 제안(링크 허락·개인정보 주소·자동 로그인·이번 대화 허락)은
+  // 사용자가 고른 것을 각 처리기가 기록하고, 여기서는 기다린 뒤 정리한다.
+  private async askByCard(
+    call: ToolCallContext,
+    preview: ToolPreview,
+    decision: ApprovalDecision,
+    guarded: boolean,
+    loginOffer: string | null,
+  ): Promise<typeof STALE | typeof DONE | { kind: "cancelled" } | { kind: "approved"; execArgs?: unknown }> {
+    const { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall } = call;
+    const { autoMode, block, linkOffer, urlOffer, pageSite, chatGrant } = decision;
+    const personalUrlKeys = preview.personalUrlKeys ?? [];
+    if (autoMode) debugLog("tool:auto_blocked", `${toolName} · ${block}`);
+    if (chatGrant.reason) debugLog("tool:chat_grant_blocked", `${toolName} · ${chatGrant.reason}`);
+    debugLog("tool:awaiting_approval", `${toolName}`);
+    this.send({
+      kind: "tool_pending",
+      callId,
+      toolName,
+      args: parsedArgs,
+      // 이 도구를 이번 대화에서 허락했는데 묻는 것이면 그 이유를 먼저 보인다(보호 중이라 쓰지 않는 경우 포함).
+      previewSummary: chatGrant.reason
+        ? `${preview.summary} (이번 대화 허락 예외: ${chatGrant.reason})`
+        : guarded
+          ? `${preview.summary} (외부 문서 내용을 읽은 대화라 자동 실행하지 않음)`
+          : autoMode
+            ? `${preview.summary} (자동 실행 예외: ${block})`
+            : preview.summary,
+      previewDetails: urlOffer
+        ? `${typeof preview.details === "string" && preview.details ? `${preview.details}\n` : ""}개인정보 모양이 걸린 주소:\n${(preview.personalUrls ?? []).map((u) => `- ${u}`).join("\n")}`
+        : preview.details,
+      ...(linkOffer ? { linkGrantOffer: true } : {}),
+      ...(urlOffer ? { personalUrlOffer: true } : {}),
+      ...(loginOffer ? { loginSiteOffer: loginOffer } : {}),
+      ...(chatGrant.offer ? { chatGrantOffer: true } : {}),
+      ...(preview.choices
+        ? { choices: preview.choices, choiceLimit: preview.choiceLimit, choiceDefaults: preview.choiceDefaults }
+        : {}),
+    });
+    if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
+    if (urlOffer) this.personalUrlOffers.set(callId, { turn, keys: personalUrlKeys });
+    if (loginOffer) this.loginSiteOffers.set(callId, loginOffer);
+    if (toolName === "sign_in" && preview.signIn) this.signInTokens.set(callId, preview.signIn.token);
+    if (chatGrant.offer && isChatGrantTool(toolName)) {
+      this.chatGrantOffers.set(callId, { tool: toolName, scope: preview.grantScope ?? "" });
+    }
+    const approved = await new Promise<boolean>((resolve) => {
+      this.pendingApprovals.set(callId, resolve);
+    });
+    this.pendingApprovals.delete(callId);
+    this.linkGrantOffers.delete(callId);
+    this.chatGrantOffers.delete(callId);
+    this.personalUrlOffers.delete(callId);
+    const rememberOrigin = this.rememberLogin.has(callId) ? this.loginSiteOffers.get(callId) : undefined;
+    this.loginSiteOffers.delete(callId);
+    this.rememberLogin.delete(callId);
+    this.signInTokens.delete(callId);
+    if (this.isStale(turn)) {
+      discardSignIn(preview.signIn?.token);
+      return STALE;
+    }
+    debugLog(
+      "tool:approval_result",
+      `${toolName} ${approved ? "approved" : "cancelled"}`,
+    );
+    if (!approved) return { kind: "cancelled" };
+    let execArgs: unknown;
+    // 자동 로그인: 카드에서 고른 항목으로 실행한다. "앞으로 자동 로그인"을 골랐으면 그 출처에 이 항목을 묶어 둔다.
+    if (toolName === "sign_in") {
+      const token = preview.signIn?.token ?? "";
+      const uuid = chosenSignInEntry(token);
+      if (!uuid) {
+        discardSignIn(token);
+        recordCancelledAction(callId, turnTab);
+        failCall("로그인할 항목을 고르지 않아 넣지 않았습니다.", argsKey);
+        return DONE;
+      }
+      execArgs = { ...(parsedArgs as object), uuid, token };
+      const entry = preview.signIn?.entries.find((e) => e.uuid === uuid);
+      if (rememberOrigin && entry) {
+        await applySettingsUpdate((cur) => ({
+          loginSites: [
+            ...cur.loginSites.filter((s) => s.origin !== rememberOrigin),
+            { origin: rememberOrigin, uuid, entryName: entry.name || "(제목 없는 항목)", totp: false },
+          ].slice(-MAX_LOGIN_SITES),
+        })).catch((err) => debugLog("login:remember_failed", err instanceof Error ? err.message : String(err), "warn"));
+        debugLog("login:site_approved", rememberOrigin);
+        if (this.isStale(turn)) {
+          discardSignIn(token);
+          return STALE;
+        }
+      }
+    }
+    // 사용자가 카드로 허락한 이동의 출처는 이 대화에서 자동 이동해도 되는 곳으로 둔다.
+    if (toolName === "navigate_to_url") {
+      try {
+        const site = siteOf(String(preview.details));
+        if (site) this.approvedSites.add(site);
+      } catch {
+        /* ignore */
+      }
+    }
+    return { kind: "approved", execArgs };
+  }
+
+  // 사용자가 취소한 호출(카드 취소·손 넘기기 취소)의 결과를 남기고 준비한 것을 버린다.
+  private cancelCall(call: ToolCallContext, signInToken: string | null): typeof DONE {
+    const { turnTab, callId, toolName, argsKey } = call;
+    recordCancelledAction(callId, turnTab);
+    discardSignIn(signInToken);
+    discardTabChoices(callId);
+    discardLinkCall(callId);
+    discardDownloadCall(callId);
+    this.send({
+      kind: "tool_result",
+      callId,
+      toolName,
+      ok: false,
+      summary: "사용자가 취소했습니다.",
+    });
+    this.history.push({
+      role: "tool",
+      tool_call_id: callId,
+      name: toolName,
+      content: this.toolContent(turnTab, { error: "user_cancelled" }),
+    });
+    call.record(toolName, argsKey, false, "user_cancelled", "사용자가 취소했습니다.", { cancelled: true });
+    return DONE;
+  }
+
+  // 사용자가 직접 조작해 마친 호출(실행하지 않는다)의 결과를 남긴다. false: 이 요청이 끝났다.
+  private async finishHandoff(call: ToolCallContext, handed: HandedOff): Promise<boolean> {
+    const { turn, turnTab, callId, toolName, argsKey } = call;
+    const { outcome } = handed;
+    let note: string;
+    let summary: string;
+    if (toolName === "sign_in") {
+      discardSignIn(handed.signInToken);
+      note = "사용자가 직접 로그인을 마쳤다고 알렸습니다. 결과는 페이지를 다시 관측해 확인하세요.";
+      summary = "직접 로그인 · 사용자가 마쳤다고 알림";
+    } else {
+      recordHandedOffAction(callId, turnTab);
+      // 사용자의 클릭이 팝업 창을 열었으면 따라가고 그 안내를 붙인다(클릭 결과와 같은 문구).
+      const popupNote = handed.popups
+        ? await handed.popups.settle(handed.clickedAt, () => this.isStale(turn)).catch(() => null)
+        : null;
+      if (this.isStale(turn)) return false;
+      // 손 넘기기는 클릭·입력·로그인에만 한다(decideApproval의 isPageAction, signInApproval).
+      note = `${handoffResultText(toolName as "click_element" | "fill_form_fields", outcome)}${popupNote ? ` ${popupNote}` : ""}`;
+      summary = `직접 조작 · ${HANDOFF_LABELS[outcome]}`;
+    }
+    this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
+    this.history.push({
+      role: "tool",
+      tool_call_id: callId,
+      name: toolName,
+      content: this.toolContent(turnTab, { result: { handedOff: true, outcome, note } }),
+    });
+    // 사용자가 한 일이라 같은 대상을 다시 넘겨도 헛돌기로 세지 않는다.
+    call.record(toolName, argsKey, true, `handoff:${outcome}`, note, { changed: true });
+    return true;
+  }
+
+  // 승인된(또는 승인 대상이 아닌) 호출을 실행하고 결과를 남긴다. false: 이 요청이 끝났다.
+  private async runAuthorized(call: ToolCallContext, auth: AuthorizedRun): Promise<boolean> {
+    const { turn, turnTab, callId, toolName, argsKey, failCall } = call;
+    const { execArgs, via } = auth;
+    const grantRan = via === "grant";
+    // 실행 전에 등록해야 번역 도중 중단해도 translate_stop이 이 탭에 간다.
+    // 팝업 창을 기다리는 사이 중단·새 요청이 오면 실행하지 않는다. 번역 중 팝업이 닫히면 도구는 원래 탭으로 돌아가므로
+    // 지금 탭과 원래 탭을 함께 등록한다(멈춤 요청은 번역하지 않은 탭에는 아무 일도 하지 않는다).
+    if (toolName === "translate_page") {
+      const current = await currentToolTab(turnTab);
+      if (this.isStale(turn)) return false;
+      if (current) this.translatedTabs.add(current.tabId);
+      if ("tabId" in turnTab) this.translatedTabs.add(turnTab.tabId);
+    }
+    const toolAbort = new AbortController();
+    this.activeTool = toolAbort;
+    // 외부 데이터를 가져오는 도구는 성공·실패와 관계없이(오류에도 파일 이름 등이 실린다) 결과를 문맥에 넣기 전에 보호를 켠다.
+    // 같은 응답의 다음 도구 호출은 이 뒤에 순서대로 실행되므로 바로 적용된다.
+    if (TOOL_POLICY[toolName].bringsExternal) {
+      this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
+    }
+    // 자동 로그인: 값을 넣기 시작하기 전에 시도를 기록한다(넣은 뒤 응답이 끊기거나 늦어도 같은 출처·단계를 다시 자동으로 하지 않게).
+    if (auth.signInAttempt) this.loginAttempts.add(auth.signInAttempt);
+    try {
+      const result = await executeTool(toolName, execArgs, callId, turnTab, toolAbort.signal, {
+        viaGrant: grantRan,
+        ...(grantRan && auth.grantImages ? { grantImages: auth.grantImages } : {}),
+        inputSession: this.inputSession,
+      });
+      if (this.isStale(turn)) return false;
+      debugLog(
+        "tool:result",
+        `${toolName} ${result.ok ? "ok" : "fail"} · ${result.summary.slice(0, 140)}`,
+      );
+      this.send({
+        kind: "tool_result",
+        callId,
+        toolName,
+        ok: result.ok,
+        summary: grantRan
+          ? `이번 대화 허락으로 실행 · ${result.summary}`
+          : via === "auto"
+            ? `자동 실행 · ${result.summary}`
+            : result.summary,
+      });
+      this.history.push({
+        role: "tool",
+        tool_call_id: callId,
+        name: toolName,
+        content: this.toolContent(turnTab, { result: result.data }),
+      });
+      // 클릭은 뒤따른 이동·화면 변화가 관측되면 같은 id를 다시 누르는 것('다음 달' 등)이 반복이 아니다.
+      const changed =
+        toolName === "click_element" &&
+        clickObservedChange((result.data as { effect?: ClickEffectLike } | null)?.effect);
+      call.record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, { changed });
+      if (auth.internalNavSite && result.ok && !this.turnSite) {
+        this.turnSite = auth.internalNavSite;
+        debugLog("turn:site", `${auth.internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);
+      }
+      // 저장한 링크(사용자가 저장한 출처)를 열었으면 그 사이트를 이 대화에서 사용자가 고른 사이트로 둔다
+      // (카드로 허락한 navigate_to_url과 같은 범위 — 이후 클릭·입력의 자동 실행 경계).
+      if (toolName === "open_saved_link" && result.ok) {
+        const site = siteOf(String((execArgs as { url?: unknown }).url ?? ""));
+        if (site) this.approvedSites.add(site);
+      }
+    } catch (err) {
+      if (this.isStale(turn)) return false;
+      const msg = err instanceof Error ? err.message : String(err);
+      // 턴 탭 해석(내부 페이지·닫힌 탭) 등 실행 전 단계에서 실패해도 결과 줄을 남긴다(#54).
+      logToolFail(toolName, msg);
+      failCall(msg, argsKey, grantRan ? `이번 대화 허락으로 실행 · ${msg}` : msg);
+    } finally {
+      if (this.activeTool === toolAbort) this.activeTool = null;
+    }
+    return true;
+  }
+
   private async streamLoop(
     apiKey: string,
     model: ModelId,
@@ -1065,19 +1693,11 @@ export class ChatAgent {
     let limit = maxToolHops;
     // 이번 요청에서 실행을 마친 도구 호출(헛돌기 판정과 이어 가기 카드의 요약).
     const runs: ToolRunRecord[] = [];
-    const record = (
-      tool: string,
-      argsKey: string,
-      ok: boolean,
-      result: string,
-      summary: string,
-      extra: { changed?: boolean; cancelled?: boolean } = {},
-    ): void => {
+    const record: RecordRun = (tool, argsKey, ok, result, summary, extra = {}) => {
       runs.push({ tool, argsKey, ok, resultKey: fingerprint(result), summary, changed: extra.changed === true, cancelled: extra.cancelled });
     };
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
-    let documentReads = 0;
-    let otherTabReads = 0;
+    const reads = { documents: 0, otherTabs: 0 };
     // 생각만 하다 응답 상한에 걸려 빈 답이 나오면 생각을 줄여 한 번 더 시도한다(턴마다 한 번).
     let lengthRetried = false;
     let lowReasoning = false;
@@ -1143,507 +1763,7 @@ export class ChatAgent {
 
       for (const fc of functionCalls) {
         if (this.isStale(turn)) return false;
-        const toolName = fc.function.name as ToolName;
-        const callId = fc.id;
-        // 이 호출을 실패로 끝낸다: 패널 결과 줄, 대화 기록(모델이 보는 오류), 헛돌기 감지 기록을 함께 남긴다.
-        // panelSummary: 패널에만 다르게 보일 문구(허락으로 실행한 호출 등).
-        const failCall = (msg: string, key: string, panelSummary = msg): void => {
-          this.send({ kind: "tool_result", callId, toolName, ok: false, summary: panelSummary });
-          this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
-          record(toolName, key, false, `error:${msg}`, msg);
-        };
-
-        let parsedArgs: unknown;
-        try {
-          parsedArgs = parseToolArgs(toolName, JSON.parse(fc.function.arguments || "{}"));
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logToolFail(toolName, msg);
-          failCall(msg, fc.function.arguments);
-          continue;
-        }
-        const argsKey = canonicalJson(parsedArgs);
-
-        if (toolName === "read_other_tabs" && ++otherTabReads > MAX_OTHER_TAB_READS_PER_TURN) {
-          const msg = `한 요청에서 다른 탭 읽기는 최대 ${MAX_OTHER_TAB_READS_PER_TURN}번입니다. 지금까지 읽은 내용으로 답하세요.`;
-          failCall(msg, argsKey);
-          continue;
-        }
-
-        if (toolName === "read_document" && ++documentReads > MAX_DOCUMENT_READS_PER_TURN) {
-          const msg = `한 요청에서 파일은 최대 ${MAX_DOCUMENT_READS_PER_TURN}개까지 읽을 수 있습니다. 지금까지 읽은 내용으로 답하고, 더 필요하면 사용자에게 다음 요청으로 나눠 달라고 하세요.`;
-          failCall(msg, argsKey);
-          continue;
-        }
-
-        // 승인 없이 실행한 호출은 결과 카드에 표시한다.
-        let autoRan = false;
-        // 직접 조작할 사이트에서 사용자에게 넘겨 마친 호출(실행하지 않는다).
-        let handoffOutcome: HandoffOutcome | null = null;
-        // 손 넘기기 동안 이 탭이 여는 창 감시(#81)와 사용자가 대상을 누른 것을 안 시각.
-        let handoffPopups: { stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> } | null = null;
-        let handoffClickedAt = 0;
-        // 이번 대화 허락(#53)으로 카드 없이 실행한 호출.
-        let grantRan = false;
-        // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
-        let execArgs: unknown = parsedArgs;
-        // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
-        let signInAttempt: string | null = null;
-        // sign_in 준비의 열쇠(취소·손 넘기기로 끝나면 받은 값을 버린다).
-        let signInToken: string | null = null;
-        // 이번 대화 허락으로 저장할 이미지를 이 호출을 위해 쿠키 없이 미리 받은 것(실행 옵션으로 직접 넘긴다).
-        let grantImages: Map<string, string> | undefined;
-        // 내부 페이지에서 자동 이동한 목적지 사이트(이동이 성공하면 이 턴의 사이트로 삼는다).
-        let internalNavSite: string | null = null;
-        // 외부 본문 보호가 켜졌으면 관측 전용이 아닌 도구는 평소 승인 대상이 아니어도(번역·Google 읽기 등) 묻는다.
-        const guarded = this.externalContent && needsApprovalWhenProtected(toolName);
-        if (SENSITIVE_TOOLS.has(toolName) || guarded) {
-          let preview: Awaited<ReturnType<typeof buildToolPreview>>;
-          try {
-            preview = await buildToolPreview(toolName, parsedArgs, callId, turnTab);
-          } catch (err) {
-            // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
-            if (this.isStale(turn)) return false;
-            const msg = err instanceof Error ? err.message : String(err);
-            logToolFail(toolName, msg);
-            failCall(msg, argsKey);
-            continue;
-          }
-          // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
-          if (this.isStale(turn)) return false;
-          if (preview.execArgs !== undefined) execArgs = preview.execArgs;
-          // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
-          const { autoApprove, manualSites } = await getSettings();
-          if (this.isStale(turn)) return false;
-          const trusted = new Set(this.approvedSites);
-          if (this.turnSite) trusted.add(this.turnSite);
-          let pageUrl: string | undefined;
-          if (toolName === "click_element" || toolName === "fill_form_fields" || toolName === "sign_in") {
-            try {
-              // 팝업 창을 따라가는 중이면 그 창의 주소로 사이트 경계를 본다(다른 사이트의 팝업은 이동과 같게 묻는다).
-              pageUrl = await this.toolTabUrl(turnTab);
-            } catch {
-              pageUrl = undefined;
-            }
-            if (this.isStale(turn)) return false;
-          }
-          // 턴 탭이 지금 내부 페이지(새 탭·설정)면 이동은 요청 글에 사용자가 적은 사이트·카드로 허락한 사이트 안에서만
-          // 자동 실행한다(#54). 내부 페이지에는 페이지 글이 없어 숨긴 지시문이 끼어들 수 없다.
-          const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(turnTab));
-          if (this.isStale(turn)) return false;
-          // 승인 판정(손 넘기기·이번 대화 허락·자동 실행·카드)과 카드에 함께 보일 제안. 규칙은 src/lib/approvalDecision.ts.
-          let decision = decideApproval({
-            toolName,
-            preview,
-            guarded,
-            autoApprove,
-            pageUrl,
-            manualSite: isManualSite(manualSites, pageUrl),
-            trusted,
-            turn,
-            linkGrant: this.linkGrant,
-            fromInternal,
-            namedSites: this.turnNamedSites,
-            allowedPersonalUrls: this.allowedPersonalUrls,
-            chatGrants: this.chatGrants,
-          });
-          // 자동 로그인(sign_in): 판정은 출처 → 항목 승인(설정)과 로그인 양식의 구조로 따로 한다(src/lib/loginPolicy.ts).
-          // 비밀번호 관리자를 쓸 수 없거나 직접 조작할 사이트면 칸을 표시해 사용자가 직접 로그인하게 한다.
-          let loginOffer: string | null = null;
-          let signInHandoffWhy: string | null = null;
-          if (toolName === "sign_in" && preview.signIn) {
-            const sp = preview.signIn;
-            if (sp.origin) signInAttempt = `${sp.origin}|${sp.shape.step}`;
-            signInToken = sp.token;
-            const asMode = (mode: ApprovalDecision["mode"], block: string | null): ApprovalDecision => ({
-              mode,
-              autoMode: mode === "card",
-              block,
-              linkOffer: false,
-              linkGranted: false,
-              urlOffer: false,
-              pageSite: null,
-              chatGrant: { covered: false, offer: false, reason: null },
-            });
-            signInHandoffWhy = isManualSite(manualSites, pageUrl)
-              ? "사용자가 '직접 조작할 사이트'로 정한 사이트입니다"
-              : !sp.origin
-                ? "https 로그인 페이지가 아니어서 비밀번호 관리자를 쓰지 않습니다"
-                : sp.manager === "none"
-                  ? "비밀번호 관리자(KeePassXC)가 연결되지 않았습니다(설정 → 자동 로그인)"
-                  : sp.manager === "error"
-                    ? `비밀번호 관리자에서 항목을 받지 못했습니다(${sp.managerError ?? "오류"})`
-                    : sp.entries.length === 0
-                      ? "비밀번호 관리자에 이 주소의 항목이 없습니다"
-                      : null;
-            if (signInHandoffWhy || !sp.origin) {
-              decision = asMode("handoff", signInHandoffWhy);
-            } else {
-              const { loginSites } = await getSettings();
-              if (this.isStale(turn)) return false;
-              const site = loginSiteFor(loginSites, sp.origin);
-              const d = signInDecision({
-                shape: sp.shape,
-                origin: sp.origin,
-                site,
-                entryUuids: sp.entries.map((e) => e.uuid),
-                attempted: this.loginAttempts.has(`${sp.origin}|${sp.shape.step}`),
-                maskedHere: this.secretsMasked,
-                guarded,
-              });
-              if (d.auto && site) {
-                decision = asMode("auto", null);
-                execArgs = { ...(parsedArgs as object), uuid: site.uuid, token: sp.token };
-              } else {
-                decision = asMode("card", d.auto ? null : d.reason);
-                // 승인한 항목이 있으면 처음부터 골라 둔다. 승인 목록에 없거나 다른 항목이면 사용자가 직접 고른다.
-                if (site && sp.entries.some((e) => e.uuid === site.uuid)) preview.choiceDefaults = [site.uuid];
-                if (!site || sp.entries.every((e) => e.uuid !== site.uuid)) loginOffer = sp.origin;
-              }
-            }
-          }
-          // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
-          // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
-          if (decision.chatGrant.covered && toolName === "download_images") {
-            // 허락으로 받는 것은 모델이 넘긴 주소의 고정 후보뿐이다(카드에 선택 해제로 함께 보일 페이지의 다른 이미지는 아님).
-            // 카드로 넘어가면 사용자가 고른 것으로 다시 정한다.
-            setChosenDownloads(callId, preview.grantChoiceIds ?? []);
-            // 받는 동안 중단·새 대화·패널 닫힘이면(cancelInFlight가 activeTool을 끊는다) 남은 주소로 요청하지 않는다.
-            const prefetchAbort = new AbortController();
-            this.activeTool = prefetchAbort;
-            let got: Awaited<ReturnType<typeof prepareGrantImages>>;
-            try {
-              got = await prepareGrantImages(
-                chosenDownloads(callId, "image").map((c) => c.url),
-                prefetchAbort.signal,
-              );
-            } finally {
-              if (this.activeTool === prefetchAbort) this.activeTool = null;
-            }
-            if (this.isStale(turn)) return false;
-            if ("why" in got) decision = withoutChatGrant(decision, got.why);
-            else grantImages = got.images;
-          }
-          const { autoMode, block, linkOffer, linkGranted, urlOffer, pageSite, chatGrant } = decision;
-          const personalUrlKeys = preview.personalUrlKeys ?? [];
-          let approved: boolean;
-          if (decision.mode === "handoff") {
-            const ids =
-              toolName === "click_element" || toolName === "sign_in"
-                ? [(parsedArgs as { id: string }).id]
-                : (parsedArgs as { fills: Array<{ id: string }> }).fills.map((f) => f.id);
-            // 사용자가 표시한 대상을 눌러 팝업 창을 열면 그 창을 따라간다(#81). 넘기는 동안 이 탭이 여는 창을 지켜보고,
-            // 사용자가 대상을 누른 것(clicked)으로 끝났을 때만 그 즈음 열린 창을 클릭과 같은 규칙으로 따라간다.
-            if (toolName === "click_element") handoffPopups = await this.watchHandoffPopups(turnTab);
-            let shown: HandoffSession;
-            try {
-              // sign_in은 칸을 준비 열쇠(token)로 승인 대상에 남겼다.
-              shown = await showHandoff(turnTab, (toolName === "sign_in" && signInToken) || callId, toolName === "click_element" ? "c" : "f", ids);
-            } catch (err) {
-              handoffPopups?.stop();
-              handoffPopups = null;
-              if (this.isStale(turn)) return false;
-              const msg = err instanceof Error ? err.message : String(err);
-              logToolFail(toolName, msg);
-              recordCancelledAction(callId, turnTab);
-              failCall(msg, argsKey);
-              continue;
-            }
-            if (this.isStale(turn)) {
-              void endHandoff(shown);
-              handoffPopups?.stop();
-              return false;
-            }
-            debugLog("tool:handoff", toolName);
-            this.send({
-              kind: "tool_pending",
-              callId,
-              toolName,
-              args: parsedArgs,
-              previewSummary:
-                toolName === "click_element"
-                  ? "페이지에 표시한 대상을 직접 눌러 주세요. 누르면 이어서 진행합니다."
-                  : toolName === "sign_in"
-                    ? `페이지에 표시한 로그인 칸에서 직접 로그인해 주세요(브라우저·비밀번호 관리자의 자동 채우기를 써도 됩니다). 로그인을 마치면 "했어요"를 눌러 주세요.`
-                    : `페이지에 표시한 칸에 아래 값을 직접 입력하고 "했어요"를 눌러 주세요.`,
-              // 사용자가 직접 입력하므로 값을 자르지 않은 전체 목록을 보인다(승인 카드 요약은 10칸·80자까지).
-              previewDetails: toolName === "sign_in" ? (signInHandoffWhy ?? "") : (preview.handoffDetails ?? preview.details),
-              handoff: true,
-            });
-            let by: HandoffOutcome = "confirmed";
-            let expired = false;
-            const stopWatch = watchHandoff(shown, (outcome, clickedAt) => {
-              // 로그인은 문서가 바뀌어도(2단계 인증 화면 등) 끝난 것이 아니다. 사용자가 "했어요"를 누를 때까지 기다린다.
-              if (toolName === "sign_in" && outcome !== "expired") return;
-              if (outcome === "expired") expired = true;
-              else by = outcome;
-              // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 0 — 어느 창이 그 클릭의 것인지 몰라
-              // 따라가지 않는다.
-              if (outcome === "clicked") handoffClickedAt = clickedAt ?? 0;
-              this.pendingApprovals.get(callId)?.(!expired);
-            });
-            approved = await new Promise<boolean>((resolve) => {
-              this.pendingApprovals.set(callId, resolve);
-            });
-            stopWatch();
-            this.pendingApprovals.delete(callId);
-            void endHandoff(shown);
-            if (this.isStale(turn)) {
-              handoffPopups?.stop();
-              return false;
-            }
-            debugLog("tool:handoff_result", `${toolName} ${approved ? by : expired ? "expired" : "cancelled"}`);
-            if (!(approved && by === ("clicked" as HandoffOutcome) && handoffClickedAt > 0)) {
-              handoffPopups?.stop();
-              handoffPopups = null;
-            }
-            if (expired) {
-              const msg = "사용자가 표시한 대상을 오래 조작하지 않아 직접 조작 안내를 끝냈습니다. 사용자에게 계속할지 물으세요.";
-              recordCancelledAction(callId, turnTab);
-              failCall(msg, argsKey);
-              continue;
-            }
-            if (approved) handoffOutcome = by;
-          } else if (decision.mode === "grant") {
-            debugLog("tool:chat_grant_approved", toolName);
-            // 선택 카드는 미리보기가 정한 후보를 고른 것으로 한다(링크 읽기는 고정한 후보 전부, 이미지 저장은 모델이 넘긴
-            // 주소의 후보). 경고가 붙은 후보가 있으면 위에서 덮지 않았다.
-            if (preview.grantChoiceIds) {
-              setChosenLinks(callId, preview.grantChoiceIds);
-              setChosenDownloads(callId, preview.grantChoiceIds);
-            }
-            approved = true;
-            grantRan = true;
-          } else if (decision.mode === "auto") {
-            debugLog(
-              "tool:auto_approved",
-              `${toolName}${linkGranted && !autoApprove ? " (link grant)" : ""}${fromInternal ? " (내부 페이지에서)" : ""}`,
-            );
-            approved = true;
-            autoRan = true;
-            // 내부 페이지에서 사용자가 적은 사이트로 자동 이동했으면, 이동이 성공한 뒤 그 사이트를 이 턴의 사이트로 삼아
-            // 이후 클릭·입력의 자동 실행 범위로 쓴다(카드로 허락한 이동이 approvedSites가 되는 것과 같은 범위).
-            if (fromInternal && !this.turnSite) internalNavSite = siteOf(String(preview.details ?? ""));
-          } else {
-            if (autoMode) debugLog("tool:auto_blocked", `${toolName} · ${block}`);
-            if (chatGrant.reason) debugLog("tool:chat_grant_blocked", `${toolName} · ${chatGrant.reason}`);
-            debugLog("tool:awaiting_approval", `${toolName}`);
-            this.send({
-              kind: "tool_pending",
-              callId,
-              toolName,
-              args: parsedArgs,
-              // 이 도구를 이번 대화에서 허락했는데 묻는 것이면 그 이유를 먼저 보인다(보호 중이라 쓰지 않는 경우 포함).
-              previewSummary: chatGrant.reason
-                ? `${preview.summary} (이번 대화 허락 예외: ${chatGrant.reason})`
-                : guarded
-                  ? `${preview.summary} (외부 문서 내용을 읽은 대화라 자동 실행하지 않음)`
-                  : autoMode
-                    ? `${preview.summary} (자동 실행 예외: ${block})`
-                    : preview.summary,
-              previewDetails: urlOffer
-                ? `${typeof preview.details === "string" && preview.details ? `${preview.details}\n` : ""}개인정보 모양이 걸린 주소:\n${(preview.personalUrls ?? []).map((u) => `- ${u}`).join("\n")}`
-                : preview.details,
-              ...(linkOffer ? { linkGrantOffer: true } : {}),
-              ...(urlOffer ? { personalUrlOffer: true } : {}),
-              ...(loginOffer ? { loginSiteOffer: loginOffer } : {}),
-              ...(chatGrant.offer ? { chatGrantOffer: true } : {}),
-              ...(preview.choices
-                ? { choices: preview.choices, choiceLimit: preview.choiceLimit, choiceDefaults: preview.choiceDefaults }
-                : {}),
-            });
-            if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
-            if (urlOffer) this.personalUrlOffers.set(callId, { turn, keys: personalUrlKeys });
-            if (loginOffer) this.loginSiteOffers.set(callId, loginOffer);
-            if (toolName === "sign_in" && preview.signIn) this.signInTokens.set(callId, preview.signIn.token);
-            if (chatGrant.offer && isChatGrantTool(toolName)) {
-              this.chatGrantOffers.set(callId, { tool: toolName, scope: preview.grantScope ?? "" });
-            }
-            approved = await new Promise<boolean>((resolve) => {
-              this.pendingApprovals.set(callId, resolve);
-            });
-            this.pendingApprovals.delete(callId);
-            this.linkGrantOffers.delete(callId);
-            this.chatGrantOffers.delete(callId);
-            this.personalUrlOffers.delete(callId);
-            const rememberOrigin = this.rememberLogin.has(callId) ? this.loginSiteOffers.get(callId) : undefined;
-            this.loginSiteOffers.delete(callId);
-            this.rememberLogin.delete(callId);
-            this.signInTokens.delete(callId);
-            if (this.isStale(turn)) {
-              discardSignIn(preview.signIn?.token);
-              return false;
-            }
-            debugLog(
-              "tool:approval_result",
-              `${toolName} ${approved ? "approved" : "cancelled"}`,
-            );
-            // 자동 로그인: 카드에서 고른 항목으로 실행한다. "앞으로 자동 로그인"을 골랐으면 그 출처에 이 항목을 묶어 둔다.
-            if (approved && toolName === "sign_in") {
-              const token = preview.signIn?.token ?? "";
-              const uuid = chosenSignInEntry(token);
-              if (!uuid) {
-                discardSignIn(token);
-                recordCancelledAction(callId, turnTab);
-                failCall("로그인할 항목을 고르지 않아 넣지 않았습니다.", argsKey);
-                continue;
-              }
-              execArgs = { ...(parsedArgs as object), uuid, token };
-              const entry = preview.signIn?.entries.find((e) => e.uuid === uuid);
-              if (rememberOrigin && entry) {
-                await applySettingsUpdate((cur) => ({
-                  loginSites: [
-                    ...cur.loginSites.filter((s) => s.origin !== rememberOrigin),
-                    { origin: rememberOrigin, uuid, entryName: entry.name || "(제목 없는 항목)", totp: false },
-                  ].slice(-MAX_LOGIN_SITES),
-                })).catch((err) => debugLog("login:remember_failed", err instanceof Error ? err.message : String(err), "warn"));
-                debugLog("login:site_approved", rememberOrigin);
-                if (this.isStale(turn)) {
-                  discardSignIn(token);
-                  return false;
-                }
-              }
-            }
-            // 사용자가 카드로 허락한 이동의 출처는 이 대화에서 자동 이동해도 되는 곳으로 둔다.
-            if (approved && toolName === "navigate_to_url") {
-              try {
-                const site = siteOf(String(preview.details));
-                if (site) this.approvedSites.add(site);
-              } catch {
-                /* ignore */
-              }
-            }
-          }
-
-          if (!approved) {
-            recordCancelledAction(callId, turnTab);
-            discardSignIn(signInToken);
-            discardTabChoices(callId);
-            discardLinkCall(callId);
-            discardDownloadCall(callId);
-            this.send({
-              kind: "tool_result",
-              callId,
-              toolName,
-              ok: false,
-              summary: "사용자가 취소했습니다.",
-            });
-            this.history.push({
-              role: "tool",
-              tool_call_id: callId,
-              name: toolName,
-              content: this.toolContent(turnTab, { error: "user_cancelled" }),
-            });
-            record(toolName, argsKey, false, "user_cancelled", "사용자가 취소했습니다.", { cancelled: true });
-            continue;
-          }
-        }
-
-        if (handoffOutcome && toolName === "sign_in") {
-          discardSignIn(signInToken);
-          const note = "사용자가 직접 로그인을 마쳤다고 알렸습니다. 결과는 페이지를 다시 관측해 확인하세요.";
-          this.send({ kind: "tool_result", callId, toolName, ok: true, summary: "직접 로그인 · 사용자가 마쳤다고 알림" });
-          this.history.push({
-            role: "tool",
-            tool_call_id: callId,
-            name: toolName,
-            content: this.toolContent(turnTab, { result: { handedOff: true, outcome: handoffOutcome, note } }),
-          });
-          record(toolName, argsKey, true, `handoff:${handoffOutcome}`, note, { changed: true });
-          continue;
-        }
-
-        if (handoffOutcome && (toolName === "click_element" || toolName === "fill_form_fields")) {
-          recordHandedOffAction(callId, turnTab);
-          // 사용자의 클릭이 팝업 창을 열었으면 따라가고 그 안내를 붙인다(클릭 결과와 같은 문구).
-          const popupNote = handoffPopups
-            ? await handoffPopups.settle(handoffClickedAt, () => this.isStale(turn)).catch(() => null)
-            : null;
-          handoffPopups = null;
-          if (this.isStale(turn)) return false;
-          const note = `${handoffResultText(toolName, handoffOutcome)}${popupNote ? ` ${popupNote}` : ""}`;
-          this.send({ kind: "tool_result", callId, toolName, ok: true, summary: `직접 조작 · ${HANDOFF_LABELS[handoffOutcome]}` });
-          this.history.push({
-            role: "tool",
-            tool_call_id: callId,
-            name: toolName,
-            content: this.toolContent(turnTab, { result: { handedOff: true, outcome: handoffOutcome, note } }),
-          });
-          // 사용자가 한 일이라 같은 대상을 다시 넘겨도 헛돌기로 세지 않는다.
-          record(toolName, argsKey, true, `handoff:${handoffOutcome}`, note, { changed: true });
-          continue;
-        }
-
-        // 실행 전에 등록해야 번역 도중 중단해도 translate_stop이 이 탭에 간다.
-        // 팝업 창을 기다리는 사이 중단·새 요청이 오면 실행하지 않는다. 번역 중 팝업이 닫히면 도구는 원래 탭으로 돌아가므로
-        // 지금 탭과 원래 탭을 함께 등록한다(멈춤 요청은 번역하지 않은 탭에는 아무 일도 하지 않는다).
-        if (toolName === "translate_page") {
-          const current = await currentToolTab(turnTab);
-          if (this.isStale(turn)) return false;
-          if (current) this.translatedTabs.add(current.tabId);
-          if ("tabId" in turnTab) this.translatedTabs.add(turnTab.tabId);
-        }
-        const toolAbort = new AbortController();
-        this.activeTool = toolAbort;
-        // 외부 데이터를 가져오는 도구는 성공·실패와 관계없이(오류에도 파일 이름 등이 실린다) 결과를 문맥에 넣기 전에 보호를 켠다.
-        // 같은 응답의 다음 도구 호출은 이 뒤에 순서대로 실행되므로 바로 적용된다.
-        if (TOOL_POLICY[toolName].bringsExternal) {
-          this.noteExternalContent(`외부 데이터를 가져오는 도구(${toolName})를 실행했습니다.`);
-        }
-        // 자동 로그인: 값을 넣기 시작하기 전에 시도를 기록한다(넣은 뒤 응답이 끊기거나 늦어도 같은 출처·단계를 다시 자동으로 하지 않게).
-        if (signInAttempt) this.loginAttempts.add(signInAttempt);
-        try {
-          const result = await executeTool(toolName, execArgs, callId, turnTab, toolAbort.signal, {
-            viaGrant: grantRan,
-            ...(grantRan && grantImages ? { grantImages } : {}),
-            inputSession: this.inputSession,
-          });
-          if (this.isStale(turn)) return false;
-          debugLog(
-            "tool:result",
-            `${toolName} ${result.ok ? "ok" : "fail"} · ${result.summary.slice(0, 140)}`,
-          );
-          this.send({
-            kind: "tool_result",
-            callId,
-            toolName,
-            ok: result.ok,
-            summary: grantRan
-              ? `이번 대화 허락으로 실행 · ${result.summary}`
-              : autoRan
-                ? `자동 실행 · ${result.summary}`
-                : result.summary,
-          });
-          this.history.push({
-            role: "tool",
-            tool_call_id: callId,
-            name: toolName,
-            content: this.toolContent(turnTab, { result: result.data }),
-          });
-          // 클릭은 뒤따른 이동·화면 변화가 관측되면 같은 id를 다시 누르는 것('다음 달' 등)이 반복이 아니다.
-          const changed =
-            toolName === "click_element" &&
-            clickObservedChange((result.data as { effect?: ClickEffectLike } | null)?.effect);
-          record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, { changed });
-          if (internalNavSite && result.ok && !this.turnSite) {
-            this.turnSite = internalNavSite;
-            debugLog("turn:site", `${internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);
-          }
-          // 저장한 링크(사용자가 저장한 출처)를 열었으면 그 사이트를 이 대화에서 사용자가 고른 사이트로 둔다
-          // (카드로 허락한 navigate_to_url과 같은 범위 — 이후 클릭·입력의 자동 실행 경계).
-          if (toolName === "open_saved_link" && result.ok) {
-            const site = siteOf(String((execArgs as { url?: unknown }).url ?? ""));
-            if (site) this.approvedSites.add(site);
-          }
-        } catch (err) {
-          if (this.isStale(turn)) return false;
-          const msg = err instanceof Error ? err.message : String(err);
-          // 턴 탭 해석(내부 페이지·닫힌 탭) 등 실행 전 단계에서 실패해도 결과 줄을 남긴다(#54).
-          logToolFail(toolName, msg);
-          failCall(msg, argsKey, grantRan ? `이번 대화 허락으로 실행 · ${msg}` : msg);
-        } finally {
-          if (this.activeTool === toolAbort) this.activeTool = null;
-        }
+        if (!(await this.handleCall(fc, turn, turnTab, record, reads))) return false;
       }
 
       // 헛돌기 감지(#55): 한도와 별개로, 같은 호출이 같은 결과로 되풀이되거나 한 도구가 거듭 실패하면 멈추고 알린다.
