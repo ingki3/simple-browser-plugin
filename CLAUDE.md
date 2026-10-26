@@ -20,6 +20,8 @@ OpenRouter 기반 Chrome MV3 사이드 패널 에이전트. 구조와 기능은 
 
 브랜치는 **feature → dev → main** 순서로 PR을 통해서만 진행한다. `dev`·`main` 모두 보호 브랜치라 직접 push할 수 없다
 (GitHub 보호: PR 필수, 관리자 포함, force push·삭제 불가, 대화 해결 필수, 새 push 시 승인 무효화). 기본 브랜치는 `dev`다.
+GitHub Actions CI(`.github/workflows/ci.yml`)가 필수 검사다: dev·main 대상 PR은 "단위 테스트·타입 검사·빌드",
+main 대상 PR(릴리스)은 여기에 "확장 하네스"까지 통과해야 머지된다(브랜치는 base 최신이어야 함).
 
 1. `dev`에서 feature branch를 만들어 작업한다(`git checkout -b <브랜치> origin/dev`). 시작하기 전에 코드 그래프로 관련 코드를 찾는다(위 "코드 그래프").
 2. 변경 후 `npm test`, `npm run typecheck`, `npm run build`를 통과시킨다.
