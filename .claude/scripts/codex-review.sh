@@ -3,11 +3,11 @@
 # PASS면 HEAD SHA를 .git/codex-review-passed에 기록하고, require-codex-review 훅은
 # 이 기록이 있는 커밋에 대해서만 gh pr create / gh pr merge를 허용한다.
 #
-# 사용법: .claude/scripts/codex-review.sh [base-branch]   (기본 main)
+# 사용법: .claude/scripts/codex-review.sh [base-branch]   (기본 dev — 기능 브랜치는 dev로 PR한다)
 # 종료 코드: 0 PASS · 1 CHANGES_REQUESTED · 3 리뷰 불가 상태 · 4 codex 실행 실패 · 5 판정 없음
 set -euo pipefail
 
-BASE="${1:-main}"
+BASE="${1:-dev}"
 MODEL="${CODEX_REVIEW_MODEL:-gpt-6.1-sol}"
 EFFORT="${CODEX_REVIEW_EFFORT:-high}"
 # 리뷰어 에이전트의 Bash 호출 제한(10분) 안에 끝나도록 9분으로 둔다.
@@ -26,16 +26,16 @@ fi
 HEAD_SHA="$(git rev-parse HEAD)"
 GIT_DIR="$(git rev-parse --git-common-dir)"
 PASSED="$GIT_DIR/codex-review-passed"
-# PR은 원격 main으로 머지되므로 origin/main 대비 전체 범위를 리뷰했을 때만 통과를 기록한다.
-# 로컬 main에 미푸시 커밋이 있으면 그만큼 리뷰에서 빠지므로 로컬 브랜치를 기준으로 쓰지 않는다.
+# 기능 PR은 원격 dev로 머지되므로 origin/dev 대비 전체 범위를 리뷰했을 때만 통과를 기록한다.
+# 로컬 dev에 미푸시 커밋이 있으면 그만큼 리뷰에서 빠지므로 로컬 브랜치를 기준으로 쓰지 않는다.
 RECORD=0
-if [ "$BASE" = "main" ]; then
-  # single-branch clone에도 origin/main이 생기도록 목적지를 명시한다.
-  if ! git fetch -q origin "+refs/heads/main:refs/remotes/origin/main"; then
-    echo "origin main을 가져오지 못했습니다. 네트워크를 확인한 뒤 다시 실행하세요." >&2
+if [ "$BASE" = "dev" ]; then
+  # single-branch clone에도 origin/dev가 생기도록 목적지를 명시한다.
+  if ! git fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev"; then
+    echo "origin dev를 가져오지 못했습니다. 네트워크를 확인한 뒤 다시 실행하세요." >&2
     exit 3
   fi
-  BASE="origin/main"
+  BASE="origin/dev"
   RECORD=1
 fi
 BASE_SHA="$(git merge-base "$BASE" HEAD)"
@@ -192,7 +192,7 @@ case "$VERDICT" in
       echo "$HEAD_SHA" >>"$PASSED"
       echo "[codex-review] PASS — ${HEAD_SHA:0:7} 통과 기록 (전문: $OUT)"
     else
-      echo "[codex-review] PASS — base가 main이 아니라 통과 기록은 남기지 않습니다. PR 전에는 main 대비로 다시 리뷰하세요. (전문: $OUT)"
+      echo "[codex-review] PASS — base가 dev가 아니라 통과 기록은 남기지 않습니다. PR 전에는 dev 대비로 다시 리뷰하세요. (전문: $OUT)"
     fi
     ;;
   VERDICT:CHANGES_REQUESTED)

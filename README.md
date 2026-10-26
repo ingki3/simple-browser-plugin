@@ -140,14 +140,15 @@ npm run harness      # 확장 하네스(dist를 Chrome for Testing에 올려 시
 
 ### 기여 워크플로
 
-`main` 브랜치는 보호되어 있으며 직접 push가 불가능합니다. 모든 변경은 feature branch + Pull Request로 반영합니다.
+브랜치는 `feature → dev → main` 순서로 PR을 통해서만 진행합니다. `dev`·`main` 모두 보호되어 직접 push가 불가능합니다.
+기능은 `dev` 대상 PR(squash 머지)로 올리고, 릴리스는 `dev` → `main` PR(merge commit)로 반영한 뒤 main에 `vX.X.XX` 태그를 답니다.
 
 ```bash
-git checkout -b feat/your-change
+git checkout -b feat/your-change origin/dev
 # ... 작업 ...
 git commit -m "feat: ..."
 git push -u origin feat/your-change
-gh pr create --base main --title "..." --body "..."
+gh pr create --base dev --head feat/your-change --title "..." --body "..."
 ```
 
 ## 아키텍처
