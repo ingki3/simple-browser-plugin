@@ -4,7 +4,7 @@
 //   (null을 돌려줌)를 센다. 클릭이 끝나면 원래 함수로 되돌린다. 페이지가 이 기록을 꾸밀 수는 있지만, 결과에는
 //   고정 문구와 줄인 주소(popupWhere)만 실으므로 페이지 글이 모델 지시문으로 들어가지 않는다.
 // - 열린 팝업 창: 클릭하는 동안 이 탭의 문서가 연 탐색 대상(onCreatedNavigationTarget, 보조로 openerTabId) 중 창 종류가 popup인 것. 사용자가 따로 연 창이나
-//   일반 새 탭(target=_blank)은 따라가지 않는다.
+//   일반 새 탭(target=_blank 링크 등)은 브라우저가 같은 창의 앞에 띄운 하나뿐일 때만 따라간다(newTabIneligible).
 
 import { popupWhere, type PopupEffect } from "@/lib/actionTarget";
 import {
@@ -14,6 +14,7 @@ import {
   OPEN_CALLS_MAX,
   OPEN_FEATURES_MAX,
   OPEN_URL_MAX,
+  newTabIneligible,
   popupTabIneligible,
   reusedTargets,
   type OpenCallRecord,
@@ -275,6 +276,39 @@ async function settledTabState(
   }
 }
 
+// 새 탭의 첫 웹 문서가 확정되기를 잠깐 기다린다(열린 직후는 about:blank이거나 이동 중). 주소를 미리 모르는 링크
+// 새 탭용: 이동 중이 아니고 확정된 최상위 문서가 http(s)면 바로, 시간이 지나면 그때 상태를 돌려준다.
+async function settledNewTab(
+  tabId: number,
+  timeoutMs = 5_000,
+): Promise<{ windowId: number; active: boolean; committedUrl: string | null; pending: boolean; documentId: string | null } | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let tab: chrome.tabs.Tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      return null;
+    }
+    let frame: chrome.webNavigation.GetFrameResultDetails | null = null;
+    try {
+      frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    } catch {
+      frame = null;
+    }
+    const committedUrl = frame?.url ?? null;
+    const state = {
+      windowId: tab.windowId,
+      active: tab.active,
+      committedUrl,
+      pending: !!tab.pendingUrl,
+      documentId: frame?.documentId ?? null,
+    };
+    if ((!state.pending && committedUrl && /^https?:/i.test(committedUrl)) || Date.now() >= deadline) return state;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 // 클릭이 끝난 뒤: 막힌 window.open과 열린 팝업 창을 정리하고, 열린 팝업 창(첫 번째)은 따라간다.
 // 팝업을 요청한 window.open이 브라우저 사정(macOS 전체 화면 등)으로 같은 창의 탭으로 열렸으면, 브라우저가 그 탭을
 // 앞에 띄웠고 기록이 모호하지 않을 때만(popupTabIneligible) 그 탭을 팝업처럼 따라간다(kind "tab").
@@ -338,6 +372,7 @@ export async function settlePopups(
       continue;
     }
     let asTab: { documentId: string; url: string } | null = null;
+    let newTab = false;
     if (win.type !== "popup") {
       // 일반 창의 탭: 팝업을 요청한 window.open이 탭으로 열린 경우만(다시 쓴 창은 대상이 아니다).
       const call = opens.filter((c) => !c.blocked);
@@ -366,8 +401,28 @@ export async function settlePopups(
               if (!reason && st.documentId) asTab = { documentId: st.documentId, url: st.committedUrl as string };
               return reason ?? (st.documentId ? null : "탭의 문서를 확인할 수 없음");
             })();
-      if (why || !asTab) {
-        skipLog(t.tabId, `${why ?? "탭의 문서를 확인할 수 없음"} (일반 창 탭)`);
+      // 팝업을 탭으로 연 경우가 아니면 일반 새 탭으로 본다: 이 클릭이 연 새 탭 하나를 브라우저가 같은 창의 앞에 띄웠으면
+      // 따라간다(뒤에 열린 탭이면 원래 탭에 남는다 — 사용자가 보는 탭에서 계속).
+      let tabWhy = why;
+      if ((why || !asTab) && !t.reused && win.type === "normal" && sourceWindowId !== null) {
+        const st = await settledNewTab(t.tabId);
+        const reason = st
+          ? newTabIneligible({
+              freshCount: fresh.length,
+              sourceWindowId,
+              tab: { windowId: st.windowId, windowType: win.type, active: st.active, committedUrl: st.committedUrl, pending: st.pending },
+            })
+          : "탭이 이미 닫힘";
+        if (!reason && st?.documentId) {
+          asTab = { documentId: st.documentId, url: st.committedUrl as string };
+          newTab = true;
+          tabWhy = null;
+        } else {
+          tabWhy = `팝업 탭 아님(${why ?? "탭의 문서를 확인할 수 없음"}), 새 탭 아님(${reason ?? "탭의 문서를 확인할 수 없음"})`;
+        }
+      }
+      if (tabWhy || !asTab) {
+        skipLog(t.tabId, `${tabWhy ?? "탭의 문서를 확인할 수 없음"} (일반 창 탭)`);
         continue;
       }
     }
@@ -377,7 +432,7 @@ export async function settlePopups(
     const followed = await followPopup(
       turnTab,
       tabPopup
-        ? { tabId: t.tabId, windowId: tab.windowId, kind: "tab", documentId: tabPopup.documentId }
+        ? { tabId: t.tabId, windowId: tab.windowId, kind: "tab", documentId: tabPopup.documentId, ...(newTab ? { newTab: true } : {}) }
         : { tabId: t.tabId, windowId: tab.windowId },
     );
     effect.opened = {
@@ -385,8 +440,9 @@ export async function settlePopups(
       followed,
       otherSite: /^https?:/i.test(url) && !sameSiteAs(pageUrl, url),
       ...(tabPopup ? { asTab: true } : {}),
+      ...(newTab ? { newTab: true } : {}),
     };
-    debugLog("popup:opened", `tab ${t.tabId}${t.reused ? " (다시 쓴 창)" : ""}${tabPopup ? " (탭으로 열림)" : ""}${followed ? " (따라감)" : " (따라가지 않음 — 깊이 한도 또는 이미 따라가는 창)"}`);
+    debugLog("popup:opened", `tab ${t.tabId}${t.reused ? " (다시 쓴 창)" : ""}${newTab ? " (새 탭)" : tabPopup ? " (탭으로 열림)" : ""}${followed ? " (따라감)" : " (따라가지 않음 — 깊이 한도 또는 이미 따라가는 창)"}`);
     if (i + 1 < candidates.length) debugLog("popup:skip", `첫 팝업 창 뒤 남은 후보 ${candidates.length - i - 1}개는 보지 않음`);
     break;
   }

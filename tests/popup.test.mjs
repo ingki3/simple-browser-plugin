@@ -224,3 +224,40 @@ test("popupTabIneligible: 하나라도 어긋나면 이유", () => {
   // 막힌 호출은 성공 수에 들지 않는다.
   assert.equal(popupTabIneligible(baseInput({ opens: [...baseInput().opens, { url: "https://a.test/z", blocked: true, features: "" }] })), null);
 });
+
+import { newTabIneligible } from "../src/lib/popupMatch.ts";
+
+const newTabInput = (over = {}) => ({
+  freshCount: 1,
+  sourceWindowId: 7,
+  tab: { windowId: 7, windowType: "normal", active: true, committedUrl: "https://booking.test/items/1", pending: false },
+  ...over,
+});
+
+test("newTabIneligible: 같은 창 앞에 뜬 새 탭 하나면 null", () => {
+  assert.equal(newTabIneligible(newTabInput()), null);
+});
+
+test("newTabIneligible: 하나라도 어긋나면 이유(뒤에 열린 탭·여러 탭·다른 창·이동 중·웹 페이지 아님)", () => {
+  const tab = newTabInput().tab;
+  const cases = [
+    { freshCount: 0 },
+    { freshCount: 2 },
+    { tab: { ...tab, windowType: "popup" } },
+    { tab: { ...tab, windowId: 8 } },
+    { tab: { ...tab, active: false } },
+    { tab: { ...tab, pending: true } },
+    { tab: { ...tab, committedUrl: null } },
+    { tab: { ...tab, committedUrl: "about:blank" } },
+    { tab: { ...tab, committedUrl: "chrome://newtab/" } },
+  ];
+  for (const c of cases) assert.notEqual(newTabIneligible(newTabInput(c)), null, JSON.stringify(c));
+});
+
+test("describePopup: 따라간 새 탭은 새 탭 문구, 다른 사이트면 승인 안내", () => {
+  const same = describePopup({ opened: { where: "booking.test/items/1", followed: true, otherSite: false, asTab: true, newTab: true } }).join(" ");
+  assert.match(same, /새 탭이 열려 앞에 떴습니다/);
+  assert.doesNotMatch(same, /승인/);
+  const other = describePopup({ opened: { where: "other.test/x", followed: true, otherSite: true, asTab: true, newTab: true } }).join(" ");
+  assert.match(other, /승인을 받습니다/);
+});

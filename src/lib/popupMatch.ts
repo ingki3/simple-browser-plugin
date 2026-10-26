@@ -181,6 +181,25 @@ export function popupRequested(features: string): boolean {
 // - opensComplete: 모든 프레임의 기록을 한도 안에서 빠짐없이 읽었는지.
 // - freshCount: 이 클릭 동안 브라우저 관계(탐색 대상·opener)로 새로 만들어진 탭 수(닫힌 탭 포함, 다시 쓴 창 제외).
 // - tab: 후보 탭의 지금 상태(committedUrl은 최상위 문서가 확정된 주소, pending은 아직 이동 중인지).
+// 클릭으로 열린 일반 새 탭(target=_blank 링크·양식, 팝업을 요청하지 않은 window.open)을 따라가도 되는지.
+// 브라우저가 알려 준 관계(이 클릭 동안 이 탭이 연 탐색 대상)와 탭 상태로만 정한다. 브라우저가 그 탭을 앞에 띄웠을 때만
+// 따라간다(뒤에 열린 탭 — 광고 탭 등 — 은 따라가지 않는다). 따라가도 되면 null, 아니면 이유.
+// 주소가 페이지가 정한 값이라 주소·글자로는 판단하지 않는다(다른 사이트 여부는 결과에 알리고 승인은 그 탭 주소로 한다).
+export function newTabIneligible(input: {
+  freshCount: number;
+  sourceWindowId: number;
+  tab: { windowId: number; windowType: string; active: boolean; committedUrl: string | null; pending: boolean };
+}): string | null {
+  const { tab } = input;
+  if (tab.windowType !== "normal") return `창 종류 ${tab.windowType}`;
+  if (input.freshCount !== 1) return `새 탭이 ${input.freshCount}개`;
+  if (tab.windowId !== input.sourceWindowId) return "클릭한 탭과 다른 창";
+  if (!tab.active) return "앞에 보이지 않는 탭";
+  if (tab.pending || tab.committedUrl === null) return "탭이 아직 이동 중";
+  if (!/^https?:/i.test(tab.committedUrl)) return "웹 페이지가 아닌 탭";
+  return null;
+}
+
 export function popupTabIneligible(input: {
   opensComplete: boolean;
   opens: readonly OpenCallRecord[];
