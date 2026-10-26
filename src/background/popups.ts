@@ -277,7 +277,8 @@ async function settledTabState(
 }
 
 // 새 탭의 첫 웹 문서가 확정되기를 잠깐 기다린다(열린 직후는 about:blank이거나 이동 중). 주소를 미리 모르는 링크
-// 새 탭용: 이동 중이 아니고 확정된 최상위 문서가 http(s)면 바로, 시간이 지나면 그때 상태를 돌려준다.
+// 새 탭용: 이동 중이 아니고 로딩이 끝났고(로딩 중 스크립트로 넘어가는 중간 문서를 고정하지 않게) 확정된 최상위 문서가
+// http(s)면 바로, 시간이 지나면 그때 상태를 돌려준다(로딩 중이면 pending — 따라가지 않는다).
 async function settledNewTab(
   tabId: number,
   timeoutMs = 5_000,
@@ -301,7 +302,7 @@ async function settledNewTab(
       windowId: tab.windowId,
       active: tab.active,
       committedUrl,
-      pending: !!tab.pendingUrl,
+      pending: !!tab.pendingUrl || tab.status === "loading",
       documentId: frame?.documentId ?? null,
     };
     if ((!state.pending && committedUrl && /^https?:/i.test(committedUrl)) || Date.now() >= deadline) return state;
