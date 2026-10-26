@@ -1,5 +1,5 @@
 // 하네스 실행기: `npm run harness [이름 일부]`. 빌드한 dist가 있어야 한다(먼저 npm run build).
-// Chrome for Testing이나 playwright-core가 없으면 건너뛴다(종료 코드 0, 안내만).
+// Chrome for Testing이나 playwright-core가 없으면 건너뛴다(종료 코드 0, 안내만). HARNESS_REQUIRED=1(CI)이면 실패로 끝낸다.
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,7 +13,12 @@ if (!existsSync(join(EXT, "manifest.json"))) {
   process.exit(1);
 }
 if (!findChrome()) {
-  console.log("Chrome for Testing을 찾지 못해 하네스를 건너뜁니다. HARNESS_CHROME에 실행 파일 경로를 주거나 `npx playwright-core install chromium`.");
+  const msg = "Chrome for Testing을 찾지 못했습니다. HARNESS_CHROME에 실행 파일 경로를 주거나 `npx playwright-core install chromium`.";
+  if (process.env.HARNESS_REQUIRED) {
+    console.error(`${msg} (HARNESS_REQUIRED라 실패로 끝냅니다)`);
+    process.exit(1);
+  }
+  console.log(`${msg} 하네스를 건너뜁니다.`);
   process.exit(0);
 }
 

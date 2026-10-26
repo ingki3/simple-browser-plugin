@@ -1,0 +1,57 @@
+name: CI
+
+# 머지 조건(브랜치 보호의 필수 검사):
+# - dev 대상 PR : 단위 테스트·타입 검사·빌드
+# - main 대상 PR(릴리스): 위 항목 + 확장 하네스(dist를 Chrome for Testing에 올려 시나리오 실행)
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: 단위 테스트·타입 검사·빌드
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 단위 테스트
+        run: npm test
+      - name: 타입 검사
+        run: npm run typecheck
+      - name: 빌드
+        run: npm run build
+
+  harness:
+    name: 확장 하네스 (main 대상 PR 전용)
+    if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Chrome for Testing 설치
+        run: npx playwright-core install --with-deps chromium
+      - name: 빌드
+        run: npm run build
+      # Chrome을 찾지 못하면 건너뛰지 않고 실패로 끝낸다(조용히 통과하지 않게).
+      - name: 하네스
+        env:
+          HARNESS_REQUIRED: "1"
+        run: npm run harness
