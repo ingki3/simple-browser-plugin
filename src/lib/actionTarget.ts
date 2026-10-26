@@ -388,7 +388,8 @@ export interface PopupEffect {
   // 이 클릭 동안 이 탭이 연 팝업 창(창 종류 popup). followed: 이후 도구가 그 창에서 동작한다.
   // otherSite: 클릭한 페이지와 다른 사이트의 창.
   // asTab: 팝업을 요청했지만 브라우저가 같은 창의 탭으로 연 것(macOS 전체 화면 등).
-  opened?: { where: string; followed: boolean; otherSite: boolean; asTab?: boolean };
+  // newTab: 팝업이 아닌 일반 새 탭(target=_blank 링크 등)을 브라우저가 앞에 띄워 따라간 것(asTab과 함께).
+  opened?: { where: string; followed: boolean; otherSite: boolean; asTab?: boolean; newTab?: boolean };
   // 클릭한 팝업 창이 클릭 뒤 닫혀 돌아간 곳(원래 탭, 또는 그 팝업을 연 팝업 창).
   closed?: "original" | "popup";
 }
@@ -410,7 +411,13 @@ export function popupWhere(url: string): string {
 export function describePopup(p: PopupEffect): string[] {
   const out: string[] = [];
   if (p.opened) {
-    if (p.opened.followed && p.opened.asTab) {
+    if (p.opened.followed && p.opened.newTab) {
+      out.push(
+        `클릭으로 새 탭이 열려 앞에 떴습니다(${p.opened.where}). 이제 도구는 그 새 탭에서 동작합니다. 그 탭이 닫히면 원래 탭으로 돌아갑니다. 사용자가 다른 탭으로 옮기면 그 탭에서는 작업하지 않습니다. navigate_to_url은 원래 탭을 앞으로 띄워 이동합니다.` +
+          (p.opened.otherSite ? " 클릭한 페이지와 다른 사이트의 탭이라 그 탭에서의 클릭·입력은 승인을 받습니다." : "") +
+          " 새 탭의 내용은 describe_page·find_clickables로 다시 찾으세요(원래 탭에서 찾은 id는 쓸 수 없습니다).",
+      );
+    } else if (p.opened.followed && p.opened.asTab) {
       out.push(
         `팝업이 새 탭으로 열렸습니다(${p.opened.where} — 브라우저가 팝업 창 대신 같은 창의 탭으로 열어 앞에 띄움). 이제 도구는 그 탭에서 동작합니다. 그 탭이 닫히면 원래 탭으로 돌아갑니다. 사용자가 다른 탭으로 옮기면 그 탭에서는 작업하지 않습니다.` +
           (p.opened.otherSite ? " 클릭한 페이지와 다른 사이트의 탭이라 그 탭에서의 클릭·입력은 승인을 받습니다." : "") +
