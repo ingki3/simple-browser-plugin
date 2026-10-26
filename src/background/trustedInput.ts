@@ -402,6 +402,7 @@ async function pressIn(
     viewport: status.viewport ?? { width: Infinity, height: Infinity },
     point,
     frameBlocked: blockedBy.reduce((a, r) => a + r.blocked, 0),
+    hidden: status.hidden,
   });
   const frames = blockedBy.map((r) => `frame ${r.doc.frameId} ${originLabel(r.doc.url)} ×${r.blocked}`).join(", ");
   debugLog(
