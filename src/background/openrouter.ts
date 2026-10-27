@@ -349,6 +349,10 @@ export class ChatAgent {
   // 이 대화에서 사용자가 작업을 맡겼는지(#123, 실행 방식 task). 새 대화·다른 실행 방식·패널의 해제로 풀린다.
   // 저장소에 남기지 않으므로 패널을 닫거나 서비스 워커가 다시 뜨면(새 대화 객체) 다시 묻는다.
   private taskApproved = false;
+  // 맡긴 작업을 거둘 때(다른 실행 방식·해제·새 대화)마다 올린다. 열려 있던 맡기기 카드의 승인은 세대가 같을 때만 받는다.
+  private taskEpoch = 0;
+  // 열려 있는 맡기기 카드의 callId(거둘 때 취소한다).
+  private pendingTaskCall: string | null = null;
   // 이번 요청에서 사용자가 보낸 글(작업 맡기기 카드에 원문으로 보인다).
   private turnRequest = "";
   // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 주소 글자 그대로,
@@ -386,8 +390,8 @@ export class ChatAgent {
   // 설정이 바뀌었을 때(저장소 변경). 이 대화가 쓰던 제공자·키·모델과 달라지면 이 대화가 연 페이지 번역(남은 배치·동적
   // 재번역)을 멈춘다 — 한 번역이 두 제공자에 걸치지 않게(#108 후속, #99). 대화 기록은 다음 요청에서 새로 시작한다.
   onSettingsChanged(next: Settings): void {
-    // 다른 실행 방식으로 바꾸는 즉시 맡긴 작업을 거둔다(다시 task로 돌아와도 새로 묻는다, #123).
-    if (next.runMode !== "task") this.setTaskApproved(false);
+    // 다른 실행 방식으로 바꾸는 즉시 맡긴 작업과 열린 맡기기 카드를 거둔다(다시 task로 돌아와도 새로 묻는다, #123).
+    if (next.runMode !== "task") this.withdrawTask();
     if (this.apiKey === null) return;
     const now = activeModel(next);
     if (now.provider !== this.provider || now.apiKey !== this.apiKey || now.model !== this.model) this.stopTranslations();
@@ -502,6 +506,13 @@ export class ChatAgent {
 
   // 패널에서 맡긴 작업을 거둔다(#123). 다음 동작부터 다시 맡길지 묻는다.
   revokeTask(): void {
+    this.withdrawTask();
+  }
+
+  // 맡긴 작업을 거둔다: 세대를 올리고, 열린 맡기기 카드는 취소로 끝낸다.
+  private withdrawTask(): void {
+    this.taskEpoch += 1;
+    if (this.pendingTaskCall) this.pendingApprovals.get(this.pendingTaskCall)?.(false);
     this.setTaskApproved(false);
   }
 
@@ -526,6 +537,7 @@ export class ChatAgent {
     this.chatGrants.clear();
     this.allowedPersonalUrls.clear();
     this.taskApproved = false;
+    this.taskEpoch += 1;
     this.externalContent = false;
     void detachSession(this.inputSession);
     this.inputSession = new InputSession();
@@ -596,7 +608,7 @@ export class ChatAgent {
       this.committedCandidates = null;
       this.forceNewConversation = false;
       // 새 기록은 새 대화다: 맡긴 작업도 다시 묻는다.
-      this.setTaskApproved(false);
+      this.withdrawTask();
     }
     return {
       apiKey: active.apiKey,
@@ -1415,6 +1427,7 @@ export class ChatAgent {
   // 승인 카드를 띄우지 않는다(손 넘기기·로그인 항목·탭 고르기는 그대로). null: 이 요청이 끝났다.
   private async askTask(call: ToolCallContext, plan: string, risks: string[]): Promise<boolean | null> {
     const { turn, callId, toolName, parsedArgs } = call;
+    const epoch = this.taskEpoch;
     debugLog("tool:awaiting_task", toolName);
     this.send({
       kind: "tool_pending",
@@ -1424,11 +1437,19 @@ export class ChatAgent {
       previewSummary: "이 일을 맡기고 끝까지 실행할까요?",
       task: { request: this.turnRequest.slice(0, 2000), plan, risks },
     });
-    const approved = await new Promise<boolean>((resolve) => {
+    this.pendingTaskCall = callId;
+    let approved = await new Promise<boolean>((resolve) => {
       this.pendingApprovals.set(callId, resolve);
     });
     this.pendingApprovals.delete(callId);
+    if (this.pendingTaskCall === callId) this.pendingTaskCall = null;
     if (this.isStale(turn)) return null;
+    // 카드가 열린 사이 다른 방식으로 바꿨거나 거뒀으면(돌아왔어도) 그 카드의 승인은 쓰지 않는다.
+    if (approved) {
+      const { runMode } = await getSettings();
+      if (this.isStale(turn)) return null;
+      if (epoch !== this.taskEpoch || runMode !== "task") approved = false;
+    }
     debugLog("tool:task_result", approved ? "approved" : "cancelled");
     if (approved) this.setTaskApproved(true);
     return approved;

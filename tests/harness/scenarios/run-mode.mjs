@@ -92,6 +92,26 @@ export default [
     },
   },
   {
+    name: "맡기기 방식: 카드가 열린 사이 방식을 바꾸면 그 카드는 취소되고, 돌아와도 다시 묻는다",
+    async run(h) {
+      await h.settings({ runMode: "task" });
+      const r = await h.turn([findC, { click: "결제하기" }], {
+        onCard: async (card) => {
+          await h.settings({ runMode: "ask" });
+          await h.panel.waitForTimeout(300);
+          await h.settings({ runMode: "task" });
+          await h.panel.waitForTimeout(300);
+          // 이미 거둔 카드라 눌러도(눌리지 않아도) 맡겨지지 않아야 한다.
+          await card.locator(".btn-approve").click({ timeout: 1000 }).catch(() => {});
+        },
+      });
+      expect(r.out !== "결제됨", `거둔 카드로 실행되면 안 된다(out='${r.out}')`);
+      expect(!(await h.panel.locator(".task-bar").count()), "맡김 표시가 없어야 한다");
+      const r2 = await h.turn([findC, { click: "결제하기" }], { noReload: true });
+      expect(r2.stoppedAtCard && r2.out !== "결제됨", "다시 맡길지 물어야 한다");
+    },
+  },
+  {
     name: "실행 방식: 입력창 아래에서 고르면 설정에 저장된다",
     async run(h) {
       await h.panel.selectOption("#run-mode-select", "task");
