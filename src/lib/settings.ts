@@ -14,6 +14,7 @@ import {
   MAX_TOOL_HOPS_VERSION,
   normalizeCsvMaxChars,
   normalizeMaxToolHops,
+  isRunMode,
   type Settings,
 } from "./messages.ts";
 
@@ -29,7 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
   actionLogEnabled: true,
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
-  autoApprove: false,
+  runMode: "ask",
   showThinking: false,
   rememberPages: true,
   trustedInput: false,
@@ -58,7 +59,8 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     maxToolHops: normalizeMaxToolHops(r),
     actionLogEnabled: r.actionLogEnabled !== false,
     csvMaxChars: normalizeCsvMaxChars(r.csvMaxChars),
-    autoApprove: r.autoApprove === true,
+    // 예전 설정은 자동 실행 켜기(autoApprove)만 있었다.
+    runMode: isRunMode(r.runMode) ? r.runMode : (r as { autoApprove?: unknown }).autoApprove === true ? "auto" : "ask",
     showThinking: r.showThinking === true,
     rememberPages: r.rememberPages !== false,
     trustedInput: r.trustedInput === true,

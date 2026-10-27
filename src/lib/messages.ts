@@ -33,7 +33,17 @@ export type ToolName =
   | "google_drive_list_recent"
   | "google_drive_export"
   | "read_other_tabs"
-  | "read_linked_pages";
+  | "read_linked_pages"
+  // '처음에 승인 받고 끝까지 실행'(runMode task, #123): 할 일과 위험을 보이고 사용자에게 작업을 한 번 맡긴다.
+  | "confirm_task";
+
+// 실행 방식(#123). ask: 모든 동작에 승인 후 실행. auto: 페이지 이동·클릭·입력을 묻지 않고 실행(위험한 동작은 묻는다).
+// task: 처음에 작업을 한 번 승인받고, 이 대화가 끝날 때까지 승인 카드 없이 실행한다.
+export type RunMode = "ask" | "auto" | "task";
+export const RUN_MODES: readonly RunMode[] = ["auto", "ask", "task"];
+export function isRunMode(v: unknown): v is RunMode {
+  return v === "ask" || v === "auto" || v === "task";
+}
 
 export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "fill_form_fields",
@@ -199,6 +209,8 @@ export type PanelToBg =
   | { kind: "cancel_tool"; callId: string }
   // 이 대화에서 허락한 도구를 취소한다(#53).
   | { kind: "revoke_chat_grant"; tool: string }
+  // 이 대화에서 맡긴 작업을 거둔다(#123). 다음 동작부터 다시 맡길지 묻는다.
+  | { kind: "revoke_task" }
   | { kind: "abort_stream" }
   | { kind: "reset_conversation"; conversationId: string }
   | { kind: "heartbeat" };
@@ -253,7 +265,11 @@ export type BgToPanel =
       // 직접 조작할 사이트의 손 넘기기 카드(0.2.2): 사용자가 페이지에서 직접 하고 "했어요"(approve_tool)를 누른다.
       // 표시한 대상을 사용자가 누르면 백그라운드가 카드 없이 이어 간다(결과 줄이 오면 카드를 닫는다).
       handoff?: boolean;
+      // 작업 맡기기 카드(#123): 사용자가 보낸 요청 글, 모델이 정리한 할 일, 이 작업의 위험.
+      task?: { request: string; plan: string; risks: string[] };
     }
+  // 이 대화에서 작업을 맡겼는지(#123). 패널이 입력창 위에 표시와 해제 버튼을 보인다.
+  | { kind: "task_state"; active: boolean }
   | {
       kind: "tool_result";
       callId: string;
@@ -369,8 +385,8 @@ export interface Settings {
   actionLogEnabled: boolean;
   // read_document가 CSV·TSV 파일을 표로 읽을 때 모델에 넘기는 최대 글자 수(모델이 따로 정하지 않았을 때).
   csvMaxChars: number;
-  // 페이지 이동·클릭·입력을 승인 없이 실행할지. 켜도 결제·개인정보 제출은 묻는다(src/lib/autoApprove.ts).
-  autoApprove: boolean;
+  // 실행 방식(#123). 예전 설정의 autoApprove(true면 auto)는 normalizeSettings가 옮긴다.
+  runMode: RunMode;
   // 추론(thinking) 글자를 접이식 상자로 보일지. 끄면(기본) 추론 중에 "생각 중…" 표시만 보인다.
   showThinking: boolean;
   // "이 페이지 기억하기": 사용자가 저장한 페이지를 같은 사이트에서 모델에 이동 후보로 준다(#30).

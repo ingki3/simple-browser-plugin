@@ -18,9 +18,9 @@ export default [
       expect(groups.join(",") === "시작하기:true,동작:false,자동 로그인:false,기억·기록:false,연결:false,고급:false", `묶음(${groups.join(",")})`);
       expect((await h.panel.locator(".drawer-footer").count()) === 0, "저장·취소 버튼 없음");
       await h.panel.locator("details.settings-group summary", { hasText: "동작" }).click();
-      await h.panel.locator(".field", { hasText: "자동 실행" }).locator("input[type=checkbox]").first().check();
+      await h.panel.locator("input[name=run-mode][value=auto]").check();
       await h.panel.waitForTimeout(300);
-      expect((await stored(h)).autoApprove === true, "자동 실행이 바로 저장됨");
+      expect((await stored(h)).runMode === "auto", "실행 방식이 바로 저장됨");
     },
   },
   {
@@ -66,17 +66,17 @@ export default [
       await openDrawer(h);
       await other.locator("button.icon-btn[title]", { hasText: "⚙" }).click();
       await other.waitForTimeout(300);
-      // A: 자동 실행 끄기
+      // A: 실행 방식을 '모든 동작에 승인'으로
       await h.panel.locator("details.settings-group summary", { hasText: "동작" }).click();
-      await h.panel.locator(".field", { hasText: "자동 실행" }).locator("input[type=checkbox]").first().uncheck();
+      await h.panel.locator("input[name=run-mode][value=ask]").check();
       await h.panel.waitForTimeout(400);
-      // B(열 때 자동 실행이 켜져 있던 서랍): 생각 보기만 켜기
+      // B(열 때 자동 실행 방식이던 서랍): 생각 보기만 켜기
       await other.locator("details.settings-group summary", { hasText: "고급" }).click();
       await other.locator(".field", { hasText: "생각" }).locator("input[type=checkbox]").first().check();
       await other.waitForTimeout(400);
       const st = await stored(h);
       await other.close();
-      expect(st.autoApprove === false && st.showThinking === true, `둘 다 유지(${JSON.stringify({ autoApprove: st.autoApprove, showThinking: st.showThinking })})`);
+      expect(st.runMode === "ask" && st.showThinking === true, `둘 다 유지(${JSON.stringify({ runMode: st.runMode, showThinking: st.showThinking })})`);
     },
   },
   {
@@ -85,12 +85,12 @@ export default [
       await h.settings({ autoApprove: true, showThinking: false, providerModels: { openai: "gpt-5" } });
       await h.panel.evaluate(async () => {
         const send = (patch) => chrome.runtime.sendMessage({ kind: "settings_patch", patch });
-        await Promise.all([send({ autoApprove: false }), send({ showThinking: true }), send({ providerModels: { gemini: "gemini-3.1-pro-preview" } })]);
+        await Promise.all([send({ runMode: "ask" }), send({ showThinking: true }), send({ providerModels: { gemini: "gemini-3.1-pro-preview" } })]);
       });
       const st = await stored(h);
       expect(
-        st.autoApprove === false && st.showThinking === true && st.providerModels.openai === "gpt-5" && st.providerModels.gemini === "gemini-3.1-pro-preview",
-        `모두 유지(${JSON.stringify({ autoApprove: st.autoApprove, showThinking: st.showThinking, providerModels: st.providerModels })})`,
+        st.runMode === "ask" && st.showThinking === true && st.providerModels.openai === "gpt-5" && st.providerModels.gemini === "gemini-3.1-pro-preview",
+        `모두 유지(${JSON.stringify({ runMode: st.runMode, showThinking: st.showThinking, providerModels: st.providerModels })})`,
       );
     },
   },

@@ -2,9 +2,11 @@
 // 값은 부르는 쪽이 미리 구해 넘기고, 이 함수는 카드를 띄울지·자동 실행할지·손 넘기기할지와 카드에 함께 보일 제안만 정한다.
 // 규칙(우선순위 순):
 // 1. 직접 조작할 사이트(0.2.2)의 클릭·입력 → handoff(실행하지 않고 사용자에게 넘김)
-// 2. 이번 대화 허락(#53)으로 덮이는 호출 → grant
-// 3. 자동 실행(설정 또는 이번 요청 링크 이동 허락 #28)이고 막는 이유(block)가 없으면 → auto
-// 4. 그 밖 → card
+// 2. 실행 방식이 '처음에 승인 받고 끝까지 실행'(#123)이고 사용자가 고르는 카드가 아니면 → task(맡긴 작업으로 실행.
+//    맡기기 전이면 부르는 쪽이 작업 맡기기 카드로 한 번 묻는다). 되돌리기 어려운 동작·외부 본문 보호 중도 포함한다(사용자 결정).
+// 3. 이번 대화 허락(#53)으로 덮이는 호출 → grant
+// 4. 자동 실행(설정 또는 이번 요청 링크 이동 허락 #28)이고 막는 이유(block)가 없으면 → auto
+// 5. 그 밖 → card
 // 외부 본문 보호 중(guarded, #37)에는 자동 실행·링크 허락을 쓰지 않는다. 되돌리기 어려운 동작(#62, alwaysAsk)은 링크 허락·
 // 대화 허락으로도 건너뛰지 않는다.
 import type { TargetInfo } from "./actionTarget.ts";
@@ -33,8 +35,10 @@ export interface ApprovalInput {
   preview: ApprovalPreview;
   // 외부 본문 보호 중이라 이 도구에 승인이 필요한지(needsApprovalWhenProtected).
   guarded: boolean;
-  // 설정의 자동 실행.
+  // 설정의 자동 실행(실행 방식 auto).
   autoApprove: boolean;
+  // 실행 방식이 '처음에 승인 받고 끝까지 실행'(task)인지(#123).
+  taskMode: boolean;
   // 클릭·입력 대상 페이지 주소(따라가는 팝업이면 그 창). 그 밖의 도구는 undefined.
   pageUrl?: string;
   // 지금 페이지가 사용자가 고른 '직접 조작할 사이트'인지(isManualSite).
@@ -54,7 +58,7 @@ export interface ApprovalInput {
   chatGrants: ChatGrants;
 }
 
-export type ApprovalMode = "handoff" | "grant" | "auto" | "card";
+export type ApprovalMode = "handoff" | "task" | "grant" | "auto" | "card";
 
 export interface ApprovalDecision {
   mode: ApprovalMode;
@@ -70,6 +74,16 @@ export interface ApprovalDecision {
   // 지금 페이지의 사이트(링크 허락을 보관할 출처).
   pageSite: string | null;
   chatGrant: ChatGrantDecision;
+  // 맡긴 작업(실행 방식 task)으로 실행할 호출인지.
+  taskCovered: boolean;
+}
+
+// 실행 방식 task에서도 카드를 띄우는 도구: 승인이 아니라 사용자가 골라야 하는 것이 있다(모델이 고르지 않음).
+// sign_in은 항목 고르기·손 넘기기(자동 로그인 판정은 따로), read_other_tabs는 읽을 탭 고르기.
+const USER_PICKS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "read_other_tabs"]);
+
+export function taskCovers(toolName: ToolName): boolean {
+  return !USER_PICKS.has(toolName);
 }
 
 const isPageAction = (tool: ToolName) => tool === "click_element" || tool === "fill_form_fields";
@@ -137,7 +151,8 @@ export function decideApproval(input: ApprovalInput): ApprovalDecision {
     block: preview.alwaysAsk ?? preview.grantBlock ?? null,
     scope: preview.grantScope ?? "",
   });
-  const base = { autoMode, block, linkOffer, linkGranted, urlOffer, pageSite, chatGrant };
+  const taskCovered = input.taskMode && taskCovers(toolName);
+  const base = { autoMode, block, linkOffer, linkGranted, urlOffer, pageSite, chatGrant, taskCovered };
   return { ...base, mode: modeOf(handOff, base) };
 }
 
@@ -149,6 +164,7 @@ export function withoutChatGrant(d: ApprovalDecision, reason: string): ApprovalD
 
 function modeOf(handOff: boolean, d: Omit<ApprovalDecision, "mode">): ApprovalMode {
   if (handOff) return "handoff";
+  if (d.taskCovered) return "task";
   if (d.chatGrant.covered) return "grant";
   if (d.autoMode && !d.block) return "auto";
   return "card";

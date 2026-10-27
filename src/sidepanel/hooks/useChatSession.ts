@@ -46,6 +46,9 @@ export function useChatSession() {
         case "chat_grants":
           s.setChatGrants(msg.grants);
           return;
+        case "task_state":
+          s.setTaskActive(msg.active);
+          return;
         case "hop_progress":
           s.setHopProgress({ used: msg.used, limit: msg.limit });
           return;
@@ -74,6 +77,7 @@ export function useChatSession() {
             personalUrlOffer: msg.personalUrlOffer === true,
             ...(typeof msg.loginSiteOffer === "string" ? { loginSiteOffer: msg.loginSiteOffer } : {}),
             handoff: msg.handoff === true,
+            ...(msg.task ? { task: msg.task } : {}),
             ...(msg.choices ? { choices: msg.choices, choiceLimit: msg.choiceLimit, choiceDefaults: msg.choiceDefaults } : {}),
             resolved: null,
           });
@@ -152,6 +156,8 @@ export function useChatSession() {
         clearHeartbeat();
         // 연결이 끊기면 백그라운드가 대화 객체를 버리므로 그 대화의 허락도 사라진다(#53).
         useChatStore.getState().setChatGrants([]);
+        // 맡긴 작업(#123)도 대화 객체와 함께 사라진다.
+        useChatStore.getState().setTaskActive(false);
         const lastErr = chrome.runtime.lastError?.message;
         pushPanelDebug("port:disconnect", lastErr, "warn");
         if (!alive) return;
@@ -252,6 +258,13 @@ export function useChatSession() {
     send({ kind: "revoke_chat_grant", tool });
   };
 
+  // 맡긴 작업을 거둔다(#123). 표시는 바로 지우고, 백그라운드가 상태를 다시 보낸다.
+  const revokeTask = () => {
+    useChatStore.getState().setTaskActive(false);
+    localDebug("revoke_task");
+    send({ kind: "revoke_task" });
+  };
+
   const cancelTool = (callId: string) => {
     useChatStore.getState().resolveToolPending(callId, "cancelled");
     localDebug("cancel_tool", callId);
@@ -270,5 +283,5 @@ export function useChatSession() {
     send({ kind: "reset_conversation", conversationId });
   };
 
-  return { sendUser, approveTool, cancelTool, abortStream, resetConversation, revokeChatGrant };
+  return { sendUser, approveTool, cancelTool, abortStream, resetConversation, revokeChatGrant, revokeTask };
 }

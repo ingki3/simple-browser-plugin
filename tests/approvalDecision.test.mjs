@@ -12,6 +12,7 @@ const input = (over = {}) => ({
   preview: { autoBlock: null, linkHrefs: [], fillValues: [] },
   guarded: false,
   autoApprove: false,
+  taskMode: false,
   pageUrl: PAGE,
   manualSite: false,
   trusted: new Set([SITE]),
@@ -38,6 +39,14 @@ const TABLE = [
   ["자동 실행 + 신뢰 사이트 안 이동 → 자동", { toolName: "navigate_to_url", autoApprove: true, pageUrl: undefined, preview: { details: `${SITE}/b` } }, "auto", null],
   ["자동 실행 + 사이트 밖 이동 → 카드", { toolName: "navigate_to_url", autoApprove: true, pageUrl: undefined, preview: { details: "https://other.example/" } }, "card", /사이트 밖/],
   ["내부 페이지에서 요청에 적은 사이트로 이동(#54) → 자동", { toolName: "navigate_to_url", autoApprove: true, pageUrl: undefined, trusted: new Set(), fromInternal: true, namedSites: ["https://news.example"], preview: { details: "https://news.example/" } }, "auto", null],
+  // 처음에 승인 받고 끝까지 실행(#123): 사용자가 고르는 카드(로그인 항목·다른 탭)와 손 넘기기 밖은 모두 맡긴 작업으로 실행한다.
+  ["맡기기 방식 + 결제 단서 → 맡긴 작업", { taskMode: true, preview: { autoBlock: "결제·구매 동작" } }, "task", null],
+  ["맡기기 방식 + 늘 묻는 동작 → 맡긴 작업", { taskMode: true, preview: { autoBlock: null, alwaysAsk: "삭제" } }, "task", null],
+  ["맡기기 방식 + 보호 중 → 맡긴 작업", { taskMode: true, guarded: true }, "task", null],
+  ["맡기기 방식 + 다른 사이트 이동 → 맡긴 작업", { toolName: "navigate_to_url", taskMode: true, pageUrl: undefined, preview: { details: "https://other.example/" } }, "task", null],
+  ["맡기기 방식 + 직접 조작할 사이트 → 손 넘기기", { taskMode: true, manualSite: true }, "handoff", null],
+  ["맡기기 방식 + 다른 탭 읽기 → 카드(탭은 사용자가 고름)", { toolName: "read_other_tabs", taskMode: true, pageUrl: undefined, preview: {} }, "card", null],
+  ["맡기기 방식 + 로그인 → 맡긴 작업 아님", { toolName: "sign_in", taskMode: true, preview: {} }, "card", null],
   ["내부 페이지에서 적지 않은 사이트로 이동 → 카드", { toolName: "navigate_to_url", autoApprove: true, pageUrl: undefined, trusted: new Set(), fromInternal: true, namedSites: ["https://news.example"], preview: { details: "https://other.example/" } }, "card", /./],
 ];
 
@@ -107,4 +116,10 @@ test("손 넘기기는 다른 판정보다 앞선다(자동 실행·허락과 �
   const d = decideApproval(input({ manualSite: true, autoApprove: false, toolName: "fill_form_fields" }));
   assert.equal(d.mode, "handoff");
   assert.equal(withoutChatGrant(d, "x").mode, "handoff");
+});
+
+test("맡긴 작업(#123)은 이번 대화 허락을 못 쓰게 돼도 맡긴 작업으로 남는다", () => {
+  const d = decideApproval(input({ taskMode: true, toolName: "download_images", pageUrl: undefined, preview: {} }));
+  assert.equal(d.mode, "task");
+  assert.equal(withoutChatGrant(d, "이유").mode, "task");
 });

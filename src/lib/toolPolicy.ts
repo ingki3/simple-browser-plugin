@@ -53,6 +53,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   read_other_tabs: EXTERNAL,
   // 링크한 페이지(다른 사이트일 수 있음)의 본문.
   read_linked_pages: EXTERNAL,
+  // 작업 맡기기 카드(#123): 페이지를 건드리지 않고 사용자에게만 묻는다.
+  confirm_task: LOCAL_READ,
 };
 
 // 외부 본문 보호가 켜진 대화에서 이 도구 호출에 승인 카드가 필요한지(관측 전용이 아니면 모두).
