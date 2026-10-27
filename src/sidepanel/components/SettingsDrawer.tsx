@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
-import { AutoApproveField } from "./AutoApproveField";
+import { RunModeField } from "./RunModeField";
 import { RememberPagesField } from "./RememberPagesField";
 import { TrustedInputField } from "./TrustedInputField";
 import { ManualSitesField } from "./ManualSitesField";
@@ -394,7 +394,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
           <details className="settings-group">
             <summary>동작</summary>
-            <AutoApproveField enabled={draft.autoApprove} onToggle={(autoApprove) => update({ autoApprove })} />
+            <RunModeField mode={draft.runMode} onChange={(runMode) => update({ runMode })} />
             <ManualSitesField sites={draft.manualSites} onChange={(manualSites) => update({ manualSites })} currentTabButton />
             <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
           </details>

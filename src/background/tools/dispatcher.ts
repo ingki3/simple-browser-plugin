@@ -1119,5 +1119,8 @@ async function runTool(
         data,
       };
     }
+    case "confirm_task":
+      // 작업 맡기기 카드는 대화 객체(ChatAgent.confirmTask)가 직접 처리한다.
+      throw new Error("confirm_task는 실행 도구가 아닙니다.");
   }
 }

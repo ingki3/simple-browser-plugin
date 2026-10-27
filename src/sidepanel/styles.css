@@ -1234,3 +1234,67 @@ body,
   font-size: 12px;
   opacity: 0.75;
 }
+
+/* 실행 방식 선택(#123): 입력창 아래 */
+.run-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 8px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.run-mode-select {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+/* 작업을 맡긴 대화(#123): 입력창 위 */
+.task-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--warn);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.task-section-label {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.task-text {
+  font-family: inherit;
+  word-break: break-word;
+}
+
+.task-risks {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.task-warning {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--error);
+}
+
+.task-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}

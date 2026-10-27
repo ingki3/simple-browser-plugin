@@ -67,6 +67,9 @@ chrome.runtime.onConnect.addListener((port) => {
       case "revoke_chat_grant":
         agent?.revokeChatGrant(String(msg.tool));
         return;
+      case "revoke_task":
+        agent?.revokeTask();
+        return;
       case "cancel_tool":
         agent?.cancelTool(msg.callId);
         return;
