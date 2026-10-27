@@ -78,7 +78,12 @@ export async function startHarness() {
   await installMockModel(sw);
   const panel = await ctx.newPage();
 
+  // 예전 이름 autoApprove(true/false)는 실행 방식(runMode auto/ask, #123)으로 바꿔 쓴다.
   async function settings(patch) {
+    if ("autoApprove" in patch) {
+      const { autoApprove, ...rest } = patch;
+      patch = { runMode: autoApprove ? "auto" : "ask", ...rest };
+    }
     await sw.evaluate(async (patch) => {
       const cur = (await chrome.storage.local.get("settings")).settings ?? {};
       await chrome.storage.local.set({ settings: { ...cur, ...patch } });
@@ -90,7 +95,7 @@ export async function startHarness() {
     await sw.evaluate(async () => {
       await chrome.storage.local.clear();
       await chrome.storage.local.set({
-        settings: { openRouterApiKey: "sk-or-test-dummy", model: "deepseek/x", autoApprove: false },
+        settings: { openRouterApiKey: "sk-or-test-dummy", model: "deepseek/x", runMode: "ask" },
       });
       globalThis.__steps = [];
       globalThis.__toolLog = [];

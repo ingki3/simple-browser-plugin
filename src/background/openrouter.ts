@@ -117,11 +117,11 @@ interface HandedOff {
   popups: HandoffPopups | null;
   clickedAt: number;
 }
-// 실행한다. via: 카드 없이 실행한 이유(이번 대화 허락·자동 실행). 카드로 승인했거나 승인 대상이 아니면 null.
+// 실행한다. via: 카드 없이 실행한 이유(이번 대화 허락·자동 실행·맡긴 작업). 카드로 승인했거나 승인 대상이 아니면 null.
 interface AuthorizedRun {
   kind: "run";
   execArgs: unknown;
-  via: "grant" | "auto" | null;
+  via: "grant" | "auto" | "task" | null;
   // 이번 대화 허락으로 저장할 이미지를 쿠키 없이 미리 받은 것.
   grantImages?: Map<string, string>;
   // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
@@ -142,7 +142,7 @@ const SYSTEM_PROMPT = `너는 Chrome 사이드 패널에서 사용자의 현재 
    (c) 다음에 부를 툴과 그 이유.
    navigate_to_url을 바로 호출하는 예외에서는 현재 페이지 관측 대신 사용자가 요청한 목적지와 사용할 공식 URL을 밝힌다.
 3. 관측 결과가 예상과 다르거나 후보가 여러 개면 바로 행동하지 말고, Thought에서 이유를 밝힌 뒤 다른 필터/도구로 재관측하거나 사용자에게 되묻는다. 단, 아래 '목표 페이지 찾아가기 모드'에서 경로 중간의 링크를 고를 때는 되묻지 않고 가장 그럴듯한 후보를 고른다.
-4. 민감 툴(navigate_to_url, open_saved_link, click_element, fill_form_fields, sign_in, download_images, download_files, capture_page)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다(목표 페이지 찾아가기 모드의 경로 중간 링크는 예외). 사용자가 '직접 조작할 사이트'로 정한 사이트에서는 click_element·fill_form_fields를 불러도 확장이 대신 누르거나 입력하지 않고, 대상을 화면에 표시해 사용자가 직접 하게 한다(결과에 handedOff). 이때도 평소처럼 대상을 하나씩 정해 부르고, 결과를 받으면 페이지를 다시 관측해 사용자가 한 일을 확인한다.
+4. 민감 툴(navigate_to_url, open_saved_link, click_element, fill_form_fields, sign_in, download_images, download_files, capture_page)은 실행 시 자동으로 사용자 승인 UI가 뜬다. 대상이 확정되지 않았으면 민감 툴을 부르지 말고 후보를 나열해 되묻는다(목표 페이지 찾아가기 모드의 경로 중간 링크는 예외). 사용자가 '직접 조작할 사이트'로 정한 사이트에서는 click_element·fill_form_fields를 불러도 확장이 대신 누르거나 입력하지 않고, 대상을 화면에 표시해 사용자가 직접 하게 한다(결과에 handedOff). 이때도 평소처럼 대상을 하나씩 정해 부르고, 결과를 받으면 페이지를 다시 관측해 사용자가 한 일을 확인한다. 실행 방식이 '처음에 승인 받고 끝까지 실행'이라는 안내가 붙으면 승인이 필요한 첫 동작 전에 confirm_task로 작업을 한 번 맡기고, 맡긴 뒤에는 카드 없이 실행되므로 맡긴 일의 범위 안에서만 동작한다.
 5. 페이지 내용을 지어내지 않는다. 모르면 관측 후 말하거나 "확실하지 않다"고 말한다.
 6. 툴이 ok:false로 실패하거나 에러를 반환하면:
    - 같은 툴을 같은 인자로 재시도하지 않는다. 같은 호출이 같은 결과로 3번 이어지거나(화면 변화가 관측된 클릭은 제외) 한 툴이 성공 없이 3번 실패하면 확장이 도구 사용을 멈춘다.
@@ -305,6 +305,10 @@ function logToolFail(toolName: ToolName, msg: string): void {
 const MAX_DOCUMENT_READS_PER_TURN = 5;
 
 // 마무리 요청(도구 없이 답만 받기)에만 붙이는 안내(#55). 대화 기록에는 넣지 않는다.
+// 실행 방식 task(#123)에서 아직 작업을 맡기지 않았을 때 사용자 요청 직후 요청에 붙인다.
+const TASK_MODE_NOTE =
+  "실행 방식: 처음에 승인 받고 끝까지 실행. 이 대화에서는 아직 작업을 맡기지 않았다. 페이지 이동·클릭·입력·저장·문서 쓰기 같은 승인이 필요한 동작이 필요하면, 그 첫 동작 전에 confirm_task(할 일 요약, 이 작업의 위험)를 한 번 부른다. 관측·답만 하는 요청이면 부르지 않는다.";
+
 const LIMIT_STOP_NOTE =
   "[확장 안내 — 사용자 글 아님] 도구 호출 순환 한도에 닿아 사용자가 더 진행하지 않기로 했습니다. 도구를 더 부르지 말고, 지금까지 관측한 결과만으로 사용자의 요청에 답하세요. 끝내지 못한 부분이 있으면 무엇이 남았는지와 다음에 할 일을 짧게 밝히세요.";
 
@@ -342,6 +346,11 @@ export class ChatAgent {
   // 링크 이동 허락(linkGrant)과는 대상 도구가 겹치지 않는다: 그쪽은 페이지 상태를 바꾸는 클릭이라 한 요청에만 쓴다.
   // 그 선택지를 보여 준 카드(callId → 도구·범위)만 받아들인다.
   private chatGrants = new Map<ChatGrantTool, string>();
+  // 이 대화에서 사용자가 작업을 맡겼는지(#123, 실행 방식 task). 새 대화·다른 실행 방식·패널의 해제로 풀린다.
+  // 저장소에 남기지 않으므로 패널을 닫거나 서비스 워커가 다시 뜨면(새 대화 객체) 다시 묻는다.
+  private taskApproved = false;
+  // 이번 요청에서 사용자가 보낸 글(작업 맡기기 카드에 원문으로 보인다).
+  private turnRequest = "";
   // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 주소 글자 그대로,
   // 양식 제출 주소는 그 action).
   // 클릭·입력의 자동 실행 판정에서 이 주소들의 개인정보 주소 신호만 면제한다(사이트 경계·다른 신호는 그대로).
@@ -489,6 +498,22 @@ export class ChatAgent {
     this.send({ kind: "chat_grants", grants: [...this.chatGrants].map(([tool, scope]) => ({ tool, scope })) });
   }
 
+  // 패널에서 맡긴 작업을 거둔다(#123). 다음 동작부터 다시 맡길지 묻는다.
+  revokeTask(): void {
+    this.setTaskApproved(false);
+  }
+
+  private setTaskApproved(v: boolean): void {
+    if (this.taskApproved === v) return;
+    this.taskApproved = v;
+    debugLog(v ? "task:approved" : "task:cleared");
+    this.sendTaskState();
+  }
+
+  private sendTaskState(): void {
+    this.send({ kind: "task_state", active: this.taskApproved });
+  }
+
   reset(): void {
     this.history = [];
     this.lastAttachedPdfUrl = null;
@@ -498,6 +523,7 @@ export class ChatAgent {
     this.linkGrant = null;
     this.chatGrants.clear();
     this.allowedPersonalUrls.clear();
+    this.taskApproved = false;
     this.externalContent = false;
     void detachSession(this.inputSession);
     this.inputSession = new InputSession();
@@ -567,6 +593,8 @@ export class ChatAgent {
       this.lastAttachedPdfUrl = null;
       this.committedCandidates = null;
       this.forceNewConversation = false;
+      // 새 기록은 새 대화다: 맡긴 작업도 다시 묻는다.
+      this.setTaskApproved(false);
     }
     return {
       apiKey: active.apiKey,
@@ -813,8 +841,10 @@ export class ChatAgent {
     if (!this.isStale(turn)) {
       this.turnSite = site;
       this.turnNamedSites = userNamedSites(userText);
+      this.turnRequest = userText;
       // 패널의 허락 표시를 이 대화 객체의 상태에 맞춘다(서비스 워커가 다시 떠 새 대화 객체면 빈 목록).
       this.sendChatGrants();
+      this.sendTaskState();
     }
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
@@ -921,8 +951,11 @@ export class ChatAgent {
       }
       if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
     }
+    const { runMode } = await getSettings();
+    const taskNote = runMode === "task" && !this.taskApproved && !afterToolResult ? TASK_MODE_NOTE : null;
     const sentNotes: OpenRouterMessage[] = maskSyncMessages<OpenRouterMessage>([
       ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
+      ...(taskNote ? [{ role: "user" as const, content: taskNote }] : []),
       ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
       ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
       // 문맥을 서명하는 제공자는 이 안내를 기록에 남기므로 남기기 전에 가린다.
@@ -1151,6 +1184,7 @@ export class ChatAgent {
     }
 
     const call: ToolCallContext = { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall, record };
+    if (toolName === "confirm_task") return this.confirmTask(call);
     const auth = await this.authorizeCall(call);
     if (auth.kind === "stale") return false;
     if (auth.kind === "done") return true;
@@ -1183,8 +1217,11 @@ export class ChatAgent {
     // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
     let execArgs: unknown = preview.execArgs !== undefined ? preview.execArgs : parsedArgs;
     // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
-    const { autoApprove, manualSites } = await getSettings();
+    const { runMode, manualSites } = await getSettings();
     if (this.isStale(turn)) return STALE;
+    const autoApprove = runMode === "auto";
+    // 다른 실행 방식으로 바꿨으면 맡긴 작업을 거둔다(다시 task로 바꾸면 새로 묻는다).
+    if (runMode !== "task") this.setTaskApproved(false);
     const trusted = new Set(this.approvedSites);
     if (this.turnSite) trusted.add(this.turnSite);
     let pageUrl: string | undefined;
@@ -1207,6 +1244,7 @@ export class ChatAgent {
       preview,
       guarded,
       autoApprove,
+      taskMode: runMode === "task",
       pageUrl,
       manualSite: isManualSite(manualSites, pageUrl),
       trusted,
@@ -1238,7 +1276,7 @@ export class ChatAgent {
     let grantImages: Map<string, string> | undefined;
     // 이미지 저장을 허락으로 실행할 때는 쿠키 없이·리다이렉트 없이 이미지를 미리 받아 그 바이트만 저장한다.
     // 받지 못하면(리다이렉트·이미지 아님·너무 큼·로그인 필요) 허락을 쓰지 않고 그 이유와 함께 카드로 묻는다.
-    if (decision.chatGrant.covered && toolName === "download_images") {
+    if (decision.mode === "grant" && toolName === "download_images") {
       // 허락으로 받는 것은 모델이 넘긴 주소의 고정 후보뿐이다(카드에 선택 해제로 함께 보일 페이지의 다른 이미지는 아님).
       // 카드로 넘어가면 사용자가 고른 것으로 다시 정한다.
       setChosenDownloads(callId, preview.grantChoiceIds ?? []);
@@ -1263,6 +1301,22 @@ export class ChatAgent {
       const handed = await this.handOff(call, preview, signInToken, signInHandoffWhy);
       if (handed.kind !== "cancelled") return handed;
       return this.cancelCall(call, signInToken);
+    }
+    if (decision.mode === "task") {
+      if (!this.taskApproved) {
+        // 모델이 confirm_task로 맡기지 않고 승인이 필요한 동작을 불렀다: 이 동작을 할 일로 보여 한 번 묻는다.
+        const asked = await this.askTask(call, `첫 동작: ${preview.summary}`, []);
+        if (asked === null) return STALE;
+        if (!asked) return this.cancelCall(call, signInToken);
+      }
+      debugLog("tool:task_run", toolName);
+      // 고르는 카드(링크 읽기·저장)는 미리보기가 정한 기본 선택(모델이 넘긴 후보 중 경고가 없는 것)으로 실행한다.
+      if (preview.choices) {
+        const ids = preview.choiceDefaults ?? [];
+        setChosenLinks(callId, ids);
+        setChosenDownloads(callId, ids);
+      }
+      return { kind: "run", execArgs, via: "task", signInAttempt, internalNavSite: null };
     }
     if (decision.mode === "grant") {
       debugLog("tool:chat_grant_approved", toolName);
@@ -1315,6 +1369,7 @@ export class ChatAgent {
       urlOffer: false,
       pageSite: null,
       chatGrant: { covered: false, offer: false, reason: null },
+      taskCovered: false,
     });
     const handoffWhy = manualSite
       ? "사용자가 '직접 조작할 사이트'로 정한 사이트입니다"
@@ -1352,6 +1407,60 @@ export class ChatAgent {
     if (site && sp.entries.some((e) => e.uuid === site.uuid)) preview.choiceDefaults = [site.uuid];
     const loginOffer = !site || sp.entries.every((e) => e.uuid !== site.uuid) ? sp.origin : null;
     return { decision: asMode("card", d.auto ? null : d.reason), loginOffer, handoffWhy: null };
+  }
+
+  // 작업 맡기기 카드(#123): 사용자가 보낸 요청 글(원문)과 할 일·위험을 보이고 한 번 묻는다. 맡기면 이 대화가 끝날 때까지
+  // 승인 카드를 띄우지 않는다(손 넘기기·로그인 항목·탭 고르기는 그대로). null: 이 요청이 끝났다.
+  private async askTask(call: ToolCallContext, plan: string, risks: string[]): Promise<boolean | null> {
+    const { turn, callId, toolName, parsedArgs } = call;
+    debugLog("tool:awaiting_task", toolName);
+    this.send({
+      kind: "tool_pending",
+      callId,
+      toolName,
+      args: parsedArgs,
+      previewSummary: "이 일을 맡기고 끝까지 실행할까요?",
+      task: { request: this.turnRequest.slice(0, 2000), plan, risks },
+    });
+    const approved = await new Promise<boolean>((resolve) => {
+      this.pendingApprovals.set(callId, resolve);
+    });
+    this.pendingApprovals.delete(callId);
+    if (this.isStale(turn)) return null;
+    debugLog("tool:task_result", approved ? "approved" : "cancelled");
+    if (approved) this.setTaskApproved(true);
+    return approved;
+  }
+
+  // confirm_task(#123): 실행 방식이 task이고 아직 맡기지 않았으면 작업 맡기기 카드로 묻는다. false: 이 요청이 끝났다.
+  private async confirmTask(call: ToolCallContext): Promise<boolean> {
+    const { turn, turnTab, callId, toolName, argsKey } = call;
+    const args = call.parsedArgs as { summary: string; risks: string[] };
+    const { runMode } = await getSettings();
+    if (this.isStale(turn)) return false;
+    let summary: string;
+    let note: string;
+    if (runMode !== "task") {
+      this.setTaskApproved(false);
+      summary = "지금 실행 방식에서는 맡기지 않음";
+      note = "지금 실행 방식은 '처음에 승인 받고 끝까지 실행'이 아닙니다. confirm_task 없이 평소처럼 진행하세요(승인이 필요한 동작은 카드로 묻습니다).";
+    } else if (this.taskApproved) {
+      summary = "이미 맡긴 작업";
+      note = "이 대화에서 이미 작업을 맡겼습니다. 승인 카드 없이 진행하세요.";
+    } else {
+      const approved = await this.askTask(call, args.summary, args.risks);
+      if (approved === null) return false;
+      if (!approved) {
+        this.cancelCall(call, null);
+        return true;
+      }
+      summary = "작업을 맡김 · 이 대화에서는 묻지 않고 실행";
+      note = "사용자가 작업을 맡겼습니다. 이 대화에서는 승인 카드 없이 진행합니다. 맡긴 일의 범위를 벗어나는 동작은 하지 않습니다.";
+    }
+    this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
+    this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { result: { note } }) });
+    call.record(toolName, argsKey, true, `task:${summary}`, summary);
+    return true;
   }
 
   // 손 넘기기: 페이지에 대상을 표시하고 사용자가 직접 조작(클릭·입력·로그인)하기를 기다린다.
@@ -1645,7 +1754,9 @@ export class ChatAgent {
           ? `이번 대화 허락으로 실행 · ${result.summary}`
           : via === "auto"
             ? `자동 실행 · ${result.summary}`
-            : result.summary,
+            : via === "task"
+              ? `맡긴 작업 · ${result.summary}`
+              : result.summary,
       });
       this.history.push({
         role: "tool",

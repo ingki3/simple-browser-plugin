@@ -222,6 +222,15 @@ export const readLinkedPagesArgs = z
   })
   .strict();
 
+export const confirmTaskArgs = z
+  .object({
+    // 사용자에게 보일 할 일 요약.
+    summary: z.string().min(1).max(1000),
+    // 이 작업에 특히 있을 위험(결제·개인정보 입력·삭제·다른 사이트 등). 카드에 그대로 보인다.
+    risks: z.array(z.string().min(1).max(300)).max(8),
+  })
+  .strict();
+
 export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
@@ -251,6 +260,7 @@ export const toolArgsSchemas = {
   google_drive_export: googleDriveExportArgs,
   read_other_tabs: readOtherTabsArgs,
   read_linked_pages: readLinkedPagesArgs,
+  confirm_task: confirmTaskArgs,
 } as const;
 
 export type ToolArgs = {

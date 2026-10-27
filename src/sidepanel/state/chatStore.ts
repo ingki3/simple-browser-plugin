@@ -29,6 +29,8 @@ export type ChatMessage =
       choiceLimit?: number;
       choiceDefaults?: string[];
       handoff?: boolean;
+      // 작업 맡기기 카드(#123).
+      task?: { request: string; plan: string; risks: string[] };
       resolved: "approved" | "cancelled" | null;
     }
   | {
@@ -66,6 +68,8 @@ interface ChatState {
   hopProgress: { used: number; limit: number } | null;
   // 이 대화에서 "묻지 않기"로 허락한 도구와 범위(#53). 백그라운드가 보낸 목록을 그대로 보인다.
   chatGrants: Array<{ tool: ToolName; scope: string }>;
+  // 이 대화에서 작업을 맡겼는지(#123). 백그라운드가 보낸 상태를 그대로 보인다.
+  taskActive: boolean;
   debugEvents: DebugEvent[];
   appendUser: (text: string) => void;
   beginAssistant: () => void;
@@ -77,6 +81,7 @@ interface ChatState {
   addHopLimit: (m: Extract<ChatMessage, { type: "hop_limit" }>) => void;
   setHopProgress: (p: { used: number; limit: number } | null) => void;
   setChatGrants: (grants: Array<{ tool: ToolName; scope: string }>) => void;
+  setTaskActive: (active: boolean) => void;
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string) => void;
   addInfo: (title: string, message: string) => void;
@@ -104,6 +109,7 @@ export const useChatStore = create<ChatState>((set) => ({
   statusText: null,
   hopProgress: null,
   chatGrants: [],
+  taskActive: false,
   debugEvents: [],
 
   appendUser: (text) =>
@@ -195,6 +201,8 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setChatGrants: (grants) => set((s) => ({ ...s, chatGrants: grants })),
 
+  setTaskActive: (active) => set((s) => ({ ...s, taskActive: active })),
+
   addToolResult: (m) =>
     set((s) => ({ messages: [...closeStreamingBubbles(s.messages), m] })),
 
@@ -243,6 +251,7 @@ export const useChatStore = create<ChatState>((set) => ({
       statusText: null,
       hopProgress: null,
       chatGrants: [],
+      taskActive: false,
       debugEvents: s.debugEvents,
     })),
 
