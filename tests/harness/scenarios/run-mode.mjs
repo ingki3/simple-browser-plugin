@@ -77,6 +77,21 @@ export default [
     },
   },
   {
+    name: "맡기기 방식: 동작 없이 다른 방식으로 바꿨다 돌아와도 다시 묻는다",
+    async run(h) {
+      await h.settings({ runMode: "task" });
+      await h.turn([confirm, findC, { click: "적용" }], { approve: true });
+      expect(await h.panel.locator(".task-bar").count(), "맡김 표시");
+      await h.settings({ runMode: "ask" });
+      await h.panel.waitForTimeout(300);
+      expect(!(await h.panel.locator(".task-bar").count()), "바꾸는 즉시 맡김 표시가 사라져야 한다");
+      await h.settings({ runMode: "task" });
+      const r = await h.turn([findC, { click: "결제하기" }], { noReload: true });
+      expect(r.stoppedAtCard, "다시 맡길지 물어야 한다");
+      expect(r.out !== "결제됨", "실행되면 안 된다");
+    },
+  },
+  {
     name: "실행 방식: 입력창 아래에서 고르면 설정에 저장된다",
     async run(h) {
       await h.panel.selectOption("#run-mode-select", "task");

@@ -156,6 +156,8 @@ export function useChatSession() {
         clearHeartbeat();
         // 연결이 끊기면 백그라운드가 대화 객체를 버리므로 그 대화의 허락도 사라진다(#53).
         useChatStore.getState().setChatGrants([]);
+        // 맡긴 작업(#123)도 대화 객체와 함께 사라진다.
+        useChatStore.getState().setTaskActive(false);
         const lastErr = chrome.runtime.lastError?.message;
         pushPanelDebug("port:disconnect", lastErr, "warn");
         if (!alive) return;

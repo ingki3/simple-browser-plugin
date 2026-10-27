@@ -386,6 +386,8 @@ export class ChatAgent {
   // 설정이 바뀌었을 때(저장소 변경). 이 대화가 쓰던 제공자·키·모델과 달라지면 이 대화가 연 페이지 번역(남은 배치·동적
   // 재번역)을 멈춘다 — 한 번역이 두 제공자에 걸치지 않게(#108 후속, #99). 대화 기록은 다음 요청에서 새로 시작한다.
   onSettingsChanged(next: Settings): void {
+    // 다른 실행 방식으로 바꾸는 즉시 맡긴 작업을 거둔다(다시 task로 돌아와도 새로 묻는다, #123).
+    if (next.runMode !== "task") this.setTaskApproved(false);
     if (this.apiKey === null) return;
     const now = activeModel(next);
     if (now.provider !== this.provider || now.apiKey !== this.apiKey || now.model !== this.model) this.stopTranslations();
