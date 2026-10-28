@@ -1,0 +1,51 @@
+name: Release
+
+# main에 vX.X.XX 태그를 push하면 빌드해서 설치용 ZIP을 GitHub 릴리스에 첨부한다.
+# 받는 사람은 ZIP을 풀고 chrome://extensions → "압축해제된 확장 프로그램 로드"로 그 폴더를 고른다(빌드 불필요).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 설치용 ZIP 릴리스
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 태그와 버전 확인
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "태그($GITHUB_REF_NAME)와 package.json 버전(v$version)이 다릅니다." >&2
+            exit 1
+          fi
+      - name: 단위 테스트
+        run: npm test
+      - name: 빌드
+        run: npm run build
+      - name: ZIP 만들기
+        run: |
+          name="simple-browser-plugin-$GITHUB_REF_NAME"
+          mkdir -p "out/$name"
+          cp -R dist/. "out/$name/"
+          cp LICENSE "out/$name/LICENSE"
+          # 소스 맵은 받는 사람에게 필요 없어 뺀다.
+          (cd out && zip -qr "$name.zip" "$name" -x "*.map")
+          echo "ZIP=out/$name.zip" >> "$GITHUB_ENV"
+      - name: 릴리스에 첨부
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$ZIP" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          fi

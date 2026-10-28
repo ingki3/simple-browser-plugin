@@ -2,6 +2,9 @@
 
 Chrome Side Panel에 탑재되는 채팅 에이전트입니다(모델 제공자: OpenRouter, 또는 OpenAI·Google Gemini·Anthropic Claude 직접 연결). 현재 탭의 페이지를 이해하고, 사용자의 자연어 요청을 ReAct 패턴으로 해석해 사이트 이동·번역·폼 채우기·이미지 다운로드·링크 클릭 등 실제 동작을 수행합니다.
 
+**[최신 버전 받기](https://github.com/ingki3/simple-browser-plugin/releases/latest)** · [설치 안내](docs/install.md) · Chrome 116 이상 · MIT 라이선스
+안정 버전은 Releases(main 브랜치)입니다. 기본 브랜치 `dev`는 개발 중인 코드입니다.
+
 ## 주요 기능
 
 - **설정** (#99) — 사이드 패널의 설정(⚙) 한 곳에서 묶음별로(시작하기·동작·기억·기록·연결·고급, 시작하기만 펼쳐 둠) 바꾸고, 바꾸면 바로 저장(글자 칸은 입력이 멈추면·닫을 때, API 키만 저장 버튼). 설명은 한 줄 요약에 "자세히". 확장 옵션 페이지는 사이드 패널로 안내만 함
@@ -109,14 +112,8 @@ Chrome Side Panel에 탑재되는 채팅 에이전트입니다(모델 제공자:
 
 ## 설치
 
-1. 의존성 설치 및 빌드
-   ```bash
-   npm install
-   npm run build
-   ```
-2. Chrome에서 `chrome://extensions` 열기 → 개발자 모드 활성화
-3. "압축해제된 확장 프로그램 로드" 클릭 → `dist/` 폴더 선택
-4. 최초 실행 시 설정(⚙)에서 [OpenRouter Keys](https://openrouter.ai/keys)에서 발급한 API 키와 사용할 모델 ID 입력 후 저장
+빌드할 필요 없습니다. [Releases](https://github.com/ingki3/simple-browser-plugin/releases/latest)에서 `simple-browser-plugin-vX.X.XX.zip`을 받아 풀고, `chrome://extensions`에서 개발자 모드를 켠 뒤 **압축해제된 확장 프로그램 로드**로 그 폴더를 고릅니다.
+업데이트, 권한 설명, 직접 빌드, Google 연동은 [설치 안내](docs/install.md)를 보세요.
 
 ## 사용 예시
 
@@ -208,4 +205,4 @@ Vite · TypeScript · React 18 · zustand · zod · OpenRouter API · `@crxjs/vi
 
 ## 라이선스
 
-MIT
+MIT — [LICENSE](LICENSE)
