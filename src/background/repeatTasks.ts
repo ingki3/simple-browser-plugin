@@ -296,11 +296,25 @@ function holdWorker(): () => void {
   return () => clearInterval(timer);
 }
 
-// 이 확인이 연 탭을 닫는다. 사용자가 그 탭을 앞으로 가져왔거나 등록한 사이트 밖으로 옮겼으면 닫지 않는다.
+// 확인 중에 사용자가 앞으로 가져온 적이 있는 확인용 탭(사용하기 시작한 탭은 닫지 않는다).
+const touchedTabs = new Set<number>();
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (openChecks.has(tabId)) touchedTabs.add(tabId);
+});
+// 지금 확인 중인 탭 → 다 뜬 뒤 본 주소.
+const openChecks = new Map<number, string | null>();
+
+// 이 확인이 연 탭을 닫는다. 사용자가 그 탭을 한 번이라도 앞으로 가져왔거나, 우리가 본 주소에서 옮겼거나, 등록한 사이트 밖에
+// 있으면 닫지 않는다(사용자가 쓰기 시작한 탭의 입력을 잃지 않게).
 async function closeOwnTab(tabId: number | null, registered: string): Promise<void> {
   if (tabId === null) return;
+  const seen = openChecks.get(tabId) ?? null;
+  const touched = touchedTabs.has(tabId);
+  openChecks.delete(tabId);
+  touchedTabs.delete(tabId);
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab || tab.active || !tab.url || !inRegisteredSite(registered, tab.url)) return;
+  if (!tab || touched || tab.active || !tab.url || !inRegisteredSite(registered, tab.url)) return;
+  if (seen !== null && tab.url !== seen) return;
   await chrome.tabs.remove(tabId).catch(() => {});
 }
 
@@ -317,11 +331,13 @@ async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: numbe
   const created = await chrome.tabs.create({ url: t.url, active: false });
   if (created.id === undefined) throw new Error("확인용 탭을 열지 못했습니다.");
   const tabId = created.id;
+  openChecks.set(tabId, null);
   onTab(tabId);
   await waitLoaded(tabId, signal);
   await sleep(SETTLE_MS, signal);
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url ?? "";
+  if (openChecks.has(tabId)) openChecks.set(tabId, url);
   if (!/^https?:/.test(url)) throw new Error("확인용 탭이 웹 페이지가 아닙니다.");
   // 등록한 주소와 같은 출처이거나 같은 등록 도메인이면 읽는다(공유 호스팅은 등록 도메인으로 묶지 않으므로 같은 출처만).
   if (!inRegisteredSite(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");

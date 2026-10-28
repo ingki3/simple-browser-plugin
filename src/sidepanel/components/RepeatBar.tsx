@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useChatStore } from "../state/chatStore";
 import { useRepeatTasks } from "../hooks/useRepeatTasks";
 
@@ -10,6 +11,8 @@ interface Props {
 export function RepeatBar({ onContinue }: Props) {
   const { tasks } = useRepeatTasks();
   const streaming = useChatStore((s) => s.streaming);
+  // 누른 작업(준비하는 동안 다시 누르지 못하게 — 두 번 누르면 둘 다 취소된다). 목록이 바뀌면(시작·되돌림) 다시 누를 수 있다.
+  const [pressed, setPressed] = useState<{ id: string; revision: number } | null>(null);
   const triggered = (tasks ?? []).filter((t) => t.status === "triggered");
   if (!triggered.length) return null;
   return (
@@ -23,9 +26,12 @@ export function RepeatBar({ onContinue }: Props) {
           </div>
           <button
             className="btn-approve"
-            disabled={streaming}
+            disabled={streaming || (pressed?.id === t.id && pressed.revision === t.revision)}
             title={streaming ? "지금 응답이 끝난 뒤 누를 수 있습니다" : "새 대화를 열고 작업 탭에서 할 일을 시작합니다"}
-            onClick={() => onContinue(t.id)}
+            onClick={() => {
+              setPressed({ id: t.id, revision: t.revision });
+              onContinue(t.id);
+            }}
           >
             이어서 진행
           </button>
