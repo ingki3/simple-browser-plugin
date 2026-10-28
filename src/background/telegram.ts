@@ -277,6 +277,8 @@ async function pollOnce(timeoutS: number): Promise<PollResult> {
   const s = await load();
   if (!s.token || s.status !== "idle" || (s.chatId === null && !s.pairing)) return "stopped";
   const epoch = s.epoch;
+  // 이 받기가 속한 연결. 그 뒤 연결을 끊거나 토큰을 바꾸면 이 받기에서 나온 요청은 실행하지 않는다.
+  const conn = connAbort.signal;
   pollAbort = new AbortController();
   let updates: Array<{ update_id: number }>;
   try {
@@ -298,12 +300,13 @@ async function pollOnce(timeoutS: number): Promise<PollResult> {
     // 처리하기 전에 다음 offset을 저장한다(같은 메시지를 두 번 실행하지 않는다 — 저장하지 못하면 실행하지 않는다).
     const saved = await update((cur) => (u.update_id < cur.offset ? null : { ...cur, offset: u.update_id + 1 }), epoch).catch(() => null);
     if (!saved) continue;
-    await handleUpdate(saved, u);
+    if (conn.aborted) return "stopped";
+    await handleUpdate(saved, u, conn);
   }
   return "ok";
 }
 
-async function handleUpdate(s: TelegramState, u: unknown): Promise<void> {
+async function handleUpdate(s: TelegramState, u: unknown, conn: AbortSignal): Promise<void> {
   const a = parseUpdate(u, s.chatId);
   const now = Date.now();
   switch (a.kind) {
@@ -343,7 +346,8 @@ async function handleUpdate(s: TelegramState, u: unknown): Promise<void> {
         await sendText(s, "앞의 요청을 처리하고 있습니다. /stop으로 멈출 수 있습니다.").catch(() => {});
         return;
       }
-      startRun(s, a.text);
+      if (conn.aborted) return;
+      startRun(s, a.text, conn);
       return;
   }
 }
@@ -369,7 +373,7 @@ let session: Session | null = null;
 let connAbort = new AbortController();
 // 실행 슬롯: 한 번에 요청 하나. id·연결 세대가 같은 실행만 결과를 보내고 슬롯을 비운다.
 // 멈춰도(stopping) 실행이 실제로 끝날 때까지 비우지 않는다(멈추는 중인 도구와 다음 요청이 겹치지 않게).
-let slot: { id: string; epoch: number; agent: ChatAgent; stopping: boolean } | null = null;
+let slot: { id: string; epoch: number; agent: ChatAgent; stopping: boolean; abort: AbortController } | null = null;
 
 // 원격 대화의 이벤트는 패널로 가지 않는다(최종 답은 sendUserTurn의 결과로만 보낸다).
 const sink: AgentSink = { postMessage: () => {} };
@@ -378,6 +382,7 @@ function stopRun(): boolean {
   if (!slot || slot.stopping) return false;
   slot.stopping = true;
   slot.agent.abort();
+  slot.abort.abort();
   return true;
 }
 
@@ -396,7 +401,7 @@ function dropSession(): void {
   session = null;
 }
 
-function startRun(s: TelegramState, text: string): void {
+function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
   const id = crypto.randomUUID();
   if (!session || Date.now() - session.lastAt > IDLE_RESET_MS) {
     dropSession();
@@ -404,17 +409,24 @@ function startRun(s: TelegramState, text: string): void {
   }
   const cur = session;
   cur.lastAt = Date.now();
-  slot = { id, epoch: s.epoch, agent: cur.agent, stopping: false };
+  // 이 요청의 중단(/stop·새 대화): 실행과 결과 보내기(가림·나눠 보내기·재시도)를 함께 멈춘다.
+  const runAbort = new AbortController();
+  slot = { id, epoch: s.epoch, agent: cur.agent, stopping: false, abort: runAbort };
   const mine = () => slot?.id === id && !slot.stopping;
   debugLog("telegram:request", `${text.length}자`);
-  const conn = connAbort.signal;
+  const out = AbortSignal.any([conn, runAbort.signal]);
   void (async () => {
     const at = Date.now();
     const hold = setInterval(() => void chrome.runtime.getPlatformInfo().catch(() => {}), 20_000);
     let status: TelegramRecent["status"] = "failed";
     try {
-      await update((st) => ({ ...st, recent: [{ at, preview: text.slice(0, 40), status: "running" as const }, ...st.recent].slice(0, RECENT) }), s.epoch);
-      void tgCall(s.token, "sendChatAction", { chat_id: s.chatId, action: "typing" }, conn).catch(() => {});
+      const recorded = await update((st) => ({ ...st, recent: [{ at, preview: text.slice(0, 40), status: "running" as const }, ...st.recent].slice(0, RECENT) }), s.epoch);
+      // 그 사이 연결이 바뀌었으면(끊기·토큰 바꾸기) 실행하지 않는다.
+      if (!recorded || out.aborted) {
+        status = "stopped";
+        return;
+      }
+      void tgCall(s.token, "sendChatAction", { chat_id: s.chatId, action: "typing" }, out).catch(() => {});
       const tabId = await workTab(cur);
       if (!mine()) {
         status = "stopped";
@@ -434,19 +446,19 @@ function startRun(s: TelegramState, text: string): void {
       // 이 요청이 끝난 주소를 기억한다(다음 요청은 이 탭이 이 주소 그대로일 때만 새 탭 화면으로 되돌려 다시 쓴다).
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       cur.tab = tab?.url ? { tabId, url: tab.url } : null;
-      if (!mine() || conn.aborted) {
+      if (!mine() || out.aborted) {
         status = "stopped";
         return;
       }
       if (result.outcome === "ok") {
         status = "done";
-        await sendMasked(s, result.finalText || "끝났습니다(답할 내용이 없습니다).", conn);
+        await sendMasked(s, result.finalText || "끝났습니다(답할 내용이 없습니다).", out);
       } else if (result.outcome === "error") {
-        await sendText(s, remoteErrorText(result.action), conn);
+        await sendText(s, remoteErrorText(result.action), out);
       } else status = "stopped";
     } catch (err) {
       debugLog("telegram:run_error", err instanceof Error ? err.message : String(err), "warn");
-      if (mine() && !conn.aborted) await sendText(s, remoteErrorText(undefined), conn).catch(() => {});
+      if (mine() && !out.aborted) await sendText(s, remoteErrorText(undefined), out).catch(() => {});
     } finally {
       clearInterval(hold);
       if (slot?.id === id) slot = null;
@@ -526,9 +538,11 @@ const recovered = (async () => {
 
 // 반복 작업 알림(설정에서 켰을 때만): 제목만 보내고 확인 결과의 이유·할 일은 보내지 않는다.
 onRepeatTriggered(async (t) => {
+  // 이 알림이 속한 연결(그 사이 끊거나 토큰을 바꾸면 보내지 않는다).
+  const conn = connAbort.signal;
   const s = await load();
-  if (!s.notifyRepeat || s.chatId === null || s.status !== "idle") return;
-  await sendMasked(s, `반복 작업 ‘${t.title}’의 조건이 맞았습니다. 패널에서 ‘이어서 진행’을 누르세요.`).catch(() => {});
+  if (conn.aborted || !s.notifyRepeat || s.chatId === null || s.status !== "idle") return;
+  await sendMasked(s, `반복 작업 ‘${t.title}’의 조건이 맞았습니다. 패널에서 ‘이어서 진행’을 누르세요.`, conn).catch(() => {});
 });
 
 // 하네스(tests/harness/scenarios/telegram.mjs)가 알람을 기다리지 않고 받기를 부르는 진입점. 서비스 워커 안에서만 보인다.
