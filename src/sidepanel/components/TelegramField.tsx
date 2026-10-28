@@ -80,7 +80,7 @@ export function TelegramField() {
         <>
           <span className="field-hint">1. 텔레그램에서 @BotFather에게 /newbot을 보내 봇을 만들고, 받은 토큰을 아래에 넣으세요.</span>
           <div className="key-row">
-            <input type="password" value={token} placeholder="123456789:AA…" autoComplete="off" onChange={(e) => setToken(e.target.value)} />
+            <input type="password" value={token} placeholder="123456789:AA…" autoComplete="new-password" onChange={(e) => setToken(e.target.value)} />
             <button
               type="button"
               className="ghost-btn"
