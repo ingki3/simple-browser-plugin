@@ -8,6 +8,7 @@ import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
 import { checkConnection } from "./connectionCheck";
+import { friendlyError } from "@/lib/friendlyError";
 import { registerDebugSink, debugLog } from "./debug";
 import {
   clearGoogleToken,
@@ -176,7 +177,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     }
     checkConnection()
       .then((data) => sendResponse({ ok: true, data }))
-      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      .catch((err: unknown) => sendResponse({ ok: false, error: friendlyError(err).message }));
     return true;
   }
 

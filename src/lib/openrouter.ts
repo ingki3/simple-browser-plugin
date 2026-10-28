@@ -50,6 +50,22 @@ export interface OpenRouterStreamChunk {
   error?: { code?: number | string; message?: string; metadata?: unknown };
 }
 
+// 모델 제공자의 HTTP 오류(#130). 상태 코드를 함께 실어, 화면이 원인과 다음 행동을 고르게 한다(문구로 짐작하지 않는다).
+export class ProviderHttpError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ProviderHttpError";
+    this.status = status;
+  }
+}
+
+// 응답 본문·스트림 조각의 error.code가 HTTP 상태 숫자면 그 값(OpenRouter는 스트림 중 오류에도 code를 준다).
+function statusOf(code: unknown): number | null {
+  const n = typeof code === "number" ? code : typeof code === "string" && /^\d{3}$/.test(code) ? Number(code) : NaN;
+  return n >= 400 && n <= 599 ? n : null;
+}
+
 function errorMessage(body: unknown, status: number, label: string): string {
   if (body && typeof body === "object") {
     const error = (body as { error?: { message?: unknown } }).error;
@@ -74,16 +90,20 @@ export async function chatRequest(
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(errorMessage(body, response.status, label));
+    throw new ProviderHttpError(errorMessage(body, response.status, label), response.status);
   }
   return response;
 }
 
 export async function chatJson<T>(response: Response, label: string): Promise<T> {
   const body = (await response.json()) as T & {
-    error?: { message?: string };
+    error?: { message?: string; code?: unknown };
   };
-  if (body.error) throw new Error(body.error.message ?? `${label} 응답 오류`);
+  if (body.error) {
+    const message = body.error.message ?? `${label} 응답 오류`;
+    const status = statusOf(body.error.code);
+    throw status ? new ProviderHttpError(message, status) : new Error(message);
+  }
   return body;
 }
 
@@ -136,7 +156,9 @@ export async function readOpenRouterStream(
       throw new Error(`${label} 스트림 JSON 파싱에 실패했습니다.`);
     }
     if (parsed.error) {
-      throw new Error(parsed.error.message ?? `${label} 스트리밍 오류`);
+      const message = parsed.error.message ?? `${label} 스트리밍 오류`;
+      const status = statusOf(parsed.error.code);
+      throw status ? new ProviderHttpError(message, status) : new Error(message);
     }
     onChunk(parsed);
     return false;

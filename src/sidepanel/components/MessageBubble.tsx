@@ -21,9 +21,12 @@ interface Props {
   ) => void;
   onCancel: (callId: string) => void;
   showThinking: boolean;
+  onOpenSettings: () => void;
+  // 지금 제공자의 사용량 확인 주소(오류의 "사용량 확인" 버튼, #130).
+  usageUrl: string;
 }
 
-export function MessageBubble({ message, onApprove, onCancel, showThinking }: Props) {
+export function MessageBubble({ message, onApprove, onCancel, showThinking, onOpenSettings, usageUrl }: Props) {
   switch (message.type) {
     case "user":
       return (
@@ -76,7 +79,29 @@ export function MessageBubble({ message, onApprove, onCancel, showThinking }: Pr
     case "error":
       return (
         <div className="msg msg-error">
-          <div className="bubble bubble-error">⚠ {message.message}</div>
+          <div className="bubble bubble-error">
+            ⚠ {message.message}
+            {message.action === "settings" && (
+              <div className="error-actions">
+                <button type="button" className="ghost-btn" onClick={onOpenSettings}>
+                  설정 열기
+                </button>
+              </div>
+            )}
+            {message.action === "usage" && (
+              <div className="error-actions">
+                <a href={message.usageUrl ?? usageUrl} target="_blank" rel="noopener noreferrer">
+                  사용량 확인
+                </a>
+              </div>
+            )}
+            {message.detail && (
+              <details className="error-detail">
+                <summary>자세히</summary>
+                {message.detail}
+              </details>
+            )}
+          </div>
         </div>
       );
     case "info":
