@@ -11,6 +11,15 @@ import { checkConnection } from "./connectionCheck";
 import { friendlyError } from "@/lib/friendlyError";
 import { registerDebugSink, debugLog } from "./debug";
 import {
+  continueRepeatTask,
+  deleteRepeatTask,
+  listRepeatTasks,
+  pauseRepeatTask,
+  registerRepeatSink,
+  resumeRepeatTask,
+  runRepeatNow,
+} from "./repeatTasks";
+import {
   clearGoogleToken,
   connectGoogle,
   getGoogleConnectionState,
@@ -38,6 +47,7 @@ chrome.runtime.onConnect.addListener((port) => {
   let agent: ChatAgent | null = null;
   let activeConversationId: string | null = null;
   registerDebugSink(port);
+  registerRepeatSink(port);
   debugLog("port:connect");
 
   port.onMessage.addListener((raw: unknown) => {
@@ -83,6 +93,33 @@ chrome.runtime.onConnect.addListener((port) => {
         agent = new ChatAgent(port);
         activeConversationId = msg.conversationId;
         return;
+      case "repeat_continue": {
+        // 반복 작업의 "이어서 진행"(#138): 백그라운드가 한 번만 진행 상태로 바꾸고, 저장된 작업 내용으로 만든 요청을
+        // 새 대화 객체로 그 작업의 탭에서 시작한다(패널이 보낸 글자는 쓰지 않는다).
+        // 이 확장의 화면(패널)에서 연 연결만 받는다.
+        if (!port.sender?.url?.startsWith(chrome.runtime.getURL(""))) return;
+        const conversationId = String(msg.conversationId);
+        continueRepeatTask(String(msg.taskId))
+          .then(({ text, tabId }) => {
+            agent?.abort();
+            agent = new ChatAgent(port);
+            activeConversationId = conversationId;
+            try {
+              port.postMessage({ kind: "repeat_started", text });
+            } catch {
+              return;
+            }
+            agent.sendUserTurn(text, { tabId }).catch((err) => console.error("[sendUserTurn]", err));
+          })
+          .catch((err: unknown) => {
+            try {
+              port.postMessage({ kind: "error", message: `반복 작업을 이어서 진행하지 못했습니다(${err instanceof Error ? err.message : String(err)}).` });
+            } catch {
+              /* port closed */
+            }
+          });
+        return;
+      }
       case "heartbeat":
         // panel liveness ping — keep the service worker from idling out
         return;
@@ -193,6 +230,35 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
         : m.kind === "keepassxc_forget"
           ? keepassxcForget().then(() => keepassxcStatus())
           : keepassxcStatus();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 반복 작업 관리(#138, 설정 화면). 이 확장의 화면에서만 받는다.
+  if (
+    m.kind === "repeat_list" ||
+    m.kind === "repeat_pause" ||
+    m.kind === "repeat_resume" ||
+    m.kind === "repeat_delete" ||
+    m.kind === "repeat_run_now"
+  ) {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const id = String((msg as { id?: unknown }).id ?? "");
+    const job =
+      m.kind === "repeat_pause"
+        ? pauseRepeatTask(id)
+        : m.kind === "repeat_resume"
+          ? resumeRepeatTask(id)
+          : m.kind === "repeat_delete"
+            ? deleteRepeatTask(id)
+            : m.kind === "repeat_run_now"
+              ? runRepeatNow(id)
+              : listRepeatTasks();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));

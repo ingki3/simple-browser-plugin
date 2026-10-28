@@ -15,7 +15,7 @@ export default [
     async run(h) {
       await openDrawer(h);
       const groups = await h.panel.locator("details.settings-group").evaluateAll((els) => els.map((e) => `${e.querySelector("summary").textContent}:${e.open}`));
-      expect(groups.join(",") === "시작하기:true,동작:false,기억·기록:false,자동 로그인 (선택 · KeePassXC 필요):false,Google 연결 (선택 · 직접 빌드 필요):false,고급:false", `묶음(${groups.join(",")})`);
+      expect(groups.join(",") === "시작하기:true,동작:false,반복 작업:false,기억·기록:false,자동 로그인 (선택 · KeePassXC 필요):false,Google 연결 (선택 · 직접 빌드 필요):false,고급:false", `묶음(${groups.join(",")})`);
       expect((await h.panel.locator(".drawer-footer").count()) === 0, "저장·취소 버튼 없음");
       await h.panel.locator("details.settings-group summary", { hasText: "동작" }).click();
       await h.panel.locator("input[name=run-mode][value=auto]").check();

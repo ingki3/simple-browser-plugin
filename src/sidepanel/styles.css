@@ -1402,3 +1402,81 @@ body,
   color: var(--fg-muted);
   border-bottom: 1px solid var(--border);
 }
+
+/* 반복 작업(#138): 조건이 맞은 작업 띠와 설정 목록 */
+.repeat-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+.repeat-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.repeat-bar-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.repeat-bar-reason,
+.repeat-bar-then {
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.repeat-list {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.repeat-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.repeat-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.repeat-title {
+  overflow-wrap: anywhere;
+}
+.repeat-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.repeat-triggered .repeat-status {
+  color: var(--warn);
+  font-weight: 600;
+}
+.repeat-meta {
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.repeat-note {
+  color: var(--warn);
+  font-size: 11px;
+}
+.repeat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}

@@ -191,6 +191,19 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
     }
     return false;
   }
+  if (msg.kind === "watch_snapshot") {
+    try {
+      if (location.href !== msg.expectUrl) throw new Error("탭의 주소가 바뀌었습니다.");
+      const clickables = findClickables({ limit: msg.limit }).map((c) => ({ text: c.text, role: c.role, ...(c.states ? { states: c.states } : {}) }));
+      sendResponse({
+        ok: true,
+        data: { title: document.title, text: document.body ? modelText(document.body, msg.max) : "", clickables },
+      } satisfies ContentResponse);
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
+    }
+    return false;
+  }
   if (msg.kind === "link_lookup") {
     try {
       sendResponse({ ok: true, data: lookupLinks(msg.urls) } satisfies ContentResponse);

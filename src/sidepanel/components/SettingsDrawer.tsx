@@ -1,3 +1,4 @@
+import { RepeatTasksField } from "./RepeatTasksField";
 import { useEffect, useRef, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
 import { RunModeField } from "./RunModeField";
@@ -487,6 +488,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
             <RunModeField mode={draft.runMode} onChange={(runMode) => update({ runMode })} />
             <ManualSitesField sites={draft.manualSites} onChange={(manualSites) => update({ manualSites })} currentTabButton />
             <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
+          </details>
+
+          <details className="settings-group">
+            <summary>반복 작업</summary>
+            <RepeatTasksField />
           </details>
 
           <details className="settings-group">
