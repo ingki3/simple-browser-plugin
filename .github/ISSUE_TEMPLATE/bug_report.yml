@@ -1,0 +1,69 @@
+name: 버그 신고
+description: 기대와 다르게 동작하는 것을 알려 주세요.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        API 키나 비밀번호, 개인정보는 적지 마세요.
+  - type: input
+    id: version
+    attributes:
+      label: 확장 버전
+      description: chrome://extensions의 '간편 브라우저 도우미' 카드에 있는 버전(예: 0.2.29)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 설치 방법
+      options:
+        - 릴리스 ZIP
+        - 직접 빌드
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: 모델 제공자와 모델
+      placeholder: "예: OpenRouter · deepseek/deepseek-v4-pro"
+  - type: dropdown
+    id: run-mode
+    attributes:
+      label: 실행 방식
+      options:
+        - 모든 동작에 승인 후 실행
+        - 페이지 이동·클릭·입력을 묻지 않고 실행
+        - 처음에 승인 받고 끝까지 실행
+  - type: textarea
+    id: steps
+    attributes:
+      label: 한 일
+      description: 어느 사이트에서 무엇을 요청했는지
+      placeholder: "1. https://… 페이지에서\n2. '…'라고 요청\n3. …"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 결과
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 결과
+      description: 오류 문구가 있다면 그대로 붙여 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 진단 기록(선택)
+      description: 사이드 패널의 🐞 → 진단 복사. 방문한 주소가 들어 있을 수 있으니 확인한 뒤 붙여 주세요.
+      render: text
+  - type: input
+    id: chrome
+    attributes:
+      label: Chrome 버전과 운영체제
+      placeholder: "예: Chrome 131, macOS 15"
