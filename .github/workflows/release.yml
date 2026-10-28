@@ -37,6 +37,9 @@ jobs:
           mkdir -p "out/$name"
           cp -R dist/. "out/$name/"
           cp LICENSE "out/$name/LICENSE"
+          # MCP 다리(#140): AI 도구에 등록해 쓰는 Node 프로그램(확장이 불러오지 않는다).
+          mkdir -p "out/$name/mcp"
+          cp mcp/sbp-mcp.mjs "out/$name/mcp/sbp-mcp.mjs"
           # 소스 맵은 받는 사람에게 필요 없어 뺀다.
           (cd out && zip -qr "$name.zip" "$name" -x "*.map")
           echo "ZIP=out/$name.zip" >> "$GITHUB_ENV"

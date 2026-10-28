@@ -313,7 +313,7 @@ const TASK_MODE_NOTE =
   "실행 방식: 처음에 승인 받고 끝까지 실행. 이 대화에서는 아직 작업을 맡기지 않았다. 페이지 이동·클릭·입력·저장·문서 쓰기 같은 승인이 필요한 동작이 필요하면, 그 첫 동작 전에 confirm_task(할 일 요약, 이 작업의 위험)를 한 번 부른다. 관측·답만 하는 요청이면 부르지 않는다.";
 
 // 원격 대화(텔레그램, #139).
-export type AgentChannel = "panel" | "telegram";
+export type AgentChannel = "panel" | "telegram" | "mcp";
 export type TurnOutcome = { outcome: "ok" | "aborted"; finalText: string } | { outcome: "error"; finalText: ""; action?: "settings" | "usage" };
 // 대화 객체가 이벤트를 보내는 곳(패널 port 또는 원격 채널).
 export interface AgentSink {
@@ -321,11 +321,12 @@ export interface AgentSink {
 }
 const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task"]);
 const REMOTE_REFUSED_NOTE =
-  "이 요청은 사용자의 텔레그램에서 왔다. 승인이 필요한 동작은 원격 요청에서 하지 않는다. 더 시도하지 말고, 지금까지 한 일과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
+  "이 요청은 원격(텔레그램·MCP)에서 왔다. 승인이 필요한 동작은 원격 요청에서 하지 않는다. 더 시도하지 말고, 지금까지 한 일과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
 const REMOTE_STOP_NOTE =
   "승인이 필요한 동작이라 원격 요청에서 하지 않았다. 도구를 더 부르지 말고, 지금까지 알아낸 것과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
-const REMOTE_TURN_NOTE =
-  "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다. 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·다른 사이트 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 텔레그램에서 읽기 좋게 짧은 평문으로.";
+const remoteTurnNote = (channel: AgentChannel) =>
+  (channel === "mcp" ? "이 요청은 사용자의 다른 AI 도구(MCP)에서 왔다(원격 요청). 답은 그 도구로 간다." : "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다.") +
+  " 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·다른 사이트 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 짧은 평문으로.";
 
 const LIMIT_STOP_NOTE =
   "[확장 안내 — 사용자 글 아님] 도구 호출 순환 한도에 닿아 사용자가 더 진행하지 않기로 했습니다. 도구를 더 부르지 말고, 지금까지 관측한 결과만으로 사용자의 요청에 답하세요. 끝내지 못한 부분이 있으면 무엇이 남았는지와 다음에 할 일을 짧게 밝히세요.";
@@ -963,7 +964,7 @@ export class ChatAgent {
       debugLog("turn:model", model);
 
       // 원격 대화는 요청 앞에 원격 안내를 붙인다(요청 글의 주소 판정·카드의 요청 원문은 사용자가 보낸 글 그대로).
-      const userContent = await this.buildUserContent(this.remote ? `${REMOTE_TURN_NOTE}\n\n요청: ${userText}` : userText);
+      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel)}\n\n요청: ${userText}` : userText);
       if (this.isStale(turn)) {
         endTurn("aborted");
         return;
