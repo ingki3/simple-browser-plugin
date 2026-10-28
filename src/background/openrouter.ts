@@ -750,7 +750,8 @@ export class ChatAgent {
     this.send({
       kind: "info",
       title: "외부 문서 내용을 읽은 대화",
-      message: `${reason} 이 대화에서는 페이지 관측 외의 모든 동작(이동·클릭·입력·번역·Google 도구 등)을 매번 확인받습니다. 새 대화를 시작하면 다시 자동 실행됩니다.`,
+      // 실행 방식 셋 모두에 맞는 문구(#129): 맡기기 방식으로 작업을 맡긴 동안은 이 보호도 묻지 않는다(#123 사용자 결정).
+      message: `${reason} 이 대화에서는 페이지 관측 외의 모든 동작(이동·클릭·입력·번역·Google 도구 등)을 실행 방식과 관계없이 매번 확인받습니다. 다만 '처음에 승인 받고 끝까지 실행'으로 작업을 맡긴 동안에는 묻지 않습니다. 새 대화를 시작하면 이 보호가 풀립니다.`,
     });
   }
 
@@ -784,6 +785,12 @@ export class ChatAgent {
         const { data, bytes } = await fetchPdfAsBase64(pdfInfo.url);
         endFetch(`${Math.round(bytes / 1024)}KB`);
         this.lastAttachedPdfUrl = pdfInfo.url;
+        // 파일 자체가 모델 제공자로 가는 순간을 알린다(#129).
+        this.send({
+          kind: "info",
+          title: "PDF 파일을 보냅니다",
+          message: `이 탭의 PDF 파일(${Math.round(bytes / 1024)}KB)을 설정에서 고른 모델 제공자(${providerAdapter(this.provider).label})에 보내 읽습니다.`,
+        });
         return [
           {
             type: "text",

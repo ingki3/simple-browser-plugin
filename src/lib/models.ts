@@ -11,13 +11,14 @@ export type ModelId = string;
 
 export const DEFAULT_MODEL: ModelId = "deepseek/deepseek-v4-pro";
 
+// 설정의 모델 선택에 보이는 이름과 쓰임(#129). 고르는 기준이 되게 쓰임을 함께 적는다.
 export const MODEL_LABELS: Record<(typeof MODEL_IDS)[number], string> = {
-  "deepseek/deepseek-v4-pro": "DeepSeek V4 Pro (기본)",
-  "google/gemini-3.6-flash": "Google Gemini 3.6 Flash",
-  "google/gemini-3-flash-preview": "Google Gemini 3 Flash",
-  "google/gemini-3.1-pro-preview": "Google Gemini 3.1 Pro",
-  "google/gemini-3.1-flash-lite-preview": "Google Gemini 3.1 Flash Lite",
-  "openai/gpt-oss-120b": "OpenAI gpt-oss-120b",
+  "deepseek/deepseek-v4-pro": "DeepSeek V4 Pro — 기본, 대부분의 작업",
+  "google/gemini-3.6-flash": "Gemini 3.6 Flash — 빠름",
+  "google/gemini-3-flash-preview": "Gemini 3 Flash — 빠름(미리보기)",
+  "google/gemini-3.1-pro-preview": "Gemini 3.1 Pro — 복잡한 작업, 느림",
+  "google/gemini-3.1-flash-lite-preview": "Gemini 3.1 Flash Lite — 가장 가벼움, 간단한 작업",
+  "openai/gpt-oss-120b": "OpenAI gpt-oss-120b — 공개 모델",
 };
 
 export interface ReasoningConfig {

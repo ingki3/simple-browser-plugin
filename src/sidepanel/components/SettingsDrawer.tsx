@@ -8,6 +8,7 @@ import { LoginSitesField } from "./LoginSitesField";
 import { ShowThinkingField } from "./ShowThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
+import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { OPENAI_DEFAULT_MODEL, OPENAI_MODEL_SUGGESTIONS } from "@/lib/providers/openai";
 import { GEMINI_DEFAULT_MODEL, GEMINI_MODEL_SUGGESTIONS } from "@/lib/providers/gemini";
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_MODEL_SUGGESTIONS } from "@/lib/providers/anthropic";
@@ -51,6 +52,7 @@ import { FieldHelp } from "./FieldHelp";
 import { mergeSettingsPatch } from "@/lib/settings";
 
 const SAVE_DELAY_MS = 600;
+const CUSTOM_MODEL = "__custom__";
 
 // 두 patch를 합친다(제공자별 키·모델은 한 단계 더).
 function mergePatch(a: Partial<Settings>, b: Partial<Settings>): Partial<Settings> {
@@ -104,6 +106,13 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [diag, setDiag] = useState<string | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
+  // OpenRouter 모델을 목록 밖에서 직접 입력하는 중인지. 저장된 모델이 목록에 없으면 처음부터 입력 칸을 보인다.
+  const [customModel, setCustomModel] = useState(false);
+  useEffect(() => {
+    if (loaded && !(MODEL_IDS as readonly string[]).includes(settings.model)) setCustomModel(true);
+  }, [loaded, settings.model]);
+  // 연결 확인(#129): 저장한 키·모델로 짧은 요청 한 번.
+  const [check, setCheck] = useState<{ state: "busy" | "ok" | "error"; text: string } | null>(null);
 
   // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 이 서랍의 저장 중인 변경과 아직 보내지 않은 변경을 그 위에 둔다.
   useEffect(() => {
@@ -178,6 +187,32 @@ export function SettingsDrawer({ open, onClose }: Props) {
       document.removeEventListener("visibilitychange", onHide);
     };
   });
+  // 확인 중에 제공자·키·모델이 바뀌면 늦게 온 이전 응답은 버린다.
+  const checkSeq = useRef(0);
+  const checkConnection = async () => {
+    const seq = ++checkSeq.current;
+    setCheck({ state: "busy", text: "확인 중…" });
+    const show = (next: { state: "ok" | "error"; text: string }) => {
+      if (seq === checkSeq.current) setCheck(next);
+    };
+    try {
+      // 입력이 멈추기를 기다리는 모델 변경도 먼저 저장해, 화면에 보이는 모델로 확인한다.
+      await flush();
+      const res = (await chrome.runtime.sendMessage({ kind: "check_connection" })) as
+        | { ok: boolean; data?: { model: string }; error?: string }
+        | undefined;
+      if (res?.ok && res.data) show({ state: "ok", text: `✓ 연결됨 · ${res.data.model}` });
+      else show({ state: "error", text: res?.error ?? "응답이 없습니다." });
+    } catch (err) {
+      show({ state: "error", text: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  const checkedModel = draft.provider === "openrouter" ? draft.model : (draft.providerModels[draft.provider] ?? "");
+  useEffect(() => {
+    checkSeq.current++;
+    setCheck(null);
+  }, [draft.provider, savedKey, checkedModel]);
+
   const saveKey = () =>
     update(direct ? { apiKeys: { [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
 
@@ -314,6 +349,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
           </div>
         )}
         <div className="drawer-body">
+          <p className="drawer-note">바꾸면 바로 저장됩니다. API 키만 저장 버튼을 누르세요.</p>
           <details className="settings-group" open>
             <summary>시작하기</summary>
             <label className="field">
@@ -350,6 +386,24 @@ export function SettingsDrawer({ open, onClose }: Props) {
               <FieldHelp summary={keyDraft.trim() !== savedKey ? "바꾼 키는 저장을 눌러야 적용됩니다." : direct ? direct.keyHelp : "openrouter.ai/keys에서 발급합니다."}>
                 키는 이 브라우저(chrome.storage.local)에만 평문으로 저장되고, 그 제공자를 부를 때만 씁니다.
               </FieldHelp>
+              <div className="provider-links">
+                <a href={PROVIDER_LINKS[draft.provider].keyUrl} target="_blank" rel="noopener noreferrer">키 발급</a>
+                <a href={PROVIDER_LINKS[draft.provider].pricingUrl} target="_blank" rel="noopener noreferrer">요금</a>
+                <a href={PROVIDER_LINKS[draft.provider].usageUrl} target="_blank" rel="noopener noreferrer">사용량</a>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  disabled={!savedKey || keyDraft.trim() !== savedKey || check?.state === "busy"}
+                  onClick={() => void checkConnection()}
+                >
+                  연결 확인
+                </button>
+              </div>
+              {check && <span className={`field-help${check.state === "error" ? " error-text" : ""}`}>{check.text}</span>}
+              <FieldHelp summary="API는 쓴 만큼 그 서비스에 요금이 나갑니다. 앱 구독과는 따로입니다.">
+                요청마다 보낸 글자(대화·페이지 내용)와 받은 답의 양에 따라 요금이 정해집니다. 긴 페이지를 읽거나 단계가 많은 작업일수록
+                많이 듭니다. 연결 확인은 아주 짧은 요청을 한 번 보냅니다. 키를 받은 곳에서 사용 한도를 정해 두면 안심하고 쓸 수 있습니다.
+              </FieldHelp>
             </div>
 
             <label className="field">
@@ -369,24 +423,38 @@ export function SettingsDrawer({ open, onClose }: Props) {
                       <option key={id} value={id} />
                     ))}
                   </datalist>
-                  <FieldHelp summary={`비우면 ${direct.defaultModel}. 도구 호출을 지원하는 모델이어야 합니다.`} />
+                  <FieldHelp summary={`비우면 기본(${direct.defaultModel})을 씁니다. 목록에서 고르거나 모델 ID를 입력하세요. 도구 호출을 지원해야 합니다.`} />
                 </>
               ) : (
                 <>
-                  <input
-                    type="text"
-                    list="openrouter-models"
-                    value={draft.model}
-                    onChange={(e) => update({ model: e.target.value }, SAVE_DELAY_MS)}
-                    placeholder="provider/model"
-                    spellCheck={false}
-                  />
-                  <datalist id="openrouter-models">
+                  {/* 목록에서 고르고, 목록에 없는 모델만 ID를 직접 입력한다(#129). */}
+                  <select
+                    value={customModel ? CUSTOM_MODEL : draft.model}
+                    onChange={(e) => {
+                      if (e.target.value === CUSTOM_MODEL) setCustomModel(true);
+                      else {
+                        setCustomModel(false);
+                        update({ model: e.target.value });
+                      }
+                    }}
+                  >
                     {MODEL_IDS.map((id) => (
-                      <option key={id} value={id} label={MODEL_LABELS[id]} />
+                      <option key={id} value={id}>
+                        {MODEL_LABELS[id]}
+                      </option>
                     ))}
-                  </datalist>
-                  <FieldHelp summary="OpenRouter 모델 ID. 도구 호출을 지원하는 모델이어야 합니다." />
+                    <option value={CUSTOM_MODEL}>목록에 없는 모델 직접 입력…</option>
+                  </select>
+                  {customModel && (
+                    <input
+                      type="text"
+                      value={draft.model}
+                      onChange={(e) => update({ model: e.target.value }, SAVE_DELAY_MS)}
+                      placeholder="provider/model (예: anthropic/claude-sonnet-5.5)"
+                      spellCheck={false}
+                    />
+                  )}
+                  <FieldHelp summary="잘 모르면 기본을 쓰세요. 직접 입력하는 모델은 도구 호출을 지원해야 합니다." />
                 </>
               )}
             </label>
@@ -400,18 +468,18 @@ export function SettingsDrawer({ open, onClose }: Props) {
           </details>
 
           <details className="settings-group">
-            <summary>자동 로그인</summary>
-            <LoginSitesField sites={draft.loginSites} onChange={(loginSites) => update({ loginSites })} />
-          </details>
-
-          <details className="settings-group">
             <summary>기억·기록</summary>
             <RememberPagesField enabled={draft.rememberPages} onToggle={(rememberPages) => update({ rememberPages })} />
             <ActionLogField enabled={draft.actionLogEnabled} onToggle={(actionLogEnabled) => update({ actionLogEnabled })} />
           </details>
 
           <details className="settings-group">
-            <summary>연결</summary>
+            <summary>자동 로그인 (선택 · KeePassXC 필요)</summary>
+            <LoginSitesField sites={draft.loginSites} onChange={(loginSites) => update({ loginSites })} />
+          </details>
+
+          <details className="settings-group">
+            <summary>Google 연결 (선택 · 직접 빌드 필요)</summary>
             <div className="field">
               <span className="field-label">Google Workspace (Sheets / Docs / Drive)</span>
               <div className="google-status-row">
@@ -420,7 +488,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 ) : googleStatus?.configured ? (
                   <span className="tag-warn">● 연결 필요</span>
                 ) : (
-                  <span className="tag-off">● manifest 설정 필요</span>
+                  <span className="tag-off">● 직접 빌드 필요</span>
                 )}
                 <button
                   type="button"

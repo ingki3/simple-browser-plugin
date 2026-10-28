@@ -35,7 +35,7 @@ export function App() {
         </div>
       </header>
       <main className="app-main">
-        <ChatView session={session} />
+        <ChatView session={session} onOpenSettings={() => setSettingsOpen(true)} />
       </main>
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <DebugDrawer open={debugOpen} onClose={() => setDebugOpen(false)} />

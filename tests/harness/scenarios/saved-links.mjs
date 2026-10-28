@@ -1,4 +1,4 @@
-// 저장 링크(0.2.4·0.2.9): 이 페이지 기억하기 → 초안(요청·답·화면 글자 반영) → 저장 → open_saved_link로 자리 값만 넣어 열기.
+// 저장 링크(0.2.4·0.2.9): 이 페이지 기억하기 → AI로 채우기(#129) → 초안(요청·답·화면 글자 반영) → 저장 → open_saved_link로 자리 값만 넣어 열기.
 import { expect, lastTool } from "../lib.mjs";
 
 const search = `<title>가격 검색</title><main><h1>검색 결과</h1><p>최저가 상품 목록</p><input id=memo value="비밀메모"><p id=out></p></main>`;
@@ -22,6 +22,9 @@ async function saveFromOffer(h) {
   const btn = h.panel.getByText("이 페이지 기억하기");
   expect((await btn.count()) === 1, "저장 제안 버튼이 떠야 한다");
   await btn.click();
+  await h.panel.waitForTimeout(300);
+  expect((await h.sw.evaluate(() => (globalThis.__draftReqs ?? []).length)) === 0, "카드를 여는 것만으로는 초안을 묻지 않는다");
+  await h.panel.getByText("AI로 이름·용도 채우기").click();
   await h.panel.waitForTimeout(1200);
   const req = await h.sw.evaluate(() => globalThis.__draftReqs.at(-1));
   const content = req?.messages?.[0]?.content ?? "";
