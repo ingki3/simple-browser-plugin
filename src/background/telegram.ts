@@ -363,15 +363,16 @@ let session: Session | null = null;
 // 연결 세대마다 하나. 연결 끊기·토큰 바꾸기·지우기에서 끊어, 진행 중인 결과 보내기(가림·나눠 보내기·재시도 포함)를 멈춘다.
 let connAbort = new AbortController();
 // 실행 슬롯: 한 번에 요청 하나. id·연결 세대가 같은 실행만 결과를 보내고 슬롯을 비운다.
-let slot: { id: string; epoch: number; agent: ChatAgent } | null = null;
+// 멈춰도(stopping) 실행이 실제로 끝날 때까지 비우지 않는다(멈추는 중인 도구와 다음 요청이 겹치지 않게).
+let slot: { id: string; epoch: number; agent: ChatAgent; stopping: boolean } | null = null;
 
 // 원격 대화의 이벤트는 패널로 가지 않는다(최종 답은 sendUserTurn의 결과로만 보낸다).
 const sink: AgentSink = { postMessage: () => {} };
 
 function stopRun(): boolean {
-  if (!slot) return false;
+  if (!slot || slot.stopping) return false;
+  slot.stopping = true;
   slot.agent.abort();
-  slot = null;
   return true;
 }
 
@@ -398,8 +399,8 @@ function startRun(s: TelegramState, text: string): void {
   }
   const cur = session;
   cur.lastAt = Date.now();
-  slot = { id, epoch: s.epoch, agent: cur.agent };
-  const mine = () => slot?.id === id;
+  slot = { id, epoch: s.epoch, agent: cur.agent, stopping: false };
+  const mine = () => slot?.id === id && !slot.stopping;
   debugLog("telegram:request", `${text.length}자`);
   const conn = connAbort.signal;
   void (async () => {
@@ -443,7 +444,7 @@ function startRun(s: TelegramState, text: string): void {
       if (mine() && !conn.aborted) await sendText(s, remoteErrorText(undefined), conn).catch(() => {});
     } finally {
       clearInterval(hold);
-      if (mine()) slot = null;
+      if (slot?.id === id) slot = null;
       await update((st) => ({ ...st, recent: st.recent.map((r) => (r.at === at && r.status === "running" ? { ...r, status } : r)) }), s.epoch).catch(() => {});
     }
   })();
