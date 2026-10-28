@@ -137,3 +137,52 @@ test("줄 읽기: 여러 줄·갈린 UTF-8·너무 긴 줄", () => {
   feed(Buffer.alloc(1024 * 1024 + 10, 0x61));
   assert.equal(over, 1);
 });
+
+test("받았다는 확인이 없으면 같은 작업을 다시 보내고, 확인 뒤에는 보내지 않는다, 취소 중에는 슬롯을 붙잡는다", async () => {
+  let t = 1_000_000;
+  const out = [];
+  const keys = await br.deriveKeys(secret);
+  const ke = await ext.deriveKeys(secret);
+  const b = br.createBridge({ keys, write: (m) => out.push(m), now: () => t });
+  b.handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  b.handleRpc(call(30, "할 일"));
+  const sign = async (method, path) => {
+    const header = ext.makeHeader(t);
+    return { header, auth: await b.authenticate(method, path, header, await ext.signRequest(ke, method, path, header)) };
+  };
+  const next = async () => {
+    const { header, auth } = await sign("GET", "/v1/next");
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 50);
+    const body = await b.next(auth, ac.signal);
+    return body ? ext.parseNext(await ext.open(ke.bridgeEnc, ext.aadOf("GET", "/v1/next", header), body)) : null;
+  };
+  const post = async (value) => {
+    const { header, auth } = await sign("POST", "/v1/result");
+    return b.result(auth, await ext.seal(ke.extEnc, ext.aadOf("POST", "/v1/result", header), value));
+  };
+  const first = await next();
+  assert.ok(first.job);
+  t += 6_000;
+  const again = await next();
+  assert.equal(again?.job?.jobId, first.job.jobId, "확인이 없으면 다시 보냄");
+  await post({ jobId: first.job.jobId, outcome: "accepted", text: "" });
+  t += 6_000;
+  assert.equal((await next())?.job, undefined, "확인 뒤에는 다시 보내지 않음");
+  b.handleRpc({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 30 } });
+  out.length = 0;
+  b.handleRpc(call(31, "다음 일"));
+  assert.ok(out.pop().result.isError, "취소 확인 전에는 busy");
+  await post({ jobId: first.job.jobId, outcome: "cancelled", text: "" });
+  b.handleRpc(call(32, "다음 일"));
+  assert.equal(out.length, 0, "확인 뒤에는 새 작업을 받음");
+  b.shutdown();
+});
+
+test("도구 이름이 글자가 아니면 오류로 답하고 죽지 않는다", async () => {
+  const { b, out } = await bridge();
+  b.handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  b.handleRpc({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: { toString: null }, arguments: {} } });
+  assert.equal(out.pop().error.code, -32602);
+});
+

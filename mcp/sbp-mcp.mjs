@@ -109,7 +109,10 @@ const TOOL = {
 export function createBridge({ keys, write, now = () => Date.now(), log = () => {} }) {
   const bridgeId = b64url(crypto.getRandomValues(new Uint8Array(12)));
   let initialized = false;
-  let job = null; // {jobId, rpcId, request, deadline, state: "queued"|"leased", timers}
+  // {jobId, rpcId, request, deadline, state: "queued"|"leased"|"cancelling", acked, leasedAt, timers}
+  // leased: 확장에 보냈다. acked: 확장이 저장하고 받았다고 알렸다(그 전에는 같은 작업을 다시 보낸다 — 응답 유실 대비, 확장은 같은 id를 두 번 실행하지 않는다).
+  // cancelling: 취소했고 확장이 멈췄다고 알릴 때까지(또는 60초) 슬롯을 붙잡는다(멈추는 중인 작업과 다음 작업이 겹치지 않게).
+  let job = null;
   const cancels = new Set(); // 확장에 알릴 취소된 작업
   const nonces = new Map();
   const waiters = new Set(); // 대기 중인 /next 응답 함수
@@ -122,9 +125,22 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
   function finish(state, why) {
     if (!job) return;
     for (const t of job.timers) clearTimeout(t);
-    if (state === "cancelled" && job.state === "leased") cancels.add(job.jobId);
     log(`작업 ${job.jobId.slice(0, 6)} ${state}${why ? `: ${why}` : ""}`);
-    job = null;
+    if (state === "cancelled" && job.state === "leased") {
+      // 확장이 가져간 작업: 멈추라고 알리고, 멈췄다는 확인이 올 때까지 슬롯을 붙잡는다.
+      cancels.add(job.jobId);
+      job.state = "cancelling";
+      const mine = job;
+      mine.timers = [
+        setTimeout(() => {
+          if (job === mine) {
+            cancels.delete(mine.jobId);
+            job = null;
+            wake();
+          }
+        }, 60_000),
+      ];
+    } else job = null;
     wake();
   }
 
@@ -134,11 +150,11 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
 
   function startJob(rpcId, request) {
     const jobId = b64url(crypto.getRandomValues(new Uint8Array(12)));
-    job = { jobId, rpcId, request, deadline: now() + JOB_DEADLINE_MS, state: "queued", timers: [] };
+    job = { jobId, rpcId, request, deadline: now() + JOB_DEADLINE_MS, state: "queued", acked: false, leasedAt: 0, timers: [] };
     const mine = job;
     mine.timers.push(
       setTimeout(() => {
-        if (job === mine && mine.state === "queued") {
+        if (job === mine && !mine.acked && mine.state !== "cancelling") {
           toolError(rpcId, "브라우저 확장이 요청을 가져가지 않았습니다. Chrome이 켜져 있고 확장 설정의 MCP 연동이 켜져 있는지, SBP_SECRET·SBP_PORT가 맞는지 확인하세요.");
           finish("done", "가져가지 않음");
         }
@@ -180,7 +196,7 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
     if (!initialized) return fail(id, -32002, "Server not initialized");
     if (method === "tools/list") return reply(id, { tools: [TOOL] });
     if (method === "tools/call") {
-      if (params?.name !== "browser_task") return fail(id, -32602, `Unknown tool: ${params?.name}`);
+      if (typeof params?.name !== "string" || params.name !== "browser_task") return fail(id, -32602, "Unknown tool");
       const args = params.arguments;
       const keysOk = args && typeof args === "object" && Object.keys(args).every((k) => k === "request");
       const request = typeof args?.request === "string" ? args.request.trim() : "";
@@ -209,8 +225,10 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
     const pick = () => {
       const out = { bridgeId, version: BRIDGE_VERSION };
       if (cancels.size) out.cancel = [...cancels];
-      if (job && job.state === "queued") {
+      // 아직 받았다는 확인이 없는 작업은 5초 뒤 다시 보낸다(응답 유실 대비).
+      if (job && (job.state === "queued" || (job.state === "leased" && !job.acked && now() - job.leasedAt > 5_000))) {
         job.state = "leased";
+        job.leasedAt = now();
         out.job = { jobId: job.jobId, request: job.request, deadline: job.deadline };
       }
       return out.job || out.cancel ? out : null;
@@ -237,8 +255,17 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
   async function result(header, body) {
     const r = await open(keys.extEnc, aadOf("POST", "/v1/result", header), body);
     if (!r || typeof r.jobId !== "string") throw new Error("bad result");
+    // 받았다는 확인(accepted): 다시 보내지 않는다.
+    if (r.outcome === "accepted") {
+      if (job && job.jobId === r.jobId) job.acked = true;
+      return seal(keys.bridgeEnc, aadOf("POST", "/v1/result", header), { ok: true });
+    }
     cancels.delete(r.jobId);
-    if (job && job.jobId === r.jobId && job.state === "leased") {
+    if (job && job.jobId === r.jobId && job.state === "cancelling") {
+      for (const t of job.timers) clearTimeout(t);
+      job = null;
+      wake();
+    } else if (job && job.jobId === r.jobId && job.state === "leased") {
       const text = typeof r.text === "string" ? r.text.slice(0, 100_000) : "";
       if (r.outcome === "ok") reply(job.rpcId, { content: [{ type: "text", text: text || "끝났습니다." }] });
       else toolError(job.rpcId, text || "브라우저 도우미가 요청을 처리하지 못했습니다.");
@@ -350,7 +377,12 @@ async function main() {
         write({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
         return;
       }
-      bridge.handleRpc(msg);
+      try {
+        bridge.handleRpc(msg);
+      } catch (err) {
+        log(`요청 처리 오류: ${err instanceof Error ? err.message : String(err)}`);
+        if (msg && typeof msg === "object" && "id" in msg) write({ jsonrpc: "2.0", id: msg.id ?? null, error: { code: -32603, message: "Internal error" } });
+      }
     },
     () => log("너무 긴 줄을 버렸습니다."),
   );
