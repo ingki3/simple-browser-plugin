@@ -338,12 +338,17 @@ async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: numbe
   }
   live();
   if (tabId !== null) {
-    onTab(tabId);
-    const cur = await chrome.tabs.get(tabId);
+    // 바꾸기 바로 앞에 다시 본다: 그 사이 사용자가 다른 주소로 옮겼거나 이동 중이면 그 탭은 두고 새 탭을 연다.
+    const cur = await chrome.tabs.get(tabId).catch(() => null);
     live();
-    if (cur.url === t.url) await chrome.tabs.reload(tabId);
-    else await chrome.tabs.update(tabId, { url: t.url });
-  } else {
+    if (!cur || cur.url !== t.tab?.url || cur.pendingUrl) tabId = null;
+    else {
+      onTab(tabId);
+      if (cur.url === t.url) await chrome.tabs.reload(tabId);
+      else await chrome.tabs.update(tabId, { url: t.url });
+    }
+  }
+  if (tabId === null) {
     const created = await chrome.tabs.create({ url: t.url, active: false });
     if (created.id === undefined) throw new Error("확인용 탭을 열지 못했습니다.");
     tabId = created.id;
@@ -476,10 +481,11 @@ export async function continueRepeatTask(id: string): Promise<{ text: string; ta
   }
   try {
     const tabId = await continueTab(claimed);
-    // 탭을 준비하는 사이 작업을 지웠거나 상태가 바뀌었으면 시작하지 않는다.
+    await announce();
+    // 탭을 준비하는 사이 작업을 지웠거나 상태가 바뀌었으면 시작하지 않는다. 이 확인 뒤 돌려주기까지는 기다림이 없다
+    // (부르는 쪽은 돌려받은 즉시 대화를 시작한다).
     const still = (await load()).find((t) => t.id === id);
     if (!still || still.status !== "started" || still.revision !== claimed.revision) throw new Error("그 사이 작업이 지워졌거나 바뀌었습니다.");
-    await announce();
     debugLog("repeat:continue", claimed.title);
     return { text: followUpText(claimed), tabId, site: httpOrigin(claimed.url) ?? claimed.url };
   } catch (err) {
