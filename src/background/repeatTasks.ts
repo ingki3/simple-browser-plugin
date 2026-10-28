@@ -22,6 +22,7 @@ import {
   type RepeatTask,
 } from "@/lib/repeatTask";
 import { sameSiteAs } from "@/lib/siteTrust";
+import { httpOrigin } from "@/lib/url";
 import { activeModel } from "@/lib/settings";
 import { providerAdapter } from "@/lib/providers";
 import { withTimeout } from "@/lib/async";
@@ -317,7 +318,8 @@ async function openPage(t: RepeatTask, signal: AbortSignal): Promise<OpenedPage>
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url ?? "";
   if (!/^https?:/.test(url)) throw new Error("확인용 탭이 웹 페이지가 아닙니다.");
-  if (!sameSiteAs(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");
+  // 등록한 주소와 같은 출처이거나 같은 등록 도메인이면 읽는다(공유 호스팅은 등록 도메인으로 묶지 않으므로 같은 출처만).
+  if (httpOrigin(url) !== httpOrigin(t.url) && !sameSiteAs(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");
   const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
   if (!frame?.documentId) throw new Error("페이지 문서를 확인하지 못했습니다.");
   return { tabId, documentId: frame.documentId, url };

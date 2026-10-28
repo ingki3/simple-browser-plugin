@@ -56,20 +56,21 @@ export function RepeatTasksField() {
               <div className="repeat-actions">
                 {t.status === "active" && (
                   <>
-                    <button type="button" className="ghost-btn" disabled={busy !== null} onClick={() => void act("repeat_run_now", t.id)}>
+                    <button type="button" className="ghost-btn" disabled={busy === `repeat_run_now:${t.id}`} onClick={() => void act("repeat_run_now", t.id)}>
                       {busy === `repeat_run_now:${t.id}` ? "확인 중…" : "지금 확인"}
                     </button>
-                    <button type="button" className="ghost-btn" disabled={busy !== null} onClick={() => void act("repeat_pause", t.id)}>
+                    {/* 확인하는 중에도 멈추기·지우기는 누를 수 있다(진행 중인 확인을 버리고 모델 전송을 막는다). */}
+                    <button type="button" className="ghost-btn" disabled={busy === `repeat_pause:${t.id}`} onClick={() => void act("repeat_pause", t.id)}>
                       멈추기
                     </button>
                   </>
                 )}
                 {(t.status === "paused" || t.status === "triggered") && (
-                  <button type="button" className="ghost-btn" disabled={busy !== null} onClick={() => void act("repeat_resume", t.id)}>
+                  <button type="button" className="ghost-btn" disabled={busy === `repeat_resume:${t.id}`} onClick={() => void act("repeat_resume", t.id)}>
                     다시 확인 시작
                   </button>
                 )}
-                <button type="button" className="ghost-btn" disabled={busy !== null} onClick={() => void act("repeat_delete", t.id)}>
+                <button type="button" className="ghost-btn" disabled={busy === `repeat_delete:${t.id}`} onClick={() => void act("repeat_delete", t.id)}>
                   지우기
                 </button>
               </div>

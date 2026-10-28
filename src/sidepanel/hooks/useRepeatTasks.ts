@@ -9,6 +9,7 @@ export function useRepeatTasks() {
   const version = useChatStore((s) => s.repeatVersion);
   const [tasks, setTasks] = useState<RepeatTask[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 누르는 중인 버튼(동작:작업 id). 여러 요청이 겹칠 수 있다(확인 중에 멈추기).
   const [busy, setBusy] = useState<string | null>(null);
 
   const request = useCallback(async (msg: { kind: "repeat_list" } | { kind: RepeatAction; id: string }) => {
@@ -28,11 +29,12 @@ export function useRepeatTasks() {
 
   const act = useCallback(
     async (kind: RepeatAction, id: string) => {
-      setBusy(`${kind}:${id}`);
+      const key = `${kind}:${id}`;
+      setBusy(key);
       try {
         await request({ kind, id });
       } finally {
-        setBusy(null);
+        setBusy((b) => (b === key ? null : b));
       }
     },
     [request],
