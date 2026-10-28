@@ -11,10 +11,25 @@ import { checkConnection } from "./connectionCheck";
 import { friendlyError } from "@/lib/friendlyError";
 import { registerDebugSink, debugLog } from "./debug";
 import {
+  continueRepeatTask,
+  deleteRepeatTask,
+  listRepeatTasks,
+  pauseRepeatTask,
+  registerRepeatSink,
+  releaseRepeatTask,
+  resumeRepeatTask,
+  runRepeatNow,
+} from "./repeatTasks";
+import { mcpRegenerate, mcpSecret, mcpSet, mcpStatus } from "./mcp";
+import { telegramClear, telegramDisconnect, telegramSaveToken, telegramSetNotify, telegramStartPairing, telegramStatus } from "./telegram";
+import {
   clearGoogleToken,
   connectGoogle,
   getGoogleConnectionState,
 } from "./google/auth";
+
+// 저장소(API 키·텔레그램 봇 토큰 등)는 확장의 화면·서비스 워커만 읽게 한다(content script는 저장소를 쓰지 않는다, #139).
+chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
 
 pruneActionLog();
 
@@ -37,13 +52,19 @@ chrome.runtime.onConnect.addListener((port) => {
 
   let agent: ChatAgent | null = null;
   let activeConversationId: string | null = null;
+  // 사용자의 대화 동작(요청·중단·새 대화·이어서 진행)마다 올린다. 이어서 진행의 준비를 기다리는 사이 이 값이 바뀌면
+  // 그 준비는 버린다(사용자가 연 새 대화를 덮지 않게, #138).
+  let actionSeq = 0;
+  let disconnected = false;
   registerDebugSink(port);
+  registerRepeatSink(port);
   debugLog("port:connect");
 
   port.onMessage.addListener((raw: unknown) => {
     const msg = raw as PanelToBg;
     if (!msg || typeof msg !== "object") return;
 
+    if (msg.kind === "user_msg" || msg.kind === "abort_stream" || msg.kind === "reset_conversation" || msg.kind === "repeat_continue") actionSeq += 1;
     switch (msg.kind) {
       case "user_msg": {
         if (!agent || activeConversationId !== msg.conversationId) {
@@ -83,6 +104,43 @@ chrome.runtime.onConnect.addListener((port) => {
         agent = new ChatAgent(port);
         activeConversationId = msg.conversationId;
         return;
+      case "repeat_continue": {
+        // 반복 작업의 "이어서 진행"(#138): 백그라운드가 한 번만 진행 상태로 바꾸고, 저장된 작업 내용으로 만든 요청을
+        // 새 대화 객체로 그 작업의 탭에서 시작한다(패널이 보낸 글자는 쓰지 않는다).
+        // 이 확장의 화면(패널)에서 연 연결만 받는다.
+        if (!port.sender?.url?.startsWith(chrome.runtime.getURL(""))) return;
+        const conversationId = String(msg.conversationId);
+        const taskId = String(msg.taskId);
+        const seq = actionSeq;
+        continueRepeatTask(taskId)
+          .then(({ text, tabId, site }) => {
+            // 기다리는 사이 다른 대화 동작이 있었거나 패널이 닫혔으면 시작하지 않고, 다시 누를 수 있게 되돌린다.
+            if (seq !== actionSeq || disconnected) {
+              void releaseRepeatTask(taskId);
+              return;
+            }
+            try {
+              port.postMessage({ kind: "repeat_started", text });
+            } catch {
+              void releaseRepeatTask(taskId);
+              return;
+            }
+            agent?.abort();
+            agent = new ChatAgent(port);
+            activeConversationId = conversationId;
+            agent.sendUserTurn(text, { tabId, site }).catch((err) => console.error("[sendUserTurn]", err));
+          })
+          .catch((err: unknown) => {
+            // 그 사이 사용자가 다른 대화 동작을 했으면 알리지 않는다(새 대화의 화면 상태를 덮지 않게).
+            if (seq !== actionSeq || disconnected) return;
+            try {
+              port.postMessage({ kind: "error", message: `반복 작업을 이어서 진행하지 못했습니다(${err instanceof Error ? err.message : String(err)}).` });
+            } catch {
+              /* port closed */
+            }
+          });
+        return;
+      }
       case "heartbeat":
         // panel liveness ping — keep the service worker from idling out
         return;
@@ -96,6 +154,7 @@ chrome.runtime.onConnect.addListener((port) => {
   chrome.storage.onChanged.addListener(onStorage);
 
   port.onDisconnect.addListener(() => {
+    disconnected = true;
     chrome.storage.onChanged.removeListener(onStorage);
     agent?.abort();
     agent = null;
@@ -193,6 +252,91 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
         : m.kind === "keepassxc_forget"
           ? keepassxcForget().then(() => keepassxcStatus())
           : keepassxcStatus();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 반복 작업 관리(#138, 설정 화면). 이 확장의 화면에서만 받는다.
+  if (
+    m.kind === "repeat_list" ||
+    m.kind === "repeat_pause" ||
+    m.kind === "repeat_resume" ||
+    m.kind === "repeat_delete" ||
+    m.kind === "repeat_run_now"
+  ) {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const id = String((msg as { id?: unknown }).id ?? "");
+    const job =
+      m.kind === "repeat_pause"
+        ? pauseRepeatTask(id)
+        : m.kind === "repeat_resume"
+          ? resumeRepeatTask(id)
+          : m.kind === "repeat_delete"
+            ? deleteRepeatTask(id)
+            : m.kind === "repeat_run_now"
+              ? runRepeatNow(id)
+              : listRepeatTasks();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 텔레그램 연동(#139, 설정 화면). 이 확장의 화면에서만 받는다. 토큰은 돌려주지 않는다.
+  if (
+    m.kind === "telegram_status" ||
+    m.kind === "telegram_save_token" ||
+    m.kind === "telegram_pair" ||
+    m.kind === "telegram_disconnect" ||
+    m.kind === "telegram_clear" ||
+    m.kind === "telegram_set_notify"
+  ) {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { token?: unknown; on?: unknown };
+    const job =
+      m.kind === "telegram_save_token"
+        ? telegramSaveToken(typeof p.token === "string" ? p.token : "")
+        : m.kind === "telegram_pair"
+          ? telegramStartPairing()
+          : m.kind === "telegram_disconnect"
+            ? telegramDisconnect()
+            : m.kind === "telegram_clear"
+              ? telegramClear()
+              : m.kind === "telegram_set_notify"
+                ? telegramSetNotify(p.on === true)
+                : telegramStatus();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // MCP 연동(#140, 설정 화면). 이 확장의 화면에서만 받는다. 비밀은 mcp_secret으로만 돌려준다(다리 설정에 넣어야 한다).
+  if (m.kind === "mcp_status" || m.kind === "mcp_secret" || m.kind === "mcp_set" || m.kind === "mcp_regenerate") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { enabled?: unknown; port?: unknown };
+    const job: Promise<unknown> =
+      m.kind === "mcp_secret"
+        ? mcpSecret()
+        : m.kind === "mcp_regenerate"
+          ? mcpRegenerate()
+          : m.kind === "mcp_set"
+            ? mcpSet({
+                ...(typeof p.enabled === "boolean" ? { enabled: p.enabled } : {}),
+                ...(typeof p.port === "number" ? { port: p.port } : {}),
+              })
+            : mcpStatus();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));

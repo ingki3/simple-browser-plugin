@@ -72,6 +72,9 @@ interface ChatState {
   chatGrants: Array<{ tool: ToolName; scope: string }>;
   // 이 대화에서 작업을 맡겼는지(#123). 백그라운드가 보낸 상태를 그대로 보인다.
   taskActive: boolean;
+  // 반복 작업 목록이 바뀔 때마다 올린다(#138). 목록을 보이는 화면이 다시 읽는다.
+  repeatVersion: number;
+  bumpRepeat: () => void;
   debugEvents: DebugEvent[];
   appendUser: (text: string) => void;
   beginAssistant: () => void;
@@ -112,6 +115,8 @@ export const useChatStore = create<ChatState>((set) => ({
   hopProgress: null,
   chatGrants: [],
   taskActive: false,
+  repeatVersion: 0,
+  bumpRepeat: () => set((s) => ({ repeatVersion: s.repeatVersion + 1 })),
   debugEvents: [],
 
   appendUser: (text) =>
