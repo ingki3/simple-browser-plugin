@@ -451,8 +451,9 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
         return;
       }
       if (result.outcome === "ok") {
-        status = "done";
         await sendMasked(s, result.finalText || "끝났습니다(답할 내용이 없습니다).", out);
+        // 보낸 뒤에 기록한다(보내다 멈췄으면 멈춤, 보내기가 실패하면 catch에서 실패로 남는다).
+        status = out.aborted ? "stopped" : "done";
       } else if (result.outcome === "error") {
         await sendText(s, remoteErrorText(result.action), out);
       } else status = "stopped";
