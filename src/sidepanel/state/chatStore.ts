@@ -58,7 +58,7 @@ export type ChatMessage =
       offer: PageOfferData;
     }
   // detail: 원래 오류 문구(자세히), action: 다음 행동 버튼(#130).
-  | { id: string; type: "error"; message: string; detail?: string; action?: "settings" | "usage" }
+  | { id: string; type: "error"; message: string; detail?: string; action?: "settings" | "usage"; usageUrl?: string }
   | { id: string; type: "info"; title: string; message: string };
 
 interface ChatState {
@@ -85,7 +85,7 @@ interface ChatState {
   setChatGrants: (grants: Array<{ tool: ToolName; scope: string }>) => void;
   setTaskActive: (active: boolean) => void;
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
-  addError: (message: string, extra?: { detail?: string; action?: "settings" | "usage" }) => void;
+  addError: (message: string, extra?: { detail?: string; action?: "settings" | "usage"; usageUrl?: string }) => void;
   addInfo: (title: string, message: string) => void;
   addPageOffer: (offer: Extract<ChatMessage, { type: "page_offer" }>["offer"]) => void;
   setStatus: (text: string | null) => void;
@@ -211,7 +211,7 @@ export const useChatStore = create<ChatState>((set) => ({
   addError: (message, extra) =>
     set((s) => {
       const msgs = closeStreamingBubbles(s.messages);
-      msgs.push({ id: mid(), type: "error", message, ...(extra?.detail ? { detail: extra.detail } : {}), ...(extra?.action ? { action: extra.action } : {}) });
+      msgs.push({ id: mid(), type: "error", message, ...(extra?.detail ? { detail: extra.detail } : {}), ...(extra?.action ? { action: extra.action } : {}), ...(extra?.usageUrl ? { usageUrl: extra.usageUrl } : {}) });
       return { ...s, messages: msgs, streaming: false, statusText: null };
     }),
 

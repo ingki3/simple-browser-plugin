@@ -90,7 +90,7 @@ export function MessageBubble({ message, onApprove, onCancel, showThinking, onOp
             )}
             {message.action === "usage" && (
               <div className="error-actions">
-                <a href={usageUrl} target="_blank" rel="noopener noreferrer">
+                <a href={message.usageUrl ?? usageUrl} target="_blank" rel="noopener noreferrer">
                   사용량 확인
                 </a>
               </div>

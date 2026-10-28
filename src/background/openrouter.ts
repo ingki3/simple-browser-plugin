@@ -909,7 +909,7 @@ export class ChatAgent {
       const msg = err instanceof Error ? err.message : String(err);
       debugLog("turn:error", msg, "error");
       endTurn("fail");
-      this.send({ kind: "error", ...friendlyError(err) });
+      this.send({ kind: "error", ...friendlyError(err), provider: this.provider });
     } finally {
       // 이 턴이 붙인 디버거를 뗀다. 새 턴에 밀렸으면 그 턴이 끝날 때 뗀다(같은 대화 상태를 쓰므로).
       if (!this.isStale(turn)) void detachSession(this.inputSession);

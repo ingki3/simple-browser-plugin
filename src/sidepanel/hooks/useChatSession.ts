@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { PORT_NAME, type BgToPanel, type PanelToBg, type ToolName } from "@/lib/messages";
 import { useChatStore } from "../state/chatStore";
 
@@ -98,7 +99,12 @@ export function useChatSession() {
           });
           return;
         case "error":
-          s.addError(msg.message, { detail: msg.detail, action: msg.action });
+          s.addError(msg.message, {
+            detail: msg.detail,
+            action: msg.action,
+            // 오류가 난 제공자의 사용량 주소를 그때 정해 둔다(뒤에 제공자를 바꿔도 그대로).
+            usageUrl: msg.provider ? PROVIDER_LINKS[msg.provider].usageUrl : undefined,
+          });
           return;
         case "info":
           s.addInfo(msg.title, msg.message);
