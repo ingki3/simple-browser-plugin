@@ -55,6 +55,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   read_linked_pages: EXTERNAL,
   // 작업 맡기기 카드(#123): 페이지를 건드리지 않고 사용자에게만 묻는다.
   confirm_task: LOCAL_READ,
+  // 반복 작업 등록(#138): 늘 카드로 묻는다. 브라우저에 남아 페이지를 다시 여는 활동을 만든다.
+  schedule_repeat_task: ACTION,
 };
 
 // 외부 본문 보호가 켜진 대화에서 이 도구 호출에 승인 카드가 필요한지(관측 전용이 아니면 모두).

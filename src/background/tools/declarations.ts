@@ -463,6 +463,24 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "schedule_repeat_task",
+    description:
+      "반복 작업 등록. 사용자가 '10분마다 확인해서 ~하면 ~해 줘'처럼 정한 간격으로 페이지를 다시 확인하라고 할 때만 부른다. 한 번만 확인하면 되는 요청에는 부르지 않는다. 부르면 늘 승인 카드가 뜬다. 승인되면 도우미가 간격마다 그 주소를 새로고침해 화면 글자를 보고 조건이 맞는지 모델에 묻고, 조건이 맞으면 사용자에게 알린다. 다음 일은 사용자가 '이어서 진행'을 눌러 새 대화로 시작한다(지금 대화에서 하지 않는다). url은 확인할 페이지 주소(보통 지금 탭의 주소), check는 조건을 화면에서 알아볼 수 있게 구체적으로(예: '예매하기 버튼이 눌리는 상태가 됨'), then은 조건이 맞으면 할 일. 간격은 사용자가 말한 대로 하되 1분보다 짧게 하지 않는다. 등록한 뒤에는 무엇을 언제까지 확인하는지 짧게 알려 준다.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "작업 이름(80자 이내)" },
+        url: { type: "string", description: "확인할 페이지의 http(s) 주소" },
+        check: { type: "string", description: "조건(500자 이내)" },
+        then: { type: "string", description: "조건이 맞으면 할 일(1000자 이내)" },
+        intervalMinutes: { type: "integer", description: "확인 간격(분, 1~1440)" },
+        endsInHours: { type: "integer", description: "몇 시간 동안 확인할지(1~168, 기본 24)" },
+        maxRuns: { type: "integer", description: "최대 확인 횟수(1~500, 기본은 기간÷간격)" },
+      },
+      required: ["title", "url", "check", "then", "intervalMinutes"],
+    },
+  },
+  {
     name: "sign_in",
     description:
       "로그인 화면에서 사용자의 비밀번호 관리자(KeePassXC)에 저장된 로그인 정보를 넣고 제출한다. 아이디·비밀번호·일회용 코드 값은 도우미가 직접 넣으며 모델에는 보이지 않는다(인자로 주지 않는다). id는 find_form_fields가 준 비밀번호 칸, 아이디만 먼저 받는 화면이면 아이디 칸(autocomplete=username), 2단계 인증 화면이면 일회용 코드 칸의 id다. 사용자가 자동 로그인을 승인한 사이트면 카드 없이 실행되고, 아니면 승인 카드에서 사용자가 항목을 고른다. 비밀번호 관리자가 연결되지 않았거나 맞는 항목이 없거나 '직접 조작할 사이트'면 칸을 화면에 표시해 사용자가 직접 로그인하게 한다(결과에 handedOff). 결과는 '제출함'까지만 알려 주므로 로그인이 끝났는지는 페이지를 다시 관측해 확인한다(2단계 인증·보안 문자 화면이 이어질 수 있다). 같은 사이트에서 실패했으면 다시 부르지 말고 사용자에게 알린다.",

@@ -20,6 +20,8 @@ import {
   type OpenRouterToolCall,
 } from "@/lib/openrouter";
 import { functionDeclarations } from "./tools/declarations";
+import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
+import { registerRepeatTask } from "./repeatTasks";
 import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
 import { settlePopups, watchNewTabs } from "./popups";
@@ -317,6 +319,16 @@ function spinStopNote(what: string): string {
   return `[확장 안내 — 사용자 글 아님] 같은 동작이 되풀이되어 확장이 도구 사용을 멈췄습니다(${what}). 도구를 더 부르지 말고, 지금까지 관측한 결과로 사용자에게 답하세요. 무엇을 시도했고 무엇이 반복해서 안 됐는지, 사용자가 대신 해 볼 만한 일을 짧게 밝히세요.`;
 }
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
+
+// 정해진 탭으로 턴 탭을 만든다(반복 작업의 이어서 진행). 탭이 없으면 오류 턴 탭 — 활성 탭으로 대신하지 않는다.
+async function turnTabOf(tabId: number): Promise<TurnTab> {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return { tabId, internal: isBrowserInternalUrl(tab.url) };
+  } catch {
+    return { error: "작업 탭을 찾을 수 없습니다." };
+  }
+}
 
 export class ChatAgent {
   private history: OpenRouterMessage[] = [];
@@ -819,14 +831,16 @@ export class ChatAgent {
     return composed;
   }
 
-  async sendUserTurn(userText: string): Promise<void> {
+  // tabId: 반복 작업의 "이어서 진행"(#138)처럼 백그라운드가 정한 탭에서 시작할 때. 없으면 지금 활성 탭.
+  // site: 이 요청의 자동 실행 기준 사이트를 탭 주소 대신 이 출처로 고정한다(반복 작업의 이어서 진행 — 등록한 사이트).
+  async sendUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<void> {
     // 이전 턴이 아직 돌고 있으면 끊는다. 백그라운드 번역은 대화가 이어지는 동안 유지한다.
     this.cancelInFlight();
     const turn = ++this.currentTurn;
     beginKeepalive();
     const endTurn = timeSpan("turn");
     const prevTurnTab = this.turnTab;
-    this.turnTab = await captureTurnTab();
+    this.turnTab = opts.tabId !== undefined ? await turnTabOf(opts.tabId) : await captureTurnTab();
     // 기록에 넣을 때 쓰는 가림 목록을 미리 읽어 둔다(서비스 워커가 다시 시작된 뒤 첫 결과도 가리게). 읽지 못하면 이 요청을
     // 보내지 않는다(가릴 값을 모른 채 페이지 글자를 보내지 않게).
     try {
@@ -855,7 +869,7 @@ export class ChatAgent {
       try {
         const url = (await chrome.tabs.get(turnTab.tabId)).url;
         startUrl = url ?? null;
-        if (url) site = siteOf(url);
+        if (url) site = opts.site ?? siteOf(url);
       } catch {
         /* 탭을 못 읽으면 신뢰 사이트 없이 진행(이동은 카드로 묻는다) */
       }
@@ -1207,6 +1221,7 @@ export class ChatAgent {
 
     const call: ToolCallContext = { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall, record };
     if (toolName === "confirm_task") return this.confirmTask(call);
+    if (toolName === "schedule_repeat_task") return this.scheduleRepeat(call);
     const auth = await this.authorizeCall(call);
     if (auth.kind === "stale") return false;
     if (auth.kind === "done") return true;
@@ -1491,6 +1506,78 @@ export class ChatAgent {
     this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
     this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { result: { note } }) });
     call.record(toolName, argsKey, true, `task:${summary}`, summary);
+    return true;
+  }
+
+  // 반복 작업 등록(#138): 실행 방식·맡긴 작업·이번 대화 허락과 관계없이 늘 카드로 묻는다(브라우저에 남아 페이지를 다시 여는
+  // 활동을 새로 만든다). 승인은 이 등록에만 쓰고 맡긴 작업·대화 허락을 주지 않는다. false: 이 요청이 끝났다.
+  private async scheduleRepeat(call: ToolCallContext): Promise<boolean> {
+    const { turn, turnTab, callId, toolName, argsKey, failCall } = call;
+    let args: Required<RepeatArgs>;
+    try {
+      args = normalizeRepeatArgs(call.parsedArgs as RepeatArgs);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logToolFail(toolName, msg);
+      failCall(msg, argsKey);
+      return true;
+    }
+    const { provider } = activeModel(await getSettings());
+    if (this.isStale(turn)) return false;
+    const timeOf = (ms: number) => new Date(ms).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const details = [
+      `요청: ${this.turnRequest.slice(0, 500)}`,
+      `확인할 페이지: ${args.url}`,
+      `조건: ${args.check}`,
+      `조건이 맞으면: ${args.then}`,
+      `간격: ${args.intervalMinutes}분마다 · 승인한 때부터 ${args.endsInHours}시간 · 최대 ${args.maxRuns}번`,
+      "",
+      `· 확인할 때마다 그 페이지를 새로고침하고 화면 글자를 ${providerAdapter(provider).label}로 보내 모델을 한 번 부릅니다(최대 ${args.maxRuns}번, 요금이 듭니다). 입력 칸에 쓴 값은 보내지 않습니다.`,
+      "· 조건이 맞으면 알려 드립니다. 다음 일은 '이어서 진행'을 직접 눌러야 새 대화로 시작합니다.",
+      "· 이어서 진행한 대화는 지금 실행 방식을 따릅니다('처음에 승인 받고 끝까지 실행'이면 그 대화에서 맡긴 뒤로는 결제·삭제도 묻지 않습니다).",
+      "· 설정 → 반복 작업에서 언제든 멈추거나 지울 수 있습니다.",
+    ].join("\n");
+    debugLog("tool:awaiting_repeat", args.title);
+    this.send({ kind: "tool_pending", callId, toolName, args: call.parsedArgs, previewSummary: "이 반복 작업을 등록할까요?", previewDetails: details });
+    const approved = await new Promise<boolean>((resolve) => {
+      this.pendingApprovals.set(callId, resolve);
+    });
+    this.pendingApprovals.delete(callId);
+    if (this.isStale(turn)) return false;
+    if (!approved) {
+      this.cancelCall(call, null);
+      return true;
+    }
+    let task: RepeatTask;
+    try {
+      task = await registerRepeatTask(args, this.turnRequest);
+    } catch (err) {
+      if (this.isStale(turn)) return false;
+      const msg = err instanceof Error ? err.message : String(err);
+      logToolFail(toolName, msg);
+      failCall(msg, argsKey);
+      return true;
+    }
+    if (this.isStale(turn)) return false;
+    // 끝나는 시각은 승인한 때부터 센다(실제로 저장한 값으로 알린다).
+    const until = timeOf(task.endsAt);
+    const summary = `반복 작업 등록: ${task.title} · ${task.intervalMinutes}분마다 · ${until}까지`;
+    this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
+    this.history.push({
+      role: "tool",
+      tool_call_id: callId,
+      name: toolName,
+      content: this.toolContent(turnTab, {
+        result: {
+          registered: true,
+          intervalMinutes: task.intervalMinutes,
+          until,
+          maxRuns: task.maxRuns,
+          note: "등록했습니다. 지금 대화에서는 다음 일을 하지 않습니다. 조건이 맞으면 사용자가 '이어서 진행'으로 새 대화를 시작합니다. 무엇을 언제까지 확인하는지 짧게 알려 주세요.",
+        },
+      }),
+    });
+    call.record(toolName, argsKey, true, `repeat:${task.id}`, summary);
     return true;
   }
 

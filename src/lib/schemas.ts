@@ -231,6 +231,19 @@ export const confirmTaskArgs = z
   })
   .strict();
 
+// 반복 작업 등록(#138). 주소 검사·기본값은 src/lib/repeatTask.ts의 normalizeRepeatArgs.
+export const scheduleRepeatTaskArgs = z
+  .object({
+    title: z.string().min(1).max(80),
+    url: z.string().min(1).max(2000),
+    check: z.string().min(1).max(500),
+    then: z.string().min(1).max(1000),
+    intervalMinutes: z.number().int().min(1).max(1440),
+    endsInHours: z.number().int().min(1).max(168).optional(),
+    maxRuns: z.number().int().min(1).max(500).optional(),
+  })
+  .strict();
+
 export const toolArgsSchemas = {
   describe_page: describePageArgs,
   get_page_content: getPageContentArgs,
@@ -261,6 +274,7 @@ export const toolArgsSchemas = {
   read_other_tabs: readOtherTabsArgs,
   read_linked_pages: readLinkedPagesArgs,
   confirm_task: confirmTaskArgs,
+  schedule_repeat_task: scheduleRepeatTaskArgs,
 } as const;
 
 export type ToolArgs = {

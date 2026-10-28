@@ -36,7 +36,9 @@ export type ToolName =
   | "read_other_tabs"
   | "read_linked_pages"
   // '처음에 승인 받고 끝까지 실행'(runMode task, #123): 할 일과 위험을 보이고 사용자에게 작업을 한 번 맡긴다.
-  | "confirm_task";
+  | "confirm_task"
+  // 반복 작업 등록(#138): 늘 승인 카드로 묻고, 승인하면 정한 간격으로 페이지를 확인한다.
+  | "schedule_repeat_task";
 
 // 실행 방식(#123). ask: 모든 동작에 승인 후 실행. auto: 페이지 이동·클릭·입력을 묻지 않고 실행(위험한 동작은 묻는다).
 // task: 처음에 작업을 한 번 승인받고, 이 대화가 끝날 때까지 승인 카드 없이 실행한다.
@@ -193,6 +195,8 @@ export interface PageContent {
 
 export type PanelToBg =
   | { kind: "user_msg"; text: string; conversationId: string }
+  // 반복 작업의 "이어서 진행"(#138). conversationId는 패널이 새로 연 대화.
+  | { kind: "repeat_continue"; taskId: string; conversationId: string }
   // allowLinksThisTurn: 카드가 제안했을 때만 유효. 이번 요청 동안 같은 사이트 안의 일반 링크 이동은 묻지 않는다.
   // choiceIds: 선택 카드(choices)에서 고른 후보 id. 백그라운드가 고정한 후보의 부분집합만 받아들인다.
   // allowToolThisChat: 카드가 제안했을 때만 유효(chatGrantOffer). 이번 대화 동안 이 도구는 같은 조건이면 묻지 않는다(#53).
@@ -227,6 +231,9 @@ export interface DebugEvent {
 
 export type BgToPanel =
   | { kind: "assistant_chunk"; text: string }
+  // 반복 작업(#138): 목록이 바뀌었다(패널이 다시 읽는다) / 이어서 진행을 시작했다(새 대화의 첫 요청 글).
+  | { kind: "repeat_update" }
+  | { kind: "repeat_started"; text: string }
   | { kind: "thought_chunk"; text: string }
   | { kind: "assistant_done"; finishReason?: string }
   | { kind: "status"; text: string | null }
@@ -346,6 +353,8 @@ export type BgToContent =
   | { kind: "read_page_text"; expectUrl: string }
   // 저장 카드 초안(#86): 이 문서의 화면 글자(modelText — 입력 칸 값·편집 영역·숨은 내용 제외). 주소가 expectUrl과 다르면 읽지 않는다.
   | { kind: "screen_text"; expectUrl: string; max: number }
+  // 반복 작업의 확인(#138): 화면 글자(modelText)와 누를 수 있는 것의 글자·상태. 입력값·편집 영역은 담지 않는다(#43).
+  | { kind: "watch_snapshot"; expectUrl: string; max: number; limit: number }
   // read_linked_pages: 이 주소들이 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 링크에 있는지와 링크 글자.
   | { kind: "link_lookup"; urls: string[] }
   // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크(후보 고정용).

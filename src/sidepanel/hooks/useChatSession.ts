@@ -118,6 +118,14 @@ export function useChatSession() {
         case "debug":
           s.pushDebugEvent(msg.event);
           return;
+        case "repeat_update":
+          s.bumpRepeat();
+          return;
+        case "repeat_started":
+          // 이어서 진행(#138): 백그라운드가 저장된 작업으로 만든 첫 요청 글.
+          s.appendUser(msg.text);
+          s.bumpRepeat();
+          return;
       }
     };
 
@@ -158,6 +166,8 @@ export function useChatSession() {
       pushPanelDebug("port:connect");
 
       port.onMessage.addListener(onMessage);
+      // 연결(다시 연결)할 때 반복 작업 목록을 다시 읽게 한다.
+      useChatStore.getState().bumpRepeat();
       port.onDisconnect.addListener(() => {
         portRef.current = null;
         clearHeartbeat();
@@ -284,11 +294,19 @@ export function useChatSession() {
     useChatStore.getState().abortLocal();
   };
 
+  // 반복 작업의 "이어서 진행"(#138): 새 대화를 열고 백그라운드에 그 대화로 시작하게 한다. 요청 글은 백그라운드가 정한다.
+  const continueRepeat = (taskId: string) => {
+    useChatStore.getState().reset();
+    const { conversationId } = useChatStore.getState();
+    localDebug("repeat_continue", taskId);
+    send({ kind: "repeat_continue", taskId, conversationId });
+  };
+
   const resetConversation = () => {
     useChatStore.getState().reset();
     const { conversationId } = useChatStore.getState();
     send({ kind: "reset_conversation", conversationId });
   };
 
-  return { sendUser, approveTool, cancelTool, abortStream, resetConversation, revokeChatGrant, revokeTask };
+  return { sendUser, approveTool, cancelTool, abortStream, resetConversation, revokeChatGrant, revokeTask, continueRepeat };
 }
