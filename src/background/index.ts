@@ -20,11 +20,15 @@ import {
   resumeRepeatTask,
   runRepeatNow,
 } from "./repeatTasks";
+import { telegramClear, telegramDisconnect, telegramSaveToken, telegramSetNotify, telegramStartPairing, telegramStatus } from "./telegram";
 import {
   clearGoogleToken,
   connectGoogle,
   getGoogleConnectionState,
 } from "./google/auth";
+
+// 저장소(API 키·텔레그램 봇 토큰 등)는 확장의 화면·서비스 워커만 읽게 한다(content script는 저장소를 쓰지 않는다, #139).
+chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
 
 pruneActionLog();
 
@@ -276,6 +280,38 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             : m.kind === "repeat_run_now"
               ? runRepeatNow(id)
               : listRepeatTasks();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 텔레그램 연동(#139, 설정 화면). 이 확장의 화면에서만 받는다. 토큰은 돌려주지 않는다.
+  if (
+    m.kind === "telegram_status" ||
+    m.kind === "telegram_save_token" ||
+    m.kind === "telegram_pair" ||
+    m.kind === "telegram_disconnect" ||
+    m.kind === "telegram_clear" ||
+    m.kind === "telegram_set_notify"
+  ) {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { token?: unknown; on?: unknown };
+    const job =
+      m.kind === "telegram_save_token"
+        ? telegramSaveToken(typeof p.token === "string" ? p.token : "")
+        : m.kind === "telegram_pair"
+          ? telegramStartPairing()
+          : m.kind === "telegram_disconnect"
+            ? telegramDisconnect()
+            : m.kind === "telegram_clear"
+              ? telegramClear()
+              : m.kind === "telegram_set_notify"
+                ? telegramSetNotify(p.on === true)
+                : telegramStatus();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
