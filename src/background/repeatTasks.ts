@@ -27,7 +27,7 @@ import { activeModel } from "@/lib/settings";
 import { providerAdapter } from "@/lib/providers";
 import { withTimeout } from "@/lib/async";
 import { getSettings } from "./storage";
-import { maskMessagesForModel, maskValue } from "./loginSecrets";
+import { maskMessagesForModel, maskStringForModel } from "./loginSecrets";
 import { debugLog } from "./debug";
 
 const STORE_KEY = "repeatTasks";
@@ -297,8 +297,9 @@ export async function runCheck(id: string): Promise<void> {
   // 확인이 실패했어도 이 실행이 쓴 탭이 우리가 둔 주소(다 뜬 뒤 본 주소나 등록 주소)에 그대로 있으면 이 작업의 탭으로
   // 기억한다(실패할 때마다 탭이 늘지 않게). 사용자가 다른 화면으로 옮겼으면 기억하지 않는다(다음 확인이 그 탭을 건드리지 않게).
   if (check.verdict === "error" && ownedTab !== null) tab = await ownedTabState(ownedTab, ownedSeenUrl, started.url);
-  // 페이지에서 유래한 이유·오류 글자도 자동 로그인 값을 가린 뒤 저장한다.
-  check = await maskValue(check).catch(() => ({ ...check, reason: "" }));
+  // 페이지에서 유래한 이유·오류 글자도 자동 로그인 값을 가린 뒤 저장한다(판정 코드는 그대로).
+  const reasonText = check.reason;
+  check = { ...check, reason: await maskStringForModel(reasonText).then((r) => r.text, () => "") };
   const next = await update(id, (t) => {
     const n = applyRunResult(t, token, check, Date.now());
     return n ? { ...n, tab } : null;
@@ -326,14 +327,20 @@ interface OpenedPage {
 // onTab: 쓸 탭이 정해지는 즉시 알린다(뒤 단계가 실패해도 이 작업의 탭으로 기억해 다음 확인에서 새 탭을 또 만들지 않게).
 // 확인은 늘 등록한 주소에서 시작한다(지난번에 리다이렉트된 주소를 새로고침하지 않는다).
 async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: number, seenUrl?: string) => void): Promise<OpenedPage> {
+  // 각 대기 뒤, 브라우저를 바꾸기 전에 멈춤·지우기가 있었는지 본다.
+  const live = () => {
+    if (signal.aborted) throw new Discarded();
+  };
   let tabId: number | null = null;
   if (t.tab) {
     const cur = await chrome.tabs.get(t.tab.tabId).catch(() => null);
     if (cur?.id !== undefined && cur.url === t.tab.url) tabId = cur.id;
   }
+  live();
   if (tabId !== null) {
     onTab(tabId);
     const cur = await chrome.tabs.get(tabId);
+    live();
     if (cur.url === t.url) await chrome.tabs.reload(tabId);
     else await chrome.tabs.update(tabId, { url: t.url });
   } else {
@@ -469,6 +476,9 @@ export async function continueRepeatTask(id: string): Promise<{ text: string; ta
   }
   try {
     const tabId = await continueTab(claimed);
+    // 탭을 준비하는 사이 작업을 지웠거나 상태가 바뀌었으면 시작하지 않는다.
+    const still = (await load()).find((t) => t.id === id);
+    if (!still || still.status !== "started" || still.revision !== claimed.revision) throw new Error("그 사이 작업이 지워졌거나 바뀌었습니다.");
     await announce();
     debugLog("repeat:continue", claimed.title);
     return { text: followUpText(claimed), tabId, site: httpOrigin(claimed.url) ?? claimed.url };
