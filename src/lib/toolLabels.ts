@@ -33,6 +33,7 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   confirm_task: "작업 맡기기",
 };
 
+// 이름은 모델이 준 글자일 수 있다(인자 검증 실패 결과 등). 등록한 이름만 바꾸고(__proto__ 같은 상속 속성 제외) 나머지는 그대로.
 export function toolLabel(name: string): string {
-  return (TOOL_LABELS as Record<string, string>)[name] ?? name;
+  return Object.hasOwn(TOOL_LABELS, name) ? (TOOL_LABELS as Record<string, string>)[name] : name;
 }
