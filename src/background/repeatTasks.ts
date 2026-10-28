@@ -227,6 +227,18 @@ function abortRun(id: string): void {
 
 class Discarded extends Error {}
 
+// 이 실행이 쓴 탭이 우리가 둔 주소(다 뜬 뒤 본 주소나 등록 주소)에 그대로 있으면 그 탭 정보, 아니면 null.
+async function ownedTabState(tabId: number, seenUrl: string | null, url: string): Promise<RepeatTask["tab"]> {
+  const cur = await chrome.tabs.get(tabId).catch(() => null);
+  return cur?.url && (cur.url === seenUrl || cur.url === url) ? { tabId, url: cur.url } : null;
+}
+
+async function rememberTab(id: string, tabId: number | null, seenUrl: string | null, url: string): Promise<void> {
+  if (tabId === null) return;
+  const tab = await ownedTabState(tabId, seenUrl, url);
+  if (tab) await update(id, (t) => (t.tab?.tabId === tab.tabId && t.tab.url === tab.url ? null : { ...t, tab })).catch(() => null);
+}
+
 // 확인 한 번. 시작·각 단계 뒤·반영 직전에 이 실행(token)이 아직 유효한지 본다(멈춤·지우기·새 실행이면 결과를 버린다).
 export async function runCheck(id: string): Promise<void> {
   await recovered;
@@ -273,6 +285,8 @@ export async function runCheck(id: string): Promise<void> {
     if (err instanceof Discarded || controller.signal.aborted) {
       hold();
       if (running.get(id)?.token === token) running.delete(id);
+      // 멈춤·지우기로 버린 실행도 이 실행이 만든 탭이 우리가 둔 주소에 그대로 있으면 기억한다(다시 시작할 때 탭이 늘지 않게).
+      await rememberTab(id, ownedTab, ownedSeenUrl, started.url);
       return;
     }
     check = { at: Date.now(), verdict: "error", reason: err instanceof Error ? err.message : String(err) };
@@ -282,11 +296,7 @@ export async function runCheck(id: string): Promise<void> {
   if (running.get(id)?.token === token) running.delete(id);
   // 확인이 실패했어도 이 실행이 쓴 탭이 우리가 둔 주소(다 뜬 뒤 본 주소나 등록 주소)에 그대로 있으면 이 작업의 탭으로
   // 기억한다(실패할 때마다 탭이 늘지 않게). 사용자가 다른 화면으로 옮겼으면 기억하지 않는다(다음 확인이 그 탭을 건드리지 않게).
-  if (check.verdict === "error" && ownedTab !== null) {
-    const cur = await chrome.tabs.get(ownedTab).catch(() => null);
-    const ours = !!cur?.url && (cur.url === ownedSeenUrl || cur.url === started.url);
-    tab = ours ? { tabId: ownedTab, url: cur!.url! } : null;
-  }
+  if (check.verdict === "error" && ownedTab !== null) tab = await ownedTabState(ownedTab, ownedSeenUrl, started.url);
   // 페이지에서 유래한 이유·오류 글자도 자동 로그인 값을 가린 뒤 저장한다.
   check = await maskValue(check).catch(() => ({ ...check, reason: "" }));
   const next = await update(id, (t) => {
@@ -339,7 +349,7 @@ async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: numbe
   onTab(tabId, url);
   if (!/^https?:/.test(url)) throw new Error("확인용 탭이 웹 페이지가 아닙니다.");
   // 등록한 주소와 같은 출처이거나 같은 등록 도메인이면 읽는다(공유 호스팅은 등록 도메인으로 묶지 않으므로 같은 출처만).
-  if (httpOrigin(url) !== httpOrigin(t.url) && !sameSiteAs(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");
+  if (!inRegisteredSite(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");
   const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
   if (!frame?.documentId) throw new Error("페이지 문서를 확인하지 못했습니다.");
   return { tabId, documentId: frame.documentId, url };
@@ -441,7 +451,8 @@ async function judge(t: RepeatTask, s: RepeatSnapshot, signal: AbortSignal): Pro
 // ---- 이어서 진행 ----
 
 // 조건이 맞은 작업을 한 번만 진행 상태로 바꾸고, 새 대화의 첫 요청 글과 턴 탭을 돌려준다. 요청 글은 저장된 작업 내용으로만 만든다.
-export async function continueRepeatTask(id: string): Promise<{ text: string; tabId: number }> {
+// site: 새 대화의 자동 실행 기준 사이트(등록한 주소의 출처로 고정 — 탭이 그 사이 다른 사이트로 넘어가도 그 사이트를 믿지 않게).
+export async function continueRepeatTask(id: string): Promise<{ text: string; tabId: number; site: string }> {
   await recovered;
   let error: string | null = null;
   const claimed = await update(id, (t) => {
@@ -460,7 +471,7 @@ export async function continueRepeatTask(id: string): Promise<{ text: string; ta
     const tabId = await continueTab(claimed);
     await announce();
     debugLog("repeat:continue", claimed.title);
-    return { text: followUpText(claimed), tabId };
+    return { text: followUpText(claimed), tabId, site: httpOrigin(claimed.url) ?? claimed.url };
   } catch (err) {
     // 탭을 열지 못했으면 다시 누를 수 있게 되돌린다.
     await releaseRepeatTask(id);
@@ -487,9 +498,21 @@ async function continueTab(t: RepeatTask): Promise<number> {
     tabId = created.id;
   } else {
     await chrome.tabs.update(tabId, { active: true });
+    // 그 사이 다른 사이트로 넘어갔으면 그 탭을 쓰지 않고 등록한 주소로 새 탭을 연다.
+    const now = await chrome.tabs.get(tabId).catch(() => null);
+    if (!now?.url || !inRegisteredSite(t.url, now.url)) {
+      const created = await chrome.tabs.create({ url: t.url, active: true });
+      if (created.id === undefined) throw new Error("작업 탭을 열지 못했습니다.");
+      tabId = created.id;
+    }
   }
   const tab = await chrome.tabs.get(tabId);
   if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
   return tabId;
+}
+
+// 등록한 주소와 같은 출처이거나 같은 등록 도메인(공유 호스팅은 같은 출처만).
+function inRegisteredSite(registered: string, url: string): boolean {
+  return httpOrigin(url) !== null && (httpOrigin(url) === httpOrigin(registered) || sameSiteAs(registered, url));
 }
 

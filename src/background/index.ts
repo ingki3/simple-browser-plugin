@@ -108,7 +108,7 @@ chrome.runtime.onConnect.addListener((port) => {
         const taskId = String(msg.taskId);
         const seq = actionSeq;
         continueRepeatTask(taskId)
-          .then(({ text, tabId }) => {
+          .then(({ text, tabId, site }) => {
             // 기다리는 사이 다른 대화 동작이 있었거나 패널이 닫혔으면 시작하지 않고, 다시 누를 수 있게 되돌린다.
             if (seq !== actionSeq || disconnected) {
               void releaseRepeatTask(taskId);
@@ -123,7 +123,7 @@ chrome.runtime.onConnect.addListener((port) => {
             agent?.abort();
             agent = new ChatAgent(port);
             activeConversationId = conversationId;
-            agent.sendUserTurn(text, { tabId }).catch((err) => console.error("[sendUserTurn]", err));
+            agent.sendUserTurn(text, { tabId, site }).catch((err) => console.error("[sendUserTurn]", err));
           })
           .catch((err: unknown) => {
             // 그 사이 사용자가 다른 대화 동작을 했으면 알리지 않는다(새 대화의 화면 상태를 덮지 않게).

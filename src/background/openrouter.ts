@@ -832,7 +832,8 @@ export class ChatAgent {
   }
 
   // tabId: 반복 작업의 "이어서 진행"(#138)처럼 백그라운드가 정한 탭에서 시작할 때. 없으면 지금 활성 탭.
-  async sendUserTurn(userText: string, opts: { tabId?: number } = {}): Promise<void> {
+  // site: 이 요청의 자동 실행 기준 사이트를 탭 주소 대신 이 출처로 고정한다(반복 작업의 이어서 진행 — 등록한 사이트).
+  async sendUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<void> {
     // 이전 턴이 아직 돌고 있으면 끊는다. 백그라운드 번역은 대화가 이어지는 동안 유지한다.
     this.cancelInFlight();
     const turn = ++this.currentTurn;
@@ -868,7 +869,7 @@ export class ChatAgent {
       try {
         const url = (await chrome.tabs.get(turnTab.tabId)).url;
         startUrl = url ?? null;
-        if (url) site = siteOf(url);
+        if (url) site = opts.site ?? siteOf(url);
       } catch {
         /* 탭을 못 읽으면 신뢰 사이트 없이 진행(이동은 카드로 묻는다) */
       }
