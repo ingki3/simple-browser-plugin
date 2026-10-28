@@ -20,6 +20,7 @@ import {
   resumeRepeatTask,
   runRepeatNow,
 } from "./repeatTasks";
+import { mcpRegenerate, mcpSecret, mcpSet, mcpStatus } from "./mcp";
 import { telegramClear, telegramDisconnect, telegramSaveToken, telegramSetNotify, telegramStartPairing, telegramStatus } from "./telegram";
 import {
   clearGoogleToken,
@@ -312,6 +313,30 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
               : m.kind === "telegram_set_notify"
                 ? telegramSetNotify(p.on === true)
                 : telegramStatus();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // MCP 연동(#140, 설정 화면). 이 확장의 화면에서만 받는다. 비밀은 mcp_secret으로만 돌려준다(다리 설정에 넣어야 한다).
+  if (m.kind === "mcp_status" || m.kind === "mcp_secret" || m.kind === "mcp_set" || m.kind === "mcp_regenerate") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { enabled?: unknown; port?: unknown };
+    const job: Promise<unknown> =
+      m.kind === "mcp_secret"
+        ? mcpSecret()
+        : m.kind === "mcp_regenerate"
+          ? mcpRegenerate()
+          : m.kind === "mcp_set"
+            ? mcpSet({
+                ...(typeof p.enabled === "boolean" ? { enabled: p.enabled } : {}),
+                ...(typeof p.port === "number" ? { port: p.port } : {}),
+              })
+            : mcpStatus();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));

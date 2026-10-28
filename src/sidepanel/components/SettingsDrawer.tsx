@@ -1,3 +1,4 @@
+import { McpField } from "./McpField";
 import { TelegramField } from "./TelegramField";
 import { RepeatTasksField } from "./RepeatTasksField";
 import { useEffect, useRef, useState } from "react";
@@ -510,6 +511,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <details className="settings-group">
             <summary>텔레그램 연동 (선택)</summary>
             <TelegramField />
+          </details>
+
+          <details className="settings-group">
+            <summary>MCP 연동 (선택)</summary>
+            <McpField />
           </details>
 
           <details className="settings-group">
