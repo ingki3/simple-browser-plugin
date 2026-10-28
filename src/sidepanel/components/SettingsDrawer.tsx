@@ -451,14 +451,20 @@ export function SettingsDrawer({ open, onClose }: Props) {
               </div>
               {!googleStatus?.configured && (
                 <div className="setup-card">
-                  <strong>OAuth 설정 4단계 (1회성)</strong>
+                  <strong>선택 기능 · 직접 빌드한 경우만</strong>
+                  <p className="setup-note">
+                    기본 사용에는 필요 없습니다. 릴리스 ZIP에서는 꺼져 있고, 자기 Google Cloud 프로젝트로 직접 빌드해야 씁니다.{" "}
+                    <a href="https://github.com/ingki3/simple-browser-plugin/blob/main/docs/install.md#google-연동선택-직접-빌드-필요" target="_blank" rel="noopener">
+                      설치 안내
+                    </a>
+                  </p>
                   <ol>
                     <li><a href="https://console.cloud.google.com/apis/library" target="_blank" rel="noopener">Google Cloud 콘솔</a>에서 Sheets · Docs · Drive API 활성화</li>
                     <li>"OAuth 동의 화면" 구성 → 본인 이메일을 테스터 등록</li>
                     <li>"사용자 인증 정보" → "OAuth 클라이언트 ID" 생성<br />
                       → 유형 <strong>"Chrome 확장 프로그램"</strong><br />
                       → Application ID: <code className="copy-hint">이 확장의 ID</code> (chrome://extensions에서 복사)</li>
-                    <li>발급된 client_id를 <code>manifest.config.ts</code>의 <code>GOOGLE_OAUTH_CLIENT_ID</code>에 붙여넣기 → <code>npm run build</code> → 확장 재설치</li>
+                    <li>발급된 client_id로 <code>GOOGLE_OAUTH_CLIENT_ID=… npm run build</code> → 확장 새로고침</li>
                   </ol>
                   <p className="setup-note">redirect URI 등록은 필요 없습니다 (Chrome이 내부 처리).</p>
                 </div>

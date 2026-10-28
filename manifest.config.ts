@@ -17,10 +17,21 @@ const GOOGLE_SCOPES = [
 export default defineManifest({
   manifest_version: 3,
   name: "간편 브라우저 도우미",
-  description: "OpenRouter 기반 Chrome Side Panel 채팅 에이전트. 페이지 번역, 폼 자동 채우기, 이미지 일괄 다운로드.",
+  short_name: "간편 도우미",
+  description: "사이드 패널에서 말로 시키는 브라우저 도우미. 페이지 요약·번역, 입력칸 채우기, 클릭·이동, 파일 읽기와 저장을 대신합니다.",
   version: "0.2.28",
+  icons: {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png",
+  },
   action: {
-    default_title: "간편 도우미 열기",
+    default_title: "간편 브라우저 도우미 열기",
+    default_icon: {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+    },
   },
   side_panel: {
     default_path: "src/sidepanel/index.html",

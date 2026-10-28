@@ -18,9 +18,9 @@ export function Options() {
 
   return (
     <div className="options">
-      <h1>간편 도우미 설정</h1>
+      <h1>간편 브라우저 도우미 설정</h1>
       <p className="intro">
-        모든 설정(모델 제공자·API 키·모델, 자동 실행, 직접 조작할 사이트, 저장한 링크, 동작 기록, Google 연결 등)은 사이드 패널의
+        모든 설정(모델 제공자·API 키·모델, 실행 방식, 직접 조작할 사이트, 저장한 링크, 동작 기록, Google 연결 등)은 사이드 패널의
         설정(⚙)에서 바꿉니다. 바꾸면 바로 저장됩니다.
       </p>
       <button className="primary" onClick={() => void openPanel()}>
