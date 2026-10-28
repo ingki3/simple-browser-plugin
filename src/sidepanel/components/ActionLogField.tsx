@@ -10,15 +10,20 @@ interface Props {
 export function ActionLogField({ enabled, onToggle }: Props) {
   const [count, setCount] = useState<{ log: number; recipes: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  // 지우기·개수 조회가 실패하면 알린다(#130).
   const request = async (kind: "action_log_count" | "action_log_clear") => {
+    setError(null);
     try {
       const res = (await chrome.runtime.sendMessage({ kind })) as
-        | { ok: boolean; data?: { log: number; recipes: number } }
+        | { ok: boolean; data?: { log: number; recipes: number }; error?: string }
         | undefined;
       if (res?.ok && res.data) setCount(res.data);
-    } catch {
-      /* ignore */
+      else throw new Error(res?.error ?? "응답이 없습니다.");
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      setError(kind === "action_log_clear" ? `기록을 지우지 못했습니다(${why}).` : `기록 개수를 읽지 못했습니다(${why}).`);
     }
   };
 
@@ -47,6 +52,7 @@ export function ActionLogField({ enabled, onToggle }: Props) {
           {busy ? "지우는 중…" : "기록 지우기"}
         </button>
       </div>
+      {error && <span className="field-help error-text">{error}</span>}
       <FieldHelp summary="누르거나 채운 기록과 통한 읽기 방법만 이 브라우저에 남깁니다(입력값·페이지 내용은 남기지 않음).">
         어느 페이지에서 무엇을 누르거나 채웠는지와 그 결과, 같은 구조의 페이지에서 내용을 읽는 데 통한 방법(선택자·검색어)만
         남깁니다. 읽기 방법은 다음에 같은 구조의 페이지를 볼 때 먼저 시도합니다. 입력한 값과 페이지 내용은 남기지 않고,

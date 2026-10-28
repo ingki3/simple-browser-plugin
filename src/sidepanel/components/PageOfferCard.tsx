@@ -42,8 +42,8 @@ export function PageOfferCard({ offer }: Props) {
   }
   const slotNames = [...new Set(modes.flatMap((m, i) => (m === "slot" && slots[i].trim() ? [slots[i].trim()] : [])))];
 
-  const openCard = async () => {
-    setOpen(true);
+  // 카드를 여는 것만으로는 모델에 보내지 않는다. 초안은 사용자가 "AI로 채우기"를 누를 때만 묻는다(#129).
+  const requestDraft = async () => {
     // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(경로·제목·본문으로도 값이 샐 수 있어 사용자가 직접 정한다).
     if (offer.warning) return;
     const seq = ++draftSeq.current;
@@ -114,7 +114,7 @@ export function PageOfferCard({ offer }: Props) {
   if (!open) {
     return (
       <div className="page-offer">
-        <button type="button" className="ghost-btn" onClick={() => void openCard()}>
+        <button type="button" className="ghost-btn" onClick={() => setOpen(true)}>
           이 페이지 기억하기
         </button>
       </div>
@@ -122,7 +122,16 @@ export function PageOfferCard({ offer }: Props) {
   }
   return (
     <div className="page-offer open">
-      {drafting && <span className="field-help">요청과 페이지 내용으로 이름·용도·주소 값을 채우는 중…</span>}
+      {!offer.warning && (
+        <div className="page-offer-draft">
+          <button type="button" className="ghost-btn" disabled={drafting} onClick={() => void requestDraft()}>
+            {drafting ? "채우는 중…" : "AI로 이름·용도 채우기"}
+          </button>
+          <span className="field-help">
+            누르면 이번 요청·답·페이지 글자를 설정에서 고른 모델 제공자에 보내 초안을 받습니다. 직접 적어도 됩니다.
+          </span>
+        </div>
+      )}
       <label className="field">
         <span className="field-label">이름</span>
         <input
@@ -207,8 +216,7 @@ export function PageOfferCard({ offer }: Props) {
         <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{offer.evicts}'이(가) 지워집니다.</span>
       )}
       <span className="field-help">
-        카드를 열면 이번 요청·답·페이지 글자를 설정에서 고른 모델 제공자에 보내 이름·용도·주소 값 초안을 채웁니다. 입력 자리의 지금 값은
-        저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 고른 모델 제공자에 후보로
+        입력 자리의 지금 값은 저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 고른 모델 제공자에 후보로
         전송되고, 요청이 용도에 맞으면 도우미가 자리에 값을 넣어 엽니다. 설정에서 고치거나 지울 수 있습니다.
       </span>
       {state === "error" && <span className="field-help error-text">{error}</span>}

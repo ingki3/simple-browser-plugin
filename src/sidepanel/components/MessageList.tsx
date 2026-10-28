@@ -2,7 +2,8 @@ import { useLayoutEffect, useRef } from "react";
 import { useChatStore } from "../state/chatStore";
 import { MessageBubble } from "./MessageBubble";
 import { ThinkingIndicator } from "./ThinkingIndicator";
-import { KO } from "../i18n/ko";
+import { Welcome } from "./Welcome";
+import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { useSettings } from "../hooks/useSettings";
 
 interface Props {
@@ -15,9 +16,12 @@ interface Props {
     rememberLoginSite?: boolean,
   ) => void;
   onCancel: (callId: string) => void;
+  needsKey: boolean;
+  onOpenSettings: () => void;
+  onSend: (text: string) => void;
 }
 
-export function MessageList({ onApprove, onCancel }: Props) {
+export function MessageList({ onApprove, onCancel, needsKey, onOpenSettings, onSend }: Props) {
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
   const { settings } = useSettings();
@@ -46,7 +50,7 @@ export function MessageList({ onApprove, onCancel }: Props) {
   if (messages.length === 0 && !streaming) {
     return (
       <div className="message-list empty">
-        <div className="empty-state">{KO.emptyState}</div>
+        <Welcome needsKey={needsKey} onOpenSettings={onOpenSettings} onSend={onSend} />
       </div>
     );
   }
@@ -67,6 +71,8 @@ export function MessageList({ onApprove, onCancel }: Props) {
           onApprove={onApprove}
           onCancel={onCancel}
           showThinking={settings.showThinking}
+          onOpenSettings={onOpenSettings}
+          usageUrl={PROVIDER_LINKS[settings.provider].usageUrl}
         />
       ))}
       {showThinking && <ThinkingIndicator />}

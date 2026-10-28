@@ -1,3 +1,4 @@
+import type { ProviderId } from "./providers/types";
 import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
 import type { ReadHint } from "./readRecipe";
@@ -276,10 +277,14 @@ export type BgToPanel =
       toolName: ToolName;
       ok: boolean;
       summary: string;
+      // 사용자가 카드에서 취소한 호출(#130). 패널이 실패와 구분해 보인다.
+      cancelled?: boolean;
     }
   // 이 대화에서 허락한 도구와 범위(download_images는 저장 폴더). 바뀔 때와 요청을 시작할 때 보낸다(#53).
   | { kind: "chat_grants"; grants: Array<{ tool: ToolName; scope: string }> }
-  | { kind: "error"; message: string }
+  // detail: 원래 오류 문구, action: 다음 행동 버튼(설정 열기·사용량 확인, #130).
+  // provider: 오류가 난 제공자(사용량 확인 링크는 그 제공자로, 나중에 제공자를 바꿔도).
+  | { kind: "error"; message: string; detail?: string; action?: "settings" | "usage"; provider?: ProviderId }
   | { kind: "info"; title: string; message: string }
   // 턴을 마친 뒤 탭이 다른 화면에 있으면 "이 페이지 기억하기" 제안(저장은 사용자가 이름을 확인하고 누를 때만).
   | { kind: "page_save_offer"; offer: PageOfferData }

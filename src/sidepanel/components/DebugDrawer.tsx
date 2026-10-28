@@ -59,7 +59,7 @@ export function DebugDrawer({ open, onClose }: Props) {
     <div className="drawer-overlay" onClick={onClose}>
       <div className="drawer debug-drawer" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-header">
-          <h2>디버그 타임라인</h2>
+          <h2>문제 신고용 진단</h2>
           <div className="debug-actions">
             <input
               className="debug-filter"
@@ -68,7 +68,7 @@ export function DebugDrawer({ open, onClose }: Props) {
               onChange={(e) => setFilter(e.target.value)}
             />
             <button type="button" className="ghost-btn" onClick={handleCopy}>
-              {copyState === "copied" ? "복사됨" : copyState === "failed" ? "실패" : "복사"}
+              {copyState === "copied" ? "복사됨" : copyState === "failed" ? "실패" : "진단 복사"}
             </button>
             <button type="button" className="ghost-btn" onClick={clearDebugEvents}>
               지우기
@@ -78,6 +78,9 @@ export function DebugDrawer({ open, onClose }: Props) {
             </button>
           </div>
         </div>
+        <p className="debug-note">
+          문제를 알릴 때 복사해 붙여 주세요. 방문한 주소와 파일 이름이 들어 있을 수 있으니, 공유하기 전에 확인하세요.
+        </p>
         <div className="drawer-body debug-body">
           {filtered.length === 0 ? (
             <div className="debug-empty">이벤트 없음</div>
