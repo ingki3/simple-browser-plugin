@@ -51,10 +51,12 @@ export class RemoteRunner {
 
   // 진행 중인 요청을 멈춘다(실행이 끝나면 슬롯이 빈다). 멈출 것이 있었으면 true.
   stop(): boolean {
-    if (!this.slot || this.slot.stopping) return false;
-    this.slot.stopping = true;
-    this.slot.abort.abort();
-    this.slot.agent.abort();
+    const slot = this.slot;
+    if (!slot || slot.stopping) return false;
+    slot.stopping = true;
+    slot.agent.abort();
+    // 시작 전이면 이 신호의 리스너가 바로 슬롯을 비운다(그래서 지역 변수로 다룬다).
+    slot.abort.abort();
     return true;
   }
 

@@ -442,6 +442,8 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
       status = out.aborted ? "stopped" : "done";
     } catch (err) {
       debugLog("telegram:send_error", err instanceof Error ? err.message : String(err), "warn");
+      // 시작하기 전에 실패했으면(요청 기록 저장 등) 잡아 둔 슬롯을 놓는다.
+      runner.stop();
     } finally {
       sending--;
       if (sendAbort === sendCtl) sendAbort = null;
