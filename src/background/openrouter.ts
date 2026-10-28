@@ -1524,13 +1524,13 @@ export class ChatAgent {
     }
     const { provider } = activeModel(await getSettings());
     if (this.isStale(turn)) return false;
-    const until = new Date(Date.now() + args.endsInHours * 3_600_000).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const timeOf = (ms: number) => new Date(ms).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
     const details = [
       `요청: ${this.turnRequest.slice(0, 500)}`,
       `확인할 페이지: ${args.url}`,
       `조건: ${args.check}`,
       `조건이 맞으면: ${args.then}`,
-      `간격: ${args.intervalMinutes}분마다 · ${until}까지 · 최대 ${args.maxRuns}번`,
+      `간격: ${args.intervalMinutes}분마다 · 승인한 때부터 ${args.endsInHours}시간 · 최대 ${args.maxRuns}번`,
       "",
       `· 확인할 때마다 그 페이지를 새로고침하고 화면 글자를 ${providerAdapter(provider).label}로 보내 모델을 한 번 부릅니다(최대 ${args.maxRuns}번, 요금이 듭니다). 입력 칸에 쓴 값은 보내지 않습니다.`,
       "· 조건이 맞으면 알려 드립니다. 다음 일은 '이어서 진행'을 직접 눌러야 새 대화로 시작합니다.",
@@ -1559,6 +1559,8 @@ export class ChatAgent {
       return true;
     }
     if (this.isStale(turn)) return false;
+    // 끝나는 시각은 승인한 때부터 센다(실제로 저장한 값으로 알린다).
+    const until = timeOf(task.endsAt);
     const summary = `반복 작업 등록: ${task.title} · ${task.intervalMinutes}분마다 · ${until}까지`;
     this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
     this.history.push({
