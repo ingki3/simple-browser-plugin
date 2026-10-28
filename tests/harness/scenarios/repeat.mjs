@@ -136,4 +136,22 @@ export default [
       expect(after[0].note.includes("보안 문자"), `멈춘 이유(${after[0].note})`);
     },
   },
+  {
+    name: "등록한 주소가 같은 사이트로 리다이렉트돼도 다음 확인은 등록한 주소에서 시작한다",
+    pages: { "/watch": `<title>곧 열림</title><script>location.replace("/soon")</script>`, "/soon": "<title>준비 중</title><p>준비 중</p><div id=out></div>" },
+    async run(h) {
+      await register(h, { approve: true, path: "/soon" });
+      const first = await waitFor(h, (l) => l[0]?.lastCheck, "첫 확인");
+      expect(first[0].tab.url.endsWith("/soon"), `첫 확인은 리다이렉트된 주소(${first[0].tab.url})`);
+      h.pages.set("1/watch", WATCH);
+      await h.sw.evaluate(() => {
+        globalThis.__draftReqs = [];
+      });
+      await h.panel.evaluate(async (id) => chrome.runtime.sendMessage({ kind: "repeat_run_now", id }), first[0].id);
+      const after = await waitFor(h, (l) => l[0].history.length === 2, "두 번째 확인");
+      expect(after[0].tab.url.endsWith("/watch"), `등록한 주소로 다시(${after[0].tab.url})`);
+      const sent = await h.sw.evaluate(() => JSON.stringify(globalThis.__draftReqs.map((b) => b.messages)));
+      expect(sent.includes("여름 공연"), "등록한 주소의 화면 글자");
+    },
+  },
 ];

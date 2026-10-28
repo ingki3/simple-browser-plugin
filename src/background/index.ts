@@ -126,6 +126,8 @@ chrome.runtime.onConnect.addListener((port) => {
             agent.sendUserTurn(text, { tabId }).catch((err) => console.error("[sendUserTurn]", err));
           })
           .catch((err: unknown) => {
+            // 그 사이 사용자가 다른 대화 동작을 했으면 알리지 않는다(새 대화의 화면 상태를 덮지 않게).
+            if (seq !== actionSeq || disconnected) return;
             try {
               port.postMessage({ kind: "error", message: `반복 작업을 이어서 진행하지 못했습니다(${err instanceof Error ? err.message : String(err)}).` });
             } catch {

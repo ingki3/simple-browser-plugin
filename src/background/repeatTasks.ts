@@ -251,12 +251,15 @@ export async function runCheck(id: string): Promise<void> {
   debugLog("repeat:check", `${started.title} · ${started.attempts}/${started.maxRuns}`);
   let check: RepeatCheck;
   let tab: RepeatTask["tab"] = started.tab;
+  let ownedTab: number | null = null;
   try {
     const stillMine = async () => {
       const cur = (await load()).find((t) => t.id === id);
       if (!cur || cur.status !== "active" || cur.run?.token !== token || controller.signal.aborted) throw new Discarded();
     };
-    const page = await openPage(started, controller.signal);
+    const page = await openPage(started, controller.signal, (tabId) => {
+      ownedTab = tabId;
+    });
     tab = { tabId: page.tabId, url: page.url };
     await stillMine();
     const snapshot = await readSnapshot(page);
@@ -274,6 +277,11 @@ export async function runCheck(id: string): Promise<void> {
     hold();
   }
   if (running.get(id)?.token === token) running.delete(id);
+  // 확인이 실패했어도 이 실행이 쓴 탭은 이 작업의 탭으로 기억한다(지금 주소 그대로 — 사용자가 옮기면 다음에 새 탭).
+  if (check.verdict === "error" && ownedTab !== null) {
+    const cur = await chrome.tabs.get(ownedTab).catch(() => null);
+    tab = cur?.url ? { tabId: ownedTab, url: cur.url } : null;
+  }
   // 페이지에서 유래한 이유·오류 글자도 자동 로그인 값을 가린 뒤 저장한다.
   check = await maskValue(check).catch(() => ({ ...check, reason: "" }));
   const next = await update(id, (t) => {
@@ -300,18 +308,24 @@ interface OpenedPage {
 
 // 확인용 탭: 이 작업이 만든 탭이 아직 마지막으로 확인한 주소에 있으면 새로고침, 아니면(닫았거나 사용자가 옮겼으면) 새 탭.
 // 사용자가 다른 화면으로 옮긴 탭은 건드리지 않는다. 다 뜬 뒤 최종 주소가 등록한 사이트 밖이면 읽지 않는다.
-async function openPage(t: RepeatTask, signal: AbortSignal): Promise<OpenedPage> {
+// onTab: 쓸 탭이 정해지는 즉시 알린다(뒤 단계가 실패해도 이 작업의 탭으로 기억해 다음 확인에서 새 탭을 또 만들지 않게).
+// 확인은 늘 등록한 주소에서 시작한다(지난번에 리다이렉트된 주소를 새로고침하지 않는다).
+async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: number) => void): Promise<OpenedPage> {
   let tabId: number | null = null;
   if (t.tab) {
     const cur = await chrome.tabs.get(t.tab.tabId).catch(() => null);
     if (cur?.id !== undefined && cur.url === t.tab.url) tabId = cur.id;
   }
   if (tabId !== null) {
-    await chrome.tabs.reload(tabId);
+    onTab(tabId);
+    const cur = await chrome.tabs.get(tabId);
+    if (cur.url === t.url) await chrome.tabs.reload(tabId);
+    else await chrome.tabs.update(tabId, { url: t.url });
   } else {
     const created = await chrome.tabs.create({ url: t.url, active: false });
     if (created.id === undefined) throw new Error("확인용 탭을 열지 못했습니다.");
     tabId = created.id;
+    onTab(tabId);
   }
   await waitLoaded(tabId, signal);
   await sleep(SETTLE_MS, signal);
