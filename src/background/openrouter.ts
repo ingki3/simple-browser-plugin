@@ -884,22 +884,20 @@ export class ChatAgent {
   // 도구 호출이 없는 마지막 답. aborted: 중단·새 요청에 밀림. error: 오류로 끝남(action은 다음 행동의 종류).
   async sendUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<TurnOutcome> {
     this.turnErrors = [];
-    const marker = this.history.length;
     const running = this.runUserTurn(userText, opts);
     // runUserTurn은 첫 await 전에 턴 번호를 올린다.
     const turn = this.currentTurn;
     await running;
     if (this.isStale(turn)) return { outcome: "aborted", finalText: "" };
-    const finalText = this.answerSince(marker);
+    const finalText = this.answerOfLastTurn();
     if (finalText) return { outcome: "ok", finalText };
     const err = this.turnErrors[0];
     return err ? { outcome: "error", finalText: "", action: err.action } : { outcome: "ok", finalText: "" };
   }
 
-  // 기록의 marker 뒤(이번 요청)에서 도구 호출이 없는 마지막 답. 대화를 새로 시작해 기록이 짧아졌으면 처음부터 본다.
-  private answerSince(marker: number): string {
-    const from = marker <= this.history.length ? marker : 0;
-    for (let i = this.history.length - 1; i >= from; i--) {
+  // 마지막 요청(기록의 마지막 사용자 메시지 뒤)에서 도구 호출이 없는 마지막 답. 대화를 새로 시작해 기록이 바뀌어도 그대로 맞다.
+  private answerOfLastTurn(): string {
+    for (let i = this.history.length - 1; i >= 0; i--) {
       const m = this.history[i];
       if (m.role === "user") break;
       if (m.role === "assistant" && !m.tool_calls?.length && typeof m.content === "string" && m.content.trim()) return m.content;
