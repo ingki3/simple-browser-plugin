@@ -17,6 +17,8 @@ import { ChatAgent, type AgentSink } from "./openrouter";
 import { maskStringForModel } from "./loginSecrets";
 import { onRepeatTriggered } from "./repeatTasks";
 import { debugLog } from "./debug";
+import { SETTINGS_KEY, type Settings } from "@/lib/messages";
+import { normalizeSettings } from "@/lib/settings";
 
 const STORE_KEY = "telegram";
 const ALARM = "telegram-poll";
@@ -103,6 +105,8 @@ class TgError extends Error {
 }
 
 async function tgCall<T>(token: string, method: string, params: Record<string, unknown>, signal?: AbortSignal, limitMs = FETCH_LIMIT_MS): Promise<T> {
+  // 이미 멈춘 연결(연결 끊기·토큰 지우기)이면 보내지 않는다.
+  if (signal?.aborted) throw new TgError(method, 0);
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -139,6 +143,7 @@ async function sendText(s: Pick<TelegramState, "token" | "chatId">, text: string
     } catch (err) {
       if (err instanceof TgError && err.status === 429 && err.retryAfter > 0 && err.retryAfter <= 30) {
         await new Promise((r) => setTimeout(r, err.retryAfter * 1000));
+        if (signal?.aborted) return;
         await tgCall(s.token, "sendMessage", params, signal);
       } else throw err;
     }
@@ -459,8 +464,7 @@ async function workTab(sess: Session): Promise<number> {
     if (cur?.id !== undefined && cur.url === sess.tab.url) {
       await chrome.tabs.update(cur.id, { url: "chrome://newtab/" });
       sess.tab = null;
-      await waitInternal(cur.id);
-      return cur.id;
+      if (await waitInternal(cur.id)) return cur.id;
     }
   }
   const created = await chrome.tabs.create({ url: "chrome://newtab/", active: false });
@@ -470,13 +474,21 @@ async function workTab(sess: Session): Promise<number> {
 }
 
 // 새 탭 화면으로 바뀔 때까지 잠깐 기다린다(최대 3초).
-async function waitInternal(tabId: number): Promise<void> {
+// 새 탭 화면으로 바뀌었으면 true(최대 3초 기다림). 바뀌지 않았으면 그 탭을 쓰지 않는다(이전 사이트를 믿지 않게).
+async function waitInternal(tabId: number): Promise<boolean> {
   for (let i = 0; i < 15; i++) {
     const t = await chrome.tabs.get(tabId).catch(() => null);
-    if (!t || /^chrome:/.test(t.url ?? "")) return;
+    if (!t) return false;
+    if (t.url === "chrome://newtab/" && !t.pendingUrl && t.status === "complete") return true;
     await new Promise((r) => setTimeout(r, 200));
   }
+  return false;
 }
+
+// 설정에서 제공자·키·모델·실행 방식을 바꾸면 원격 대화에도 알린다(그 대화가 연 페이지 번역을 멈추는 등, 패널 대화와 같게).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes[SETTINGS_KEY] && session) session.agent.onSettingsChanged(normalizeSettings(changes[SETTINGS_KEY].newValue as Partial<Settings> | undefined));
+});
 
 // ---- 알람·복구 ----
 

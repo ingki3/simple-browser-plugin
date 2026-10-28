@@ -421,6 +421,8 @@ export class ChatAgent {
   private remoteRefusedTurn = -1;
   // 이번 턴에 패널로 보낼 오류(원격 대화의 결과 판정).
   private turnErrors: Array<{ action?: "settings" | "usage" }> = [];
+  // 이번 요청의 사용자 메시지를 기록에 넣었으면 그 턴과 위치. 넣기 전에 실패했으면 이전 요청의 답을 이번 답으로 보지 않는다.
+  private turnStart: { turn: number; index: number } | null = null;
 
   constructor(
     private readonly port: AgentSink,
@@ -889,15 +891,15 @@ export class ChatAgent {
     const turn = this.currentTurn;
     await running;
     if (this.isStale(turn)) return { outcome: "aborted", finalText: "" };
-    const finalText = this.answerOfLastTurn();
+    const finalText = this.turnStart?.turn === turn ? this.answerSince(this.turnStart.index) : "";
     if (finalText) return { outcome: "ok", finalText };
     const err = this.turnErrors[0];
     return err ? { outcome: "error", finalText: "", action: err.action } : { outcome: "ok", finalText: "" };
   }
 
-  // 마지막 요청(기록의 마지막 사용자 메시지 뒤)에서 도구 호출이 없는 마지막 답. 대화를 새로 시작해 기록이 바뀌어도 그대로 맞다.
-  private answerOfLastTurn(): string {
-    for (let i = this.history.length - 1; i >= 0; i--) {
+  // 기록의 start(이번 요청의 사용자 메시지) 뒤에서 도구 호출이 없는 마지막 답.
+  private answerSince(start: number): string {
+    for (let i = this.history.length - 1; i > start; i--) {
       const m = this.history[i];
       if (m.role === "user") break;
       if (m.role === "assistant" && !m.tool_calls?.length && typeof m.content === "string" && m.content.trim()) return m.content;
@@ -974,6 +976,8 @@ export class ChatAgent {
         debugLog("login:masked", "사용자 요청 문맥에서 넣은 로그인 값을 가림", "warn");
       }
       this.history.push(maskedUser.value[0]);
+      // 이번 요청의 사용자 메시지 위치(최종 답은 이 뒤에서만 찾는다).
+      this.turnStart = { turn, index: this.history.length - 1 };
 
       const completed = await this.streamLoop(apiKey, model, systemPrompt, turn);
       // 읽기 레시피: 답을 마친 턴에서 통한 읽기 방법만 남긴다(중단·도구 호출 한도 초과는 버림).
