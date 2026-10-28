@@ -252,13 +252,16 @@ export async function runCheck(id: string): Promise<void> {
   let check: RepeatCheck;
   let tab: RepeatTask["tab"] = started.tab;
   let ownedTab: number | null = null;
+  // 이 실행이 다 뜬 뒤 본 그 탭의 주소. 실패한 뒤에도 탭이 이 주소나 등록 주소에 그대로 있을 때만 이 작업의 탭으로 기억한다.
+  let ownedSeenUrl: string | null = null;
   try {
     const stillMine = async () => {
       const cur = (await load()).find((t) => t.id === id);
       if (!cur || cur.status !== "active" || cur.run?.token !== token || controller.signal.aborted) throw new Discarded();
     };
-    const page = await openPage(started, controller.signal, (tabId) => {
+    const page = await openPage(started, controller.signal, (tabId, seenUrl) => {
       ownedTab = tabId;
+      if (seenUrl !== undefined) ownedSeenUrl = seenUrl;
     });
     tab = { tabId: page.tabId, url: page.url };
     await stillMine();
@@ -277,10 +280,12 @@ export async function runCheck(id: string): Promise<void> {
     hold();
   }
   if (running.get(id)?.token === token) running.delete(id);
-  // 확인이 실패했어도 이 실행이 쓴 탭은 이 작업의 탭으로 기억한다(지금 주소 그대로 — 사용자가 옮기면 다음에 새 탭).
+  // 확인이 실패했어도 이 실행이 쓴 탭이 우리가 둔 주소(다 뜬 뒤 본 주소나 등록 주소)에 그대로 있으면 이 작업의 탭으로
+  // 기억한다(실패할 때마다 탭이 늘지 않게). 사용자가 다른 화면으로 옮겼으면 기억하지 않는다(다음 확인이 그 탭을 건드리지 않게).
   if (check.verdict === "error" && ownedTab !== null) {
     const cur = await chrome.tabs.get(ownedTab).catch(() => null);
-    tab = cur?.url ? { tabId: ownedTab, url: cur.url } : null;
+    const ours = !!cur?.url && (cur.url === ownedSeenUrl || cur.url === started.url);
+    tab = ours ? { tabId: ownedTab, url: cur!.url! } : null;
   }
   // 페이지에서 유래한 이유·오류 글자도 자동 로그인 값을 가린 뒤 저장한다.
   check = await maskValue(check).catch(() => ({ ...check, reason: "" }));
@@ -310,7 +315,7 @@ interface OpenedPage {
 // 사용자가 다른 화면으로 옮긴 탭은 건드리지 않는다. 다 뜬 뒤 최종 주소가 등록한 사이트 밖이면 읽지 않는다.
 // onTab: 쓸 탭이 정해지는 즉시 알린다(뒤 단계가 실패해도 이 작업의 탭으로 기억해 다음 확인에서 새 탭을 또 만들지 않게).
 // 확인은 늘 등록한 주소에서 시작한다(지난번에 리다이렉트된 주소를 새로고침하지 않는다).
-async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: number) => void): Promise<OpenedPage> {
+async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: number, seenUrl?: string) => void): Promise<OpenedPage> {
   let tabId: number | null = null;
   if (t.tab) {
     const cur = await chrome.tabs.get(t.tab.tabId).catch(() => null);
@@ -331,6 +336,7 @@ async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: numbe
   await sleep(SETTLE_MS, signal);
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url ?? "";
+  onTab(tabId, url);
   if (!/^https?:/.test(url)) throw new Error("확인용 탭이 웹 페이지가 아닙니다.");
   // 등록한 주소와 같은 출처이거나 같은 등록 도메인이면 읽는다(공유 호스팅은 등록 도메인으로 묶지 않으므로 같은 출처만).
   if (httpOrigin(url) !== httpOrigin(t.url) && !sameSiteAs(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");
