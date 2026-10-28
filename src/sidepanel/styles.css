@@ -112,12 +112,71 @@ body,
   justify-content: center;
 }
 
-.empty-state {
-  color: var(--fg-muted);
-  text-align: center;
-  white-space: pre-line;
-  font-size: 13px;
+/* 빈 대화 화면(#129): 키 안내 또는 첫 작업 */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 340px;
   padding: 24px 16px;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.welcome p {
+  margin: 0;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.welcome-title {
+  font-size: 15px;
+}
+
+.welcome-providers {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.welcome-providers li {
+  display: flex;
+  gap: 10px;
+}
+
+.welcome-providers li span {
+  flex: 1;
+}
+
+.welcome-providers a,
+.welcome a {
+  color: var(--primary);
+}
+
+.welcome-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.welcome-examples button {
+  text-align: left;
+}
+
+.welcome .welcome-note {
+  font-size: 12px;
+}
+
+.composer-hint {
+  padding: 6px 10px 0;
+  font-size: 12px;
+  color: var(--warn);
+  background: var(--bg);
 }
 
 .msg {
@@ -557,6 +616,24 @@ body,
 .field-help {
   font-size: 11px;
   color: var(--fg-muted);
+}
+
+.drawer-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.provider-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.provider-links a {
+  color: var(--primary);
 }
 
 .field input[type="text"],
@@ -1297,4 +1374,12 @@ body,
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--fg-muted);
+}
+
+/* 저장 링크 카드의 AI 초안 버튼(#129) */
+.page-offer-draft {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }

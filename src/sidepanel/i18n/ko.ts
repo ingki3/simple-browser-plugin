@@ -5,7 +5,18 @@ export const KO = {
   abort: "중단",
   settings: "설정",
   newChat: "새 대화",
-  emptyState: "페이지에 대해 질문하거나 작업을 요청해 보세요.\n예: \"이 페이지 번역해줘\", \"빈 입력칸 채워줘\", \"이미지 다 다운받아줘\"",
+  // 빈 대화 화면(#129).
+  welcomeKeyTitle: "시작하려면 AI 서비스의 API 키가 필요합니다",
+  welcomeKeyBody: "API 키는 AI 서비스를 쓰기 위한 개인 인증키입니다. 아래 서비스 중 하나에서 키를 받아 설정에 넣으세요.",
+  welcomeKeyCost:
+    "API는 쓴 만큼 그 서비스에 요금이 나갑니다. ChatGPT·Gemini·Claude 앱의 구독과는 따로입니다. 키를 받은 곳에서 사용량과 한도를 확인할 수 있습니다.",
+  welcomeKeyTip: "처음이라면 OpenRouter를 권합니다. 키 하나로 여러 회사의 모델을 고를 수 있습니다.",
+  welcomeOpenSettings: "설정 열기",
+  welcomeReadyTitle: "무엇을 도와드릴까요?",
+  welcomeReadyBody: "지금 보는 페이지를 열어 둔 채로 말로 시켜 보세요. 눌러서 바로 보낼 수도 있습니다.",
+  welcomeExamples: ["이 페이지 세 줄로 요약해 줘", "이 페이지 한국어로 번역해 줘", "이 페이지의 이미지 목록 보여 줘"],
+  welcomeReadyNote: "페이지를 바꾸는 동작(이동·클릭·입력·저장)은 아래 '실행 방식'에 따라 실행 전에 묻습니다.",
+  composerNeedsKey: "API 키를 넣으면 보낼 수 있습니다. 쓴 글은 그대로 남겨 둡니다.",
   toolConfirmTitle: "도구 실행 확인",
   // 직접 조작할 사이트의 손 넘기기 카드(0.2.2).
   handoffTitle: "직접 해 주세요",
