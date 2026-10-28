@@ -227,18 +227,6 @@ function abortRun(id: string): void {
 
 class Discarded extends Error {}
 
-// 이 실행이 쓴 탭이 우리가 둔 주소(다 뜬 뒤 본 주소나 등록 주소)에 그대로 있으면 그 탭 정보, 아니면 null.
-async function ownedTabState(tabId: number, seenUrl: string | null, url: string): Promise<RepeatTask["tab"]> {
-  const cur = await chrome.tabs.get(tabId).catch(() => null);
-  return cur?.url && (cur.url === seenUrl || cur.url === url) ? { tabId, url: cur.url } : null;
-}
-
-async function rememberTab(id: string, tabId: number | null, seenUrl: string | null, url: string): Promise<void> {
-  if (tabId === null) return;
-  const tab = await ownedTabState(tabId, seenUrl, url);
-  if (tab) await update(id, (t) => (t.tab?.tabId === tab.tabId && t.tab.url === tab.url ? null : { ...t, tab })).catch(() => null);
-}
-
 // 확인 한 번. 시작·각 단계 뒤·반영 직전에 이 실행(token)이 아직 유효한지 본다(멈춤·지우기·새 실행이면 결과를 버린다).
 export async function runCheck(id: string): Promise<void> {
   await recovered;
@@ -262,20 +250,16 @@ export async function runCheck(id: string): Promise<void> {
   const hold = holdWorker();
   debugLog("repeat:check", `${started.title} · ${started.attempts}/${started.maxRuns}`);
   let check: RepeatCheck;
-  let tab: RepeatTask["tab"] = started.tab;
-  let ownedTab: number | null = null;
-  // 이 실행이 다 뜬 뒤 본 그 탭의 주소. 실패한 뒤에도 탭이 이 주소나 등록 주소에 그대로 있을 때만 이 작업의 탭으로 기억한다.
-  let ownedSeenUrl: string | null = null;
+  // 이 확인이 연 탭(끝나면 닫는다).
+  let ownTab: number | null = null;
   try {
     const stillMine = async () => {
       const cur = (await load()).find((t) => t.id === id);
       if (!cur || cur.status !== "active" || cur.run?.token !== token || controller.signal.aborted) throw new Discarded();
     };
-    const page = await openPage(started, controller.signal, (tabId, seenUrl) => {
-      ownedTab = tabId;
-      if (seenUrl !== undefined) ownedSeenUrl = seenUrl;
+    const page = await openPage(started, controller.signal, (tabId) => {
+      ownTab = tabId;
     });
-    tab = { tabId: page.tabId, url: page.url };
     await stillMine();
     const snapshot = await readSnapshot(page);
     await stillMine();
@@ -285,8 +269,7 @@ export async function runCheck(id: string): Promise<void> {
     if (err instanceof Discarded || controller.signal.aborted) {
       hold();
       if (running.get(id)?.token === token) running.delete(id);
-      // 멈춤·지우기로 버린 실행도 이 실행이 만든 탭이 우리가 둔 주소에 그대로 있으면 기억한다(다시 시작할 때 탭이 늘지 않게).
-      await rememberTab(id, ownedTab, ownedSeenUrl, started.url);
+      await closeOwnTab(ownTab, started.url);
       return;
     }
     check = { at: Date.now(), verdict: "error", reason: err instanceof Error ? err.message : String(err) };
@@ -294,15 +277,12 @@ export async function runCheck(id: string): Promise<void> {
     hold();
   }
   if (running.get(id)?.token === token) running.delete(id);
-  // 확인이 실패했어도 이 실행이 쓴 탭이 우리가 둔 주소(다 뜬 뒤 본 주소나 등록 주소)에 그대로 있으면 이 작업의 탭으로
-  // 기억한다(실패할 때마다 탭이 늘지 않게). 사용자가 다른 화면으로 옮겼으면 기억하지 않는다(다음 확인이 그 탭을 건드리지 않게).
-  if (check.verdict === "error" && ownedTab !== null) tab = await ownedTabState(ownedTab, ownedSeenUrl, started.url);
+  await closeOwnTab(ownTab, started.url);
   // 페이지에서 유래한 이유·오류 글자도 자동 로그인 값을 가린 뒤 저장한다(판정 코드는 그대로).
   const reasonText = check.reason;
   check = { ...check, reason: await maskStringForModel(reasonText).then((r) => r.text, () => "") };
   const next = await update(id, (t) => {
-    const n = applyRunResult(t, token, check, Date.now());
-    return n ? { ...n, tab } : null;
+    return applyRunResult(t, token, check, Date.now());
   });
   if (!next) return;
   debugLog("repeat:result", `${next.title} · ${check.verdict}${check.reason ? ` · ${check.reason}` : ""}`, check.verdict === "error" ? "warn" : "info");
@@ -316,49 +296,32 @@ function holdWorker(): () => void {
   return () => clearInterval(timer);
 }
 
+// 이 확인이 연 탭을 닫는다. 사용자가 그 탭을 앞으로 가져왔거나 등록한 사이트 밖으로 옮겼으면 닫지 않는다.
+async function closeOwnTab(tabId: number | null, registered: string): Promise<void> {
+  if (tabId === null) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.active || !tab.url || !inRegisteredSite(registered, tab.url)) return;
+  await chrome.tabs.remove(tabId).catch(() => {});
+}
+
 interface OpenedPage {
   tabId: number;
   documentId: string;
   url: string;
 }
 
-// 확인용 탭: 이 작업이 만든 탭이 아직 마지막으로 확인한 주소에 있으면 새로고침, 아니면(닫았거나 사용자가 옮겼으면) 새 탭.
-// 사용자가 다른 화면으로 옮긴 탭은 건드리지 않는다. 다 뜬 뒤 최종 주소가 등록한 사이트 밖이면 읽지 않는다.
-// onTab: 쓸 탭이 정해지는 즉시 알린다(뒤 단계가 실패해도 이 작업의 탭으로 기억해 다음 확인에서 새 탭을 또 만들지 않게).
-// 확인은 늘 등록한 주소에서 시작한다(지난번에 리다이렉트된 주소를 새로고침하지 않는다).
-async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: number, seenUrl?: string) => void): Promise<OpenedPage> {
-  // 각 대기 뒤, 브라우저를 바꾸기 전에 멈춤·지우기가 있었는지 본다.
-  const live = () => {
-    if (signal.aborted) throw new Discarded();
-  };
-  let tabId: number | null = null;
-  if (t.tab) {
-    const cur = await chrome.tabs.get(t.tab.tabId).catch(() => null);
-    if (cur?.id !== undefined && cur.url === t.tab.url) tabId = cur.id;
-  }
-  live();
-  if (tabId !== null) {
-    // 바꾸기 바로 앞에 다시 본다: 그 사이 사용자가 다른 주소로 옮겼거나 이동 중이면 그 탭은 두고 새 탭을 연다.
-    const cur = await chrome.tabs.get(tabId).catch(() => null);
-    live();
-    if (!cur || cur.url !== t.tab?.url || cur.pendingUrl) tabId = null;
-    else {
-      onTab(tabId);
-      if (cur.url === t.url) await chrome.tabs.reload(tabId);
-      else await chrome.tabs.update(tabId, { url: t.url });
-    }
-  }
-  if (tabId === null) {
-    const created = await chrome.tabs.create({ url: t.url, active: false });
-    if (created.id === undefined) throw new Error("확인용 탭을 열지 못했습니다.");
-    tabId = created.id;
-    onTab(tabId);
-  }
+// 확인용 탭: 확인할 때마다 등록한 주소로 새 비활성 탭을 열고, 끝나면 닫는다(closeOwnTab). 사용자가 쓰는 탭을 다시 쓰거나
+// 옮기지 않는다. 다 뜬 뒤 최종 주소가 등록한 사이트 밖이면 읽지 않는다. onTab: 탭을 연 즉시 알린다(실패해도 닫을 수 있게).
+async function openPage(t: RepeatTask, signal: AbortSignal, onTab: (tabId: number) => void): Promise<OpenedPage> {
+  if (signal.aborted) throw new Discarded();
+  const created = await chrome.tabs.create({ url: t.url, active: false });
+  if (created.id === undefined) throw new Error("확인용 탭을 열지 못했습니다.");
+  const tabId = created.id;
+  onTab(tabId);
   await waitLoaded(tabId, signal);
   await sleep(SETTLE_MS, signal);
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url ?? "";
-  onTab(tabId, url);
   if (!/^https?:/.test(url)) throw new Error("확인용 탭이 웹 페이지가 아닙니다.");
   // 등록한 주소와 같은 출처이거나 같은 등록 도메인이면 읽는다(공유 호스팅은 등록 도메인으로 묶지 않으므로 같은 출처만).
   if (!inRegisteredSite(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");
@@ -501,30 +464,12 @@ export async function releaseRepeatTask(id: string): Promise<void> {
   await announce();
 }
 
-// 확인하던 탭이 그 주소에 그대로 있으면 그 탭, 아니면 등록한 주소로 새 탭. 지금 활성 탭으로 대신하지 않는다.
+// 등록한 주소로 새 탭을 열어 앞으로 가져온다(확인용 탭은 확인이 끝날 때 닫았다). 지금 활성 탭으로 대신하지 않는다.
 async function continueTab(t: RepeatTask): Promise<number> {
-  let tabId: number | null = null;
-  if (t.tab) {
-    const cur = await chrome.tabs.get(t.tab.tabId).catch(() => null);
-    if (cur?.id !== undefined && cur.url === t.tab.url) tabId = cur.id;
-  }
-  if (tabId === null) {
-    const created = await chrome.tabs.create({ url: t.url, active: true });
-    if (created.id === undefined) throw new Error("작업 탭을 열지 못했습니다.");
-    tabId = created.id;
-  } else {
-    await chrome.tabs.update(tabId, { active: true });
-    // 그 사이 다른 사이트로 넘어갔으면 그 탭을 쓰지 않고 등록한 주소로 새 탭을 연다.
-    const now = await chrome.tabs.get(tabId).catch(() => null);
-    if (!now?.url || !inRegisteredSite(t.url, now.url)) {
-      const created = await chrome.tabs.create({ url: t.url, active: true });
-      if (created.id === undefined) throw new Error("작업 탭을 열지 못했습니다.");
-      tabId = created.id;
-    }
-  }
-  const tab = await chrome.tabs.get(tabId);
-  if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-  return tabId;
+  const created = await chrome.tabs.create({ url: t.url, active: true });
+  if (created.id === undefined) throw new Error("작업 탭을 열지 못했습니다.");
+  if (created.windowId !== undefined) await chrome.windows.update(created.windowId, { focused: true }).catch(() => {});
+  return created.id;
 }
 
 // 등록한 주소와 같은 출처이거나 같은 등록 도메인(공유 호스팅은 같은 출처만).

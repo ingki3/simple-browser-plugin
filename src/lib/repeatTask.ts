@@ -34,8 +34,6 @@ export interface RepeatTask {
   // 바뀔 때마다 올린다. 진행 중인 확인은 결과를 반영하기 전에 run 토큰으로 자기 실행이 아직 유효한지 본다.
   revision: number;
   run: { token: string; startedAt: number } | null;
-  // 이 작업이 만든 확인용 탭과 마지막으로 확인한 그 탭의 최종 주소. 사용자가 다른 주소로 옮겼으면 재사용하지 않는다.
-  tab: { tabId: number; url: string } | null;
   lastCheck: RepeatCheck | null;
   history: RepeatCheck[];
   // 연속 실패(unknown·error) 수.
@@ -106,7 +104,6 @@ export function newRepeatTask(a: Required<RepeatArgs>, o: { id: string; now: num
     note: "",
     revision: 0,
     run: null,
-    tab: null,
     lastCheck: null,
     history: [],
     failures: 0,
@@ -161,9 +158,9 @@ export function applyRunResult(t: RepeatTask, token: string, check: RepeatCheck,
       next.failures = 0;
       break;
     case "blocked":
-      return { ...next, status: "paused", note: "사이트가 자동 확인을 막았거나 보안 문자가 떴습니다. 확인용 탭을 직접 본 뒤 다시 시작하세요." };
+      return { ...next, status: "paused", note: "사이트가 자동 확인을 막았거나 보안 문자가 떴습니다. 그 사이트를 직접 열어 확인한 뒤 다시 시작하세요." };
     case "login_required":
-      return { ...next, status: "paused", note: "로그인이 필요합니다. 확인용 탭에서 직접 로그인한 뒤 다시 시작하세요." };
+      return { ...next, status: "paused", note: "로그인이 필요합니다. 그 사이트에 직접 로그인한 뒤 다시 시작하세요." };
     default:
       next.failures = t.failures + 1;
       if (next.failures >= REPEAT_FAILURE_LIMIT) {

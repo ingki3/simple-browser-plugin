@@ -117,22 +117,22 @@ export default [
     },
   },
   {
-    name: "사용자가 확인용 탭을 다른 주소로 옮기면 그 탭은 두고 새 탭에서 확인, 보안 문자면 멈춤",
-    pages: { "/watch": WATCH, "/other": "<title>다른 화면</title><p>작성 중</p><div id=out></div>" },
+    name: "확인용 탭은 확인이 끝나면 닫고(탭이 늘지 않음), 보안 문자면 멈춤",
+    pages: { "/watch": WATCH },
     async run(h) {
+      const count = () => h.sw.evaluate(async () => (await chrome.tabs.query({})).length);
       await register(h, { approve: true });
-      const first = await waitFor(h, (l) => l[0]?.lastCheck, "첫 확인");
-      const tabId = first[0].tab.tabId;
-      await h.sw.evaluate(async ({ tabId, url }) => chrome.tabs.update(tabId, { url }), { tabId, url: `${h.base}/other` });
-      await h.panel.waitForTimeout(800);
+      await waitFor(h, (l) => l[0]?.lastCheck, "첫 확인");
+      await h.panel.waitForTimeout(500);
+      const before = await count();
       await h.sw.evaluate(() => {
         globalThis.__draft = { verdict: "blocked", reason: "보안 문자" };
       });
-      await h.panel.evaluate(async (id) => chrome.runtime.sendMessage({ kind: "repeat_run_now", id }), first[0].id);
+      const id = (await tasks(h))[0].id;
+      await h.panel.evaluate(async (id) => chrome.runtime.sendMessage({ kind: "repeat_run_now", id }), id);
       const after = await waitFor(h, (l) => l[0].status === "paused", "멈춤");
-      expect(after[0].tab.tabId !== tabId, "새 탭에서 확인");
-      const moved = await h.sw.evaluate(async (tabId) => (await chrome.tabs.get(tabId)).url, tabId);
-      expect(moved.endsWith("/other"), "옮긴 탭은 그대로");
+      await h.panel.waitForTimeout(500);
+      expect((await count()) === before, `탭 수 그대로(${before} → ${await count()})`);
       expect(after[0].note.includes("보안 문자"), `멈춘 이유(${after[0].note})`);
     },
   },
@@ -142,14 +142,14 @@ export default [
     async run(h) {
       await register(h, { approve: true, path: "/soon" });
       const first = await waitFor(h, (l) => l[0]?.lastCheck, "첫 확인");
-      expect(first[0].tab.url.endsWith("/soon"), `첫 확인은 리다이렉트된 주소(${first[0].tab.url})`);
+      const firstSent = await h.sw.evaluate(() => JSON.stringify(globalThis.__draftReqs.map((b) => b.messages)));
+      expect(firstSent.includes("/soon"), "첫 확인은 리다이렉트된 주소");
       h.pages.set("1/watch", WATCH);
       await h.sw.evaluate(() => {
         globalThis.__draftReqs = [];
       });
       await h.panel.evaluate(async (id) => chrome.runtime.sendMessage({ kind: "repeat_run_now", id }), first[0].id);
-      const after = await waitFor(h, (l) => l[0].history.length === 2, "두 번째 확인");
-      expect(after[0].tab.url.endsWith("/watch"), `등록한 주소로 다시(${after[0].tab.url})`);
+      await waitFor(h, (l) => l[0].history.length === 2, "두 번째 확인");
       const sent = await h.sw.evaluate(() => JSON.stringify(globalThis.__draftReqs.map((b) => b.messages)));
       expect(sent.includes("여름 공연"), "등록한 주소의 화면 글자");
     },
