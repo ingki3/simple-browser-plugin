@@ -96,6 +96,12 @@ async function announce(): Promise<void> {
   }
 }
 
+// 조건이 맞았을 때 부를 함수(텔레그램 알림). 작업의 제목만 쓰게 하고, 확인 결과의 이유는 넘기지 않는다.
+const triggerListeners: Array<(t: Pick<RepeatTask, "id" | "title">) => unknown> = [];
+export function onRepeatTriggered(fn: (t: Pick<RepeatTask, "id" | "title">) => unknown): void {
+  triggerListeners.push(fn);
+}
+
 // ---- 알람 ----
 
 const alarmName = (id: string) => `${ALARM_PREFIX}${id}`;
@@ -287,6 +293,8 @@ export async function runCheck(id: string): Promise<void> {
   if (!next) return;
   debugLog("repeat:result", `${next.title} · ${check.verdict}${check.reason ? ` · ${check.reason}` : ""}`, check.verdict === "error" ? "warn" : "info");
   if (next.status !== "active") await disarm(id);
+  // 조건이 맞은 그 회차에만 한 번 알린다(텔레그램 알림 등, #139).
+  if (next.status === "triggered") for (const fn of triggerListeners) void Promise.resolve(fn({ id: next.id, title: next.title })).catch(() => {});
   await announce();
 }
 

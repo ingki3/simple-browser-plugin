@@ -1,3 +1,4 @@
+import { TelegramField } from "./TelegramField";
 import { RepeatTasksField } from "./RepeatTasksField";
 import { useEffect, useRef, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
@@ -504,6 +505,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <details className="settings-group">
             <summary>자동 로그인 (선택 · KeePassXC 필요)</summary>
             <LoginSitesField sites={draft.loginSites} onChange={(loginSites) => update({ loginSites })} />
+          </details>
+
+          <details className="settings-group">
+            <summary>텔레그램 연동 (선택)</summary>
+            <TelegramField />
           </details>
 
           <details className="settings-group">

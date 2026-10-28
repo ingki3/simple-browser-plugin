@@ -1,4 +1,4 @@
-import { SENSITIVE_TOOLS, type BgToPanel, type Settings, type ToolName } from "@/lib/messages";
+import { SENSITIVE_TOOLS, type BgToPanel, type RunMode, type Settings, type ToolName } from "@/lib/messages";
 import { MissingKeyError, friendlyError } from "@/lib/friendlyError";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { describePopup, popupWhere } from "@/lib/actionTarget";
@@ -312,6 +312,21 @@ const MAX_DOCUMENT_READS_PER_TURN = 5;
 const TASK_MODE_NOTE =
   "실행 방식: 처음에 승인 받고 끝까지 실행. 이 대화에서는 아직 작업을 맡기지 않았다. 페이지 이동·클릭·입력·저장·문서 쓰기 같은 승인이 필요한 동작이 필요하면, 그 첫 동작 전에 confirm_task(할 일 요약, 이 작업의 위험)를 한 번 부른다. 관측·답만 하는 요청이면 부르지 않는다.";
 
+// 원격 대화(텔레그램, #139).
+export type AgentChannel = "panel" | "telegram";
+export type TurnOutcome = { outcome: "ok" | "aborted"; finalText: string } | { outcome: "error"; finalText: ""; action?: "settings" | "usage" };
+// 대화 객체가 이벤트를 보내는 곳(패널 port 또는 원격 채널).
+export interface AgentSink {
+  postMessage(msg: BgToPanel): void;
+}
+const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task"]);
+const REMOTE_REFUSED_NOTE =
+  "이 요청은 사용자의 텔레그램에서 왔다. 승인이 필요한 동작은 원격 요청에서 하지 않는다. 더 시도하지 말고, 지금까지 한 일과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
+const REMOTE_STOP_NOTE =
+  "승인이 필요한 동작이라 원격 요청에서 하지 않았다. 도구를 더 부르지 말고, 지금까지 알아낸 것과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
+const REMOTE_TURN_NOTE =
+  "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다. 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·다른 사이트 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 텔레그램에서 읽기 좋게 짧은 평문으로.";
+
 const LIMIT_STOP_NOTE =
   "[확장 안내 — 사용자 글 아님] 도구 호출 순환 한도에 닿아 사용자가 더 진행하지 않기로 했습니다. 도구를 더 부르지 말고, 지금까지 관측한 결과만으로 사용자의 요청에 답하세요. 끝내지 못한 부분이 있으면 무엇이 남았는지와 다음에 할 일을 짧게 밝히세요.";
 
@@ -398,7 +413,32 @@ export class ChatAgent {
   // 실제 입력 클릭(0.2.0)의 디버거 상태. 턴이 끝나면 떼고, 새 대화면 새로 만든다(디버깅 취소 선택도 그때 풀린다).
   private inputSession = new InputSession();
 
-  constructor(private readonly port: chrome.runtime.Port) {}
+  // channel: 이 대화가 어디서 왔는지. telegram(#139)이면 원격 요청이다 — 생성할 때만 정해지고 설정·메시지 글자로 바뀌지 않는다.
+  // 원격 대화는 전역 실행 방식과 관계없이 '묻지 않고 실행'의 판정 규칙을 쓰되, 승인 카드가 필요한 동작은 하지 않는다
+  // (카드를 보내지 않고 거절한 뒤 도구 없이 답을 마무리한다). 작업 맡기기·자동 로그인·저장 링크 열기도 쓰지 않는다.
+  private readonly channel: AgentChannel;
+  // 원격 대화에서 카드가 필요해 거절한 호출이 있었던 턴(그 턴은 도구 없이 마무리한다).
+  private remoteRefusedTurn = -1;
+  // 이번 턴에 패널로 보낼 오류(원격 대화의 결과 판정).
+  private turnErrors: Array<{ action?: "settings" | "usage" }> = [];
+  // 이번 요청의 사용자 메시지를 기록에 넣었으면 그 턴과 위치. 넣기 전에 실패했으면 이전 요청의 답을 이번 답으로 보지 않는다.
+  private turnStart: { turn: number; index: number } | null = null;
+
+  constructor(
+    private readonly port: AgentSink,
+    opts: { channel?: AgentChannel } = {},
+  ) {
+    this.channel = opts.channel ?? "panel";
+  }
+
+  private get remote(): boolean {
+    return this.channel !== "panel";
+  }
+
+  // 원격 대화는 전역 설정과 관계없이 auto 판정 규칙(카드가 필요한 것은 거절된다).
+  private effectiveRunMode(stored: RunMode): RunMode {
+    return this.remote ? "auto" : stored;
+  }
 
   // 설정이 바뀌었을 때(저장소 변경). 이 대화가 쓰던 제공자·키·모델과 달라지면 이 대화가 연 페이지 번역(남은 배치·동적
   // 재번역)을 멈춘다 — 한 번역이 두 제공자에 걸치지 않게(#108 후속, #99). 대화 기록은 다음 요청에서 새로 시작한다.
@@ -587,6 +627,17 @@ export class ChatAgent {
   }
 
   private send(msg: BgToPanel): void {
+    if (msg.kind === "error") this.turnErrors.push({ action: msg.action });
+    // 원격 대화: 승인 카드·한도 카드를 보내지 않고 거절로 푼다. 모든 대기 지점은 카드를 보낸 직후 같은 흐름에서 대기를 등록하므로
+    // 다음 차례(setTimeout)에 풀면 그 대기가 거절을 받는다.
+    if (this.remote && (msg.kind === "tool_pending" || msg.kind === "hop_limit")) {
+      const callId = msg.callId;
+      const turn = this.currentTurn;
+      if (msg.kind === "tool_pending") this.remoteRefusedTurn = turn;
+      debugLog("remote:refuse", msg.kind === "tool_pending" ? msg.toolName : "hop_limit");
+      setTimeout(() => this.pendingApprovals.get(callId)?.(false), 0);
+      return;
+    }
     try {
       this.port.postMessage(msg);
     } catch {
@@ -831,9 +882,34 @@ export class ChatAgent {
     return composed;
   }
 
+  // 요청 하나를 처리하고 결과를 돌려준다(원격 채널이 최종 답만 보내는 데 쓴다, #139). finalText: 이번 요청에 들어간 기록 중
+  // 도구 호출이 없는 마지막 답. aborted: 중단·새 요청에 밀림. error: 오류로 끝남(action은 다음 행동의 종류).
+  async sendUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<TurnOutcome> {
+    this.turnErrors = [];
+    const running = this.runUserTurn(userText, opts);
+    // runUserTurn은 첫 await 전에 턴 번호를 올린다.
+    const turn = this.currentTurn;
+    await running;
+    if (this.isStale(turn)) return { outcome: "aborted", finalText: "" };
+    const finalText = this.turnStart?.turn === turn ? this.answerSince(this.turnStart.index) : "";
+    if (finalText) return { outcome: "ok", finalText };
+    const err = this.turnErrors[0];
+    return err ? { outcome: "error", finalText: "", action: err.action } : { outcome: "ok", finalText: "" };
+  }
+
+  // 기록의 start(이번 요청의 사용자 메시지) 뒤에서 도구 호출이 없는 마지막 답.
+  private answerSince(start: number): string {
+    for (let i = this.history.length - 1; i > start; i--) {
+      const m = this.history[i];
+      if (m.role === "user") break;
+      if (m.role === "assistant" && !m.tool_calls?.length && typeof m.content === "string" && m.content.trim()) return m.content;
+    }
+    return "";
+  }
+
   // tabId: 반복 작업의 "이어서 진행"(#138)처럼 백그라운드가 정한 탭에서 시작할 때. 없으면 지금 활성 탭.
   // site: 이 요청의 자동 실행 기준 사이트를 탭 주소 대신 이 출처로 고정한다(반복 작업의 이어서 진행 — 등록한 사이트).
-  async sendUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<void> {
+  private async runUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<void> {
     // 이전 턴이 아직 돌고 있으면 끊는다. 백그라운드 번역은 대화가 이어지는 동안 유지한다.
     this.cancelInFlight();
     const turn = ++this.currentTurn;
@@ -855,7 +931,7 @@ export class ChatAgent {
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
     // 앞 턴에서 우리 클릭으로 열려 따라가던 팝업 창이 아직 열려 있으면 같은 탭에서 시작한 이번 턴도 그 창에서 이어 간다.
-    if (await inheritPopups(prevTurnTab, turnTab)) debugLog("turn:popup", "앞 턴의 팝업 창을 이어 따라감");
+    if (!this.remote && (await inheritPopups(prevTurnTab, turnTab))) debugLog("turn:popup", "앞 턴의 팝업 창을 이어 따라감");
     if ("tabId" in this.turnTab) {
       debugLog("turn:tab", `tab ${this.turnTab.tabId}${this.turnTab.internal ? " (내부 페이지)" : ""}`);
     } else {
@@ -886,7 +962,8 @@ export class ChatAgent {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);
 
-      const userContent = await this.buildUserContent(userText);
+      // 원격 대화는 요청 앞에 원격 안내를 붙인다(요청 글의 주소 판정·카드의 요청 원문은 사용자가 보낸 글 그대로).
+      const userContent = await this.buildUserContent(this.remote ? `${REMOTE_TURN_NOTE}\n\n요청: ${userText}` : userText);
       if (this.isStale(turn)) {
         endTurn("aborted");
         return;
@@ -899,6 +976,8 @@ export class ChatAgent {
         debugLog("login:masked", "사용자 요청 문맥에서 넣은 로그인 값을 가림", "warn");
       }
       this.history.push(maskedUser.value[0]);
+      // 이번 요청의 사용자 메시지 위치(최종 답은 이 뒤에서만 찾는다).
+      this.turnStart = { turn, index: this.history.length - 1 };
 
       const completed = await this.streamLoop(apiKey, model, systemPrompt, turn);
       // 읽기 레시피: 답을 마친 턴에서 통한 읽기 방법만 남긴다(중단·도구 호출 한도 초과는 버림).
@@ -987,7 +1066,7 @@ export class ChatAgent {
       }
       if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
     }
-    const { runMode } = await getSettings();
+    const runMode = this.effectiveRunMode((await getSettings()).runMode);
     const taskNote = runMode === "task" && !this.taskApproved && !afterToolResult ? TASK_MODE_NOTE : null;
     const sentNotes: OpenRouterMessage[] = maskSyncMessages<OpenRouterMessage>([
       ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
@@ -1220,6 +1299,11 @@ export class ChatAgent {
     }
 
     const call: ToolCallContext = { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall, record };
+    // 원격 대화에서 쓰지 않는 도구: 자동 로그인(승인한 사이트여도), 저장 링크(요청 글에 적지 않은 사이트로 간다), 반복 작업 등록.
+    if (this.remote && REMOTE_BLOCKED_TOOLS.has(toolName)) {
+      this.cancelCall(call, null);
+      return true;
+    }
     if (toolName === "confirm_task") return this.confirmTask(call);
     if (toolName === "schedule_repeat_task") return this.scheduleRepeat(call);
     const auth = await this.authorizeCall(call);
@@ -1254,7 +1338,8 @@ export class ChatAgent {
     // 실행 인자. 미리보기가 정한 값(이미지 저장 폴더)이 있으면 그것으로 고정한다(승인·허락 판정과 같은 폴더).
     let execArgs: unknown = preview.execArgs !== undefined ? preview.execArgs : parsedArgs;
     // 자동 실행: 켜져 있고 예외(결제·개인정보 제출 등)가 아니면 카드 없이 실행한다.
-    const { runMode, manualSites } = await getSettings();
+    const { runMode: storedRunMode, manualSites } = await getSettings();
+    const runMode = this.effectiveRunMode(storedRunMode);
     if (this.isStale(turn)) return STALE;
     const autoApprove = runMode === "auto";
     // 다른 실행 방식으로 바꿨으면 맡긴 작업을 거둔다(다시 task로 바꾸면 새로 묻는다).
@@ -1469,7 +1554,7 @@ export class ChatAgent {
     if (this.isStale(turn)) return null;
     // 카드가 열린 사이 다른 방식으로 바꿨거나 거뒀으면(돌아왔어도) 그 카드의 승인은 쓰지 않는다.
     if (approved) {
-      const { runMode } = await getSettings();
+      const runMode = this.effectiveRunMode((await getSettings()).runMode);
       if (this.isStale(turn)) return null;
       if (epoch !== this.taskEpoch || runMode !== "task") approved = false;
     }
@@ -1482,7 +1567,7 @@ export class ChatAgent {
   private async confirmTask(call: ToolCallContext): Promise<boolean> {
     const { turn, turnTab, callId, toolName, argsKey } = call;
     const args = call.parsedArgs as { summary: string; risks: string[] };
-    const { runMode } = await getSettings();
+    const runMode = this.effectiveRunMode((await getSettings()).runMode);
     if (this.isStale(turn)) return false;
     let summary: string;
     let note: string;
@@ -1779,6 +1864,14 @@ export class ChatAgent {
     discardTabChoices(callId);
     discardLinkCall(callId);
     discardDownloadCall(callId);
+    if (this.remote) {
+      // 원격 대화에서 승인이 필요해 하지 않은 호출.
+      this.remoteRefusedTurn = call.turn;
+      this.send({ kind: "tool_result", callId, toolName, ok: false, summary: "원격 요청이라 하지 않음", cancelled: true });
+      this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: "remote_needs_approval", note: REMOTE_REFUSED_NOTE }) });
+      call.record(toolName, argsKey, false, "remote_needs_approval", "원격 요청이라 하지 않음", { cancelled: true });
+      return DONE;
+    }
     this.send({
       kind: "tool_result",
       callId,
@@ -1994,6 +2087,13 @@ export class ChatAgent {
       for (const fc of functionCalls) {
         if (this.isStale(turn)) return false;
         if (!(await this.handleCall(fc, turn, turnTab, record, reads))) return false;
+        // 원격 대화에서 승인이 필요해 거절했으면 남은 호출을 하지 않고 도구 없이 답을 마무리한다.
+        if (this.remoteRefusedTurn === turn) break;
+      }
+      if (this.remoteRefusedTurn === turn && !this.isStale(turn)) {
+        this.closeDanglingToolCalls();
+        await this.finishWithoutTools(apiKey, model, systemPrompt, turn, REMOTE_STOP_NOTE);
+        return false;
       }
 
       // 헛돌기 감지(#55): 한도와 별개로, 같은 호출이 같은 결과로 되풀이되거나 한 도구가 거듭 실패하면 멈추고 알린다.

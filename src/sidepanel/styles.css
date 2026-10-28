@@ -1480,3 +1480,10 @@ body,
   gap: 4px;
   margin-top: 2px;
 }
+
+/* 텔레그램 연동(#139) */
+.pairing-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  letter-spacing: 2px;
+}
