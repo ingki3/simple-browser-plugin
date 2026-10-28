@@ -187,21 +187,31 @@ export function SettingsDrawer({ open, onClose }: Props) {
       document.removeEventListener("visibilitychange", onHide);
     };
   });
+  // 확인 중에 제공자·키·모델이 바뀌면 늦게 온 이전 응답은 버린다.
+  const checkSeq = useRef(0);
   const checkConnection = async () => {
+    const seq = ++checkSeq.current;
     setCheck({ state: "busy", text: "확인 중…" });
+    const show = (next: { state: "ok" | "error"; text: string }) => {
+      if (seq === checkSeq.current) setCheck(next);
+    };
     try {
       // 입력이 멈추기를 기다리는 모델 변경도 먼저 저장해, 화면에 보이는 모델로 확인한다.
       await flush();
       const res = (await chrome.runtime.sendMessage({ kind: "check_connection" })) as
         | { ok: boolean; data?: { model: string }; error?: string }
         | undefined;
-      if (res?.ok && res.data) setCheck({ state: "ok", text: `✓ 연결됨 · ${res.data.model}` });
-      else setCheck({ state: "error", text: res?.error ?? "응답이 없습니다." });
+      if (res?.ok && res.data) show({ state: "ok", text: `✓ 연결됨 · ${res.data.model}` });
+      else show({ state: "error", text: res?.error ?? "응답이 없습니다." });
     } catch (err) {
-      setCheck({ state: "error", text: err instanceof Error ? err.message : String(err) });
+      show({ state: "error", text: err instanceof Error ? err.message : String(err) });
     }
   };
-  useEffect(() => setCheck(null), [draft.provider, savedKey]);
+  const checkedModel = draft.provider === "openrouter" ? draft.model : (draft.providerModels[draft.provider] ?? "");
+  useEffect(() => {
+    checkSeq.current++;
+    setCheck(null);
+  }, [draft.provider, savedKey, checkedModel]);
 
   const saveKey = () =>
     update(direct ? { apiKeys: { [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
