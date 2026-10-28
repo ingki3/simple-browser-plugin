@@ -1,4 +1,5 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type Settings, type ToolName } from "@/lib/messages";
+import { MissingKeyError, friendlyError } from "@/lib/friendlyError";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { describePopup, popupWhere } from "@/lib/actionTarget";
 import type { ModelId } from "@/lib/models";
@@ -589,7 +590,7 @@ export class ChatAgent {
     const settings = await getSettings();
     const active = activeModel(settings);
     if (!active.apiKey) {
-      throw new Error(`${providerAdapter(active.provider).label} API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.`);
+      throw new MissingKeyError(`${providerAdapter(active.provider).label} API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.`);
     }
     if (
       this.forceNewConversation ||
@@ -908,7 +909,7 @@ export class ChatAgent {
       const msg = err instanceof Error ? err.message : String(err);
       debugLog("turn:error", msg, "error");
       endTurn("fail");
-      this.send({ kind: "error", message: msg });
+      this.send({ kind: "error", ...friendlyError(err) });
     } finally {
       // 이 턴이 붙인 디버거를 뗀다. 새 턴에 밀렸으면 그 턴이 끝날 때 뗀다(같은 대화 상태를 쓰므로).
       if (!this.isStale(turn)) void detachSession(this.inputSession);
@@ -1697,6 +1698,7 @@ export class ChatAgent {
       toolName,
       ok: false,
       summary: "사용자가 취소했습니다.",
+      cancelled: true,
     });
     this.history.push({
       role: "tool",

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { KO } from "../i18n/ko";
+import { toolLabel } from "@/lib/toolLabels";
 import type { ChatMessage } from "../state/chatStore";
 
 type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
@@ -30,7 +31,7 @@ export function ToolPreviewCard(props: Props) {
     <div className={`tool-card tool-pending${disabled ? " resolved" : ""}`}>
       <div className="tool-card-header">
         <span className="tool-card-title">{handoff ? KO.handoffTitle : KO.toolConfirmTitle}</span>
-        <span className="tool-card-badge">{toolName}</span>
+        <span className="tool-card-badge" title={toolName}>{toolLabel(toolName)}</span>
       </div>
       <div className="tool-card-body">
         <div className="tool-card-summary">{previewSummary}</div>
@@ -133,7 +134,7 @@ function TaskCard({ callId, toolName, previewSummary, task, resolved, onApprove,
     <div className={`tool-card tool-pending task-card${disabled ? " resolved" : ""}`}>
       <div className="tool-card-header">
         <span className="tool-card-title">{KO.taskTitle}</span>
-        <span className="tool-card-badge">{toolName}</span>
+        <span className="tool-card-badge" title={toolName}>{toolLabel(toolName)}</span>
       </div>
       <div className="tool-card-body">
         <div className="tool-card-summary">{previewSummary}</div>

@@ -12,6 +12,7 @@ export function RememberPagesField({ enabled, onToggle }: Props) {
   const [pages, setPages] = useState<SavedLink[] | null>(null);
   // 고치는 중인 링크(id)와 고친 이름·용도.
   const [editing, setEditing] = useState<{ id: string; name: string; purpose: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const request = async (
     msg:
@@ -19,12 +20,17 @@ export function RememberPagesField({ enabled, onToggle }: Props) {
       | { kind: "saved_pages_delete"; id: string | null }
       | { kind: "saved_link_update"; id: string; name: string; purpose: string },
   ) => {
+    // 고치기·지우기·목록 읽기가 실패하면 알린다(#130).
+    setError(null);
     try {
-      const res = (await chrome.runtime.sendMessage(msg)) as { ok: boolean; data?: SavedLink[] } | undefined;
+      const res = (await chrome.runtime.sendMessage(msg)) as { ok: boolean; data?: SavedLink[]; error?: string } | undefined;
       if (res?.ok && res.data) setPages(res.data);
       else if (res?.ok) setPages([]);
-    } catch {
-      /* ignore */
+      else throw new Error(res?.error ?? "응답이 없습니다.");
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      const what = msg.kind === "saved_pages_delete" ? "지우지" : msg.kind === "saved_link_update" ? "고치지" : "목록을 읽지";
+      setError(`저장 링크를 ${what} 못했습니다(${why}).`);
     }
   };
 
@@ -39,6 +45,7 @@ export function RememberPagesField({ enabled, onToggle }: Props) {
         <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
         <span>답을 마친 뒤 도착한 페이지를 "이 페이지 기억하기"로 저장하고, 용도에 맞는 요청에 다시 쓰기</span>
       </label>
+      {error && <span className="field-help error-text">{error}</span>}
       {pages && pages.length > 0 && (
         <ul className="saved-pages">
           {pages.map((p) =>

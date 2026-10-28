@@ -3,6 +3,7 @@ import { useChatStore } from "../state/chatStore";
 import { MessageBubble } from "./MessageBubble";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { Welcome } from "./Welcome";
+import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { useSettings } from "../hooks/useSettings";
 
 interface Props {
@@ -70,6 +71,8 @@ export function MessageList({ onApprove, onCancel, needsKey, onOpenSettings, onS
           onApprove={onApprove}
           onCancel={onCancel}
           showThinking={settings.showThinking}
+          onOpenSettings={onOpenSettings}
+          usageUrl={PROVIDER_LINKS[settings.provider].usageUrl}
         />
       ))}
       {showThinking && <ThinkingIndicator />}

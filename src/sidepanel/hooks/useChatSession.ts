@@ -94,10 +94,11 @@ export function useChatSession() {
             toolName: msg.toolName,
             ok: msg.ok,
             summary: msg.summary,
+            ...(msg.cancelled ? { cancelled: true } : {}),
           });
           return;
         case "error":
-          s.addError(msg.message);
+          s.addError(msg.message, { detail: msg.detail, action: msg.action });
           return;
         case "info":
           s.addInfo(msg.title, msg.message);

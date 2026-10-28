@@ -21,11 +21,12 @@ export default [
     name: "키가 없는 제공자는 요청을 보내지 않고 안내한다",
     async run(h) {
       await h.settings({ provider: "openai", apiKeys: {} });
-      await h.turn([{ text: "끝" }]);
+      // 패널은 키가 없으면 보내지 않고 설정을 연다(#129). 백그라운드의 키 확인은 그 뒤의 방어선이다.
+      await h.turn([{ text: "끝" }], { maxWaitMs: 1500 });
       const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
-      const text = await h.panel.locator("body").innerText();
       expect(reqs.length === 0, `요청 없음(${reqs.length})`);
-      expect(text.includes("OpenAI API 키가 설정되지 않았습니다"), "안내 문구");
+      expect((await h.panel.locator(".drawer").count()) === 1, "설정 서랍이 열려야 한다");
+      expect((await h.panel.locator(".welcome").innerText()).includes("API 키가 필요합니다"), "첫 화면 키 안내");
     },
   },
   {

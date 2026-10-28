@@ -53,6 +53,23 @@ import { mergeSettingsPatch } from "@/lib/settings";
 
 const SAVE_DELAY_MS = 600;
 const CUSTOM_MODEL = "__custom__";
+const CUSTOM_LANG = "__custom__";
+// 번역할 언어 목록(#130). 값은 BCP-47 코드.
+const TRANSLATION_LANGS: ReadonlyArray<readonly [string, string]> = [
+  ["ko", "한국어"],
+  ["en", "영어"],
+  ["ja", "일본어"],
+  ["zh-CN", "중국어(간체)"],
+  ["zh-TW", "중국어(번체)"],
+  ["es", "스페인어"],
+  ["fr", "프랑스어"],
+  ["de", "독일어"],
+  ["vi", "베트남어"],
+  ["th", "태국어"],
+  ["id", "인도네시아어"],
+  ["ru", "러시아어"],
+  ["pt", "포르투갈어"],
+];
 
 // 두 patch를 합친다(제공자별 키·모델은 한 단계 더).
 function mergePatch(a: Partial<Settings>, b: Partial<Settings>): Partial<Settings> {
@@ -111,6 +128,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
   useEffect(() => {
     if (loaded && !(MODEL_IDS as readonly string[]).includes(settings.model)) setCustomModel(true);
   }, [loaded, settings.model]);
+  // 번역할 언어를 목록 밖에서 직접 입력하는 중인지. 저장된 값이 목록에 없으면 입력 칸을 보인다.
+  const [customLang, setCustomLang] = useState(false);
+  useEffect(() => {
+    if (loaded && !TRANSLATION_LANGS.some(([code]) => code === settings.translationTargetLang)) setCustomLang(true);
+  }, [loaded, settings.translationTargetLang]);
   // 연결 확인(#129): 저장한 키·모델로 짧은 요청 한 번.
   const [check, setCheck] = useState<{ state: "busy" | "ok" | "error"; text: string } | null>(null);
 
@@ -249,7 +271,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
       }
       if (!res) {
         throw new Error(
-          "BG에서 응답이 없습니다. 서비스 워커 콘솔에서 에러를 확인해 주세요.",
+          "확장이 응답하지 않습니다. chrome://extensions에서 이 확장을 새로고침한 뒤 다시 시도해 주세요.",
         );
       }
       if (!res.ok) throw new Error(res.error ?? "알 수 없는 오류");
@@ -284,7 +306,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
       const res = (await chrome.runtime.sendMessage({
         kind: "google_diag",
       })) as { ok: boolean; data?: unknown; error?: string } | undefined;
-      if (!res) bgError = "BG 응답 없음 (서비스 워커 기동 실패 가능)";
+      if (!res) bgError = "확장 응답 없음 (확장을 새로고침해 보세요)";
       else if (!res.ok) bgError = res.error ?? "알 수 없는 BG 에러";
       else bg = res.data;
     } catch (err) {
@@ -577,12 +599,32 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
             <label className="field">
               <span className="field-label">{KO.translationLangLabel}</span>
-              <input
-                type="text"
-                value={draft.translationTargetLang}
-                onChange={(e) => update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS)}
-                placeholder="ko"
-              />
+              {/* 목록에서 고르고, 목록에 없는 언어만 코드(BCP-47)로 직접 입력한다(#130). */}
+              <select
+                value={customLang ? CUSTOM_LANG : draft.translationTargetLang}
+                onChange={(e) => {
+                  if (e.target.value === CUSTOM_LANG) setCustomLang(true);
+                  else {
+                    setCustomLang(false);
+                    update({ translationTargetLang: e.target.value });
+                  }
+                }}
+              >
+                {TRANSLATION_LANGS.map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
+                <option value={CUSTOM_LANG}>다른 언어(코드 직접 입력)…</option>
+              </select>
+              {customLang && (
+                <input
+                  type="text"
+                  value={draft.translationTargetLang}
+                  onChange={(e) => update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS)}
+                  placeholder="언어 코드(예: nl, pl, ar)"
+                />
+              )}
             </label>
 
             <label className="field">
@@ -593,6 +635,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 onChange={(e) => update({ downloadFolderPrefix: e.target.value }, SAVE_DELAY_MS)}
                 placeholder="simple-browser-plugin"
               />
+              <FieldHelp summary={KO.downloadFolderHelp} />
             </label>
 
             <label className="field">

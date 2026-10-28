@@ -40,6 +40,7 @@ export type ChatMessage =
       toolName: ToolName;
       ok: boolean;
       summary: string;
+      cancelled?: boolean;
     }
   | {
       // 도구 호출 순환 한도에서 이어 가기 카드(#55). 승인 카드와 같은 callId 흐름으로 허락·거부를 돌려준다.
@@ -56,7 +57,8 @@ export type ChatMessage =
       type: "page_offer";
       offer: PageOfferData;
     }
-  | { id: string; type: "error"; message: string }
+  // detail: 원래 오류 문구(자세히), action: 다음 행동 버튼(#130).
+  | { id: string; type: "error"; message: string; detail?: string; action?: "settings" | "usage" }
   | { id: string; type: "info"; title: string; message: string };
 
 interface ChatState {
@@ -83,7 +85,7 @@ interface ChatState {
   setChatGrants: (grants: Array<{ tool: ToolName; scope: string }>) => void;
   setTaskActive: (active: boolean) => void;
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
-  addError: (message: string) => void;
+  addError: (message: string, extra?: { detail?: string; action?: "settings" | "usage" }) => void;
   addInfo: (title: string, message: string) => void;
   addPageOffer: (offer: Extract<ChatMessage, { type: "page_offer" }>["offer"]) => void;
   setStatus: (text: string | null) => void;
@@ -206,10 +208,10 @@ export const useChatStore = create<ChatState>((set) => ({
   addToolResult: (m) =>
     set((s) => ({ messages: [...closeStreamingBubbles(s.messages), m] })),
 
-  addError: (message) =>
+  addError: (message, extra) =>
     set((s) => {
       const msgs = closeStreamingBubbles(s.messages);
-      msgs.push({ id: mid(), type: "error", message });
+      msgs.push({ id: mid(), type: "error", message, ...(extra?.detail ? { detail: extra.detail } : {}), ...(extra?.action ? { action: extra.action } : {}) });
       return { ...s, messages: msgs, streaming: false, statusText: null };
     }),
 
