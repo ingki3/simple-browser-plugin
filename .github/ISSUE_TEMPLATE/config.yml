@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 설치·사용 안내
+    url: https://github.com/ingki3/simple-browser-plugin#readme
+    about: 설치, API 키와 비용, 실행 방식, 문제 해결

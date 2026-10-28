@@ -19,7 +19,7 @@ export default defineManifest({
   name: "간편 브라우저 도우미",
   short_name: "간편 도우미",
   description: "사이드 패널에서 말로 시키는 브라우저 도우미. 페이지 요약·번역, 입력칸 채우기, 클릭·이동, 파일 읽기와 저장을 대신합니다.",
-  version: "0.2.28",
+  version: "0.2.29",
   icons: {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
