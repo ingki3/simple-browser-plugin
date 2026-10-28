@@ -16,6 +16,7 @@ import {
   listRepeatTasks,
   pauseRepeatTask,
   registerRepeatSink,
+  releaseRepeatTask,
   resumeRepeatTask,
   runRepeatNow,
 } from "./repeatTasks";
@@ -46,6 +47,10 @@ chrome.runtime.onConnect.addListener((port) => {
 
   let agent: ChatAgent | null = null;
   let activeConversationId: string | null = null;
+  // 사용자의 대화 동작(요청·중단·새 대화·이어서 진행)마다 올린다. 이어서 진행의 준비를 기다리는 사이 이 값이 바뀌면
+  // 그 준비는 버린다(사용자가 연 새 대화를 덮지 않게, #138).
+  let actionSeq = 0;
+  let disconnected = false;
   registerDebugSink(port);
   registerRepeatSink(port);
   debugLog("port:connect");
@@ -54,6 +59,7 @@ chrome.runtime.onConnect.addListener((port) => {
     const msg = raw as PanelToBg;
     if (!msg || typeof msg !== "object") return;
 
+    if (msg.kind === "user_msg" || msg.kind === "abort_stream" || msg.kind === "reset_conversation" || msg.kind === "repeat_continue") actionSeq += 1;
     switch (msg.kind) {
       case "user_msg": {
         if (!agent || activeConversationId !== msg.conversationId) {
@@ -99,16 +105,24 @@ chrome.runtime.onConnect.addListener((port) => {
         // 이 확장의 화면(패널)에서 연 연결만 받는다.
         if (!port.sender?.url?.startsWith(chrome.runtime.getURL(""))) return;
         const conversationId = String(msg.conversationId);
-        continueRepeatTask(String(msg.taskId))
+        const taskId = String(msg.taskId);
+        const seq = actionSeq;
+        continueRepeatTask(taskId)
           .then(({ text, tabId }) => {
-            agent?.abort();
-            agent = new ChatAgent(port);
-            activeConversationId = conversationId;
+            // 기다리는 사이 다른 대화 동작이 있었거나 패널이 닫혔으면 시작하지 않고, 다시 누를 수 있게 되돌린다.
+            if (seq !== actionSeq || disconnected) {
+              void releaseRepeatTask(taskId);
+              return;
+            }
             try {
               port.postMessage({ kind: "repeat_started", text });
             } catch {
+              void releaseRepeatTask(taskId);
               return;
             }
+            agent?.abort();
+            agent = new ChatAgent(port);
+            activeConversationId = conversationId;
             agent.sendUserTurn(text, { tabId }).catch((err) => console.error("[sendUserTurn]", err));
           })
           .catch((err: unknown) => {
@@ -133,6 +147,7 @@ chrome.runtime.onConnect.addListener((port) => {
   chrome.storage.onChanged.addListener(onStorage);
 
   port.onDisconnect.addListener(() => {
+    disconnected = true;
     chrome.storage.onChanged.removeListener(onStorage);
     agent?.abort();
     agent = null;

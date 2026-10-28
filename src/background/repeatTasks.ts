@@ -393,6 +393,8 @@ async function judge(t: RepeatTask, s: RepeatSnapshot, signal: AbortSignal): Pro
     { role: "system" as const, content: REPEAT_CHECK_SYSTEM },
     { role: "user" as const, content: checkPrompt(t, s) },
   ]);
+  // 준비(설정·가림 목록 읽기)를 기다리는 사이 멈춤·지우기가 있었으면 보내지 않는다.
+  if (signal.aborted) throw new Discarded();
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal.addEventListener("abort", onAbort, { once: true });
@@ -439,10 +441,15 @@ export async function continueRepeatTask(id: string): Promise<{ text: string; ta
     return { text: followUpText(claimed), tabId };
   } catch (err) {
     // 탭을 열지 못했으면 다시 누를 수 있게 되돌린다.
-    await update(id, (t) => (t.status === "started" ? { ...t, status: "triggered", note: "", revision: t.revision + 1 } : null));
-    await announce();
+    await releaseRepeatTask(id);
     throw err;
   }
+}
+
+// 이어서 진행을 실제로 시작하지 못했을 때(탭 실패·그 사이 새 대화·패널 닫힘) 조건 맞음으로 되돌린다.
+export async function releaseRepeatTask(id: string): Promise<void> {
+  await update(id, (t) => (t.status === "started" ? { ...t, status: "triggered", note: "", revision: t.revision + 1 } : null));
+  await announce();
 }
 
 // 확인하던 탭이 그 주소에 그대로 있으면 그 탭, 아니면 등록한 주소로 새 탭. 지금 활성 탭으로 대신하지 않는다.
