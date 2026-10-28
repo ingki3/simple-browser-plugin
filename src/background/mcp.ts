@@ -52,9 +52,11 @@ interface McpState {
   // 실행 중인 작업(서비스 워커가 다시 뜨면 중단으로 보고한다).
   job: McpJob | null;
   pending: McpPending | null;
+  // 이미 맡은 작업 id(최근 20개). 다리가 같은 작업을 다시 보내도 다시 실행하지 않는다(서비스 워커가 다시 뜬 뒤에도).
+  seen: string[];
 }
 
-const EMPTY: McpState = { enabled: false, port: MCP_DEFAULT_PORT, secret: "", bridgeId: "", bridgeVersion: "", lastOkAt: 0, lastError: "", job: null, pending: null };
+const EMPTY: McpState = { enabled: false, port: MCP_DEFAULT_PORT, secret: "", bridgeId: "", bridgeVersion: "", lastOkAt: 0, lastError: "", job: null, pending: null, seen: [] };
 
 let queue: Promise<unknown> = Promise.resolve();
 function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -147,6 +149,7 @@ async function keysOf(secret: string): Promise<McpKeys> {
 }
 
 async function bridgeFetch(s: McpState, method: "GET" | "POST", path: "/v1/next" | "/v1/result", value: unknown, signal: AbortSignal): Promise<unknown> {
+  if (signal.aborted) throw new BridgeError("멈춤");
   const keys = await keysOf(s.secret);
   const header = makeHeader(Date.now());
   const mac = await signRequest(keys, method, path, header);
@@ -252,6 +255,8 @@ async function loop(): Promise<void> {
   let failures = 0;
   try {
     while (!signal.aborted) {
+      // 이 폴링을 보낼 때의 연결 세대. 응답을 받는 사이 설정이 바뀌었으면 그 응답(작업)은 쓰지 않는다.
+      const gen = connGen;
       const s = await load();
       if (!s.enabled || !s.secret) return;
       let next: McpNext | null;
@@ -270,9 +275,10 @@ async function loop(): Promise<void> {
         await abortableSleep(Math.min(10_000, 1000 * 2 ** (failures - 1)), signal);
         continue;
       }
+      if (signal.aborted || gen !== connGen) return;
       failures = 0;
       lastContact = Date.now();
-      await handleNext({ gen: connGen, s }, next);
+      await handleNext({ gen, s }, next);
     }
   } finally {
     clearInterval(hold);
@@ -332,7 +338,8 @@ async function handleNext(conn: Conn, n: McpNext): Promise<void> {
   if (n.job) {
     const j = n.job;
     // 이미 받은 작업(받았다는 확인을 다리가 못 받아 다시 보냄): 다시 실행하지 않고 확인만 다시 보낸다.
-    if (current?.jobId === j.jobId || conn.s.job?.jobId === j.jobId || conn.s.pending?.jobId === j.jobId) void postResult(conn, j.jobId, "accepted", "");
+    const latest = await load();
+    if (current?.jobId === j.jobId || latest.seen.includes(j.jobId) || latest.pending?.jobId === j.jobId) void postResult(conn, j.jobId, "accepted", "");
     else startJob(conn, n.bridgeId, j);
   }
 }
@@ -344,7 +351,7 @@ function startJob(conn: Conn, bridgeId: string, job: NonNullable<McpNext["job"]>
       return;
     }
     // 실행하기 전에 작업 id를 저장한다(같은 작업을 다시 실행하지 않고, 다시 뜨면 중단으로 보고하게).
-    await update((cur) => ({ ...cur, job: { bridgeId, jobId: job.jobId } }));
+    await update((cur) => ({ ...cur, job: { bridgeId, jobId: job.jobId }, seen: [...cur.seen.filter((x) => x !== job.jobId), job.jobId].slice(-20) }));
     // 그 사이 설정이 바뀌었거나(끄기·포트·비밀) 다른 작업이 시작했으면 실행하지 않는다.
     if (conn.gen !== connGen || runner.busy) {
       await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));

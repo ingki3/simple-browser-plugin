@@ -156,7 +156,8 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
       setTimeout(() => {
         if (job === mine && !mine.acked && mine.state !== "cancelling") {
           toolError(rpcId, "브라우저 확장이 요청을 가져가지 않았습니다. Chrome이 켜져 있고 확장 설정의 MCP 연동이 켜져 있는지, SBP_SECRET·SBP_PORT가 맞는지 확인하세요.");
-          finish("done", "가져가지 않음");
+          // 확장이 가져갔지만 확인이 오지 않았으면 실행 중일 수 있으니 취소를 알린다.
+          finish(mine.state === "leased" ? "cancelled" : "done", "가져가지 않음");
         }
       }, PICKUP_MS),
       setTimeout(() => {

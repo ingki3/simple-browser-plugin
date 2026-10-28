@@ -329,6 +329,7 @@ async function handleUpdate(s: TelegramState, u: unknown, conn: AbortSignal): Pr
       if (a.command === "help") await sendText(s, HELP).catch(() => {});
       else if (a.command === "stop") await sendText(s, stopRun() ? "멈췄습니다." : "진행 중인 요청이 없습니다.").catch(() => {});
       else {
+        stopRun();
         runner.drop();
         await sendText(s, "새 대화를 시작합니다.").catch(() => {});
       }
@@ -364,8 +365,17 @@ let connAbort = new AbortController();
 // 답을 보내는 중(가림·나눠 보내기·재시도)인 요청 수. 그동안에는 다음 요청을 받지 않는다(답이 섞이거나 순서가 뒤바뀌지 않게).
 let sending = 0;
 
+// 답을 보내는 중인 요청의 중단(실행이 끝나 실행부의 슬롯이 빈 뒤에도 /stop·/new가 보내기를 멈추게).
+let sendAbort: AbortController | null = null;
+
 function stopRun(): boolean {
-  return runner.stop();
+  const stopped = runner.stop();
+  if (sendAbort) {
+    sendAbort.abort();
+    sendAbort = null;
+    return true;
+  }
+  return stopped;
 }
 
 // 연결 끊기·토큰 바꾸기: 진행 중인 요청·받기를 멈추고 대화를 버린다.
@@ -374,6 +384,8 @@ function endSession(why: string): void {
   pollAbort?.abort();
   connAbort.abort();
   connAbort = new AbortController();
+  sendAbort?.abort();
+  sendAbort = null;
   runner.drop();
 }
 
@@ -393,7 +405,9 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
   if (!run) return;
   debugLog("telegram:request", `${text.length}자`);
   // 이 요청의 중단(/stop·새 대화)과 연결 끊기: 실행과 결과 보내기(가림·나눠 보내기·재시도)를 함께 멈춘다.
-  const out = AbortSignal.any([conn, run.signal]);
+  const sendCtl = new AbortController();
+  sendAbort = sendCtl;
+  const out = AbortSignal.any([conn, run.signal, sendCtl.signal]);
   sending++;
   void (async () => {
     const at = Date.now();
@@ -430,6 +444,7 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
       debugLog("telegram:send_error", err instanceof Error ? err.message : String(err), "warn");
     } finally {
       sending--;
+      if (sendAbort === sendCtl) sendAbort = null;
       await update((st) => ({ ...st, recent: st.recent.map((r) => (r.at === at && r.status === "running" ? { ...r, status } : r)) }), s.epoch).catch(() => {});
     }
   })();
