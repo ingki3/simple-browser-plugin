@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { makeTemplate, MAX_PURPOSE, MAX_SLOT_KEY, templateText, type ParamChoice } from "@/lib/savedPages";
 import type { ChatMessage } from "../state/chatStore";
+import { useSettings } from "../hooks/useSettings";
 
 type Props = Extract<ChatMessage, { type: "page_offer" }>;
 
@@ -9,13 +10,16 @@ interface Draft {
   purpose: string;
   choices: ParamChoice[];
   hints: Record<string, string>;
+  optional: string[];
+  overflow: string[];
 }
 
 type Mode = ParamChoice["mode"];
 
 // "이 페이지 기억하기"(#30·#86): 이름·용도를 확인하고, 쿼리 값마다 고정·입력 자리·빼기를 골라 다시 쓸 수 있는 링크로 저장한다.
-// 카드를 열면 모델에 초안(이름·용도·값마다 고정·자리·빼기)을 한 번 묻고(이 턴의 요청·답·페이지 글자를 함께 보낸다), 사용자가
-// 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면 초안을 묻지 않고, 저장할 때 한 번 더 확인한다.
+// 카드를 열면 모델에 초안(이름·용도·값마다 고정·자리·빼기·비워도 되는 자리)을 한 번 자동으로 묻고(이 턴의 요청·답·페이지
+// 글자를 함께 보낸다 — 사용자 결정으로 #129의 "누를 때만"을 바꿈), 사용자가 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면
+// 초안을 묻지 않고, 저장할 때 한 번 더 확인한다. 페이지 기억하기가 꺼져 있으면 묻지도 저장하지도 않는다.
 export function PageOfferCard({ offer }: Props) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(offer.title);
@@ -23,14 +27,22 @@ export function PageOfferCard({ offer }: Props) {
   const [modes, setModes] = useState<Mode[]>(() => offer.params.map(() => "keep"));
   const [slots, setSlots] = useState<string[]>(() => offer.params.map(() => ""));
   const [hints, setHints] = useState<Record<string, string>>({});
+  // 비워도 되는 자리 이름(사용자가 체크박스로 고름, 초안이 제안).
+  const [optional, setOptional] = useState<Set<string>>(() => new Set());
+  const [overflow, setOverflow] = useState<string[]>([]);
   const [drafting, setDrafting] = useState(false);
+  const [draftFailed, setDraftFailed] = useState(false);
+  const { settings, loaded } = useSettings();
+  const enabled = !loaded || settings.rememberPages;
   const [confirmed, setConfirmed] = useState(false);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
   const [evicted, setEvicted] = useState<string | null>(null);
   // 초안을 기다리는 사이 사용자가 고친 칸은 늦게 온 초안으로 덮지 않는다. 카드를 닫았다 다시 열면 이전 요청의 응답은 버린다.
-  const touched = useRef({ name: false, purpose: false, params: false, hints: new Set<string>() });
+  const touched = useRef({ name: false, purpose: false, params: false, hints: new Set<string>(), optional: false });
   const draftSeq = useRef(0);
+  // 자동 초안은 카드마다 한 번만(닫았다 다시 열어도 다시 묻지 않는다 — 진행 중이면 그 응답을 그대로 반영).
+  const autoTried = useRef(false);
 
   const choices: ParamChoice[] = modes.map((m, i) => (m === "slot" ? { mode: "slot", slot: slots[i] } : { mode: m }));
   let preview = "";
@@ -42,12 +54,13 @@ export function PageOfferCard({ offer }: Props) {
   }
   const slotNames = [...new Set(modes.flatMap((m, i) => (m === "slot" && slots[i].trim() ? [slots[i].trim()] : [])))];
 
-  // 카드를 여는 것만으로는 모델에 보내지 않는다. 초안은 사용자가 "AI로 채우기"를 누를 때만 묻는다(#129).
   const requestDraft = async () => {
     // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(경로·제목·본문으로도 값이 샐 수 있어 사용자가 직접 정한다).
-    if (offer.warning) return;
+    // 페이지 기억하기가 꺼져 있으면 묻지 않는다(백그라운드도 다시 확인한다).
+    if (offer.warning || !enabled) return;
     const seq = ++draftSeq.current;
     setDrafting(true);
+    setDraftFailed(false);
     try {
       const res = (await chrome.runtime.sendMessage({ kind: "saved_link_draft", offerId: offer.offerId })) as
         | { ok: boolean; data?: Draft | null }
@@ -66,18 +79,25 @@ export function PageOfferCard({ offer }: Props) {
           for (const [k, v] of Object.entries(d.hints)) if (!t.hints.has(k)) next[k] = v;
           return next;
         });
+        if (!t.optional) setOptional(new Set(d.optional ?? []));
+        setOverflow(d.overflow ?? []);
+      } else if (seq === draftSeq.current) {
+        setDraftFailed(true);
       }
     } catch {
-      /* 초안 없이 직접 정한다 */
+      // 초안 없이 직접 정한다.
+      if (seq === draftSeq.current) setDraftFailed(true);
     } finally {
       if (seq === draftSeq.current) setDrafting(false);
     }
   };
-  const close = () => {
-    draftSeq.current++;
-    setDrafting(false);
-    setOpen(false);
-  };
+  // 닫아도 진행 중인 초안은 버리지 않는다(다시 열면 반영돼 있다).
+  const close = () => setOpen(false);
+  useEffect(() => {
+    if (!open || autoTried.current || offer.warning || !loaded || !settings.rememberPages) return;
+    autoTried.current = true;
+    void requestDraft();
+  }, [open, loaded, settings.rememberPages]);
 
   const save = async () => {
     setState("saving");
@@ -89,6 +109,7 @@ export function PageOfferCard({ offer }: Props) {
         purpose,
         choices,
         hints,
+        optional: slotNames.filter((k) => optional.has(k)),
         confirmedWarning: confirmed,
       })) as { ok: boolean; data?: { evicted: string | null }; error?: string } | undefined;
       if (res?.ok) {
@@ -122,14 +143,17 @@ export function PageOfferCard({ offer }: Props) {
   }
   return (
     <div className="page-offer open">
-      {!offer.warning && (
+      {!enabled && <span className="field-help error-text">페이지 기억하기가 꺼져 있어 저장할 수 없습니다(설정 → 페이지 기억하기).</span>}
+      {!offer.warning && enabled && (
         <div className="page-offer-draft">
           <button type="button" className="ghost-btn" disabled={drafting} onClick={() => void requestDraft()}>
-            {drafting ? "채우는 중…" : "AI로 이름·용도 채우기"}
+            {drafting ? "채우는 중…" : "다시 채우기"}
           </button>
           <span className="field-help">
-            누르면 이번 요청·답·페이지 글자를 설정에서 고른 모델 제공자에 보내 초안을 받습니다. 직접 적어도 됩니다.
+            카드를 열면 이번 요청·답·페이지 글자를 설정에서 고른 모델 제공자에 보내 이름·용도·자리를 일반적인 형태로 채웁니다. 직접 고쳐도
+            됩니다.
           </span>
+          {draftFailed && <span className="field-help error-text">초안을 받지 못했습니다. 직접 적거나 다시 채우기를 누르세요.</span>}
         </div>
       )}
       <label className="field">
@@ -192,19 +216,42 @@ export function PageOfferCard({ offer }: Props) {
         </div>
       )}
       {slotNames.map((k) => (
-        <label key={k} className="field">
-          <span className="field-label">'{k}' 자리 설명(선택)</span>
-          <input
-            value={hints[k] ?? ""}
-            maxLength={100}
-            placeholder="예: 검색할 상품 이름"
-            onChange={(e) => {
-              touched.current.hints.add(k);
-              setHints((cur) => ({ ...cur, [k]: e.target.value }));
-            }}
-          />
-        </label>
+        <div key={k} className="field">
+          <label className="field">
+            <span className="field-label">'{k}' 자리 설명(선택)</span>
+            <input
+              value={hints[k] ?? ""}
+              maxLength={100}
+              placeholder="예: 검색할 상품 이름"
+              onChange={(e) => {
+                touched.current.hints.add(k);
+                setHints((cur) => ({ ...cur, [k]: e.target.value }));
+              }}
+            />
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={optional.has(k)}
+              onChange={(e) => {
+                touched.current.optional = true;
+                setOptional((cur) => {
+                  const next = new Set(cur);
+                  if (e.target.checked) next.add(k);
+                  else next.delete(k);
+                  return next;
+                });
+              }}
+            />
+            <span>비워도 됨(값이 없으면 이 조건 없이 엽니다)</span>
+          </label>
+        </div>
       ))}
+      {overflow.length > 0 && (
+        <span className="field-help">
+          입력 자리가 10개를 넘어 다음 값은 고정으로 두었습니다: {overflow.join(", ")}. 그 값이 다음에도 그대로 쓰이니 필요하면 빼기로 바꾸세요.
+        </span>
+      )}
       <div className="page-offer-url">{previewError || preview}</div>
       {offer.warning && (
         <label className="check-row page-offer-warn">
@@ -227,7 +274,7 @@ export function PageOfferCard({ offer }: Props) {
         <button
           type="button"
           className="btn-approve"
-          disabled={state === "saving" || drafting || !name.trim() || !!previewError}
+          disabled={state === "saving" || drafting || !enabled || !name.trim() || !!previewError}
           onClick={save}
         >
           저장

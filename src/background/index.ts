@@ -186,6 +186,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       choices?: unknown;
       hints?: unknown;
       confirmedWarning?: unknown;
+      optional?: unknown;
       id?: unknown;
     };
     const job: Promise<unknown> =
@@ -196,6 +197,8 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             purpose: String(p.purpose ?? ""),
             choices: parseChoices(p.choices),
             hints: parseHints(p.hints),
+            // 비워도 되는 자리 이름(문자열 배열만, #저장 링크 선택 자리).
+            optional: Array.isArray(p.optional) ? p.optional.filter((k): k is string => typeof k === "string").slice(0, 20) : [],
             confirmedWarning: p.confirmedWarning === true,
           })
         : m.kind === "saved_link_draft"
