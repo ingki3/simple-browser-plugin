@@ -110,7 +110,7 @@ export function useChatSession() {
           s.addInfo(msg.title, msg.message);
           return;
         case "page_save_offer":
-          s.addPageOffer(msg.offer);
+          s.addPageOffer(msg.offer, { open: msg.open === true, autoDraft: msg.autoDraft !== false });
           return;
         case "settings_warning":
           s.addError(msg.message);

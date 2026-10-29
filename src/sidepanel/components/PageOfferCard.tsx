@@ -20,8 +20,8 @@ type Mode = ParamChoice["mode"];
 // 카드를 열면 모델에 초안(이름·용도·값마다 고정·자리·빼기·비워도 되는 자리)을 한 번 자동으로 묻고(이 턴의 요청·답·페이지
 // 글자를 함께 보낸다 — 사용자 결정으로 #129의 "누를 때만"을 바꿈), 사용자가 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면
 // 초안을 묻지 않고, 저장할 때 한 번 더 확인한다. 페이지 기억하기가 꺼져 있으면 묻지도 저장하지도 않는다.
-export function PageOfferCard({ offer }: Props) {
-  const [open, setOpen] = useState(false);
+export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
+  const [open, setOpen] = useState(!!startOpen);
   const [name, setName] = useState(offer.title);
   const [purpose, setPurpose] = useState("");
   const [modes, setModes] = useState<Mode[]>(() => offer.params.map(() => "keep"));
@@ -102,7 +102,8 @@ export function PageOfferCard({ offer }: Props) {
   // 닫아도 진행 중인 초안은 버리지 않는다(다시 열면 반영돼 있다).
   const close = () => setOpen(false);
   useEffect(() => {
-    if (!open || autoTried.current || offer.warning || !loaded || !settings.rememberPages) return;
+    // autoDraft가 false면(외부 본문 보호 중 remember_page) 자동으로 묻지 않는다 — "다시 채우기"를 누를 때만.
+    if (!open || !autoDraft || autoTried.current || offer.warning || !loaded || !settings.rememberPages) return;
     autoTried.current = true;
     void requestDraft();
   }, [open, loaded, settings.rememberPages]);
@@ -158,8 +159,9 @@ export function PageOfferCard({ offer }: Props) {
             {drafting ? "채우는 중…" : "다시 채우기"}
           </button>
           <span className="field-help">
-            카드를 열면 이번 요청·답·페이지 글자를 설정에서 고른 모델 제공자에 보내 이름·용도·자리를 일반적인 형태로 채웁니다. 직접 고쳐도
-            됩니다.
+            {autoDraft
+              ? "카드를 열면 이번 요청·답·페이지 글자를 설정에서 고른 모델 제공자에 보내 이름·용도·자리를 일반적인 형태로 채웁니다. 직접 고쳐도 됩니다."
+              : "외부 문서 내용을 읽은 대화라 자동으로 채우지 않았습니다. 누르면 이번 요청·답·페이지 글자를 모델 제공자에 보내 채웁니다. 직접 적어도 됩니다."}
           </span>
           {draftFailed && <span className="field-help error-text">초안을 받지 못했습니다. 직접 적거나 다시 채우기를 누르세요.</span>}
         </div>

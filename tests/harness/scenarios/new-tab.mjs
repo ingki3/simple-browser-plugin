@@ -94,4 +94,44 @@ export default [
       }
     },
   },
+  {
+    name: "새 탭을 따라가는 중이면 remember_page는 그 탭 페이지의 저장 카드를 띄운다",
+    pages: { "/shop": LINK_PAGE, "/booking": BOOKING_PAGE },
+    async run(h) {
+      await closeExtraTabs(h);
+      await h.settings({ autoApprove: true });
+      await h.sw.evaluate(() => { globalThis.__draftDelayMs = 0; globalThis.__draft = { name: "예약", purpose: "예약", params: [] }; });
+      try {
+        await h.turn([findC, { click: "예약" }, { tool: "remember_page", args: {} }, { text: "끝" }], { path: "/shop" });
+        await h.panel.waitForTimeout(800);
+        const url = await h.panel.locator(".page-offer.open .page-offer-url").innerText();
+        expect(url.includes("/booking"), `따라간 탭 주소(${url})`);
+      } finally {
+        await closeExtraTabs(h);
+      }
+    },
+  },
+  {
+    name: "새 탭이 첫 도구 전에 사용자 이동으로 다른 문서가 되면 remember_page도 거절한다(초안 전송 없음)",
+    pages: { "/shop": `<title>가게</title><main><a href="/still" target="_blank">예약</a><p id=out></p></main>`, "/still": STILL_PAGE, "/other": OTHER_PAGE },
+    async run(h) {
+      await closeExtraTabs(h);
+      await h.settings({ autoApprove: true });
+      await h.sw.evaluate(() => { globalThis.__draftReqs = []; globalThis.__draftDelayMs = 0; });
+      try {
+        const opened = h.ctx.waitForEvent("page");
+        const turn = h.turn([findC, { click: "예약" }, { tool: "remember_page", args: {}, delayMs: 2500 }, { text: "끝" }], { path: "/shop" });
+        const p = await opened;
+        for (let i = 0; i < 50 && !(await h.sw.evaluate(() => globalThis.__toolLog.some((t) => t.name === "click_element"))); i++) await p.waitForTimeout(100);
+        await p.goto(h.base + "/other");
+        const r = await turn;
+        const res = lastTool(r, "remember_page");
+        expect(res && String(res.error ?? "").includes("다른 문서로 바뀌어"), `거절(${JSON.stringify(res)})`);
+        await h.panel.waitForTimeout(500);
+        expect((await h.sw.evaluate(() => globalThis.__draftReqs.length)) === 0, "초안 전송 없음");
+      } finally {
+        await closeExtraTabs(h);
+      }
+    },
+  },
 ];

@@ -14,6 +14,8 @@ test("only page-reading tools that never change the page are allowed without app
   const observe = Object.entries(TOOL_POLICY).filter(([, p]) => p.observeOnly).map(([n]) => n).sort();
   assert.deepEqual(observe, [
     "confirm_task", "describe_page", "find_clickables", "find_form_fields", "get_page_content", "list_file_links", "list_page_images", "query_dom",
+    // 저장 카드만 띄운다(저장은 사용자 클릭, 보호 중이면 초안 자동 전송 없음).
+    "remember_page",
   ]);
   for (const name of ["get_youtube_transcript", "translate_page", "navigate_to_url",
     "click_element", "fill_form_fields", "download_images", "download_files", "capture_page", "read_document", "google_drive_search", "google_sheets_append_rows"]) {

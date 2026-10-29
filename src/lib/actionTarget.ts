@@ -38,9 +38,10 @@ export interface TargetInfo {
   // 대상의 ARIA·HTML 상태(aria-selected·aria-checked·aria-pressed·aria-expanded·aria-current·aria-disabled·disabled).
   // 클릭 대상만. 승인 뒤 상태가 바뀌면(이미 체크됨·이미 펼쳐짐) 누르면 반대로 되므로 다른 대상으로 본다.
   states?: Record<string, string>;
-  // 선택지(option·menuitem*)를 펼친 트리거와의 관계 확인 상태(linked: aria-controls/owns로 연결, unlinked: 펼쳐진 트리거 0~1개).
+  // 선택지(option·menuitem*)를 펼친 트리거와의 관계 확인 상태(linked: aria-controls/owns로 연결, unlinked: 펼쳐진 트리거 0~1개,
+  // nearest: 같은 묶음 안의 유일한 트리거로 구조 추정 — 늘 카드).
   // 관계 자체(요소 참조)는 content script에만 두고 실행 직전에 따로 다시 확인한다.
-  popup?: "linked" | "unlinked";
+  popup?: "linked" | "unlinked" | "nearest";
   // 그 트리거(있으면)의 기술과 위험 정보. 승인·사이트 판정은 선택지와 트리거 양쪽을 따로 본다. 모델에는 보내지 않는다.
   trigger?: TargetInfo;
   // 그 트리거 자신이 다른 목록 안의 항목(중첩 메뉴)이면 true. 상위 트리거들의 위험은 따라가지 않으므로 자동 실행하지 않는다.
@@ -364,6 +365,8 @@ export interface DomEffect {
   dialogOpened: boolean;
   // 클릭 뒤 새로 열린 대화상자의 화면 글자(modelText, 600자 — 입력값 제외, #158). 모델이 내용을 보고 다음 행동을 정한다.
   dialog?: { text: string; truncated: boolean };
+  // 스크립트로 누를 때 대상이 다른 요소(열린 목록 등)에 덮여 있었으면 그 이유(태그·역할만, 진단 — 클릭은 했다).
+  covered?: string;
   // 누르기 바로 앞 재확인에서 대상이 바뀌어 누르지 않았으면 그 이유.
   aborted?: string | null;
   // 대상이 든 같은 출처 iframe이 다른 문서로 이동했는지(탭 주소는 그대로).
@@ -505,6 +508,7 @@ export function describeEffect(e: ClickEffect): string {
   }
   // 같은 문서 안 주소 변경(필터·정렬 등)은 목록을 다시 그렸을 수 있다(구조 신호).
   if (e.navigation === "same_origin" && e.sameDocument) parts.push("목록이 다시 그려졌을 수 있습니다. 목록 항목은 다시 찾은 id로 고르세요");
+  if (e.dom?.covered) parts.push(`누를 때 ${e.dom.covered}(스크립트로 눌렀음). 화면 변화가 없으면 그 목록에서 고르거나 닫은 뒤 다시 누르세요`);
   if (e.sameDocument === null) parts.push("페이지가 응답하지 않습니다(알림창 등이 떠 있을 수 있음)");
   const head = parts.length ? parts.join(", ") + "." : "";
   if (popupLines.length) return [head, ...popupLines].filter(Boolean).join(" ");
