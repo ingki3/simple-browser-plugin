@@ -218,4 +218,18 @@ export default [
       expect(r.logs.some((l) => l.includes("read_recipe:used") && l.includes("결과 있음")), "사용");
     },
   },
+  {
+    name: "열린 shadow root 바로 아래의 반복 카드도 항목으로 묶는다",
+    pages: {
+      "/sh": `<title>섀도</title><main><shop-list></shop-list><p id=out></p></main><script>
+        const host = document.querySelector("shop-list");
+        const root = host.attachShadow({ mode: "open" });
+        root.innerHTML = [0, 1, 2, 3].map((i) => '<article><a href="/sh/' + i + '">상품' + i + '</a><span>' + (3000 + i) + '원</span></article>').join("");
+      </script>`,
+    },
+    async run(h) {
+      const res = okResult(await h.turn([items(), { text: "끝" }], { path: "/sh" }), "find_clickables");
+      expect(res.items.length === 4 && res.items[2].text.includes("3002원"), `섀도 항목(${JSON.stringify(res).slice(0, 300)})`);
+    },
+  },
 ];

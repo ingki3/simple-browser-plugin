@@ -455,8 +455,10 @@ function shapeOf(el: Element): string {
 
 // 목록 항목 경계(#161)용: el의 부모 안에서 el과 같은 태그·같은 모양(shapeOf) 형제 수(자기 포함). 부모가 없거나 body면 0.
 // cache는 한 번의 찾기 동안 부모마다 모양별 수를 기억한다(큰 목록에서 같은 형제를 거듭 세지 않게).
-export function sameShapeSiblings(el: Element, cache: Map<Element, Map<string, number>>): number {
-  const parent = el.parentElement;
+export function sameShapeSiblings(el: Element, cache: Map<ParentNode, Map<string, number>>): number {
+  // 열린 shadow root 바로 아래의 요소는 parentElement가 없다. shadow root도 형제 묶음의 부모로 본다.
+  const node = el.parentNode;
+  const parent: (Element | ShadowRoot) | null = el.parentElement ?? (node && isShadowRoot(node) ? node : null);
   if (!parent || parent === el.ownerDocument.body) return 0;
   let counts = cache.get(parent);
   if (!counts) {

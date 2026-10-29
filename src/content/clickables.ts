@@ -567,7 +567,7 @@ const ITEM_CLIMB = 10;
 
 // 대상의 목록 항목: 위로 최대 10단계(자기 포함, shadow host 넘음, body 전) 중 같은 모양 형제가 2개 이상인 조상에서
 // 그 수가 가장 큰 것(같으면 안쪽). 구조로만 정한다(키워드·class 이름을 보지 않는다). 없으면 null(항목 밖).
-function listItemOf(el: HTMLElement, cache: Map<Element, Map<string, number>>): Element | null {
+function listItemOf(el: HTMLElement, cache: Map<ParentNode, Map<string, number>>): Element | null {
   let best: Element | null = null;
   let bestCount = 1;
   let cur: Element | null = el;
@@ -604,7 +604,7 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
     }
   }
   // (ii) 항목 경계.
-  const cache = new Map<Element, Map<string, number>>();
+  const cache = new Map<ParentNode, Map<string, number>>();
   const groups = new Map<Element, Candidate[]>();
   let outside = 0;
   for (const c of cands) {
