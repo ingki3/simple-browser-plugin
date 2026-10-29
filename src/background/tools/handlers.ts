@@ -1,6 +1,6 @@
 import type { BgToContent, ContentResponse, ToolName } from "@/lib/messages";
 import { withTimeout } from "@/lib/async";
-import { navigationError, waitForNavigationSettle } from "../navigation";
+import { navigationError, redirectedOnlyFrom, waitForNavigationSettle } from "../navigation";
 import { describeNavigationError } from "@/lib/navError";
 import { debugLog, timeSpan } from "../debug";
 import { isBrowserInternalUrl } from "@/lib/siteTrust";
@@ -113,7 +113,7 @@ const TAB_POPUP_CHANGED_ERROR =
   "클릭으로 열려 따라가던 탭(새 탭·팝업 탭)이 따라가기 시작한 뒤 다른 문서로 바뀌어 작업하지 않았습니다. 사용자에게 그 탭을 닫고 다시 시도해 달라고 안내하세요.";
 
 // 탭으로 열린 팝업에서 도구를 실행해도 되는지: 그 탭이 따라가기 시작한 창에 있고 그 창의 활성 탭이며 창이 내려가
-// 있지 않아야 한다. 첫 도구 전에는 문서도 따라가기 시작할 때와 같아야 한다. 아니면 오류(따라가기는 그대로 둔다 —
+// 있지 않아야 한다. 첫 도구 전에는 문서도 따라가기 시작할 때와 같아야 한다(페이지가 스스로 넘긴 이동만 예외). 아니면 오류(따라가기는 그대로 둔다 —
 // 사용자가 다시 앞에 띄우면 이어 간다). 확인한 지금 문서 id를 돌려준다(보낼 메시지를 그 문서에 고정).
 // 확인만 하고 checked는 바꾸지 않는다 — 메시지를 실제로 그 문서에 보낸 뒤 markTabPopupUsed가 표시한다.
 async function assertTabPopupVisible(top: FollowedPopup, tab: chrome.tabs.Tab): Promise<string> {
@@ -136,7 +136,12 @@ async function assertTabPopupVisible(top: FollowedPopup, tab: chrome.tabs.Tab): 
   if (!lastFocused || lastFocused.id !== tab.windowId) throw new Error(TAB_POPUP_HIDDEN_ERROR);
   const doc = await topDocumentId(tab.id as number);
   if (!doc) throw new Error(TAB_POPUP_HIDDEN_ERROR);
-  if (!top.checked && doc !== top.documentId) throw new Error(TAB_POPUP_CHANGED_ERROR);
+  if (!top.checked && doc !== top.documentId) {
+    // 광고 중간 주소처럼 페이지가 로드를 마친 뒤 스스로 넘긴 이동(client_redirect)으로만 바뀌었으면 그 문서를 따라간다
+    // (#146). 사용자가 옮긴 이동이 끼었으면 그대로 막는다.
+    if (!top.documentId || !redirectedOnlyFrom(tab.id as number, top.documentId, doc)) throw new Error(TAB_POPUP_CHANGED_ERROR);
+    top.documentId = doc;
+  }
   return doc;
 }
 
