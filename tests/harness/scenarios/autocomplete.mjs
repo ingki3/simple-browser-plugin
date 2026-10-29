@@ -129,4 +129,19 @@ export default [
       expect(c.effect?.dom?.covered === "열린 목록(또는 대화상자)이 대상을 덮고 있음" && String(c.note).includes("열린 목록"), `덮개 진단(${JSON.stringify(c.effect?.dom)} ${c.note})`);
     },
   },
+  {
+    name: "버튼이 연 대화상자 안의 자동완성 칸은 그 버튼 때문에 막히지 않는다",
+    pages: {
+      "/dlg": `<title>주소</title><main><button aria-haspopup=dialog aria-expanded=true aria-controls=dd>주소 검색</button>
+<div id=dd role=dialog><div class=field><span>검색</span><input role=combobox aria-expanded=false aria-label="장소 검색어" id=a><div class=pop></div></div></div><p id=out></p></main>
+<script>document.getElementById("a").addEventListener("input", (e) => { e.target.setAttribute("aria-expanded", "true"); e.target.parentElement.querySelector(".pop").innerHTML = "<ul role=listbox><li role=option>판교역로</li></ul>"; });</script>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findF, { fill: "장소 검색어", value: "판교" }, { text: "끝" }], { path: "/dlg" });
+      const res = lastTool(r, "fill_form_fields");
+      const ff = lastTool(r, "find_form_fields");
+      expect(res?.result?.results?.[0]?.applied && res.result.results[0].listOpened, `채움(${JSON.stringify(res)} / 찾기 ${JSON.stringify(ff)} / stopped=${r.stoppedAtCard})`);
+    },
+  },
 ];

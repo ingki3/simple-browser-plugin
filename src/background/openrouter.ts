@@ -44,6 +44,8 @@ import { debugLog, timeSpan } from "./debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
 import {
   resolveTurnTab,
+  recheckTabPopup,
+  topDocumentId,
   captureTurnTab,
   currentToolTab,
   inheritPopups,
@@ -1699,14 +1701,22 @@ export class ChatAgent {
   // 대화면 초안을 자동으로 묻지 않는다(사용자가 "다시 채우기"를 누를 때만 보낸다).
   private async rememberPage(call: ToolCallContext): Promise<boolean> {
     const { turn, turnTab, callId, toolName, argsKey, failCall } = call;
-    const tabId = (await currentToolTab(turnTab))?.tabId ?? null;
-    if (this.isStale(turn)) return false;
-    if (tabId === null) {
-      logToolFail(toolName, OFFER_REFUSAL_TEXT.tab_gone);
-      failCall(OFFER_REFUSAL_TEXT.tab_gone, argsKey);
+    // 다른 도구와 같은 탭 검사(따라가는 탭이 앞에 보이는지, 첫 도구 전이면 따라가기 시작한 문서 그대로인지)를 거친다.
+    let tabId: number;
+    let expectDoc: string | null;
+    try {
+      tabId = await resolveTurnTab(turnTab);
+      // 따라가는 탭 팝업이면 확인한 문서에 고정한다(그 사이 바뀌면 만들지 않음). 아니면 지금 문서.
+      expectDoc = (await recheckTabPopup(turnTab, tabId)) ?? (await topDocumentId(tabId));
+    } catch (err) {
+      if (this.isStale(turn)) return false;
+      const msg = err instanceof Error ? err.message : String(err);
+      logToolFail(toolName, msg);
+      failCall(msg, argsKey);
       return true;
     }
-    const res = await makeOfferResult(tabId, null, { query: this.turnRequest, answer: "" }).catch(() => ({ reason: "tab_gone" as const }));
+    if (this.isStale(turn)) return false;
+    const res = await makeOfferResult(tabId, null, { query: this.turnRequest, answer: "" }, expectDoc).catch(() => ({ reason: "tab_gone" as const }));
     if (this.isStale(turn)) return false;
     if ("reason" in res) {
       const msg = OFFER_REFUSAL_TEXT[res.reason];

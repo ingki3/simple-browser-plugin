@@ -109,7 +109,7 @@ export async function makeOffer(
 }
 
 // 저장 제안을 못 만든 이유(remember_page 도구가 고정 문구로 알린다).
-export type OfferRefusal = "disabled" | "tab_gone" | "incognito" | "same_page" | "not_web" | "secret";
+export type OfferRefusal = "disabled" | "tab_gone" | "incognito" | "same_page" | "not_web" | "secret" | "changed";
 
 export const OFFER_REFUSAL_TEXT: Record<OfferRefusal, string> = {
   disabled: "설정에서 '페이지 기억하기'가 꺼져 있어 기억할 수 없습니다. 사용자에게 설정에서 켜 달라고 안내하세요.",
@@ -118,16 +118,20 @@ export const OFFER_REFUSAL_TEXT: Record<OfferRefusal, string> = {
   same_page: "이 페이지는 기억할 수 없습니다.",
   not_web: "웹 주소(http·https)가 아닌 페이지는 기억할 수 없습니다.",
   secret: "주소나 제목에 자동 로그인으로 넣은 값이 보여 기억하지 않습니다.",
+  changed: "확인하는 사이 페이지가 바뀌어 기억하지 않았습니다. 지금 페이지를 다시 확인한 뒤 요청하세요.",
 };
 
+// expectDocumentId: 부르는 쪽이 이미 확인한 문서(remember_page — 따라가는 탭 검사). 지금 문서가 다르면 만들지 않는다.
 export async function makeOfferResult(
   tabId: number,
   startUrl: string | null,
   context?: OfferContext,
+  expectDocumentId?: string | null,
 ): Promise<{ offer: PageOffer } | { reason: OfferRefusal }> {
   if (!(await getSettings()).rememberPages) return { reason: "disabled" };
   // 문서를 먼저 고정한 뒤 탭 주소·제목을 읽는다. 그 사이 새로고침·이동하면 고정한 문서가 없어져 페이지 글자를 읽지 않는다.
   const documentId = context ? await topDocumentId(tabId) : null;
+  if (expectDocumentId && documentId !== expectDocumentId) return { reason: "changed" };
   let tab: chrome.tabs.Tab;
   try {
     tab = await chrome.tabs.get(tabId);

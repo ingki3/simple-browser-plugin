@@ -615,6 +615,14 @@ function linkVia(trigger: Element, targets: Element[]): "controls" | "owns" | nu
   return null;
 }
 
+// 펼친 트리거가 입력 칸과 무관한 "다른 목록"인지(자동완성 순서 규칙용, 구조로만): 대화상자를 여는 트리거(aria-haspopup=dialog)나
+// aria-controls·aria-owns 대상이 그 칸을 품는 트리거(칸이 든 패널·대화상자를 연 버튼)는 다른 목록이 아니다.
+export function otherOpenList(trigger: Element, field: Element): boolean {
+  if (trigger === field) return false;
+  if ((trigger.getAttribute("aria-haspopup") ?? "").trim().toLowerCase() === "dialog") return false;
+  return !ariaRefs(trigger).some((r) => r.ref.contains(field));
+}
+
 function ariaRefs(trigger: Element): Array<{ attr: "controls" | "owns"; ref: Element }> {
   const root = trigger.getRootNode() as Document | ShadowRoot;
   const out: Array<{ attr: "controls" | "owns"; ref: Element }> = [];

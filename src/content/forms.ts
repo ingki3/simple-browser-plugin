@@ -21,6 +21,7 @@ import {
   RiskAddedError,
   expandedTriggers,
   isAutocompleteField,
+  otherOpenList,
   registeredElement,
   noteChoiceWritten,
   noteChosenOption,
@@ -1627,7 +1628,7 @@ export async function fillFormFields(
         });
         continue;
       }
-      if (ac && peek && expandedTriggers().some((t) => t !== peek)) {
+      if (ac && peek && expandedTriggers().some((t) => otherOpenList(t, peek as HTMLElement))) {
         results.push({
           id: f.id,
           label: peekLabel,
