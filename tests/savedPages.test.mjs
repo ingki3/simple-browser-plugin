@@ -180,3 +180,80 @@ test("parseLinkDraft: 값마다 고정·자리·빼기, 잘못된 번호·빈 �
   const proto = parseLinkDraft('{"params":[{"index":0,"mode":"slot","slot":"constructor","hint":"h"}]}', 1, "t");
   assert.equal(proto.hints.constructor, "h");
 });
+
+// 상품명(필수) + 최저·최고 가격(비워도 됨) 링크.
+const PRICE = "https://shop.example/search?q=%EB%A7%A5%EB%B6%81&min=500000&max=900000&sort=low";
+const priceLink = () => {
+  const { template, slots } = makeTemplate(PRICE, [
+    { mode: "slot", slot: "상품명" },
+    { mode: "slot", slot: "최저 가격" },
+    { mode: "slot", slot: "최고 가격" },
+    { mode: "keep" },
+  ]);
+  return {
+    ...link(),
+    template,
+    slots: slots.map((key) => ({ key, hint: "", ...(key === "상품명" ? {} : { optional: true }) })),
+    site: "https://shop.example",
+  };
+};
+
+test("fillLink: 비워도 되는 자리는 값이 없으면 그 쿼리 값을 빼고, 필수 자리는 여전히 오류", () => {
+  assert.equal(fillLink(priceLink(), { 상품명: "아이패드" }), "https://shop.example/search?q=%EC%95%84%EC%9D%B4%ED%8C%A8%EB%93%9C&sort=low");
+  assert.equal(
+    fillLink(priceLink(), { 상품명: "아이패드", "최고 가격": "700000", "최저 가격": " " }),
+    "https://shop.example/search?q=%EC%95%84%EC%9D%B4%ED%8C%A8%EB%93%9C&max=700000&sort=low",
+  );
+  assert.throws(() => fillLink(priceLink(), { "최고 가격": "700000" }), /'상품명' 자리에 넣을 값/);
+  assert.throws(() => fillLink(priceLink(), { 상품명: "a", 색상: "x" }), /자리가 없습니다/);
+});
+
+test("parseSaved: optional은 true일 때만 유지, 예전 링크(없음)는 필수", () => {
+  const [a] = parseSaved([priceLink()]);
+  assert.deepEqual(a.slots.map((s) => [s.key, !!s.optional]), [["상품명", false], ["최저 가격", true], ["최고 가격", true]]);
+  const [old] = parseSaved([link()]);
+  assert.equal(old.slots[0].optional, undefined);
+  assert.throws(() => fillLink(old, {}), /넣을 값을 주세요/);
+  const [weird] = parseSaved([{ ...link(), slots: [{ key: "상품명", hint: "", optional: "yes" }] }]);
+  assert.equal(weird.slots[0].optional, undefined);
+});
+
+test("candidatesText: optional 자리를 표시하고 머리말이 선택 자리 규칙을 알린다", () => {
+  const text = candidatesText([priceLink()]);
+  const data = JSON.parse(text.slice(text.indexOf("\n") + 1));
+  assert.deepEqual(data[0].slots, [{ key: "상품명" }, { key: "최저 가격", optional: true }, { key: "최고 가격", optional: true }]);
+  assert.match(text, /optional 자리는 요청에 값이 있을 때만/);
+});
+
+test("parseLinkDraft: optional 병합(하나라도 필수면 필수), 10개 넘는 자리는 고정 + overflow", () => {
+  const d = parseLinkDraft(
+    JSON.stringify({
+      name: "쇼핑 검색",
+      purpose: "상품 검색",
+      params: [
+        { index: 0, mode: "slot", slot: "가격", optional: true },
+        { index: 1, mode: "slot", slot: "가격", optional: false },
+        { index: 2, mode: "slot", slot: "위치", optional: true },
+      ],
+    }),
+    3,
+    "x",
+  );
+  assert.deepEqual(d.optional, ["위치"]);
+  const many = Array.from({ length: 12 }, (_, i) => ({ index: i, mode: "slot", slot: `자리${i}` }));
+  const d2 = parseLinkDraft(JSON.stringify({ name: "n", params: many }), 12, "x", Array.from({ length: 12 }, (_, i) => `k${i}`));
+  assert.equal(d2.choices.filter((c) => c.mode === "slot").length, 10);
+  assert.deepEqual(d2.overflow, ["k10", "k11"]);
+  assert.equal(d2.choices[10].mode, "keep");
+});
+
+test("fillLink: 선택 자리 이름이 상속 속성과 같아도 값이 없으면 뺀다", () => {
+  const { template, slots } = makeTemplate(PRICE, [
+    { mode: "slot", slot: "상품명" },
+    { mode: "slot", slot: "constructor" },
+    { mode: "drop" },
+    { mode: "keep" },
+  ]);
+  const l = { ...priceLink(), template, slots: slots.map((key) => ({ key, hint: "", ...(key === "constructor" ? { optional: true } : {}) })) };
+  assert.equal(fillLink(l, { 상품명: "a" }), "https://shop.example/search?q=a&sort=low");
+});

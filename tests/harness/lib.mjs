@@ -221,6 +221,8 @@ async function installMockModel(sw) {
       }
       if (body.response_format) {
         (globalThis.__draftReqs ??= []).push(body);
+        // __draftDelayMs: 저장 카드 초안 응답을 늦춘다(닫았다 다시 연 동안 도착하는 응답 시험).
+        if (globalThis.__draftDelayMs) await new Promise((r) => setTimeout(r, globalThis.__draftDelayMs));
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(globalThis.__draft ?? {}) } }] }), {
           headers: { "content-type": "application/json" },
         });

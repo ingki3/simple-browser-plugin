@@ -272,14 +272,14 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "open_saved_link",
     description:
-      "사용자가 저장한 링크(요청에 붙은 [저장한 링크 후보 데이터]의 id)를 현재 탭에서 연다. 사용자의 요청이 저장 링크의 용도(purpose·name)에 맞으면 사이트를 찾아가거나 검색창을 채우지 말고 이것을 먼저 쓴다. 링크의 slots마다 values에 값을 넣는다(예: 쇼핑 검색 링크면 상품명). 주소는 사용자가 저장한 그대로이고 자리 값만 바뀐다. 연 뒤에는 평소처럼 관측한다.",
+      "사용자가 저장한 링크(요청에 붙은 [저장한 링크 후보 데이터]의 id)를 현재 탭에서 연다. 사용자의 요청이 저장 링크의 용도(purpose·name)에 맞으면 사이트를 찾아가거나 검색창을 채우지 말고 이것을 먼저 쓴다. 링크의 필수 자리마다 values에 값을 넣는다(예: 쇼핑 검색 링크면 상품명). optional: true인 자리는 요청에 값이 있을 때만 넣고, 비우면 그 조건(쿼리 값) 없이 열린다(예: 가격 범위를 말하지 않았으면 최저·최고 가격을 비운다). 주소는 사용자가 저장한 그대로이고 자리 값만 바뀐다. 연 뒤에는 평소처럼 관측한다.",
     parameters: {
       type: "object",
       properties: {
         id: { type: "string", description: "후보 데이터의 id" },
         values: {
           type: "object",
-          description: "자리 이름(slots의 key) → 넣을 값(200자까지). 자리가 없는 링크면 생략.",
+          description: "자리 이름(slots의 key) → 넣을 값(200자까지). 필수 자리는 빠지면 오류, optional 자리는 생략 가능. 자리가 없는 링크면 생략.",
           additionalProperties: { type: "string" },
         },
       },
