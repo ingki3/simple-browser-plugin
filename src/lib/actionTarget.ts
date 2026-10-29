@@ -362,6 +362,8 @@ export function navKind(before: string, after: string): NavKind {
 export interface DomEffect {
   mutations: number;
   dialogOpened: boolean;
+  // 클릭 뒤 새로 열린 대화상자의 화면 글자(modelText, 600자 — 입력값 제외, #158). 모델이 내용을 보고 다음 행동을 정한다.
+  dialog?: { text: string; truncated: boolean };
   // 누르기 바로 앞 재확인에서 대상이 바뀌어 누르지 않았으면 그 이유.
   aborted?: string | null;
   // 대상이 든 같은 출처 iframe이 다른 문서로 이동했는지(탭 주소는 그대로).
@@ -496,10 +498,13 @@ export function describeEffect(e: ClickEffect): string {
   } else if (e.sameDocument === false) {
     parts.push("같은 주소로 페이지를 다시 불러왔습니다");
   }
-  if ((e.navigation === "none" || e.navigation === "fragment") && e.sameDocument) {
-    if (e.dom?.dialogOpened) parts.push("대화상자가 열렸습니다");
+  // 같은 문서면 이동 분류와 관계없이 대화상자·화면 변화를 알린다(같은 문서 안 주소 변경과 대화상자가 함께 오는 경우, #158).
+  if (e.sameDocument && e.navigation !== "cross_origin" && e.navigation !== "error") {
+    if (e.dom?.dialogOpened) parts.push(e.dom.dialog ? "대화상자가 열렸습니다(글자는 effect.dom.dialog)" : "대화상자가 열렸습니다");
     if (e.dom && e.dom.mutations > 0) parts.push(`화면이 바뀌었습니다(변경 ${e.dom.mutations}건)`);
   }
+  // 같은 문서 안 주소 변경(필터·정렬 등)은 목록을 다시 그렸을 수 있다(구조 신호).
+  if (e.navigation === "same_origin" && e.sameDocument) parts.push("목록이 다시 그려졌을 수 있습니다. 목록 항목은 다시 찾은 id로 고르세요");
   if (e.sameDocument === null) parts.push("페이지가 응답하지 않습니다(알림창 등이 떠 있을 수 있음)");
   const head = parts.length ? parts.join(", ") + "." : "";
   if (popupLines.length) return [head, ...popupLines].filter(Boolean).join(" ");

@@ -59,7 +59,7 @@ function safeSelector(s: string, max: number): boolean {
 // 레시피로 남길 인자만 골라 정규화한다. 남길 수 없으면 null.
 // - query_dom: selector(필수)·attr·limit
 // - list_file_links: query(있을 때만 — 검색어 없는 호출은 기억할 것이 없다)·limit
-// - find_clickables: query(있을 때만)·region·onlyViewport·limit
+// - find_clickables: query(있을 때만)·region·onlyViewport·limit·mode(items일 때만, #161)·matchContext(true일 때만, #159)
 export function recipeArgs(tool: string, raw: unknown): { tool: RecipeTool; args: ReadRecipe["args"] } | null {
   if (!raw || typeof raw !== "object") return null;
   const a = raw as Record<string, unknown>;
@@ -88,6 +88,8 @@ export function recipeArgs(tool: string, raw: unknown): { tool: RecipeTool; args
     if (tool === "find_clickables") {
       if (typeof a.region === "string") args.region = a.region;
       if (typeof a.onlyViewport === "boolean") args.onlyViewport = a.onlyViewport;
+      if (a.mode === "items") args.mode = "items";
+      if (a.matchContext === true) args.matchContext = true;
     }
     return { tool, args };
   }
@@ -107,6 +109,11 @@ export function usefulResult(tool: RecipeTool, data: unknown): boolean {
   }
   if (tool === "list_file_links") {
     return !!data && Array.isArray((data as { links?: unknown[] }).links) && (data as { links: unknown[] }).links.length > 0;
+  }
+  // find_clickables 항목 모드(#161)·조건 때문에 0개(#151)는 { items } 객체로 온다.
+  if (tool === "find_clickables" && data && typeof data === "object" && !Array.isArray(data)) {
+    const items = (data as { items?: unknown }).items;
+    return Array.isArray(items) && items.length > 0;
   }
   return Array.isArray(data) && data.length > 0;
 }

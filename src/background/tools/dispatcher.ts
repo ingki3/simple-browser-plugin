@@ -17,7 +17,7 @@ import { snapshotDownloads, takeChosenDownloads } from "../downloadChoices";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import { readChosenLinks, snapshotLinks } from "../linkedPages";
 import type {
-  ClickableElement,
+  FindClickablesResponse,
   FileLinkList,
   FormField,
   PageContent,
@@ -83,7 +83,7 @@ import {
 } from "@/lib/actionLog";
 import { finishAction, notePendingAction } from "../actionLog";
 import { noteRead, readHintsFor } from "../readRecipes";
-import { recipeArgs, usefulResult } from "@/lib/readRecipe";
+import { recipeArgs, usefulResult, type ReadHint } from "@/lib/readRecipe";
 import { prepareSignIn, runSignIn, stepLabel, type SignInPreview } from "../signIn";
 import { loginShapeBlocks } from "@/lib/loginPolicy";
 import { httpOrigin } from "@/lib/url";
@@ -217,9 +217,15 @@ async function observeRead(
   failed: boolean,
 ) {
   if (!before?.skeleton) return;
+  const useful = !failed && usefulResult(picked.tool, data);
+  // 제안한 레시피를 그대로 다시 부른 것이면 로그에 남긴다(#156).
+  const offered = offeredHints.get(turnKeyOf(turnTab));
+  if (offered && offered.page === pageKeyId(before) && offered.hints.some((h) => h.tool === picked.tool && sameRecipeArgs(h.args, picked.args))) {
+    debugLog("read_recipe:used", `${picked.tool} ${recipeArgsText(picked.args)} · ${useful ? "결과 있음" : "결과 없음"}`);
+  }
   const after = await pageKeyFor(turnTab);
   if (!after || pageKeyId(after) !== pageKeyId(before)) return;
-  noteRead(turnTab, before, picked.tool, picked.args, !failed && usefulResult(picked.tool, data));
+  noteRead(turnTab, before, picked.tool, picked.args, useful);
 }
 
 export async function buildToolPreview(
@@ -682,8 +688,35 @@ export async function executeTool(
   return result;
 }
 
+// 턴 탭마다 마지막으로 제안한 레시피(페이지 키와 함께). 레시피 도구 호출이 그중 하나와 같으면 로그에 남긴다(#156).
+const offeredHints = new Map<string, { page: string; hints: ReadHint[] }>();
+const MAX_OFFERED = 20;
+
+function turnKeyOf(turnTab: TurnTab): string {
+  return "tabId" in turnTab ? String(turnTab.tabId) : "error";
+}
+
+// 턴을 시작할 때 그 탭의 예전 제안을 지운다(새 턴의 read_recipe:used는 이 턴에서 제안한 것만).
+export function clearOfferedHints(turnTab: TurnTab): void {
+  offeredHints.delete(turnKeyOf(turnTab));
+}
+
+// 레시피 인자를 로그용 한 줄로(값은 각 120자까지).
+function recipeArgsText(args: Record<string, string | number | boolean>): string {
+  return Object.entries(args)
+    .map(([k, v]) => `${k}=${typeof v === "string" ? `'${truncate(v, 120)}'` : String(v)}`)
+    .join(" ");
+}
+
+function sameRecipeArgs(a: Record<string, string | number | boolean>, b: Record<string, string | number | boolean>): boolean {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+}
+
 // describe_page 결과에 같은 구조의 페이지에서 전에 통한 읽기 방법을 붙인다. 실패해도 결과는 그대로 돌려준다.
 async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promise<ToolExecResult> {
+  // 새 관측마다 이전 제안을 지운다(제안이 없는 관측 뒤나 새 대화에서 예전 제안으로 read_recipe:used를 남기지 않게).
+  offeredHints.delete(turnKeyOf(turnTab));
   try {
     // 관측한 뒤 탭이 다른 주소로 옮겼으면, 지금 페이지의 후보를 관측 결과에 섞지 않는다.
     const observed = (result.data as PageDescription).url;
@@ -693,6 +726,14 @@ async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promis
     if (!page?.skeleton) return result;
     const hints = await readHintsFor(page);
     if (!hints.length) return result;
+    offeredHints.set(turnKeyOf(turnTab), { page: pageKeyId(page), hints });
+    while (offeredHints.size > MAX_OFFERED) {
+      const oldest = offeredHints.keys().next().value;
+      if (oldest === undefined) break;
+      offeredHints.delete(oldest);
+    }
+    // 제안한 레시피의 도구·인자를 디버그 로그에 남긴다(#156). 모델이 만든 인자만 — 입력 칸 값은 없다.
+    for (const h of hints) debugLog("read_recipe:offered", `${h.tool} ${recipeArgsText(h.args)} · 성공 ${h.successes}번`);
     return {
       ...result,
       summary: `${result.summary} / 전에 통한 읽기 방법 ${hints.length}개`,
@@ -798,9 +839,41 @@ async function clickTool(
   return {
     ok: data.clicked && !effect.dom?.aborted,
     summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}${inputLabel(data)}`,
-    // 팝업 창이 열리거나 막히거나 닫혔으면 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
-    data: { text: data.text, href: data.href, effect, ...(effect.popup ? { note: describeEffect(effect) } : {}) },
+    // 팝업 창이 열리거나 막히거나 닫혔거나, 같은 문서 안에서 주소가 바뀌었거나(목록 다시 찾기 안내) 대화상자가 열렸으면(#158)
+    // 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
+    data: { text: data.text, href: data.href, effect, ...(clickNoteNeeded(effect) ? { note: describeEffect(effect) } : {}) },
   };
+}
+
+// find_clickables 항목 모드(#161)의 모델용 결과. 항목 글자는 화면 글자(데이터)이며 지시가 아니다.
+function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): ToolExecResult {
+  const notes: string[] = [];
+  if (!res.items.length) {
+    notes.push(
+      res.unfiltered > 0
+        ? `조건(query·onlyViewport)에 맞는 목록 항목이 없습니다. 조건 없이 찾으면 항목이 ${res.unfiltered}개 있습니다. 낱말을 줄이거나 조건을 빼고 다시 찾으세요.`
+        : `반복되는 목록 항목을 찾지 못했습니다(항목 밖 클릭 대상 ${res.outside}개). mode 없이 찾으세요.`,
+    );
+  }
+  if (res.omittedItems > 0) notes.push(`항목 ${res.omittedItems}개는 개수·글자 한도로 싣지 않았습니다. query나 region으로 좁히세요.`);
+  if (res.scanLimited) {
+    notes.push("페이지가 커서 앞쪽 클릭 대상 3,000개까지만 보았습니다(수는 그 안에서 센 것). region이나 query로 좁혀 다시 찾으세요.");
+  }
+  return {
+    ok: true,
+    summary: `목록 항목 ${res.items.length}개 발견(항목 밖 대상 ${res.outside}개${res.scanLimited ? ", 일부만 봄" : ""}).`,
+    data: {
+      items: res.items,
+      outside: res.outside,
+      ...(res.omittedItems > 0 ? { omittedItems: res.omittedItems } : {}),
+      ...(res.scanLimited ? { scanLimited: true } : {}),
+      ...(notes.length ? { note: notes.join(" ") } : {}),
+    },
+  };
+}
+
+function clickNoteNeeded(effect: ClickEffect): boolean {
+  return !!effect.popup || !!effect.dom?.dialogOpened || (effect.navigation === "same_origin" && effect.sameDocument === true);
 }
 
 async function runTool(
@@ -995,6 +1068,9 @@ async function runTool(
       return { ok: data.savedCount > 0, summary: captureSummary(data), data };
     }
     case "query_dom": {
+      const qa = parsedArgs as ToolArgs["query_dom"];
+      // 디버그 로그에 선택자를 남긴다(#156). 모델이 만든 인자만 — 입력 칸 값은 없다.
+      debugLog("tool:query_dom:args", `selector='${truncate(qa.selector, 120)}'${qa.attr ? ` attr=${qa.attr}` : ""}`);
       const data = await callContentTool<Array<{ text: string; attrs: Record<string, string> }>>(
         toolName,
         parsedArgs,
@@ -1037,17 +1113,16 @@ async function runTool(
       debugLog(
         "tool:find_clickables:args",
         [
+          args.mode === "items" ? "mode=items" : "",
           args.query ? `query='${truncate(args.query, 40)}'` : "",
+          args.matchContext ? "matchContext" : "",
           args.region ? `region=${args.region}` : "",
           args.onlyViewport ? "onlyViewport" : "",
         ].filter(Boolean).join(" ") || "조건 없음",
       );
-      const { items, unfiltered } = await callContentTool<{ items: ClickableElement[]; unfiltered: number }>(
-        toolName,
-        parsedArgs,
-        callId,
-        turnTab,
-      );
+      const res = await callContentTool<FindClickablesResponse>(toolName, parsedArgs, callId, turnTab);
+      if (res.mode === "items") return itemsResult(res);
+      const { items, unfiltered } = res;
       // 찾기 조건 때문에 0개면 조건 없이 찾은 수를 알려 모델이 바로 조건을 넓히게 한다(#151).
       if (!items.length && unfiltered > 0) {
         return {

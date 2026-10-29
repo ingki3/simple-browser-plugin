@@ -221,6 +221,8 @@ async function installMockModel(sw) {
       }
       if (body.response_format) {
         (globalThis.__draftReqs ??= []).push(body);
+        // __draftDelayMs: 저장 카드 초안 응답을 늦춘다(닫았다 다시 연 동안 도착하는 응답 시험).
+        if (globalThis.__draftDelayMs) await new Promise((r) => setTimeout(r, globalThis.__draftDelayMs));
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(globalThis.__draft ?? {}) } }] }), {
           headers: { "content-type": "application/json" },
         });
@@ -276,10 +278,33 @@ async function installMockModel(sw) {
         const id = list.find((f) => f.type === step.signIn || (f.label ?? "").includes(step.signIn))?.id ?? "f-missing";
         out = { tool: "sign_in", args: { id } };
       }
+      else if (step?.repeatLastClick) {
+        // 직전 click_element와 같은 id로 다시 부른다(행 내용 바뀜 안내 뒤 같은 id 재호출 시험).
+        const prev = [...msgs].reverse().flatMap((m) => m.tool_calls ?? []).find((c) => c.function?.name === "click_element");
+        let id = "c-missing";
+        try {
+          id = JSON.parse(prev?.function?.arguments ?? "{}").id ?? id;
+        } catch {
+          /* ignore */
+        }
+        out = { tool: "click_element", args: { id } };
+      }
+      else if (step?.clickItem) {
+        // find_clickables 항목 모드(#161) 결과에서 글자가 든 항목 → 그 안의 대상(target 글자 일부, 없으면 첫 대상)을 누른다.
+        const items = Array.isArray(data?.items) ? data.items : [];
+        const it = items.find((x) => (x.text ?? "").includes(step.clickItem));
+        const t = it?.targets?.find((x) => !step.target || (x.text ?? "").includes(step.target));
+        out = { tool: "click_element", args: { id: t ? t.id : "c-missing" } };
+      }
       else if (step?.click) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
         out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       } else if (step) out = step;
+      // lengthEmpty: 생각만 하다 응답 상한에 걸린 빈 응답(글자·도구 호출 없음, #160 재시도 시험).
+      if (step?.lengthEmpty) {
+        if (anthropic) return anthropicSse([{ type: "message_delta", delta: { stop_reason: "max_tokens" } }, { type: "message_stop" }]);
+        return sse([{ choices: [{ delta: {}, finish_reason: "length" }] }]);
+      }
       if (anthropic) {
         const ev = [];
         // 생각 블록(서명 포함)을 먼저 보낸다 — 다음 요청에 그대로 돌아오는지 본다.

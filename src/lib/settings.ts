@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   csvMaxChars: DEFAULT_CSV_MAX_CHARS,
   runMode: "ask",
   showThinking: false,
+  quickThinking: false,
   rememberPages: true,
   trustedInput: false,
   manualSites: [],
@@ -62,6 +63,7 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     // 예전 설정은 자동 실행 켜기(autoApprove)만 있었다.
     runMode: isRunMode(r.runMode) ? r.runMode : (r as { autoApprove?: unknown }).autoApprove === true ? "auto" : "ask",
     showThinking: r.showThinking === true,
+    quickThinking: r.quickThinking === true,
     rememberPages: r.rememberPages !== false,
     trustedInput: r.trustedInput === true,
     manualSites: normalizeManualSites(r.manualSites),

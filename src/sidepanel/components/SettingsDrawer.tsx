@@ -9,6 +9,7 @@ import { TrustedInputField } from "./TrustedInputField";
 import { ManualSitesField } from "./ManualSitesField";
 import { LoginSitesField } from "./LoginSitesField";
 import { ShowThinkingField } from "./ShowThinkingField";
+import { QuickThinkingField } from "./QuickThinkingField";
 import { CsvMaxCharsField } from "./CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import { PROVIDER_LINKS } from "@/lib/providerLinks";
@@ -488,6 +489,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <details className="settings-group">
             <summary>동작</summary>
             <RunModeField mode={draft.runMode} onChange={(runMode) => update({ runMode })} />
+            <QuickThinkingField enabled={draft.quickThinking} onToggle={(quickThinking) => update({ quickThinking })} />
             <ManualSitesField sites={draft.manualSites} onChange={(manualSites) => update({ manualSites })} currentTabButton />
             <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
           </details>

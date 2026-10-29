@@ -135,6 +135,10 @@ export const findClickablesArgs = z
       .optional(),
     onlyViewport: z.boolean().optional(),
     limit: z.number().int().positive().max(200).optional(),
+    // items: 반복 목록 항목마다 화면 글자와 그 안의 대상 id를 묶어 돌려준다(#161).
+    mode: z.enum(["list", "items"]).optional(),
+    // query를 대상이 든 묶음 글자(context)에도 맞춘다(#159, list 모드).
+    matchContext: z.boolean().optional(),
   })
   .strict();
 
