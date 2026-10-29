@@ -261,6 +261,8 @@ async function installMockModel(sw) {
       }
       if (body.tool_choice === "none") return sse([{ choices: [{ delta: { content: "정리" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }]);
       const step = globalThis.__steps.shift();
+      // delayMs: 이 단계를 답하기 전에 기다린다(페이지가 스스로 넘어가는 등 시간이 지나야 하는 상황).
+      if (step?.delayMs) await new Promise((r) => setTimeout(r, step.delayMs));
       const list = Array.isArray(data) ? data : [];
       const byLabel = (l) => list.find((f) => (f.label ?? "").includes(l))?.id ?? "f-missing";
       let out = { text: "끝" };
