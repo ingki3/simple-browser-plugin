@@ -696,6 +696,11 @@ function turnKeyOf(turnTab: TurnTab): string {
   return "tabId" in turnTab ? String(turnTab.tabId) : "error";
 }
 
+// 턴을 시작할 때 그 탭의 예전 제안을 지운다(새 턴의 read_recipe:used는 이 턴에서 제안한 것만).
+export function clearOfferedHints(turnTab: TurnTab): void {
+  offeredHints.delete(turnKeyOf(turnTab));
+}
+
 // 레시피 인자를 로그용 한 줄로(값은 각 120자까지).
 function recipeArgsText(args: Record<string, string | number | boolean>): string {
   return Object.entries(args)
@@ -710,6 +715,8 @@ function sameRecipeArgs(a: Record<string, string | number | boolean>, b: Record<
 
 // describe_page 결과에 같은 구조의 페이지에서 전에 통한 읽기 방법을 붙인다. 실패해도 결과는 그대로 돌려준다.
 async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promise<ToolExecResult> {
+  // 새 관측마다 이전 제안을 지운다(제안이 없는 관측 뒤나 새 대화에서 예전 제안으로 read_recipe:used를 남기지 않게).
+  offeredHints.delete(turnKeyOf(turnTab));
   try {
     // 관측한 뒤 탭이 다른 주소로 옮겼으면, 지금 페이지의 후보를 관측 결과에 섞지 않는다.
     const observed = (result.data as PageDescription).url;
@@ -719,9 +726,7 @@ async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promis
     if (!page?.skeleton) return result;
     const hints = await readHintsFor(page);
     if (!hints.length) return result;
-    const key = turnKeyOf(turnTab);
-    offeredHints.delete(key);
-    offeredHints.set(key, { page: pageKeyId(page), hints });
+    offeredHints.set(turnKeyOf(turnTab), { page: pageKeyId(page), hints });
     while (offeredHints.size > MAX_OFFERED) {
       const oldest = offeredHints.keys().next().value;
       if (oldest === undefined) break;

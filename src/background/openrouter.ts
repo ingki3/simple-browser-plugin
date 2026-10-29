@@ -22,7 +22,7 @@ import {
 import { functionDeclarations } from "./tools/declarations";
 import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
 import { registerRepeatTask } from "./repeatTasks";
-import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
+import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
 import { settlePopups, watchNewTabs } from "./popups";
 
@@ -920,6 +920,7 @@ export class ChatAgent {
     const endTurn = timeSpan("turn");
     const prevTurnTab = this.turnTab;
     this.turnTab = opts.tabId !== undefined ? await turnTabOf(opts.tabId) : await captureTurnTab();
+    clearOfferedHints(this.turnTab);
     // 기록에 넣을 때 쓰는 가림 목록을 미리 읽어 둔다(서비스 워커가 다시 시작된 뒤 첫 결과도 가리게). 읽지 못하면 이 요청을
     // 보내지 않는다(가릴 값을 모른 채 페이지 글자를 보내지 않게).
     try {
