@@ -10,6 +10,7 @@ import {
 import { navigateAutoBlock } from "@/lib/siteTrust";
 import { fillLink } from "@/lib/savedPages";
 import { markUsed, savedLinkById } from "../savedPagesStore";
+import { debugLog } from "../debug";
 import { downloadScope, imageDownloadSources } from "@/lib/chatGrant";
 import { DOWNLOAD_LIMITS } from "@/lib/downloadPick";
 import { snapshotDownloads, takeChosenDownloads } from "../downloadChoices";
@@ -1031,11 +1032,37 @@ async function runTool(
       };
     }
     case "find_clickables": {
-      const data = await callContentTool<ClickableElement[]>(toolName, parsedArgs, callId, turnTab);
+      const args = parsedArgs as ToolArgs["find_clickables"];
+      // 디버그 로그에 찾기 조건을 남긴다(#152). 모델이 만든 인자만 — 입력 칸 값은 들어 있지 않다.
+      debugLog(
+        "tool:find_clickables:args",
+        [
+          args.query ? `query='${truncate(args.query, 40)}'` : "",
+          args.region ? `region=${args.region}` : "",
+          args.onlyViewport ? "onlyViewport" : "",
+        ].filter(Boolean).join(" ") || "조건 없음",
+      );
+      const { items, unfiltered } = await callContentTool<{ items: ClickableElement[]; unfiltered: number }>(
+        toolName,
+        parsedArgs,
+        callId,
+        turnTab,
+      );
+      // 찾기 조건 때문에 0개면 조건 없이 찾은 수를 알려 모델이 바로 조건을 넓히게 한다(#151).
+      if (!items.length && unfiltered > 0) {
+        return {
+          ok: true,
+          summary: `클릭 가능 요소 0개 발견(조건 없이 ${unfiltered}개).`,
+          data: {
+            items,
+            note: `찾기 조건(query·region·onlyViewport)에 맞는 요소가 없습니다. 조건 없이 찾으면 클릭 가능 요소가 ${unfiltered}개 있습니다. query는 화면 글자에 그대로 들어 있어야 맞으니 낱말을 짧게 줄이거나 '|'로 다른 표현을 더하고, 그래도 없으면 조건을 빼고 다시 찾으세요.`,
+          },
+        };
+      }
       return {
         ok: true,
-        summary: `클릭 가능 요소 ${data.length}개 발견.`,
-        data,
+        summary: `클릭 가능 요소 ${items.length}개 발견.`,
+        data: items,
       };
     }
     case "click_element":

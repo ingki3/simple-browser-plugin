@@ -421,11 +421,23 @@ type FindClickablesArgs = {
 };
 
 export function findClickables(args: FindClickablesArgs): ClickableElement[] {
-  captureHiddenBaselines();
-  return scanTargets(() => collectClickables(args));
+  return findClickablesCounted(args).items;
 }
 
-function collectClickables(args: FindClickablesArgs): ClickableElement[] {
+// find_clickables 도구용: 찾은 요소와, 찾기 조건(query·region·onlyViewport)만 빼면 돌려줄 수 있었던 요소 수(#151).
+// 조건 때문에 0개가 되었을 때 모델이 바로 조건을 넓히게 수만 알린다.
+export function findClickablesCounted(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number } {
+  captureHiddenBaselines();
+  let unfiltered = 0;
+  const items = scanTargets(() => {
+    const r = collectClickables(args);
+    unfiltered = r.unfiltered;
+    return r.items;
+  });
+  return { items, unfiltered };
+}
+
+function collectClickables(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number } {
   const limit = Math.min(args.limit ?? 50, 200);
   const terms = queryTerms(args.query);
   // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
@@ -443,6 +455,8 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
   let expanded: HTMLElement[] | null = null;
   // 이미 돌려준 요소(숨긴 checkbox의 label이 다른 선택자로도 잡히는 경우 등 — 한 번만).
   const seen = new Set<HTMLElement>();
+  // 찾기 조건만 빼면 돌려줄 수 있었던 요소 수(조건에 맞은 것 포함).
+  let unfiltered = 0;
   for (const root of getAccessibleRoots()) {
     if (full()) break;
     const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
@@ -462,10 +476,9 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       seen.add(el);
 
       const inViewport = rectInViewport(el);
-      if (args.onlyViewport && !inViewport) continue;
-
       const region = detectRegion(el);
-      if (args.region && region !== args.region) continue;
+      // 찾기 조건은 아래에서 선택지 관계까지 본 뒤 적용한다(조건 없이 돌려줄 수 있는 요소 수를 세기 위해).
+      let filtered = (args.onlyViewport && !inViewport) || (args.region && region !== args.region);
 
       const tag = el.tagName.toLowerCase();
       // checkbox·radio(또는 그것을 대신 누르는 label)는 칸 종류를 role로 알려 준다(구조 — input의 type).
@@ -479,7 +492,7 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       let score = 0;
       if (terms.length) {
         score = clickMatchScore(terms, text, href);
-        if (!score) continue;
+        if (!score) filtered = true;
       }
 
       // 선택지(option·menuitem*)는 펼친 트리거와의 관계를 정할 수 있을 때만 돌려준다(targets.ts의 choiceRelation).
@@ -489,6 +502,8 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
         relation = choiceRelation(CLICK_KIND, el, expanded);
         if (!relation) continue;
       }
+      unfiltered += 1;
+      if (filtered) continue;
 
       const entry = { el, item: { text, href, tag, role, region, inViewport }, relation, score };
       if (!ranked) {
@@ -504,7 +519,7 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
     }
   }
 
-  return found.map(({ el, item, relation }) => {
+  const items = found.map(({ el, item, relation }) => {
     const id = registerTarget(CLICK_KIND, el, relation);
     const info = registeredInfo(id);
     return {
@@ -514,6 +529,7 @@ function collectClickables(args: FindClickablesArgs): ClickableElement[] {
       ...(info?.states ? { states: info.states } : {}),
     };
   });
+  return { items, unfiltered };
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
