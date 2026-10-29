@@ -6,7 +6,7 @@ import { stopTranslation, translatePage } from "./translate";
 import { findFormFields, fillFormFields } from "./forms";
 import { listPageImages } from "./images";
 import { queryDom } from "./dom";
-import { findClickables, clickElement } from "./clickables";
+import { findClickables, findClickablesCounted, clickElement } from "./clickables";
 import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
@@ -40,7 +40,7 @@ async function execTool(toolName: ToolName, args: unknown, callId: string, trust
     case "query_dom":
       return queryDom(args as { selector: string; attr?: string; limit?: number });
     case "find_clickables":
-      return findClickables((args ?? {}) as { query?: string; limit?: number });
+      return findClickablesCounted((args ?? {}) as { query?: string; limit?: number });
     case "click_element":
       return clickElement(args as { id: string }, callId, trusted);
     case "capture_page":
