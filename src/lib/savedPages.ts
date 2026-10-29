@@ -164,7 +164,8 @@ export function fillLink(link: SavedLink, values: Record<string, unknown> | unde
   }
   const filled = new Map<string, string>();
   for (const s of link.slots) {
-    const v = given[s.key];
+    // 자기 속성만 읽는다(자리 이름이 constructor 같아도 상속 속성을 값으로 보지 않게).
+    const v = Object.prototype.hasOwnProperty.call(given, s.key) ? given[s.key] : undefined;
     const empty = v === undefined || v === null || (typeof v === "string" && !v.trim());
     if (empty && s.optional) continue;
     if (typeof v !== "string" || !v.trim()) throw new Error(`저장한 링크 '${link.name}'의 '${s.key}' 자리에 넣을 값을 주세요.`);

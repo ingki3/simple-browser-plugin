@@ -246,3 +246,14 @@ test("parseLinkDraft: optional 병합(하나라도 필수면 필수), 10개 넘�
   assert.deepEqual(d2.overflow, ["k10", "k11"]);
   assert.equal(d2.choices[10].mode, "keep");
 });
+
+test("fillLink: 선택 자리 이름이 상속 속성과 같아도 값이 없으면 뺀다", () => {
+  const { template, slots } = makeTemplate(PRICE, [
+    { mode: "slot", slot: "상품명" },
+    { mode: "slot", slot: "constructor" },
+    { mode: "drop" },
+    { mode: "keep" },
+  ]);
+  const l = { ...priceLink(), template, slots: slots.map((key) => ({ key, hint: "", ...(key === "constructor" ? { optional: true } : {}) })) };
+  assert.equal(fillLink(l, { 상품명: "a" }), "https://shop.example/search?q=a&sort=low");
+});
