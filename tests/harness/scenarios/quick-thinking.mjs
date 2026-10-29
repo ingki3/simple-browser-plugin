@@ -74,4 +74,19 @@ export default [
       expect(r.stoppedAtCard, "승인 카드가 떠야 한다");
     },
   },
+  {
+    name: "Claude: 대화 도중 바꾸면 다음 요청은 새 대화로(이전 생각 서명을 다른 지침과 보내지 않음)",
+    pages: { "/p": PAGE },
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
+      await h.turn([{ tool: "describe_page", args: {}, thinking: "먼저 본다" }, { text: "끝" }], { path: "/p", text: "첫 요청" });
+      await h.settings({ quickThinking: true });
+      await clear(h);
+      await h.turn([{ text: "둘째 답" }], { noReload: true, text: "둘째 요청" });
+      const list = agentReqs(await reqs(h));
+      const b = list[0]?.body;
+      expect(b && b.messages.length === 1 && !JSON.stringify(b.messages).includes("thinking"), `새 대화(${b?.messages?.length}개)`);
+      expect(b.system.includes("한 문장으로 말한다(Thought)"), "새 지침");
+    },
+  },
 ];

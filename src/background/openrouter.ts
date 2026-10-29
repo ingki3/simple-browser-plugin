@@ -359,6 +359,8 @@ export class ChatAgent {
   // 모델 제공자(#97). 바뀌면 대화 기록을 새로 시작한다(제공자마다 기록 형식·생각 정보가 다르다).
   private provider: ProviderId = "openrouter";
   private customSystemPrompt: string | null = null;
+  // 기록을 시작할 때의 빠르게 생각 값(#160). 바뀌면 지침이 달라져 새 대화로 시작한다(서명 제공자의 기존 생각 서명이 무효가 되지 않게).
+  private conversationQuick: boolean | null = null;
   // 턴마다 증가. 중단되거나 새 턴에 밀린 루프는 자기 번호가 현재 값과 달라지므로
   // 늦게 끝난 도구 결과를 대화 기록에 쓰지 않고 빠진다.
   private currentTurn = 0;
@@ -671,12 +673,14 @@ export class ChatAgent {
       this.provider !== active.provider ||
       this.apiKey !== active.apiKey ||
       this.model !== active.model ||
-      this.customSystemPrompt !== settings.systemPrompt
+      this.customSystemPrompt !== settings.systemPrompt ||
+      this.conversationQuick !== settings.quickThinking
     ) {
       this.provider = active.provider;
       this.apiKey = active.apiKey;
       this.model = active.model;
       this.customSystemPrompt = settings.systemPrompt;
+      this.conversationQuick = settings.quickThinking;
       this.history = [];
       // 첨부한 PDF는 지운 기록에 있었다. 새 기록(새 제공자)에는 다시 첨부해야 한다.
       this.lastAttachedPdfUrl = null;

@@ -14,7 +14,7 @@ export function QuickThinkingField({ enabled, onToggle }: Props) {
         <span>생각을 줄여 단계마다 빨리 답하기</span>
       </label>
       <FieldHelp summary="모델이 단계마다 생각하는 양을 줄여 더 빨리 진행합니다.">
-        어려운 작업은 정확도가 떨어질 수 있습니다. 바꾼 값은 다음 요청부터 적용됩니다. 승인 카드·자동 실행 규칙은 그대로입니다.
+        어려운 작업은 정확도가 떨어질 수 있습니다. 바꾸면 다음 요청부터 새 대화로 시작합니다(지침이 달라지므로). 승인 카드·자동 실행 규칙은 그대로입니다.
       </FieldHelp>
     </div>
   );
