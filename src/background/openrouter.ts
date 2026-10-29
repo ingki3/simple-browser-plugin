@@ -178,7 +178,8 @@ describe_page 결과를 읽는 법:
 - get_page_content: 본문 텍스트 전체 추출 (요약·질의응답 근거 보강).
 - open_saved_link(id, values): 민감. 사용자가 저장한 링크를 자리 값만 넣어 현재 탭에서 연다(아래 저장한 링크 후보).
 - navigate_to_url(url): 민감. 현재 탭을 신뢰할 수 있는 전체 http/https URL로 직접 이동. 현재 페이지 관측 불필요.
-- find_clickables(query?, region?, onlyViewport?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
+- find_clickables(query?, region?, onlyViewport?, mode?, matchContext?): 클릭 후보 탐색. region/query/onlyViewport로 좁힌다.
+  상품·검색 결과·글 목록에서 조건(가격·판매처·평점 등)에 맞는 항목 하나를 고르는 일이면 get_page_content·query_dom으로 짝을 맞추지 말고 mode="items"로 항목 글자와 그 안의 링크 id를 한 번에 받아 고른다(필요하면 region="main"). 결과가 비거나 note가 있으면 그 안내대로 조건을 바꾼다.
   링크·버튼에 더해 목록에서 고르는 위젯(role=option·menuitem·menuitemradio·menuitemcheckbox·tab, 선택 팝업 트리거 role=combobox·aria-haspopup=listbox)과 체크 위젯(role=checkbox·switch·radio, 진짜 checkbox·radio — 화면에서 숨긴 칸은 대신 보여 주는 label이 tag=label·role=checkbox/radio로 나온다)도 돌려준다. 필터 대화상자(경유·항공사·가격대 같은 선택지)의 선택지도 이것으로 찾아 click_element로 누른다. states.checked가 "true"인 checkbox를 누르면 해제된다. 글자가 같은 대상도 요소마다 따로 나온다. context(대상이 든 묶음 — 행·패널·달력의 한 달 — 의 화면 글자, 표제가 있으면 앞에)로 어느 묶음의 대상인지 구분하고, states(selected·checked·pressed·expanded·current·disabled)로 지금 상태를 본다. 글자·context·states로 고를 대상을 구분할 수 없으면 임의로 누르지 않고 다시 관측하거나 사용자에게 묻는다.
   같은 버튼(다음 달·더 보기 등)을 여러 번 눌러야 하면 다시 찾지 말고 같은 id로 다시 누른다. 클릭 결과에 "화면이 바뀌었습니다"가 있어도 그 버튼이 다시 그려졌다는 뜻은 아니다.
   다만 결과 목록을 바꾸는 클릭(필터·정렬·검색·탭 전환 등) 뒤에 그 목록 안의 항목(상품·글·다른 필터 선택지)을 고를 때는 앞선 찾기 결과의 id를 쓰지 말고 다시 찾은 id만 쓴다. 클릭 결과가 "페이지 안에서 주소만 바뀌었습니다"(같은 문서 안 주소 변경)이면 목록이 다시 그려졌을 수 있으니 목록 항목은 다시 찾는다. 그 밖에 다시 찾는 것은 클릭으로 새로 나타난 대상(펼친 목록의 선택지, 새 페이지의 링크 등)이 필요하거나 "다시 찾으세요"로 실패했을 때다. 도구 호출 단계는 한 요청에 한도가 있다.

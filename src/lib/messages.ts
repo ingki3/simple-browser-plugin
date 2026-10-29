@@ -86,7 +86,26 @@ export interface ClickableElement {
   context?: string;
   // ARIA·HTML 상태(selected·checked·pressed·expanded·current·disabled). 있는 것만.
   states?: Record<string, string>;
+  // context가 200자 한도에서 잘렸으면 true(#159).
+  contextTruncated?: boolean;
 }
+
+// find_clickables 항목 모드(#161)의 목록 항목: 반복 항목(같은 모양 형제가 가장 많은 조상)의 화면 글자와 그 안의 클릭 대상.
+export interface ListItem {
+  // 항목의 화면 글자(안쪽 항목 제외, 입력값·편집 영역·숨은 글자 제외, 400자).
+  text: string;
+  textTruncated?: boolean;
+  region: PageRegion;
+  inViewport: boolean;
+  targets: Array<{ id: string; text: string; href: string; tag: string; role: string; states?: Record<string, string> }>;
+  // 8개를 넘어 싣지 않은 대상 수.
+  moreTargets?: number;
+}
+
+// content의 find_clickables 응답(모드별). 모델용 결과는 dispatcher가 만든다.
+export type FindClickablesResponse =
+  | { mode: "list"; items: ClickableElement[]; unfiltered: number }
+  | { mode: "items"; items: ListItem[]; unfiltered: number; outside: number; omittedItems: number; scanLimited: boolean };
 
 export interface LandmarkSnapshot {
   region: PageRegion;

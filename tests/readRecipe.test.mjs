@@ -121,3 +121,11 @@ test("pruneRecipes: 페이지당 개수·나이 한도, 깨진 값은 버림", (
   assert.deepEqual(pruneRecipes([null, "x", { page: 1 }], 0), []);
   assert.deepEqual(pruneRecipes(undefined, 0), []);
 });
+
+test("recipeArgs·usefulResult: find_clickables 항목 모드·matchContext(#159·#161)", () => {
+  assert.deepEqual(recipeArgs("find_clickables", { query: "원", mode: "items", matchContext: true }).args, { query: "원", mode: "items", matchContext: true });
+  // 기본값(list·false)은 남기지 않는다.
+  assert.deepEqual(recipeArgs("find_clickables", { query: "원", mode: "list", matchContext: false }).args, { query: "원" });
+  assert.equal(usefulResult("find_clickables", { items: [{ text: "상품", targets: [] }], outside: 0 }), true);
+  assert.equal(usefulResult("find_clickables", { items: [], note: "…" }), false);
+});
