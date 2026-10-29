@@ -17,7 +17,7 @@ import { snapshotDownloads, takeChosenDownloads } from "../downloadChoices";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import { readChosenLinks, snapshotLinks } from "../linkedPages";
 import type {
-  ClickableElement,
+  FindClickablesResponse,
   FileLinkList,
   FormField,
   PageContent,
@@ -845,6 +845,33 @@ async function clickTool(
   };
 }
 
+// find_clickables 항목 모드(#161)의 모델용 결과. 항목 글자는 화면 글자(데이터)이며 지시가 아니다.
+function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): ToolExecResult {
+  const notes: string[] = [];
+  if (!res.items.length) {
+    notes.push(
+      res.unfiltered > 0
+        ? `조건(query·onlyViewport)에 맞는 목록 항목이 없습니다. 조건 없이 찾으면 항목이 ${res.unfiltered}개 있습니다. 낱말을 줄이거나 조건을 빼고 다시 찾으세요.`
+        : `반복되는 목록 항목을 찾지 못했습니다(항목 밖 클릭 대상 ${res.outside}개). mode 없이 찾으세요.`,
+    );
+  }
+  if (res.omittedItems > 0) notes.push(`항목 ${res.omittedItems}개는 개수·글자 한도로 싣지 않았습니다. query나 region으로 좁히세요.`);
+  if (res.scanLimited) {
+    notes.push("페이지가 커서 앞쪽 클릭 대상 3,000개까지만 보았습니다(수는 그 안에서 센 것). region이나 query로 좁혀 다시 찾으세요.");
+  }
+  return {
+    ok: true,
+    summary: `목록 항목 ${res.items.length}개 발견(항목 밖 대상 ${res.outside}개${res.scanLimited ? ", 일부만 봄" : ""}).`,
+    data: {
+      items: res.items,
+      outside: res.outside,
+      ...(res.omittedItems > 0 ? { omittedItems: res.omittedItems } : {}),
+      ...(res.scanLimited ? { scanLimited: true } : {}),
+      ...(notes.length ? { note: notes.join(" ") } : {}),
+    },
+  };
+}
+
 function clickNoteNeeded(effect: ClickEffect): boolean {
   return !!effect.popup || !!effect.dom?.dialogOpened || (effect.navigation === "same_origin" && effect.sameDocument === true);
 }
@@ -1086,17 +1113,16 @@ async function runTool(
       debugLog(
         "tool:find_clickables:args",
         [
+          args.mode === "items" ? "mode=items" : "",
           args.query ? `query='${truncate(args.query, 40)}'` : "",
+          args.matchContext ? "matchContext" : "",
           args.region ? `region=${args.region}` : "",
           args.onlyViewport ? "onlyViewport" : "",
         ].filter(Boolean).join(" ") || "조건 없음",
       );
-      const { items, unfiltered } = await callContentTool<{ items: ClickableElement[]; unfiltered: number }>(
-        toolName,
-        parsedArgs,
-        callId,
-        turnTab,
-      );
+      const res = await callContentTool<FindClickablesResponse>(toolName, parsedArgs, callId, turnTab);
+      if (res.mode === "items") return itemsResult(res);
+      const { items, unfiltered } = res;
       // 찾기 조건 때문에 0개면 조건 없이 찾은 수를 알려 모델이 바로 조건을 넓히게 한다(#151).
       if (!items.length && unfiltered > 0) {
         return {

@@ -1,4 +1,4 @@
-import type { ClickableElement, PageRegion } from "@/lib/messages";
+import type { ClickableElement, FindClickablesResponse, ListItem, PageRegion } from "@/lib/messages";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
@@ -37,16 +37,21 @@ import {
 } from "./context";
 import {
   choiceRelation,
+  clickContextInfo,
   detectRegion,
   expandedTriggers,
   isChoice,
+  itemText,
+  parentAcross,
   recheckApproved,
   registerTarget,
   registeredInfo,
+  sameShapeSiblings,
   scanTargets,
   startEffectWatch,
   statesOf,
   takeApproved,
+  type ItemBinding,
   type Relation,
   type TargetKind,
 } from "./targets";
@@ -418,23 +423,68 @@ type FindClickablesArgs = {
   region?: PageRegion;
   onlyViewport?: boolean;
   limit?: number;
+  mode?: "list" | "items";
+  matchContext?: boolean;
 };
 
-export function findClickables(args: FindClickablesArgs): ClickableElement[] {
-  return findClickablesCounted(args).items;
+// 찾기 조건과 무관한 제외 규칙을 통과한 클릭 후보.
+interface Candidate {
+  el: HTMLElement;
+  text: string;
+  href: string;
+  tag: string;
+  role: string;
+  region: PageRegion;
+  inViewport: boolean;
+  relation: Relation | null;
 }
 
-// find_clickables 도구용: 찾은 요소와, 찾기 조건(query·region·onlyViewport)만 빼면 돌려줄 수 있었던 요소 수(#151).
-// 조건 때문에 0개가 되었을 때 모델이 바로 조건을 넓히게 수만 알린다.
-export function findClickablesCounted(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number } {
+// 후보 하나를 만든다(보이는 것·편집 영역 제외·비활성 제외·선택지는 트리거 관계가 정해질 때만). 아니면 null.
+// list·items 모드가 같은 규칙을 쓴다.
+function safeCandidate(node: HTMLElement, seen: Set<HTMLElement>, expandedRef: { list: HTMLElement[] | null }): Candidate | null {
+  // 진짜 checkbox·radio: 보이면 그 칸, 숨겼으면 대신 보여 주는 label을 누른다(그 label은 누르면 이 칸이 작동한다).
+  // 값(value)은 보내지 않는다 — 이름은 modelName(label 글자), 상태는 checked뿐이다(#43). 비활성 칸은 뺀다.
+  const toggle = isToggleInput(node) ? node : null;
+  if (toggle?.disabled) return null;
+  const el: HTMLElement | null = toggle ? (shownToUser(toggle) ? toggle : proxyLabel(toggle)) : node;
+  if (!el || seen.has(el)) return null;
+  if (!shownToUser(el)) return null;
+  // 역할로만 잡힌 새 대상에서 값 컨트롤·편집 영역은 뺀다(편집형 combobox의 입력값이 클릭 대상 글자로 나가지 않게;
+  // 그런 칸은 find_form_fields의 값 미전송 계약을 따른다). checkbox·radio는 값을 보내지 않으므로 편집 영역만 뺀다.
+  const roleOnly = !el.matches(BASE_SELECTOR);
+  if (toggle ? el.isContentEditable : roleOnly && (VALUE_CONTROL_TAGS.has(el.localName) || el.isContentEditable)) return null;
+  seen.add(el);
+  const tag = el.tagName.toLowerCase();
+  // checkbox·radio(또는 그것을 대신 누르는 label)는 칸 종류를 role로 알려 준다(구조 — input의 type).
+  const role = el.getAttribute("role") || (toggle ? toggle.type : "");
+  const href = isTag(el, "a") ? el.href : "";
+  // 모델에 돌려주는 글자(입력 칸·편집 영역·숨은 글자 제외). 검색어 필터도 이 글자로 본다(#43).
+  const text = modelName(el);
+  // 역할 기반 대상은 글자가 비어도 돌려준다(role·상태로 구분). 기존 대상은 글자·주소가 모두 비면 뺀다.
+  if (!text && !href && !roleOnly) return null;
+  // 선택지(option·menuitem*)는 펼친 트리거와의 관계를 정할 수 있을 때만 돌려준다(targets.ts의 choiceRelation).
+  let relation: Relation | null = null;
+  if (isChoice(el)) {
+    expandedRef.list ??= expandedTriggers();
+    relation = choiceRelation(CLICK_KIND, el, expandedRef.list);
+    if (!relation) return null;
+  }
+  return { el, text, href, tag, role, region: detectRegion(el), inViewport: rectInViewport(el), relation };
+}
+
+export function findClickables(args: FindClickablesArgs): ClickableElement[] {
   captureHiddenBaselines();
-  let unfiltered = 0;
-  const items = scanTargets(() => {
+  return scanTargets(() => collectClickables({ ...args, mode: "list" }).items);
+}
+
+// find_clickables 도구용(모드별 응답). list: 찾은 요소와 찾기 조건만 빼면 돌려줄 수 있었던 수(#151). items: 목록 항목(#161).
+export function findClickablesCounted(args: FindClickablesArgs): FindClickablesResponse {
+  captureHiddenBaselines();
+  if (args.mode === "items") return scanTargets(() => collectItems(args));
+  return scanTargets(() => {
     const r = collectClickables(args);
-    unfiltered = r.unfiltered;
-    return r.items;
+    return { mode: "list" as const, items: r.items, unfiltered: r.unfiltered };
   });
-  return { items, unfiltered };
 }
 
 function collectClickables(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number } {
@@ -443,16 +493,11 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
   // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
   // footer의 '주문/배송 조회'가 빠지지 않게). 낱말이 하나 이하면 예전처럼 문서 순서로 limit개에서 멈춘다.
   const ranked = terms.length > 1;
-  const found: Array<{
-    el: HTMLElement;
-    item: Omit<ClickableElement, "id">;
-    relation: Relation | null;
-    score: number;
-  }> = [];
+  const found: Array<{ c: Candidate; score: number }> = [];
   const full = () => !ranked && found.length >= limit;
   // 같은 요소만 합친다(한 문서의 querySelectorAll은 요소를 한 번씩만 준다). 글자·주소가 같아도 다른 요소면 따로
   // 돌려준다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼). 모델은 묶음 문맥(context)으로 구분한다.
-  let expanded: HTMLElement[] | null = null;
+  const expandedRef: { list: HTMLElement[] | null } = { list: null };
   // 이미 돌려준 요소(숨긴 checkbox의 label이 다른 선택자로도 잡히는 경우 등 — 한 번만).
   const seen = new Set<HTMLElement>();
   // 찾기 조건만 빼면 돌려줄 수 있었던 요소 수(조건에 맞은 것 포함).
@@ -462,50 +507,18 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
     const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
     for (const node of nodes) {
       if (full()) break;
-      // 진짜 checkbox·radio: 보이면 그 칸, 숨겼으면 대신 보여 주는 label을 누른다(그 label은 누르면 이 칸이 작동한다).
-      // 값(value)은 보내지 않는다 — 이름은 modelName(label 글자), 상태는 checked뿐이다(#43). 비활성 칸은 뺀다.
-      const toggle = isToggleInput(node) ? node : null;
-      if (toggle?.disabled) continue;
-      const el: HTMLElement | null = toggle ? (shownToUser(toggle) ? toggle : proxyLabel(toggle)) : node;
-      if (!el || seen.has(el)) continue;
-      if (!shownToUser(el)) continue;
-      // 역할로만 잡힌 새 대상에서 값 컨트롤·편집 영역은 뺀다(편집형 combobox의 입력값이 클릭 대상 글자로 나가지 않게;
-      // 그런 칸은 find_form_fields의 값 미전송 계약을 따른다). checkbox·radio는 값을 보내지 않으므로 편집 영역만 뺀다.
-      const roleOnly = !el.matches(BASE_SELECTOR);
-      if (toggle ? el.isContentEditable : roleOnly && (VALUE_CONTROL_TAGS.has(el.localName) || el.isContentEditable)) continue;
-      seen.add(el);
-
-      const inViewport = rectInViewport(el);
-      const region = detectRegion(el);
-      // 찾기 조건은 아래에서 선택지 관계까지 본 뒤 적용한다(조건 없이 돌려줄 수 있는 요소 수를 세기 위해).
-      let filtered = (args.onlyViewport && !inViewport) || (args.region && region !== args.region);
-
-      const tag = el.tagName.toLowerCase();
-      // checkbox·radio(또는 그것을 대신 누르는 label)는 칸 종류를 role로 알려 준다(구조 — input의 type).
-      const role = el.getAttribute("role") || (toggle ? toggle.type : "");
-      const href = isTag(el, "a") ? el.href : "";
-      // 모델에 돌려주는 글자(입력 칸·편집 영역·숨은 글자 제외). 검색어 필터도 이 글자로 본다(#43).
-      const text = modelName(el);
-      // 역할 기반 대상은 글자가 비어도 돌려준다(role·상태로 구분). 기존 대상은 글자·주소가 모두 비면 뺀다.
-      if (!text && !href && !roleOnly) continue;
-
+      const c = safeCandidate(node, seen, expandedRef);
+      if (!c) continue;
+      unfiltered += 1;
+      if ((args.onlyViewport && !c.inViewport) || (args.region && c.region !== args.region)) continue;
       let score = 0;
       if (terms.length) {
-        score = clickMatchScore(terms, text, href);
-        if (!score) filtered = true;
+        score = clickMatchScore(terms, c.text, c.href);
+        // matchContext: 대상이 든 묶음 글자(modelText 경로로 만든 context)에도 맞춘다(#159). 원문 글자는 쓰지 않는다(#43).
+        if (args.matchContext) score += termHits(terms, clickContextInfo(c.el).text);
+        if (!score) continue;
       }
-
-      // 선택지(option·menuitem*)는 펼친 트리거와의 관계를 정할 수 있을 때만 돌려준다(targets.ts의 choiceRelation).
-      let relation: Relation | null = null;
-      if (isChoice(el)) {
-        expanded ??= expandedTriggers();
-        relation = choiceRelation(CLICK_KIND, el, expanded);
-        if (!relation) continue;
-      }
-      unfiltered += 1;
-      if (filtered) continue;
-
-      const entry = { el, item: { text, href, tag, role, region, inViewport }, relation, score };
+      const entry = { c, score };
       if (!ranked) {
         found.push(entry);
         continue;
@@ -519,17 +532,146 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
     }
   }
 
-  const items = found.map(({ el, item, relation }) => {
-    const id = registerTarget(CLICK_KIND, el, relation);
+  const items = found.map(({ c }) => {
+    const id = registerTarget(CLICK_KIND, c.el, c.relation);
     const info = registeredInfo(id);
+    const cut = info?.modelContext ? clickContextInfo(c.el).cut : false;
     return {
       id,
-      ...item,
+      text: c.text,
+      href: c.href,
+      tag: c.tag,
+      role: c.role,
+      region: c.region,
+      inViewport: c.inViewport,
       ...(info?.modelContext ? { context: info.modelContext } : {}),
+      ...(cut ? { contextTruncated: true } : {}),
       ...(info?.states ? { states: info.states } : {}),
     };
   });
   return { items, unfiltered };
+}
+
+// 글자에 든 낱말 수(대소문자 무시).
+function termHits(terms: string[], hay: string): number {
+  const h = hay.toLowerCase();
+  let n = 0;
+  for (const t of terms) if (h.includes(t)) n += 1;
+  return n;
+}
+
+const ITEM_SCAN_MAX = 3000;
+const ITEM_TARGETS_MAX = 8;
+const ITEM_CHAR_BUDGET = 16_000;
+const ITEM_CLIMB = 10;
+
+// 대상의 목록 항목: 위로 최대 10단계(자기 포함, shadow host 넘음, body 전) 중 같은 모양 형제가 2개 이상인 조상에서
+// 그 수가 가장 큰 것(같으면 안쪽). 구조로만 정한다(키워드·class 이름을 보지 않는다). 없으면 null(항목 밖).
+function listItemOf(el: HTMLElement, cache: Map<Element, Map<string, number>>): Element | null {
+  let best: Element | null = null;
+  let bestCount = 1;
+  let cur: Element | null = el;
+  for (let depth = 0; cur && depth < ITEM_CLIMB; depth++) {
+    if (cur === cur.ownerDocument.body || cur === cur.ownerDocument.documentElement) break;
+    const n = sameShapeSiblings(cur, cache);
+    if (n >= 2 && n > bestCount) {
+      best = cur;
+      bestCount = n;
+    }
+    cur = parentAcross(cur);
+  }
+  return best;
+}
+
+function collectItems(args: FindClickablesArgs): FindClickablesResponse {
+  const terms = queryTerms(args.query);
+  const limit = Math.min(args.limit ?? 20, 60);
+  const expandedRef: { list: HTMLElement[] | null } = { list: null };
+  const seen = new Set<HTMLElement>();
+  const cands: Candidate[] = [];
+  let scanLimited = false;
+  // (i) 안전한 후보 수집. region은 후보 단계에서 거른다(상한이 그 영역에만 쓰이게). query·limit은 항목으로 묶은 뒤에.
+  outer: for (const root of getAccessibleRoots()) {
+    for (const node of root.querySelectorAll<HTMLElement>(CLICK_SELECTOR)) {
+      const c = safeCandidate(node, seen, expandedRef);
+      if (!c) continue;
+      if (args.region && c.region !== args.region) continue;
+      if (cands.length >= ITEM_SCAN_MAX) {
+        scanLimited = true;
+        break outer;
+      }
+      cands.push(c);
+    }
+  }
+  // (ii) 항목 경계.
+  const cache = new Map<Element, Map<string, number>>();
+  const groups = new Map<Element, Candidate[]>();
+  let outside = 0;
+  for (const c of cands) {
+    const item = listItemOf(c.el, cache);
+    if (!item) {
+      outside += 1;
+      continue;
+    }
+    const list = groups.get(item);
+    if (list) list.push(c);
+    else groups.set(item, [c]);
+  }
+  // 안쪽 항목: 각 항목의 조상 중 다른 항목이 있으면 그 바깥 항목 글자에서 이 항목을 뺀다.
+  const excludesOf = new Map<Element, Set<Element>>();
+  for (const item of groups.keys()) {
+    for (let a = parentAcross(item); a; a = parentAcross(a)) {
+      if (groups.has(a)) {
+        let set = excludesOf.get(a);
+        if (!set) excludesOf.set(a, (set = new Set()));
+        set.add(item);
+      }
+    }
+  }
+  // (iii) 항목 단위 글자·필터·점수.
+  const built: Array<{ item: Element; text: string; cut: boolean; cands: Candidate[]; score: number; order: number; excludes: Set<Element> }> = [];
+  let order = 0;
+  for (const [item, list] of groups) {
+    const excludes = excludesOf.get(item) ?? new Set<Element>();
+    const { text, cut } = itemText(item, excludes);
+    built.push({ item, text, cut, cands: list, score: 0, order: order++, excludes });
+  }
+  const unfiltered = built.length;
+  const kept = built.filter((b) => {
+    if (args.onlyViewport && !rectInViewport(b.item as HTMLElement)) return false;
+    if (!terms.length) return true;
+    const best = Math.max(0, ...b.cands.map((c) => clickMatchScore(terms, c.text, c.href)));
+    b.score = termHits(terms, b.text) + best;
+    return b.score > 0;
+  });
+  if (terms.length) kept.sort((a, b) => b.score - a.score || a.order - b.order);
+  // (iv) 제한·예산. (v) 남은 항목의 대상만 id 발급(선택지 관계 전달, 항목 결합).
+  const items: ListItem[] = [];
+  let used = 0;
+  for (const b of kept) {
+    if (items.length >= limit) break;
+    const ordered = terms.length
+      ? [...b.cands].sort((x, y) => clickMatchScore(terms, y.text, y.href) - clickMatchScore(terms, x.text, x.href))
+      : b.cands;
+    const shown = ordered.slice(0, ITEM_TARGETS_MAX);
+    const size = b.text.length + shown.reduce((n, c) => n + c.text.length + c.href.length, 0);
+    if (items.length && used + size > ITEM_CHAR_BUDGET) break;
+    used += size;
+    const binding: ItemBinding = { ref: new WeakRef(b.item), excludes: [...b.excludes].map((e) => new WeakRef(e)), text: b.text };
+    items.push({
+      text: b.text,
+      ...(b.cut ? { textTruncated: true } : {}),
+      region: detectRegion(b.item),
+      inViewport: rectInViewport(b.item as HTMLElement),
+      targets: shown.map((c) => {
+        const id = registerTarget(CLICK_KIND, c.el, c.relation, binding);
+        const states = registeredInfo(id)?.states;
+        return { id, text: c.text, href: c.href, tag: c.tag, role: c.role, ...(states ? { states } : {}) };
+      }),
+      ...(b.cands.length > ITEM_TARGETS_MAX ? { moreTargets: b.cands.length - ITEM_TARGETS_MAX } : {}),
+    });
+  }
+  return { mode: "items", items, unfiltered, outside, omittedItems: kept.length - items.length, scanLimited };
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
@@ -541,14 +683,14 @@ export function clickElement(
   callId: string,
   trusted?: string,
 ): { clicked: boolean; text: string; href: string; effectToken: string; trusted?: TrustedPrepare } {
-  const { el, info, relation } = takeApproved(args.id, callId, CLICK_KIND.prefix);
+  const { el, info, relation, item } = takeApproved(args.id, callId, CLICK_KIND.prefix);
   const text = info.modelName ?? "";
   const href = isTag(el, "a") ? el.href : "";
   const effectToken = `${callId}:${Date.now()}`;
 
   if (trusted) {
     scrollToCenter(el);
-    const changed = recheckApproved(CLICK_KIND, el, info, relation);
+    const changed = recheckApproved(CLICK_KIND, el, info, relation, false, false, item);
     if (changed) {
       startEffectWatch(effectToken, el, changed);
       return { clicked: true, text, href, effectToken, trusted: { mode: "aborted" } };
@@ -569,7 +711,7 @@ export function clickElement(
     }
     if (reason || !point) {
       const why = reason ?? "누를 점 없음";
-      setTimeout(() => scriptClick(el, info, relation, effectToken, false), 0);
+      setTimeout(() => scriptClick(el, info, relation, effectToken, false, item), 0);
       return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
     }
     startEffectWatch(effectToken, el);
@@ -586,7 +728,7 @@ export function clickElement(
       trusted,
       el,
       point,
-      (phase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase === "click" ? "up" : phase), relation),
+      (phase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase === "click" ? "up" : phase), relation, false, false, item),
       (check) => (toggleEl && toggle ? withToggleReverted(toggleEl, toggle, check) : check()),
     );
     return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
@@ -594,7 +736,7 @@ export function clickElement(
 
   // Defer actual click so the content-script response can fly back to the
   // background before a potential navigation tears down this context.
-  setTimeout(() => scriptClick(el, info, relation, effectToken, true), 0);
+  setTimeout(() => scriptClick(el, info, relation, effectToken, true, item), 0);
 
   return { clicked: true, text, href, effectToken };
 }
@@ -673,6 +815,7 @@ function scriptClick(
   relation: Relation | null,
   effectToken: string,
   scroll: boolean,
+  item?: ItemBinding,
 ): void {
   if (scroll) scrollToCenter(el);
   try {
@@ -682,7 +825,7 @@ function scriptClick(
   }
   // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
   // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
-  const changed = recheckApproved(CLICK_KIND, el, info, relation);
+  const changed = recheckApproved(CLICK_KIND, el, info, relation, false, false, item);
   // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
   startEffectWatch(effectToken, el, changed);
   if (changed) return;

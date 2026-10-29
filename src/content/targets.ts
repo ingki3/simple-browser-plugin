@@ -19,7 +19,7 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { groupLabel, modelText, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo } from "./modelText";
+import { groupLabel, inProtectedArea, modelText, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -54,11 +54,49 @@ interface Entry {
   kind: TargetKind;
   ref: WeakRef<HTMLElement>;
   base: TargetInfo;
-  approved: { callId: string; info: TargetInfo; relation: Relation | null } | null;
+  approved: { callId: string; info: TargetInfo; relation: Relation | null; item?: ItemBinding } | null;
   // 선택지(option·menuitem*)면 찾을 때 확인한 트리거 관계. 승인 카드 때 지금 관계와 같아야 한다.
   relation: Relation | null;
   // 이 항목을 마지막으로 돌려준 탐색 회차. 한도를 넘어 정리할 때 이번 탐색 결과는 지우지 않는다.
   gen: number;
+  // find_clickables 항목 모드(#161)로 돌려준 대상이면 그 목록 항목(모델이 보고 고른 글자). 검사 때 항목이 그대로여야 한다.
+  item?: ItemBinding;
+}
+
+// 목록 항목 결합: 항목 요소, 항목 글자에서 뺀 안쪽 항목 요소들, 돌려준 항목 글자(itemText로 만든 것).
+export interface ItemBinding {
+  ref: WeakRef<Element>;
+  excludes: WeakRef<Element>[];
+  text: string;
+}
+
+export const ITEM_TEXT_MAX = 400;
+
+// 목록 항목의 모델용 글자: 안쪽 항목 요소를 뺀 화면 글자(modelText 경로 — 입력값·편집 영역·숨은 글자 제외, #43).
+// 출력과 검사가 같은 함수를 쓴다.
+export function itemText(item: Element, excludes: ReadonlySet<Element>): { text: string; cut: boolean } {
+  return modelTextInfo(item, ITEM_TEXT_MAX, { exclude: excludes });
+}
+
+// 합성 트리(shadow host 넘음)에서 anc가 el의 조상(또는 자신)인지.
+function containsAcross(anc: Element, el: Element): boolean {
+  for (let cur: Element | null = el; cur; cur = parentAcross(cur)) if (cur === anc) return true;
+  return false;
+}
+
+// 항목 결합이 지금도 그대로인지. 다르면 이유(모델에 그대로 보여 줄 고정 문구), 같으면 null.
+function itemDifference(item: ItemBinding | undefined, el: HTMLElement): string | null {
+  if (!item) return null;
+  const host = item.ref.deref();
+  if (!host || !host.isConnected || !containsAcross(host, el)) return "대상이 든 목록 항목이 다시 그려지거나 사라짐";
+  const excludes = new Set<Element>();
+  for (const r of item.excludes) {
+    const ex = r.deref();
+    if (!ex || !ex.isConnected || !containsAcross(host, ex)) return "목록 항목의 구성이 바뀜";
+    excludes.add(ex);
+  }
+  if (itemText(host, excludes).text !== item.text) return "대상이 든 목록 항목의 내용이 찾은 뒤 바뀜";
+  return null;
 }
 
 // content script가 새로 뜰 때마다(페이지 이동) 바뀐다. 이전 페이지의 id가 새 페이지의 다른 요소를 가리키지 않게 한다.
@@ -268,11 +306,25 @@ const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role='heading'], caption, leg
 // 모델에 돌려주는 묶음 문맥: 행 글자를 modelText로(입력 칸·편집 영역·숨은 글자 제외) 만들고, 묶음의 접근성 이름이나
 // 묶음 안 첫 표제가 있으면 앞에 둔다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼을 구분하게).
 function modelContextOf(row: Element | null, opts: { substitute?: ReadonlyMap<Element, string> } = {}): string {
-  if (!row) return "";
-  const text = modelText(row, MODEL_CONTEXT_MAX, opts);
-  if (!text) return "";
+  return modelContextInfoOf(row, opts).text;
+}
+
+// modelContextOf와 같은 글자와, 한도에서 잘렸는지(cut — 행 글자 순회가 끝나지 않았거나 표제를 붙인 뒤 한도를 넘음, #159).
+function modelContextInfoOf(row: Element | null, opts: { substitute?: ReadonlyMap<Element, string> } = {}): { text: string; cut: boolean } {
+  if (!row) return { text: "", cut: false };
+  if (inProtectedArea(row)) return { text: "", cut: false };
+  const info = subtreeTextInfo(row, MODEL_CONTEXT_MAX, opts);
+  if (!info.text) return { text: "", cut: false };
   const heading = groupHeading(row);
-  return cleanModelText(heading && !text.startsWith(heading) ? `${heading} · ${text}` : text, MODEL_CONTEXT_MAX);
+  const joined = heading && !info.text.startsWith(heading) ? `${heading} · ${info.text}` : info.text;
+  const text = cleanModelText(joined, MODEL_CONTEXT_MAX);
+  return { text, cut: info.cut || joined.replace(/\s+/g, " ").trim().length > MODEL_CONTEXT_MAX };
+}
+
+// 클릭 대상의 모델용 묶음 문맥과 잘림 여부(find_clickables의 contextTruncated·matchContext, #159). 등록 기술의 modelContext와
+// 같은 함수로 만든다.
+export function clickContextInfo(el: HTMLElement): { text: string; cut: boolean } {
+  return modelContextInfoOf(rowElement(el)?.row ?? null);
 }
 
 const GROUP_CLIMB = 6;
@@ -400,6 +452,25 @@ function shapeOf(el: Element): string {
   for (const k of el.children) kids.add(k.localName);
   return `${el.localName}[${role}](${[...kids].sort().join(",")})`;
 }
+
+// 목록 항목 경계(#161)용: el의 부모 안에서 el과 같은 태그·같은 모양(shapeOf) 형제 수(자기 포함). 부모가 없거나 body면 0.
+// cache는 한 번의 찾기 동안 부모마다 모양별 수를 기억한다(큰 목록에서 같은 형제를 거듭 세지 않게).
+export function sameShapeSiblings(el: Element, cache: Map<Element, Map<string, number>>): number {
+  const parent = el.parentElement;
+  if (!parent || parent === el.ownerDocument.body) return 0;
+  let counts = cache.get(parent);
+  if (!counts) {
+    counts = new Map();
+    for (const sib of parent.children) {
+      const key = `${sib.localName}|${shapeOf(sib)}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    cache.set(parent, counts);
+  }
+  return counts.get(`${el.localName}|${shapeOf(el)}`) ?? 0;
+}
+
+export { parentAcross, containsAcross };
 
 const LIST_MIN_ITEMS = 3;
 const LIST_ITEM_TAGS = new Set(["li", "tr", "dt", "dd", "article", "option"]);
@@ -673,7 +744,7 @@ export function scanTargets<T>(fn: () => T): T {
 }
 
 // relation: 선택지(option·menuitem*)면 찾을 때 확인한 트리거 관계(choiceRelation).
-export function registerTarget(kind: TargetKind, el: HTMLElement, relation: Relation | null = null): string {
+export function registerTarget(kind: TargetKind, el: HTMLElement, relation: Relation | null = null, item?: ItemBinding): string {
   let ids = idsByKind.get(kind.prefix);
   if (!ids) {
     ids = new WeakMap();
@@ -686,6 +757,8 @@ export function registerTarget(kind: TargetKind, el: HTMLElement, relation: Rela
     // 다시 찾을 때 글자 등이 바뀌었으면 새 기술로 갱신한다(모델은 지금 결과를 보고 고른다).
     entry.base = base;
     entry.relation = relation;
+    // 항목 모드가 아닌 찾기로 다시 돌려주면 항목 결합을 지운다(그 결과에는 항목 글자를 보여 주지 않았다).
+    entry.item = item;
     entry.approved = null;
     entry.gen = generation;
     return existing;
@@ -693,7 +766,7 @@ export function registerTarget(kind: TargetKind, el: HTMLElement, relation: Rela
   counter += 1;
   const id = `${kind.prefix}${counter}-${TOKEN}`;
   ids.set(el, id);
-  registry.set(id, { kind, ref: new WeakRef(el), base, relation, approved: null, gen: generation });
+  registry.set(id, { kind, ref: new WeakRef(el), base, relation, approved: null, gen: generation, ...(item ? { item } : {}) });
   return id;
 }
 
@@ -778,6 +851,9 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
   checkVisible(entry, el, entry.base.modelName || id, false);
+  // 항목 모드로 찾은 대상이면 그 목록 항목이 찾을 때와 같아야 한다(모델이 고른 근거, #161).
+  const itemDiff = itemDifference(entry.item, el);
+  if (itemDiff) throw new Error(`대상 '${id}'의 ${itemDiff}. 다시 찾으세요.`);
   // 선택지면 지금 트리거 관계가 찾을 때와 같아야 한다. 승인은 지금 관계를 기준으로 남긴다.
   let relation: Relation | null = null;
   if (entry.relation) {
@@ -790,7 +866,7 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
     { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el), ...entry.kind.risk?.(el) },
     relation,
   );
-  entry.approved = { callId, info, relation };
+  entry.approved = { callId, info, relation, ...(entry.item ? { item: entry.item } : {}) };
   const row = rowElement(el)?.row;
   const texts = row ? rowTextNodes(row) : null;
   if (row && texts) {
@@ -957,7 +1033,7 @@ export function takeApproved(
   callId: string,
   prefix: string,
   inFlight = false,
-): { el: HTMLElement; info: TargetInfo; relation: Relation | null } {
+): { el: HTMLElement; info: TargetInfo; relation: Relation | null; item?: ItemBinding } {
   const known = entryOf(id, prefix);
   const approved = known.approved;
   if (!approved || approved.callId !== callId) {
@@ -982,8 +1058,10 @@ export function takeApproved(
   if (added) throw new RiskAddedError(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
   const relationMoved = relationChanged(entry.kind, el, approved.relation);
   if (relationMoved) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${relationMoved}). 다시 찾으세요.`);
+  const itemMoved = itemDifference(approved.item, el);
+  if (itemMoved) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${itemMoved}). 다시 찾으세요.`);
   checkVisible(entry, el, approved.info.modelName || id, true);
-  return { el, info: approved.info, relation: approved.relation };
+  return { el, info: approved.info, relation: approved.relation, ...(approved.item ? { item: approved.item } : {}) };
 }
 
 // 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
@@ -1173,6 +1251,8 @@ export function recheckApproved(
   inFlight = false,
   // 실행이 끝난 뒤 반영을 확인하는 보고(무엇을 실행할지 정하지 않음). 해시만 바뀐 기준 주소는 같게 본다(#88).
   afterWrite = false,
+  // 항목 모드로 찾은 대상의 목록 항목 결합(#161). 누르기 직전에도 항목이 그대로여야 한다.
+  item?: ItemBinding,
 ): string | null {
   if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
   const pinned = inFlight ? pinnedRowOf(el) : null;
@@ -1183,6 +1263,8 @@ export function recheckApproved(
   if (added) return added;
   const relationMoved = relationChanged(kind, el, relation);
   if (relationMoved) return relationMoved;
+  const itemMoved = itemDifference(item, el);
+  if (itemMoved) return itemMoved;
   if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";
   return null;
 }
@@ -1201,6 +1283,8 @@ export function peekApproved(id: string, callId: string, prefix: string): void {
   }
   const added = riskAdded(entry.kind, el, approved.info);
   if (added) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${added}). 다시 찾으세요.`);
+  const itemMoved = itemDifference(approved.item, el);
+  if (itemMoved) throw new Error(`승인한 뒤 대상이 바뀌어 실행하지 않았습니다(${itemMoved}). 다시 찾으세요.`);
 }
 
 // 손 넘기기(직접 조작할 사이트)용: 이 호출에서 확인한 승인 대상이 아직 같으면 그 요소를 돌려준다. 승인을 쓰지 않고,
