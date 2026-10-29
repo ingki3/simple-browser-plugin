@@ -144,4 +144,14 @@ export default [
       expect(res?.result?.results?.[0]?.applied && res.result.results[0].listOpened, `채움(${JSON.stringify(res)} / 찾기 ${JSON.stringify(ff)} / stopped=${r.stoppedAtCard})`);
     },
   },
+  {
+    name: "숨긴 패널에 남은 펼침 상태는 다른 자동완성 칸 입력을 막지 않는다",
+    pages: { "/h": routePage().replace("<p id=out></p></main>", '<div hidden><input role=combobox aria-expanded=true aria-label="숨은 칸"></div><p id=out></p></main>') },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findF, { fill: "출발지", value: "운중" }, { text: "끝" }], { path: "/h" });
+      const res = okResult(r, "fill_form_fields");
+      expect(res.results[0].applied, `채움(${JSON.stringify(res)})`);
+    },
+  },
 ];

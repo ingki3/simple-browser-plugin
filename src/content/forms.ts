@@ -1628,7 +1628,8 @@ export async function fillFormFields(
         });
         continue;
       }
-      if (ac && peek && expandedTriggers().some((t) => otherOpenList(t, peek as HTMLElement))) {
+      // 화면에 보이는 펼친 트리거만 센다(숨긴 패널에 남은 펼침 상태는 사용자가 닫을 수 없다).
+      if (ac && peek && expandedTriggers().some((t) => t.getClientRects().length > 0 && otherOpenList(t, peek as HTMLElement))) {
         results.push({
           id: f.id,
           label: peekLabel,

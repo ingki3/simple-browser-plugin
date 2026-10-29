@@ -138,6 +138,8 @@ export async function makeOfferResult(
   } catch {
     return { reason: "tab_gone" };
   }
+  // 탭 정보를 읽는 사이 문서가 바뀌었으면(확인한 문서가 있을 때) 만들지 않는다 — 바뀐 페이지의 주소·제목을 쓰지 않게.
+  if (expectDocumentId && (await topDocumentId(tabId)) !== expectDocumentId) return { reason: "changed" };
   const url = tab.url ?? "";
   if (tab.incognito) return { reason: "incognito" };
   if (!url || url === startUrl) return { reason: "same_page" };
@@ -163,6 +165,8 @@ export async function makeOfferResult(
   // 페이지 글자는 지금(턴이 끝난 화면) 읽어 둔다. 카드를 늦게 열면 탭이 다른 화면일 수 있다.
   // 경고가 있는 주소는 초안을 묻지 않으므로 읽지 않는다.
   const page = context && !offer.warning ? await screenText(tabId, documentId, url) : "";
+  // 화면 글자를 읽은 뒤에도 같은 문서여야 한다(확인한 문서가 있을 때).
+  if (expectDocumentId && (await topDocumentId(tabId)) !== expectDocumentId) return { reason: "changed" };
   offers.set(offer.offerId, offer);
   const titleFromUrl = !normalizeName(tab.title ?? "");
   contexts.set(offer.offerId, {
