@@ -522,14 +522,18 @@ function fullInfo(
 }
 
 // ---------------------------------------------------------------------------
-// 선택지와 그것을 펼친 트리거의 관계(#43 B). 소속을 포함 구조나 글자로 추론하지 않는다.
+// 선택지와 그것을 펼친 트리거의 관계(#43 B). 글자로 추론하지 않는다. 포함 구조로 정하는 것은 아래 nearest뿐이며(엄격한 증명 조건),
+// 그 관계의 선택지는 늘 승인 카드로 묻는다.
 // - linked: 펼쳐진(aria-expanded=true) 트리거(combobox·aria-haspopup 요소) 중 aria-controls/aria-owns로 선택지나
 //   선택지를 담은 팝업(가장 가까운 listbox·menu 조상, 없으면 선택지 자신)을 가리키는 것이 정확히 하나.
 //   직접 연결이 없으면, 펼친 트리거들의 참조 중 팝업을 감싼 요소가 정확히 하나이고 그것이 aria-controls이며 그 안을 모두 볼 수
 //   있고 다른 팝업·트리거가 없을 때(Google 항공편의 공항 추천 목록) 그 트리거와 연결로 본다(wrapperLink — 명시적 참조를
 //   한 단계 따라갈 뿐, 소속을 포함 구조로 추론하지 않는다).
 // - unlinked: 그런 연결이 없고, 접근 가능한 모든 문서에서 펼쳐진 트리거가 0개나 1개.
-// - 그 밖(펼쳐진 트리거가 둘 이상인데 연결 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
+// - nearest: 연결이 없고 펼쳐진 트리거가 둘 이상일 때, 선택지의 팝업에서 위로 6단계 안에 트리거를 품는 첫 묶음(조상)이 트리거를
+//   정확히 하나(그것이 펼쳐짐)와 그 팝업 하나만 담고 다 볼 수 있으면(숨은 트리 없음) 그 트리거(출발·도착처럼 칸마다 목록을
+//   붙이는 자동완성, #네이버 지도). 구조로 추정한 관계라 실행 방식과 관계없이 늘 승인 카드로 묻는다(approvalDecision).
+// - 그 밖(위로도 정할 수 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
 // 관계는 찾을 때·승인 카드 때·실행 직전·스크롤과 포커스 뒤에 다시 계산해 같아야 한다.
 // ---------------------------------------------------------------------------
 
@@ -537,7 +541,7 @@ const CHOICE_ROLES = new Set(["option", "menuitem", "menuitemradio", "menuitemch
 const POPUP_ROLES = new Set(["listbox", "menu", "menubar"]);
 
 export interface Relation {
-  mode: "linked" | "unlinked";
+  mode: "linked" | "unlinked" | "nearest";
   via: "controls" | "owns" | null;
   trigger: WeakRef<HTMLElement> | null;
   triggerBase: TargetInfo | null;
@@ -548,6 +552,15 @@ export interface Relation {
 
 export function isChoice(el: HTMLElement): boolean {
   return CHOICE_ROLES.has(implicitRole(el));
+}
+
+// 자동완성 칸(#자동완성): 트리거(role=combobox·aria-haspopup)이면서 글자를 넣는 입력 칸(텍스트 계열 input·textarea).
+// 입력 순서 규칙·목록 열림 관측에 쓴다. 펼침·관계 계산과 같은 isTrigger를 쓴다.
+const TEXT_INPUT_TYPES = new Set(["", "text", "search", "email", "tel", "url"]);
+export function isAutocompleteField(el: Element): boolean {
+  if (!isTrigger(el)) return false;
+  if (el.localName === "textarea") return true;
+  return el.localName === "input" && TEXT_INPUT_TYPES.has(((el as HTMLInputElement).getAttribute("type") ?? "").trim().toLowerCase());
 }
 
 function isTrigger(el: Element): boolean {
@@ -687,7 +700,42 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
   const wrapped = wrapperLink(expanded, popup);
   if (wrapped) return make("linked", wrapped, "controls");
   if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null);
+  const near = nearestTrigger(popup, expanded);
+  if (near) return make("nearest", near, null);
   return null;
+}
+
+const NEAREST_CLIMB = 6;
+
+// 선택지 팝업과 같은 묶음 안의 유일한 트리거(관계 nearest의 증명 조건). 정할 수 없으면 null.
+function nearestTrigger(popup: Element, expanded: HTMLElement[]): HTMLElement | null {
+  let group: Element | null = popup.parentElement;
+  for (let depth = 0; group && depth < NEAREST_CLIMB; depth++, group = group.parentElement) {
+    const doc = group.ownerDocument;
+    // 문서 맨 위까지 올라가면(목록을 body 끝에 붙인 포털 등) 정하지 않는다.
+    if (group === doc.body || group === doc.documentElement) return null;
+    // 안을 모두 볼 수 없으면(shadow root·슬롯·프레임) 정하지 않는다.
+    if (hasHiddenTree(group)) return null;
+    const all = Array.from(group.querySelectorAll("*"));
+    if (all.some(hasHiddenTree)) return null;
+    const triggers = all.filter(isTrigger);
+    if (!triggers.length) continue;
+    if (triggers.length !== 1) return null;
+    const t = triggers[0] as HTMLElement;
+    if (!expanded.includes(t) || popup.contains(t) || nestedTrigger(t)) return null;
+    // 묶음 안의 팝업은 이 팝업 하나뿐이어야 한다(다른 목록·대화상자가 있으면 어느 것을 연 칸인지 정할 수 없다).
+    for (const p of all) {
+      if (p === popup || popup.contains(p)) continue;
+      if (POPUP_ROLES.has((p.getAttribute("role") ?? "").trim().toLowerCase()) || p.localName === "dialog") return null;
+    }
+    return t;
+  }
+  return null;
+}
+
+// 선택지의 관계가 가리키는 트리거(모델에 보일 listFor 라벨용). 없으면 null.
+export function relationTrigger(relation: Relation | null): HTMLElement | null {
+  return relation?.trigger?.deref() ?? null;
 }
 
 // 두 관계가 같은지. 다르면 이유.
@@ -1307,6 +1355,8 @@ interface EffectWatch {
   dialogsBefore: Set<Element>;
   // 클릭 직전 재확인에서 멈췄으면 그 이유(클릭하지 않음).
   aborted: string | null;
+  // 스크립트로 누를 때 대상이 덮여 있었으면 그 이유(진단 — 클릭은 했다).
+  covered: string | null;
   // 대상이 같은 출처 iframe 안이면 그 프레임과 클릭 당시 문서. 프레임만 이동하면 탭 주소는 그대로라 따로 본다.
   frame: { el: Element; doc: Document } | null;
   timer: ReturnType<typeof setTimeout>;
@@ -1339,13 +1389,14 @@ function newDialogText(before: Set<Element>): { text: string; truncated: boolean
   return info.cut ? { text: info.text, truncated: true } : { text: info.text, truncated: false };
 }
 
-export function startEffectWatch(token: string, target: HTMLElement, aborted: string | null = null): void {
+export function startEffectWatch(token: string, target: HTMLElement, aborted: string | null = null, covered: string | null = null): void {
   const doc = target.ownerDocument;
   const frameEl = doc !== document ? doc.defaultView?.frameElement : null;
   const watch: EffectWatch = {
     observers: [],
     mutations: 0,
     aborted,
+    covered,
     frame: frameEl ? { el: frameEl, doc } : null,
     dialogsBefore: new Set(openDialogs()),
     timer: setTimeout(() => stopEffectWatch(token), WATCH_MAX_MS),
@@ -1385,6 +1436,7 @@ export function readEffect(
   dialog?: { text: string; truncated: boolean };
   aborted: string | null;
   frameNavigated: boolean;
+  covered?: string;
 } | null {
   const watch = stopEffectWatch(token);
   if (!watch) return null;
@@ -1402,5 +1454,6 @@ export function readEffect(
     ...(dialog ? { dialog } : {}),
     aborted: watch.aborted,
     frameNavigated,
+    ...(watch.covered ? { covered: watch.covered } : {}),
   };
 }

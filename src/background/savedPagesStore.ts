@@ -104,20 +104,42 @@ export async function makeOffer(
   startUrl: string | null,
   context?: OfferContext,
 ): Promise<PageOffer | null> {
-  if (!(await getSettings()).rememberPages) return null;
+  const r = await makeOfferResult(tabId, startUrl, context);
+  return "offer" in r ? r.offer : null;
+}
+
+// 저장 제안을 못 만든 이유(remember_page 도구가 고정 문구로 알린다).
+export type OfferRefusal = "disabled" | "tab_gone" | "incognito" | "same_page" | "not_web" | "secret";
+
+export const OFFER_REFUSAL_TEXT: Record<OfferRefusal, string> = {
+  disabled: "설정에서 '페이지 기억하기'가 꺼져 있어 기억할 수 없습니다. 사용자에게 설정에서 켜 달라고 안내하세요.",
+  tab_gone: "기억할 탭을 찾지 못했습니다(탭이 닫혔을 수 있음).",
+  incognito: "시크릿 창의 페이지는 기억하지 않습니다.",
+  same_page: "이 페이지는 기억할 수 없습니다.",
+  not_web: "웹 주소(http·https)가 아닌 페이지는 기억할 수 없습니다.",
+  secret: "주소나 제목에 자동 로그인으로 넣은 값이 보여 기억하지 않습니다.",
+};
+
+export async function makeOfferResult(
+  tabId: number,
+  startUrl: string | null,
+  context?: OfferContext,
+): Promise<{ offer: PageOffer } | { reason: OfferRefusal }> {
+  if (!(await getSettings()).rememberPages) return { reason: "disabled" };
   // 문서를 먼저 고정한 뒤 탭 주소·제목을 읽는다. 그 사이 새로고침·이동하면 고정한 문서가 없어져 페이지 글자를 읽지 않는다.
   const documentId = context ? await topDocumentId(tabId) : null;
   let tab: chrome.tabs.Tab;
   try {
     tab = await chrome.tabs.get(tabId);
   } catch {
-    return null;
+    return { reason: "tab_gone" };
   }
   const url = tab.url ?? "";
-  if (tab.incognito || !url || url === startUrl) return null;
+  if (tab.incognito) return { reason: "incognito" };
+  if (!url || url === startUrl) return { reason: "same_page" };
   const parts = splitUrl(url);
   const site = siteOf(url);
-  if (!parts || !site) return null;
+  if (!parts || !site) return { reason: "not_web" };
   const list = await load();
   // 저장 링크가 가득 차 있으면 가장 오래 쓰지 않은 링크. 카드가 최종 템플릿이 이미 저장된 것인지(savedTemplates) 보고
   // 지워질지 알린다(자리를 고르면 템플릿이 바뀌므로 카드에서 다시 판단한다).
@@ -133,7 +155,7 @@ export async function makeOffer(
     savedTemplates: list.map((l) => templateText(l.template)),
   };
   // 제목·주소에 자동 로그인으로 넣은 값이 보이면 기억하기를 제안하지 않는다(저장 링크는 브라우저를 다시 켠 뒤에도 남아 모델 후보로 간다).
-  if (await containsSecret({ title: offer.title, url: offer.url })) return null;
+  if (await containsSecret({ title: offer.title, url: offer.url })) return { reason: "secret" };
   // 페이지 글자는 지금(턴이 끝난 화면) 읽어 둔다. 카드를 늦게 열면 탭이 다른 화면일 수 있다.
   // 경고가 있는 주소는 초안을 묻지 않으므로 읽지 않는다.
   const page = context && !offer.warning ? await screenText(tabId, documentId, url) : "";
@@ -156,7 +178,7 @@ export async function makeOffer(
     offers.delete(oldest);
     contexts.delete(oldest);
   }
-  return offer;
+  return { offer };
 }
 
 

@@ -9,7 +9,7 @@ import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
 import { discardLinkCall, setChosenLinks } from "./linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "./downloadChoices";
-import { candidatesMessage, makeOffer } from "./savedPagesStore";
+import { candidatesMessage, makeOffer, makeOfferResult, OFFER_REFUSAL_TEXT } from "./savedPagesStore";
 import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
 import { providerAdapter, type ChatStream, type ProviderId } from "@/lib/providers";
@@ -184,6 +184,8 @@ describe_page 결과를 읽는 법:
   같은 버튼(다음 달·더 보기 등)을 여러 번 눌러야 하면 다시 찾지 말고 같은 id로 다시 누른다. 클릭 결과에 "화면이 바뀌었습니다"가 있어도 그 버튼이 다시 그려졌다는 뜻은 아니다.
   다만 결과 목록을 바꾸는 클릭(필터·정렬·검색·탭 전환 등) 뒤에 그 목록 안의 항목(상품·글·다른 필터 선택지)을 고를 때는 앞선 찾기 결과의 id를 쓰지 말고 다시 찾은 id만 쓴다. 클릭 결과가 "페이지 안에서 주소만 바뀌었습니다"(같은 문서 안 주소 변경)이면 목록이 다시 그려졌을 수 있으니 목록 항목은 다시 찾는다. 그 밖에 다시 찾는 것은 클릭으로 새로 나타난 대상(펼친 목록의 선택지, 새 페이지의 링크 등)이 필요하거나 "다시 찾으세요"로 실패했을 때다. 도구 호출 단계는 한 요청에 한도가 있다.
   드롭다운·필터 패널 같은 위젯을 펼쳤으면(트리거의 states.expanded가 "true") 고를 것을 고른 뒤 닫거나 결과를 확인하고 다음으로 간다. 필요 없는 위젯은 펼치지 않는다.
+- 자동완성 칸(출발지·도착지·주소·검색어 추천처럼 글자를 넣으면 목록이 뜨는 칸 — 판단은 네가)은 한 번에 하나씩: 그 칸 하나만 fill_form_fields로 채우고 → find_clickables로 그 칸의 선택지(결과의 listFor가 그 칸)를 골라 누르고 → 다음 칸. 목록이 열린 채 다른 칸을 채우거나 버튼을 누르지 않는다(목록이 덮거나 선택지의 주인을 정할 수 없게 된다). 채우기 결과에 listOpened나 "한 번에 하나씩"이 있으면 그 안내대로 한다. find_clickables 결과의 note에 "선택지 N개는 … 확인하지 못해 뺐습니다"가 있으면 열린 다른 목록을 먼저 처리한다. 클릭 결과에 "열린 목록(또는 대화상자)이 대상을 덮고 있음"이 있으면 그 목록에서 고르거나 닫은 뒤 다시 누른다.
+- 사용자가 지금 보고 있는 페이지를 기억·저장해 달라고 하면 remember_page를 부른다. 저장 카드가 뜨고 사용자가 저장을 눌러야 저장되니, 답에서 카드에서 저장해 달라고 알린다.
 - 목록에서 고르는 칸(상품 옵션, 자동완성, 날짜 고르기)이 find_form_fields에 없으면: find_clickables로 트리거(role=combobox·aria-haspopup=listbox, 또는 입력 칸에 글자를 채운 뒤 뜨는 목록)를 열고 → find_clickables로 다시 찾아 그 결과의 role=option 항목을 누른다(트리거를 누른 뒤 예전 결과의 선택지 id를 쓰지 않는다). 펼쳐진 목록이 여러 개라 어느 위젯의 선택지인지 정할 수 없으면 선택지가 결과에 나오지 않는다. 그때는 다른 목록을 닫거나 사용자에게 알린다.
   고른 뒤에는 그 묶음을 다시 관측(find_clickables의 states·트리거 글자, 또는 describe_page)해 반영됐는지 확인한다. 반영되지 않았으면 같은 클릭을 반복하지 않고 지원 한계를 사용자에게 알린다.
 - 목록에서 여러 항목을 골라 처리할 때(메일 몇 통을 휴지통으로, 게시글 몇 개 삭제):
@@ -326,7 +328,7 @@ export type TurnOutcome = { outcome: "ok" | "aborted"; finalText: string } | { o
 export interface AgentSink {
   postMessage(msg: BgToPanel): void;
 }
-const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task"]);
+const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page"]);
 const REMOTE_REFUSED_NOTE =
   "이 요청은 원격(텔레그램·MCP)에서 왔다. 승인이 필요한 동작은 원격 요청에서 하지 않는다. 더 시도하지 말고, 지금까지 한 일과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
 const REMOTE_STOP_NOTE =
@@ -393,6 +395,8 @@ export class ChatAgent {
   private pendingTaskCall: string | null = null;
   // 이번 요청에서 사용자가 보낸 글(작업 맡기기 카드에 원문으로 보인다).
   private turnRequest = "";
+  // 이 턴에 remember_page로 저장 카드를 띄운 주소(턴 끝 자동 제안이 같은 주소면 띄우지 않는다).
+  private rememberedUrls: { turn: number; urls: Set<string> } = { turn: -1, urls: new Set() };
   // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 주소 글자 그대로,
   // 양식 제출 주소는 그 action).
   // 클릭·입력의 자동 실행 판정에서 이 주소들의 개인정보 주소 신호만 면제한다(사이트 경계·다른 신호는 그대로).
@@ -1009,7 +1013,8 @@ export class ChatAgent {
           query: userText,
           answer: this.lastAnswerText(),
         }).catch(() => null);
-        if (offer && !this.isStale(turn)) this.send({ kind: "page_save_offer", offer });
+        const already = this.rememberedUrls.turn === turn && !!offer && this.rememberedUrls.urls.has(offer.url);
+        if (offer && !already && !this.isStale(turn)) this.send({ kind: "page_save_offer", offer });
       }
       endTurn(this.isStale(turn) ? "aborted" : "ok");
     } catch (err) {
@@ -1328,6 +1333,7 @@ export class ChatAgent {
     }
     if (toolName === "confirm_task") return this.confirmTask(call);
     if (toolName === "schedule_repeat_task") return this.scheduleRepeat(call);
+    if (toolName === "remember_page") return this.rememberPage(call);
     const auth = await this.authorizeCall(call);
     if (auth.kind === "stale") return false;
     if (auth.kind === "done") return true;
@@ -1685,6 +1691,47 @@ export class ChatAgent {
       }),
     });
     call.record(toolName, argsKey, true, `repeat:${task.id}`, summary);
+    return true;
+  }
+
+  // "이 페이지 기억해줘": 지금 도구가 동작하는 탭(팝업·새 탭을 따라가는 중이면 그 탭)의 저장 카드를 펼친 채 띄운다.
+  // 저장은 사용자가 카드에서 저장을 누를 때만 된다(페이지 글의 지시로 모델이 불러도 저장되지 않는다). 외부 본문 보호가 켜진
+  // 대화면 초안을 자동으로 묻지 않는다(사용자가 "다시 채우기"를 누를 때만 보낸다).
+  private async rememberPage(call: ToolCallContext): Promise<boolean> {
+    const { turn, turnTab, callId, toolName, argsKey, failCall } = call;
+    const tabId = (await currentToolTab(turnTab))?.tabId ?? null;
+    if (this.isStale(turn)) return false;
+    if (tabId === null) {
+      logToolFail(toolName, OFFER_REFUSAL_TEXT.tab_gone);
+      failCall(OFFER_REFUSAL_TEXT.tab_gone, argsKey);
+      return true;
+    }
+    const res = await makeOfferResult(tabId, null, { query: this.turnRequest, answer: "" }).catch(() => ({ reason: "tab_gone" as const }));
+    if (this.isStale(turn)) return false;
+    if ("reason" in res) {
+      const msg = OFFER_REFUSAL_TEXT[res.reason];
+      logToolFail(toolName, msg);
+      failCall(msg, argsKey);
+      return true;
+    }
+    if (this.rememberedUrls.turn !== turn) this.rememberedUrls = { turn, urls: new Set() };
+    this.rememberedUrls.urls.add(res.offer.url);
+    const autoDraft = !this.externalContent;
+    this.send({ kind: "page_save_offer", offer: res.offer, open: true, autoDraft });
+    const summary = "이 페이지의 저장 카드를 띄움(사용자가 저장을 눌러야 저장)";
+    this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
+    this.history.push({
+      role: "tool",
+      tool_call_id: callId,
+      name: toolName,
+      content: this.toolContent(turnTab, {
+        result: {
+          shown: true,
+          note: `저장 카드를 띄웠습니다${autoDraft ? "(이름·용도·입력 자리는 자동으로 채워집니다)" : ""}. 아직 저장되지 않았습니다. 사용자가 카드에서 내용을 확인하고 저장을 눌러야 저장된다고 알려 주세요.`,
+        },
+      }),
+    });
+    call.record(toolName, argsKey, true, "remember:shown", summary);
     return true;
   }
 

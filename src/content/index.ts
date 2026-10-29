@@ -32,7 +32,8 @@ async function execTool(toolName: ToolName, args: unknown, callId: string, trust
     case "find_form_fields":
       return findFormFields((args ?? {}) as { onlyVisible?: boolean });
     case "fill_form_fields":
-      return fillFormFields(args as { fills: Array<{ id: string; value: string }> }, callId);
+      // 모델의 입력 도구는 자동완성 칸 순서 규칙을 쓴다(자동 로그인은 쓰지 않는다).
+      return fillFormFields(args as { fills: Array<{ id: string; value: string }> }, callId, undefined, { autocompleteOrder: true });
     case "list_page_images":
       return listPageImages((args ?? {}) as { minWidth?: number });
     case "list_file_links":

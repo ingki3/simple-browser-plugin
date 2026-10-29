@@ -34,15 +34,27 @@ export default [
     },
   },
   {
-    name: "대화상자 안 다른 메뉴 버튼이 연 메뉴의 항목은 바깥 버튼에 연결하지 않는다",
+    name: "대화상자 안 다른 메뉴 버튼이 연 메뉴의 항목은 바깥 버튼에 연결하지 않는다(같은 묶음의 그 버튼에 추정 연결 — 늘 카드)",
     pages: { "/d": dialogMenu },
     async run(h) {
       await h.settings({ autoApprove: true });
-      const r = await h.turn([findC(), { text: "끝" }], { path: "/d" });
-      const found = okResult(r, "find_clickables");
+      const seen = [];
+      const r = await h.turn([findC(), { click: "선택 항목" }], {
+        path: "/d",
+        onCard: async (card) => {
+          seen.push(await card.innerText());
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      const found = r.tools.find((t) => t.name === "find_clickables").result;
       expect(Array.isArray(found), `목록이어야 한다(${JSON.stringify(found)})`);
       expect(found.some((c) => c.text === "관리"), `같은 페이지의 버튼은 나와야 한다(${JSON.stringify(found)})`);
-      expect(!found.some((c) => c.role === "menuitem"), `메뉴 항목이 나오면 안 된다(${JSON.stringify(found)})`);
+      // 바깥 '관리'가 아니라 같은 묶음 안의 '삭제'(실제로 메뉴를 연 버튼)에 연결한다(nearest).
+      const item = found.find((c) => c.role === "menuitem");
+      expect(item && item.listFor === "삭제", `메뉴 항목은 '삭제' 칸으로(${JSON.stringify(item)})`);
+      // 추정 연결이라 자동 실행이어도 카드로 묻고, 트리거('삭제')의 되돌리기 어려운 동작 경고가 함께 보인다.
+      expect(seen.length === 1 && seen[0].includes("구조로 추정"), `카드(${seen[0]})`);
+      expect(r.out === "", `누르지 않음(out='${r.out}')`);
     },
   },
   {

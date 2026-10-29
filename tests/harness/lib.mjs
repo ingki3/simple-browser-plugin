@@ -265,10 +265,13 @@ async function installMockModel(sw) {
       const step = globalThis.__steps.shift();
       // delayMs: 이 단계를 답하기 전에 기다린다(페이지가 스스로 넘어가는 등 시간이 지나야 하는 상황).
       if (step?.delayMs) await new Promise((r) => setTimeout(r, step.delayMs));
-      const list = Array.isArray(data) ? data : [];
+      // find_clickables는 안내가 있으면 { items, note } 객체로 온다.
+      const list = Array.isArray(data) ? data : Array.isArray(data?.items) && data.items.every((x) => typeof x?.id === "string") ? data.items : [];
       const byLabel = (l) => list.find((f) => (f.label ?? "").includes(l))?.id ?? "f-missing";
       let out = { text: "끝" };
       if (step?.fill) out = { tool: "fill_form_fields", args: { fills: [{ id: byLabel(step.fill), value: step.value }] } };
+      // fillMany: 여러 칸을 한 호출로([{ label, value }]).
+      else if (step?.fillMany) out = { tool: "fill_form_fields", args: { fills: step.fillMany.map((f) => ({ id: byLabel(f.label), value: f.value })) } };
       else if (step?.fillType) {
         const id = list.find((f) => f.type === step.fillType)?.id ?? "f-missing";
         out = { tool: "fill_form_fields", args: { fills: [{ id, value: step.value }] } };
@@ -288,6 +291,11 @@ async function installMockModel(sw) {
           /* ignore */
         }
         out = { tool: "click_element", args: { id } };
+      }
+      else if (step?.clickOption) {
+        // 선택지 글자 + 그 목록을 연 칸(listFor)으로 고른다(자동완성 칸이 여럿일 때).
+        const hit = list.find((c) => c.text === step.clickOption && (!step.listFor || (c.listFor ?? "").includes(step.listFor)));
+        out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       }
       else if (step?.clickItem) {
         // find_clickables 항목 모드(#161) 결과에서 글자가 든 항목 → 그 안의 대상(target 글자 일부, 없으면 첫 대상)을 누른다.

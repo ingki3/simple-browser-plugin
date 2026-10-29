@@ -289,7 +289,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "find_clickables",
     description:
-      "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link, 그리고 목록에서 고르는 위젯의 role=option·menuitem*·tab·combobox·aria-haspopup=listbox 트리거, 체크 위젯 role=checkbox·switch·radio, 진짜 checkbox·radio — 화면에서 숨긴 칸은 연결된 보이는 label을 tag=label로 — 와 그 role)를 문서 순서로 반환한다. 필터 대화상자의 선택지(경유·항공사 등)도 여기서 찾아 click_element로 누른다. 글자가 같아도 요소마다 따로 반환하며, context(대상이 든 묶음의 화면 글자)와 states(selected·checked·expanded 등)로 구분한다. 펼친 트리거가 여럿이라 어느 위젯의 것인지 정할 수 없는 선택지는 반환하지 않는다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다. 찾기 조건 때문에 0개면 결과가 {items: [], note}로 오고 note에 조건 없이 찾을 수 있는 요소 수가 있다. 그때는 같은 조건을 반복하지 말고 낱말을 줄이거나 조건을 뺀다.",
+      "현재 활성 탭에서 클릭 가능한 요소(링크 a, button, role=button, role=link, 그리고 목록에서 고르는 위젯의 role=option·menuitem*·tab·combobox·aria-haspopup=listbox 트리거, 체크 위젯 role=checkbox·switch·radio, 진짜 checkbox·radio — 화면에서 숨긴 칸은 연결된 보이는 label을 tag=label로 — 와 그 role)를 문서 순서로 반환한다. 필터 대화상자의 선택지(경유·항공사 등)도 여기서 찾아 click_element로 누른다. 글자가 같아도 요소마다 따로 반환하며, context(대상이 든 묶음의 화면 글자)와 states(selected·checked·expanded 등)로 구분한다. 선택지는 그 목록을 연 칸(트리거)을 listFor로 알려 준다. 펼친 트리거가 여럿이라 어느 위젯의 것인지 구조로도 정할 수 없는 선택지는 반환하지 않고 note에 뺀 수를 알린다. 각 요소는 `region` 라벨(main/article/nav/aside/header/footer/other)과 `inViewport`(현재 화면에 보이는지) 정보를 포함해, 사이드바/헤더 같은 UI 크롬과 본문 콘텐츠를 구분할 수 있다. click_element 호출 전 반드시 먼저 호출한다. 사용자가 '첫 번째 아티클' 같은 콘텐츠 클릭을 요청하면 `region=main` 또는 `region=article`로 먼저 시도해 본문 영역만 본다. 뉴스레터 메일처럼 본문 속 링크가 목표라면 main/article 영역이 비어 있을 수 있으므로, 이 때는 필터 없이 다시 조회해 본문 텍스트(예: '읽기', 'Read more', 기사 제목)가 포함된 링크를 고른다. 찾기 조건 때문에 0개면 결과가 {items: [], note}로 오고 note에 조건 없이 찾을 수 있는 요소 수가 있다. 그때는 같은 조건을 반복하지 말고 낱말을 줄이거나 조건을 뺀다.",
     parameters: {
       type: "object",
       properties: {
@@ -471,6 +471,12 @@ export const functionDeclarations: FunctionDeclaration[] = [
       },
       required: ["summary", "risks"],
     },
+  },
+  {
+    name: "remember_page",
+    description:
+      "사용자가 지금 보고 있는 페이지를 기억(저장)해 달라고 할 때 그 페이지의 저장 카드를 띄운다('이 페이지 기억해줘'). 카드에 이름·용도·입력 자리가 일반적인 형태로 채워지고, 사용자가 확인하고 저장을 눌러야 저장된다(이 도구만으로는 저장되지 않는다). 팝업·새 탭을 따라가는 중이면 그 탭의 페이지다. 결과대로 사용자에게 카드에서 저장해 달라고 알린다. 사용자가 요청하지 않았는데 부르지 않는다.",
+    parameters: { type: "object", properties: {} },
   },
   {
     name: "schedule_repeat_task",

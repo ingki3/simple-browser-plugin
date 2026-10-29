@@ -94,4 +94,21 @@ export default [
       }
     },
   },
+  {
+    name: "새 탭을 따라가는 중이면 remember_page는 그 탭 페이지의 저장 카드를 띄운다",
+    pages: { "/shop": LINK_PAGE, "/booking": BOOKING_PAGE },
+    async run(h) {
+      await closeExtraTabs(h);
+      await h.settings({ autoApprove: true });
+      await h.sw.evaluate(() => { globalThis.__draftDelayMs = 0; globalThis.__draft = { name: "예약", purpose: "예약", params: [] }; });
+      try {
+        await h.turn([findC, { click: "예약" }, { tool: "remember_page", args: {} }, { text: "끝" }], { path: "/shop" });
+        await h.panel.waitForTimeout(800);
+        const url = await h.panel.locator(".page-offer.open .page-offer-url").innerText();
+        expect(url.includes("/booking"), `따라간 탭 주소(${url})`);
+      } finally {
+        await closeExtraTabs(h);
+      }
+    },
+  },
 ];

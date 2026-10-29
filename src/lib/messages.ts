@@ -38,7 +38,9 @@ export type ToolName =
   // '처음에 승인 받고 끝까지 실행'(runMode task, #123): 할 일과 위험을 보이고 사용자에게 작업을 한 번 맡긴다.
   | "confirm_task"
   // 반복 작업 등록(#138): 늘 승인 카드로 묻고, 승인하면 정한 간격으로 페이지를 확인한다.
-  | "schedule_repeat_task";
+  | "schedule_repeat_task"
+  // "이 페이지 기억해줘": 지금 보고 있는 페이지의 저장 카드를 띄운다(저장은 사용자가 카드에서 누를 때만).
+  | "remember_page";
 
 // 실행 방식(#123). ask: 모든 동작에 승인 후 실행. auto: 페이지 이동·클릭·입력을 묻지 않고 실행(위험한 동작은 묻는다).
 // task: 처음에 작업을 한 번 승인받고, 이 대화가 끝날 때까지 승인 카드 없이 실행한다.
@@ -88,6 +90,8 @@ export interface ClickableElement {
   states?: Record<string, string>;
   // context가 200자 한도에서 잘렸으면 true(#159).
   contextTruncated?: boolean;
+  // 선택지면 그 목록을 연 칸(트리거)의 라벨(이름 또는 "칸 n"). 칸이 여럿일 때 구분한다.
+  listFor?: string;
 }
 
 // find_clickables 항목 모드(#161)의 목록 항목: 반복 항목(같은 모양 형제가 가장 많은 조상)의 화면 글자와 그 안의 클릭 대상.
@@ -97,15 +101,15 @@ export interface ListItem {
   textTruncated?: boolean;
   region: PageRegion;
   inViewport: boolean;
-  targets: Array<{ id: string; text: string; href: string; tag: string; role: string; states?: Record<string, string> }>;
+  targets: Array<{ id: string; text: string; href: string; tag: string; role: string; states?: Record<string, string>; listFor?: string }>;
   // 8개를 넘어 싣지 않은 대상 수.
   moreTargets?: number;
 }
 
 // content의 find_clickables 응답(모드별). 모델용 결과는 dispatcher가 만든다.
 export type FindClickablesResponse =
-  | { mode: "list"; items: ClickableElement[]; unfiltered: number }
-  | { mode: "items"; items: ListItem[]; unfiltered: number; outside: number; omittedItems: number; scanLimited: boolean };
+  | { mode: "list"; items: ClickableElement[]; unfiltered: number; unrelatedChoices: number }
+  | { mode: "items"; items: ListItem[]; unfiltered: number; outside: number; omittedItems: number; scanLimited: boolean; unrelatedChoices: number };
 
 export interface LandmarkSnapshot {
   region: PageRegion;
@@ -313,7 +317,8 @@ export type BgToPanel =
   | { kind: "error"; message: string; detail?: string; action?: "settings" | "usage"; provider?: ProviderId }
   | { kind: "info"; title: string; message: string }
   // 턴을 마친 뒤 탭이 다른 화면에 있으면 "이 페이지 기억하기" 제안(저장은 사용자가 이름을 확인하고 누를 때만).
-  | { kind: "page_save_offer"; offer: PageOfferData }
+  // open: 카드를 펼친 채로 보인다(remember_page). autoDraft: 펼칠 때 초안을 자동으로 묻는다(외부 본문 보호 중이면 false).
+  | { kind: "page_save_offer"; offer: PageOfferData; open?: boolean; autoDraft?: boolean }
   | { kind: "settings_warning"; message: string };
 
 // "이 페이지 기억하기" 카드(#30·#86). params: 주소의 쿼리 값(카드에서 고정·자리·빼기를 고른다). evicts: 저장 링크가 가득 차

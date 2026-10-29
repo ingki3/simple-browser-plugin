@@ -46,6 +46,7 @@ import {
   recheckApproved,
   registerTarget,
   registeredInfo,
+  relationTrigger,
   sameShapeSiblings,
   scanTargets,
   startEffectWatch,
@@ -57,7 +58,7 @@ import {
 } from "./targets";
 import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
 import type { TrustedPrepare } from "@/lib/trustedClick";
-import { armTopGuard, choosePoint, type RecheckPhase } from "./trustedClick";
+import { armTopGuard, choosePoint, OVERLAY_COVER, type RecheckPhase } from "./trustedClick";
 
 const BASE_SELECTOR =
   'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]';
@@ -441,7 +442,8 @@ interface Candidate {
 
 // 후보 하나를 만든다(보이는 것·편집 영역 제외·비활성 제외·선택지는 트리거 관계가 정해질 때만). 아니면 null.
 // list·items 모드가 같은 규칙을 쓴다.
-function safeCandidate(node: HTMLElement, seen: Set<HTMLElement>, expandedRef: { list: HTMLElement[] | null }): Candidate | null {
+// 선택지인데 펼친 트리거와의 관계를 정하지 못해 뺀 것은 "unrelated"(수를 알린다, 리뷰 #2).
+function safeCandidate(node: HTMLElement, seen: Set<HTMLElement>, expandedRef: { list: HTMLElement[] | null }): Candidate | null | "unrelated" {
   // 진짜 checkbox·radio: 보이면 그 칸, 숨겼으면 대신 보여 주는 label을 누른다(그 label은 누르면 이 칸이 작동한다).
   // 값(value)은 보내지 않는다 — 이름은 modelName(label 글자), 상태는 checked뿐이다(#43). 비활성 칸은 뺀다.
   const toggle = isToggleInput(node) ? node : null;
@@ -467,7 +469,7 @@ function safeCandidate(node: HTMLElement, seen: Set<HTMLElement>, expandedRef: {
   if (isChoice(el)) {
     expandedRef.list ??= expandedTriggers();
     relation = choiceRelation(CLICK_KIND, el, expandedRef.list);
-    if (!relation) return null;
+    if (!relation) return "unrelated";
   }
   return { el, text, href, tag, role, region: detectRegion(el), inViewport: rectInViewport(el), relation };
 }
@@ -483,11 +485,11 @@ export function findClickablesCounted(args: FindClickablesArgs): FindClickablesR
   if (args.mode === "items") return scanTargets(() => collectItems(args));
   return scanTargets(() => {
     const r = collectClickables(args);
-    return { mode: "list" as const, items: r.items, unfiltered: r.unfiltered };
+    return { mode: "list" as const, items: r.items, unfiltered: r.unfiltered, unrelatedChoices: r.unrelated };
   });
 }
 
-function collectClickables(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number } {
+function collectClickables(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number; unrelated: number } {
   const limit = Math.min(args.limit ?? 50, 200);
   const terms = queryTerms(args.query);
   // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
@@ -502,12 +504,18 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
   const seen = new Set<HTMLElement>();
   // 찾기 조건만 빼면 돌려줄 수 있었던 요소 수(조건에 맞은 것 포함).
   let unfiltered = 0;
+  // 관계를 정하지 못해 뺀 선택지 수(이번에 본 범위).
+  let unrelated = 0;
   for (const root of getAccessibleRoots()) {
     if (full()) break;
     const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
     for (const node of nodes) {
       if (full()) break;
       const c = safeCandidate(node, seen, expandedRef);
+      if (c === "unrelated") {
+        unrelated += 1;
+        continue;
+      }
       if (!c) continue;
       unfiltered += 1;
       if ((args.onlyViewport && !c.inViewport) || (args.region && c.region !== args.region)) continue;
@@ -532,8 +540,10 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
     }
   }
 
+  const labels = listLabels(found.map(({ c }) => c.relation));
   const items = found.map(({ c }) => {
     const id = registerTarget(CLICK_KIND, c.el, c.relation);
+    const listFor = labels.get(relationTrigger(c.relation) as HTMLElement);
     const info = registeredInfo(id);
     const cut = info?.modelContext ? clickContextInfo(c.el).cut : false;
     return {
@@ -547,9 +557,36 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
       ...(info?.modelContext ? { context: info.modelContext } : {}),
       ...(cut ? { contextTruncated: true } : {}),
       ...(info?.states ? { states: info.states } : {}),
+      ...(listFor ? { listFor } : {}),
     };
   });
-  return { items, unfiltered };
+  return { items, unfiltered, unrelated };
+}
+
+// 선택지마다 어느 칸(트리거)의 목록인지 모델에 보일 라벨(#자동완성): 트리거의 이름(modelName — 입력값 제외 #43). 같은 이름이
+// 둘 이상이거나 이름이 없으면 문서 순서 번호를 붙인다("출발지", "칸 2"). 표시용이며 판정은 내부 관계로 한다.
+function listLabels(relations: Array<Relation | null>): Map<HTMLElement, string> {
+  const triggers: HTMLElement[] = [];
+  for (const r of relations) {
+    const t = relationTrigger(r);
+    if (t && !triggers.includes(t)) triggers.push(t);
+  }
+  const out = new Map<HTMLElement, string>();
+  if (triggers.length < 2) {
+    // 펼친 칸이 하나면 라벨이 없어도 구분할 필요가 없다. 이름이 있으면 그대로 보인다.
+    for (const t of triggers) {
+      const name = modelName(t, 40);
+      if (name) out.set(t, name);
+    }
+    return out;
+  }
+  triggers.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  const names = triggers.map((t) => modelName(t, 40));
+  triggers.forEach((t, i) => {
+    const dup = !names[i] || names.filter((n) => n === names[i]).length > 1;
+    out.set(t, dup ? `${names[i] ? `${names[i]} ` : ""}칸 ${i + 1}` : names[i]);
+  });
+  return out;
 }
 
 // 글자에 든 낱말 수(대소문자 무시).
@@ -590,10 +627,15 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
   const seen = new Set<HTMLElement>();
   const cands: Candidate[] = [];
   let scanLimited = false;
+  let unrelated = 0;
   // (i) 안전한 후보 수집. region은 후보 단계에서 거른다(상한이 그 영역에만 쓰이게). query·limit은 항목으로 묶은 뒤에.
   outer: for (const root of getAccessibleRoots()) {
     for (const node of root.querySelectorAll<HTMLElement>(CLICK_SELECTOR)) {
       const c = safeCandidate(node, seen, expandedRef);
+      if (c === "unrelated") {
+        unrelated += 1;
+        continue;
+      }
       if (!c) continue;
       if (args.region && c.region !== args.region) continue;
       if (cands.length >= ITEM_SCAN_MAX) {
@@ -648,6 +690,7 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
   // (iv) 제한·예산. (v) 남은 항목의 대상만 id 발급(선택지 관계 전달, 항목 결합).
   const items: ListItem[] = [];
   let used = 0;
+  const labels = listLabels(cands.map((c) => c.relation));
   for (const b of kept) {
     if (items.length >= limit) break;
     const ordered = terms.length
@@ -666,12 +709,13 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
       targets: shown.map((c) => {
         const id = registerTarget(CLICK_KIND, c.el, c.relation, binding);
         const states = registeredInfo(id)?.states;
-        return { id, text: c.text, href: c.href, tag: c.tag, role: c.role, ...(states ? { states } : {}) };
+        const listFor = labels.get(relationTrigger(c.relation) as HTMLElement);
+        return { id, text: c.text, href: c.href, tag: c.tag, role: c.role, ...(states ? { states } : {}), ...(listFor ? { listFor } : {}) };
       }),
       ...(b.cands.length > ITEM_TARGETS_MAX ? { moreTargets: b.cands.length - ITEM_TARGETS_MAX } : {}),
     });
   }
-  return { mode: "items", items, unfiltered, outside, omittedItems: kept.length - items.length, scanLimited };
+  return { mode: "items", items, unfiltered, outside, omittedItems: kept.length - items.length, scanLimited, unrelatedChoices: unrelated };
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.
@@ -711,7 +755,8 @@ export function clickElement(
     }
     if (reason || !point) {
       const why = reason ?? "누를 점 없음";
-      setTimeout(() => scriptClick(el, info, relation, effectToken, false, item), 0);
+      // 덮여서 스크립트로 누르면 그 이유를 결과(effect.dom.covered)에도 싣는다(모델이 목록을 먼저 처리하게).
+      setTimeout(() => scriptClick(el, info, relation, effectToken, false, item, reason ?? null), 0);
       return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
     }
     startEffectWatch(effectToken, el);
@@ -816,6 +861,8 @@ function scriptClick(
   effectToken: string,
   scroll: boolean,
   item?: ItemBinding,
+  // 실제 입력 경로가 이미 본 덮개 이유. 없으면(스크립트 클릭 경로) 누르기 바로 앞에서 본다.
+  coveredHint?: string | null,
 ): void {
   if (scroll) scrollToCenter(el);
   try {
@@ -826,8 +873,15 @@ function scriptClick(
   // 스크롤·포커스 처리기가 대상을 바꿨을 수 있으니 누르기 바로 앞에서 다시 본다. 같은 실행 흐름 안이라
   // 이 확인과 클릭 사이에는 페이지 코드가 끼어들지 않는다. 바뀌었으면 누르지 않고 결과로 알린다.
   const changed = recheckApproved(CLICK_KIND, el, info, relation, false, false, item);
+  // 스크롤·포커스 뒤 누르기 바로 앞에서 대상이 덮였는지 본다(진단 — 여러 점 판정, top 문서만). 덮였어도 지금처럼 누른다.
+  let covered: string | null = coveredHint === undefined ? null : coveredHint;
+  if (coveredHint === undefined && !changed) {
+    const chosen = choosePoint(el);
+    if (chosen && !chosen.ok && !chosen.inside) covered = chosen.reason;
+  }
+  // 덮개가 열린 목록·대화상자일 때만 결과에 싣는다(일반 덮개는 대개 무해한 장식이라 지금처럼 조용히).
   // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
-  startEffectWatch(effectToken, el, changed);
+  startEffectWatch(effectToken, el, changed, covered === OVERLAY_COVER ? covered : null);
   if (changed) return;
   try {
     el.click();

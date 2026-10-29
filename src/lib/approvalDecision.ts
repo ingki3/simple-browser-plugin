@@ -28,6 +28,8 @@ export interface ApprovalPreview {
   grantScope?: string;
   personalUrlKeys?: string[];
   autoBlockIfUrlsAllowed?: string | null;
+  // 선택지와 칸의 연결을 구조로 추정한 클릭(관계 nearest) — 맡긴 작업으로도 건너뛰지 않는다.
+  inferredChoice?: boolean;
 }
 
 export interface ApprovalInput {
@@ -151,7 +153,8 @@ export function decideApproval(input: ApprovalInput): ApprovalDecision {
     block: preview.alwaysAsk ?? preview.grantBlock ?? null,
     scope: preview.grantScope ?? "",
   });
-  const taskCovered = input.taskMode && taskCovers(toolName);
+  // 선택지와 칸의 연결을 구조로 추정한 클릭(nearest)은 맡긴 작업으로도 건너뛰지 않는다(늘 카드).
+  const taskCovered = input.taskMode && taskCovers(toolName) && !preview.inferredChoice;
   const base = { autoMode, block, linkOffer, linkGranted, urlOffer, pageSite, chatGrant, taskCovered };
   return { ...base, mode: modeOf(handOff, base) };
 }

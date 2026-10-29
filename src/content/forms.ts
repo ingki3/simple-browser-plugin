@@ -19,6 +19,9 @@ import { clickRiskOf } from "./clickables";
 import { inProtectedArea, modelName, optionHidden, selectProxyOf, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
+  expandedTriggers,
+  isAutocompleteField,
+  registeredElement,
   noteChoiceWritten,
   noteChosenOption,
   noteWritten,
@@ -1564,6 +1567,8 @@ export interface FillResult {
   label: string;
   applied: boolean;
   note?: string;
+  // 자동완성 칸이 입력 뒤 펼쳐져 있었는지(관측한 상태 — 선택 확정이 아니다).
+  listOpened?: boolean;
 }
 
 // 페이지가 값을 고치거나 되돌리는 처리(마이크로태스크·타이머·다시 그리기)가 끝날 틈을 준 뒤 최종 값을 본다.
@@ -1572,10 +1577,13 @@ const SETTLE_MS = 150;
 // 승인 카드에서 확인한 칸들이 모두 그대로일 때만 채운다. 하나라도 바뀌었으면 아무것도 채우지 않는다.
 // extraGuard: 칸마다 쓰기 직전과 input 처리기가 돈 뒤(change 전)에 부르는 추가 검사(자동 로그인이 양식의 제출 방법·주소가 그대로인지
 // 보려고). 이유를 돌려주면 그 칸과 남은 칸을 채우지 않는다.
+// opts.autocompleteOrder(fill_form_fields 도구만): 자동완성 칸은 한 호출에 하나만, 그 뒤 칸은 쓰지 않고, 다른 칸의 목록이 열려
+// 있으면 자동완성 칸을 쓰지 않는다(목록이 겹쳐 선택지의 주인을 정할 수 없게 되지 않게). 자동 로그인(sign_in)은 쓰지 않는다.
 export async function fillFormFields(
   args: { fills: Array<{ id: string; value: string }> },
   callId: string,
   extraGuard?: () => string | null,
+  opts: { autocompleteOrder?: boolean } = {},
 ): Promise<{ filledCount: number; results: FillResult[] }> {
   const ids = args.fills.map((f) => f.id);
   if (new Set(ids).size !== ids.length) throw new Error("같은 칸 id가 두 번 들어 있습니다. 칸마다 한 번만 지정하세요.");
@@ -1591,10 +1599,43 @@ export async function fillFormFields(
   let halted = false;
   // 이 묶음에서 칸에 쓰기를 시작했는지(그 뒤의 칸은 입력 도중의 비교로 확인한다).
   let touched = false;
+  // 이 호출에서 자동완성 칸을 썼는지(그 뒤 칸은 쓰지 않는다).
+  let autocompleteWritten = false;
   for (const f of args.fills) {
     if (halted) {
       results.push({ id: f.id, label: "", applied: false, note: "앞 칸에서 위험 변화가 보여 채우지 않았습니다. 다시 찾으세요." });
       continue;
+    }
+    if (opts.autocompleteOrder) {
+      // 승인을 쓰지 않고 요소만 본다(건너뛴 칸은 다음 호출에서 다시 승인한다).
+      let peek: HTMLElement | null = null;
+      try {
+        peek = registeredElement(f.id, FIELD_KIND.prefix);
+      } catch {
+        peek = null;
+      }
+      const ac = !!peek && isAutocompleteField(peek);
+      const peekLabel = peek && isFieldElement(peek) ? FIELD_KIND.modelName(peek) : "";
+      if (autocompleteWritten) {
+        results.push({
+          id: f.id,
+          label: peekLabel,
+          applied: false,
+          note: ac
+            ? "자동완성 칸은 한 번에 하나씩 채웁니다. 앞 칸의 목록에서 선택지를 고른 뒤 이 칸을 다시 채우세요"
+            : "앞 자동완성 칸의 목록을 먼저 처리하세요(목록에서 고른 뒤 이 칸을 다시 채우세요)",
+        });
+        continue;
+      }
+      if (ac && peek && expandedTriggers().some((t) => t !== peek)) {
+        results.push({
+          id: f.id,
+          label: peekLabel,
+          applied: false,
+          note: "다른 칸의 목록(드롭다운·자동완성)이 열려 있습니다. 그 목록에서 먼저 고르거나 닫은 뒤 이 칸을 채우세요",
+        });
+        continue;
+      }
     }
     let el: HTMLElement;
     let info: TargetInfo;
@@ -1773,6 +1814,7 @@ export async function fillFormFields(
     const result: FillResult = { id: f.id, label, applied: false };
     results.push(result);
     written.push({ el, info, value: f.value, actual, result });
+    if (opts.autocompleteOrder && isAutocompleteField(el)) autocompleteWritten = true;
   }
 
   await new Promise((r) => setTimeout(r, SETTLE_MS));
@@ -1798,6 +1840,12 @@ export async function fillFormFields(
       result.note = "눌렀지만 체크 상태가 요청과 다릅니다(페이지가 클릭을 취소했거나 되돌림)";
     } else {
       result.note = "페이지가 값을 바꾸거나 받아들이지 않았습니다(최대 길이·서식 등)";
+    }
+    // 자동완성 칸이 펼쳐져 있으면 알린다(값 확정에는 목록의 선택지를 골라야 할 수 있다). 관측한 상태일 뿐 선택 확정이 아니다.
+    if (opts.autocompleteOrder && el.isConnected && isAutocompleteField(el) && (el.getAttribute("aria-expanded") ?? "").trim().toLowerCase() === "true") {
+      result.listOpened = true;
+      const opened = "자동완성 목록이 열렸습니다. 값을 확정하려면 find_clickables로 이 칸의 선택지(listFor가 이 칸)를 고르세요";
+      result.note = result.note ? `${result.note}. ${opened}` : opened;
     }
   }
   return { filledCount: results.filter((r) => r.applied).length, results };
