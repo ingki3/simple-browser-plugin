@@ -57,6 +57,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   confirm_task: LOCAL_READ,
   // 반복 작업 등록(#138): 늘 카드로 묻는다. 브라우저에 남아 페이지를 다시 여는 활동을 만든다.
   schedule_repeat_task: ACTION,
+  // 저장 카드만 띄운다(페이지를 바꾸지 않고 모델 값을 밖으로 보내지 않음). 저장은 사용자가 카드에서 누를 때만.
+  remember_page: LOCAL_READ,
 };
 
 // 외부 본문 보호가 켜진 대화에서 이 도구 호출에 승인 카드가 필요한지(관측 전용이 아니면 모두).

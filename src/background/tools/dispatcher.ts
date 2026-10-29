@@ -94,6 +94,9 @@ export interface ToolExecResult {
   data: unknown;
 }
 
+const INFERRED_CHOICE = "이 선택지가 어느 칸의 목록인지는 화면 구조로 추정했습니다";
+const clipText = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+
 export interface ToolPreview {
   summary: string;
   details?: unknown;
@@ -104,6 +107,8 @@ export interface ToolPreview {
   // 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않고 늘 카드로 묻는 이유
   // (#62 되돌리기 어려운 동작 — 삭제·스팸). 없으면 null.
   alwaysAsk?: string | null;
+  // 선택지가 어느 칸의 목록인지 구조로 추정한 클릭(관계 nearest). 맡긴 작업(task)으로도 건너뛰지 않고 카드로 묻는다.
+  inferredChoice?: boolean;
   // 클릭 대상 링크의 주소(자동 실행 사이트 경계 판정용).
   linkHrefs?: string[];
   // 입력할 값들(사이트 경계 판정용).
@@ -373,12 +378,19 @@ export async function buildToolPreview(
       const card = clickCard(info);
       // 되돌리기 어려운 동작(삭제·스팸)은 자동 실행이 꺼져 있어도 카드에 경고를 붙인다(#62).
       const destructive = destructiveClickBlock(sides);
+      // 선택지가 어느 칸의 목록인지 구조로 추정했으면(nearest) 실행 방식과 관계없이 카드에 알리고 늘 묻는다.
+      const inferred = info.popup === "nearest";
+      const warnings = [
+        ...(destructive ? [`⚠ ${destructive}입니다. 누르기 전에 대상을 확인하세요.`] : []),
+        ...(inferred ? [`⚠ ${INFERRED_CHOICE}. 고르려는 칸(${clipText(info.trigger?.modelName ?? "", 40) || "펼쳐진 칸"})의 선택지가 맞는지 확인하세요.`] : []),
+      ];
       return {
         ...card,
-        ...(destructive ? { details: `${card.details}\n⚠ ${destructive}입니다. 누르기 전에 대상을 확인하세요.` } : {}),
+        ...(warnings.length ? { details: [card.details, ...warnings].join("\n") } : {}),
         autoBlock: autoApproveBlock("click_element", sides),
         ...personalUrlFields("click_element", sides),
-        alwaysAsk: destructive,
+        alwaysAsk: destructive ?? (inferred ? INFERRED_CHOICE : null),
+        ...(inferred ? { inferredChoice: true } : {}),
         // 트리거가 있는 선택지는 링크 이동 허락(grantableLink) 대상이 아니다.
         ...(info.trigger ? {} : { clickTarget: info }),
         linkHrefs: sides
@@ -845,6 +857,11 @@ async function clickTool(
   };
 }
 
+// 관계를 확인하지 못해 뺀 선택지 안내(자동완성·드롭다운 목록이 여럿 열린 경우).
+function unrelatedNote(n: number): string {
+  return `선택지 ${n}개는 어느 칸·버튼이 연 목록인지 화면 구조로 확인하지 못해 뺐습니다(이번에 본 범위). 펼쳐진 다른 목록(드롭다운·자동완성)을 닫거나 그 목록에서 먼저 고른 뒤 다시 찾으세요.`;
+}
+
 // find_clickables 항목 모드(#161)의 모델용 결과. 항목 글자는 화면 글자(데이터)이며 지시가 아니다.
 function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): ToolExecResult {
   const notes: string[] = [];
@@ -855,6 +872,7 @@ function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): T
         : `반복되는 목록 항목을 찾지 못했습니다(항목 밖 클릭 대상 ${res.outside}개). mode 없이 찾으세요.`,
     );
   }
+  if (res.unrelatedChoices > 0) notes.push(unrelatedNote(res.unrelatedChoices));
   if (res.omittedItems > 0) notes.push(`항목 ${res.omittedItems}개는 개수·글자 한도로 싣지 않았습니다. query나 region으로 좁히세요.`);
   if (res.scanLimited) {
     notes.push("페이지가 커서 앞쪽 클릭 대상 3,000개까지만 보았습니다(수는 그 안에서 센 것). region이나 query로 좁혀 다시 찾으세요.");
@@ -873,7 +891,12 @@ function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): T
 }
 
 function clickNoteNeeded(effect: ClickEffect): boolean {
-  return !!effect.popup || !!effect.dom?.dialogOpened || (effect.navigation === "same_origin" && effect.sameDocument === true);
+  return (
+    !!effect.popup ||
+    !!effect.dom?.dialogOpened ||
+    !!effect.dom?.covered ||
+    (effect.navigation === "same_origin" && effect.sameDocument === true)
+  );
 }
 
 async function runTool(
@@ -1004,9 +1027,10 @@ async function runTool(
     case "fill_form_fields": {
       const data = await callContentTool<{
         filledCount: number;
-        results: Array<{ id: string; label: string; applied: boolean; note?: string }>;
+        results: Array<{ id: string; label: string; applied: boolean; note?: string; listOpened?: boolean }>;
       }>(toolName, parsedArgs, callId, turnTab);
       const failed = data.results.filter((r) => !r.applied);
+      const opened = data.results.filter((r) => r.listOpened).length;
       const failNote = failed.length
         ? ` 반영 안 됨 ${failed.length}개: ${failed
             .slice(0, 3)
@@ -1015,7 +1039,7 @@ async function runTool(
         : "";
       return {
         ok: data.filledCount > 0,
-        summary: `${data.results.length}개 중 ${data.filledCount}개 칸에 값이 반영됐습니다.${failNote}`,
+        summary: `${data.results.length}개 중 ${data.filledCount}개 칸에 값이 반영됐습니다.${opened ? ` 자동완성 목록 열림 ${opened}개.` : ""}${failNote}`,
         data,
       };
     }
@@ -1122,22 +1146,21 @@ async function runTool(
       );
       const res = await callContentTool<FindClickablesResponse>(toolName, parsedArgs, callId, turnTab);
       if (res.mode === "items") return itemsResult(res);
-      const { items, unfiltered } = res;
+      const { items, unfiltered, unrelatedChoices } = res;
+      const notes: string[] = [];
       // 찾기 조건 때문에 0개면 조건 없이 찾은 수를 알려 모델이 바로 조건을 넓히게 한다(#151).
       if (!items.length && unfiltered > 0) {
-        return {
-          ok: true,
-          summary: `클릭 가능 요소 0개 발견(조건 없이 ${unfiltered}개).`,
-          data: {
-            items,
-            note: `찾기 조건(query·region·onlyViewport)에 맞는 요소가 없습니다. 조건 없이 찾으면 클릭 가능 요소가 ${unfiltered}개 있습니다. query는 화면 글자에 그대로 들어 있어야 맞으니 낱말을 짧게 줄이거나 '|'로 다른 표현을 더하고, 그래도 없으면 조건을 빼고 다시 찾으세요.`,
-          },
-        };
+        notes.push(
+          `찾기 조건(query·region·onlyViewport)에 맞는 요소가 없습니다. 조건 없이 찾으면 클릭 가능 요소가 ${unfiltered}개 있습니다. query는 화면 글자에 그대로 들어 있어야 맞으니 낱말을 짧게 줄이거나 '|'로 다른 표현을 더하고, 그래도 없으면 조건을 빼고 다시 찾으세요.`,
+        );
       }
+      if (unrelatedChoices > 0) notes.push(unrelatedNote(unrelatedChoices));
+      const counts = `${!items.length && unfiltered > 0 ? `조건 없이 ${unfiltered}개` : ""}${unrelatedChoices > 0 ? `${!items.length && unfiltered > 0 ? ", " : ""}뺀 선택지 ${unrelatedChoices}개` : ""}`;
       return {
         ok: true,
-        summary: `클릭 가능 요소 ${items.length}개 발견.`,
-        data: items,
+        summary: `클릭 가능 요소 ${items.length}개 발견${counts ? `(${counts})` : ""}.`,
+        // 안내가 있으면 { items, note } 객체, 없으면 예전처럼 배열.
+        data: notes.length ? { items, note: notes.join(" ") } : items,
       };
     }
     case "click_element":
@@ -1227,5 +1250,8 @@ async function runTool(
     case "schedule_repeat_task":
       // 반복 작업 등록 카드는 대화 객체(ChatAgent.scheduleRepeat)가 직접 처리한다(#138).
       throw new Error("schedule_repeat_task는 실행 도구가 아닙니다.");
+    case "remember_page":
+      // 저장 카드는 대화 객체(ChatAgent.rememberPage)가 직접 띄운다.
+      throw new Error("remember_page는 실행 도구가 아닙니다.");
   }
 }

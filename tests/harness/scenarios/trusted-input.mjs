@@ -1,6 +1,7 @@
 // 실제 마우스 입력 클릭(0.2.0)과 덮인 대상(#89): 설정을 켜면 디버거로 누르고(isTrusted), 가운데가 덮이면 다른 점을,
 // 모두 덮이면 스크립트 클릭으로 대체하고 이유를 남긴다.
-import { expect, resultLog } from "../lib.mjs";
+import { expect, okResult, resultLog } from "../lib.mjs";
+import { routePage } from "./autocomplete.mjs";
 
 const findC = { tool: "find_clickables", args: {} };
 const rec = "document.getElementById('out').textContent='눌림 '+event.isTrusted";
@@ -84,6 +85,18 @@ export default [
       await h.turn([findC, { click: "RA" }], { path: "/r2" });
       const state = await h.tab.evaluate(() => ["ra", "rb"].map((id) => `${id}=${document.getElementById(id).checked}`).join(" "));
       expect(state === "ra=false rb=true", `그룹 상태(${state})`);
+    },
+  },
+  {
+    name: "실제 입력: 열린 목록이 버튼을 덮으면 스크립트 클릭으로 바꾸고 결과에 알린다",
+    pages: { "/r": routePage() },
+    async run(h) {
+      await h.settings({ runMode: "auto", trustedInput: true });
+      await h.tab.goto(h.base + "/r");
+      await h.tab.evaluate(() => { const s = document.getElementById("s"); s.value = "운중"; s.dispatchEvent(new Event("input")); });
+      const r = await h.turn([{ tool: "find_clickables", args: {} }, { click: "길찾기" }, { text: "끝" }], { noReload: true });
+      const c = okResult(r, "click_element");
+      expect(c.effect?.dom?.covered === "열린 목록(또는 대화상자)이 대상을 덮고 있음" && String(c.note).includes("열린 목록"), `덮개 진단(${JSON.stringify(c.effect?.dom)} ${c.note})`);
     },
   },
 ];

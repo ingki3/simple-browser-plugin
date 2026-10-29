@@ -10,6 +10,7 @@ import {
   type TrustedClickStatus,
 } from "@/lib/trustedClick";
 import { isTag } from "./docs";
+import { expandedTriggers } from "./targets";
 
 // 승인한 대상 안에 있어도 따로 활성화되는 요소(링크·버튼·입력·프레임 등). 실제 입력이 이것에 닿으면 승인한 대상이 아닌
 // 그 요소가 동작하므로(기존 el.click()과 다름) 누르지 않는다. 구조(요소 종류·역할)로만 정한다.
@@ -119,6 +120,29 @@ function hitAt(doc: Document, p: Point): Element | null {
   return hit;
 }
 
+export const OVERLAY_COVER = "열린 목록(또는 대화상자)이 대상을 덮고 있음";
+const OVERLAY_ROLES = new Set(["listbox", "menu", "menubar", "dialog", "alertdialog"]);
+
+// 요소가 열린 목록·대화상자 안인지(합성 트리 조상 — shadow 경계를 넘는다).
+function inOpenOverlay(node: Element): boolean {
+  for (let cur: Node | null = node, depth = 0; cur && depth < 200; cur = flatParent(cur), depth++) {
+    if (cur.nodeType !== Node.ELEMENT_NODE) continue;
+    const e = cur as Element;
+    if (OVERLAY_ROLES.has((e.getAttribute("role") ?? "").trim().toLowerCase())) return true;
+    if (e.localName === "dialog" && e.hasAttribute("open")) return true;
+    if ((e.getAttribute("aria-modal") ?? "").trim().toLowerCase() === "true") return true;
+  }
+  // 펼친 트리거(aria-expanded=true)가 aria-controls로 가리키는 요소 안(역할 없이 그린 목록).
+  for (const t of expandedTriggers()) {
+    const root = t.getRootNode() as Document | ShadowRoot;
+    for (const id of (t.getAttribute("aria-controls") ?? "").split(/\s+/).filter(Boolean)) {
+      const ref = root.getElementById?.(id);
+      if (ref && ref.contains(node)) return true;
+    }
+  }
+  return false;
+}
+
 export type PointCheck = { ok: true } | { ok: false; reason: string; inside: boolean };
 
 // 점을 누르면 el이 받는지. inside: el 안의 다른 활성 요소가 받는 경우(덮개가 아님).
@@ -127,6 +151,8 @@ export function checkPoint(el: HTMLElement, p: Point): PointCheck {
   if (!hit) return { ok: false, reason: "누를 자리에 요소가 없음", inside: false };
   const chain = chainTo(hit, el);
   if (!chain) {
+    // 덮은 요소가 열린 목록·대화상자 안이면 그렇게 알린다(구조로만 — 역할·대화상자 요소·aria-modal). 글자는 담지 않는다.
+    if (inOpenOverlay(hit)) return { ok: false, reason: OVERLAY_COVER, inside: false };
     // 덮은 요소의 태그·역할만 알린다(글자는 담지 않는다).
     const role = hit.getAttribute("role");
     return { ok: false, reason: `다른 요소(${hit.localName}${role ? ` role=${role.slice(0, 20)}` : ""})가 대상을 덮고 있음`, inside: false };

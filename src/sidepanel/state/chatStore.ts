@@ -56,6 +56,9 @@ export type ChatMessage =
       id: string;
       type: "page_offer";
       offer: PageOfferData;
+      // remember_page로 띄운 카드: 펼친 채로 보이고, autoDraft가 false면(외부 본문 보호 중) 초안을 자동으로 묻지 않는다.
+      startOpen?: boolean;
+      autoDraft?: boolean;
     }
   // detail: 원래 오류 문구(자세히), action: 다음 행동 버튼(#130).
   | { id: string; type: "error"; message: string; detail?: string; action?: "settings" | "usage"; usageUrl?: string }
@@ -90,7 +93,10 @@ interface ChatState {
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string, extra?: { detail?: string; action?: "settings" | "usage"; usageUrl?: string }) => void;
   addInfo: (title: string, message: string) => void;
-  addPageOffer: (offer: Extract<ChatMessage, { type: "page_offer" }>["offer"]) => void;
+  addPageOffer: (
+    offer: Extract<ChatMessage, { type: "page_offer" }>["offer"],
+    opts?: { open?: boolean; autoDraft?: boolean },
+  ) => void;
   setStatus: (text: string | null) => void;
   abortLocal: () => void;
   reset: () => void;
@@ -220,8 +226,19 @@ export const useChatStore = create<ChatState>((set) => ({
       return { ...s, messages: msgs, streaming: false, statusText: null };
     }),
 
-  addPageOffer: (offer) =>
-    set((s) => ({ messages: [...s.messages, { id: mid(), type: "page_offer", offer }] })),
+  addPageOffer: (offer, opts) =>
+    set((s) => ({
+      messages: [
+        ...s.messages,
+        {
+          id: mid(),
+          type: "page_offer",
+          offer,
+          ...(opts?.open ? { startOpen: true } : {}),
+          ...(opts?.autoDraft === false ? { autoDraft: false } : {}),
+        },
+      ],
+    })),
 
   addInfo: (title, message) =>
     set((s) => ({

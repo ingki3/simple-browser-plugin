@@ -279,6 +279,7 @@ export const toolArgsSchemas = {
   read_linked_pages: readLinkedPagesArgs,
   confirm_task: confirmTaskArgs,
   schedule_repeat_task: scheduleRepeatTaskArgs,
+  remember_page: z.object({}).strict(),
 } as const;
 
 export type ToolArgs = {

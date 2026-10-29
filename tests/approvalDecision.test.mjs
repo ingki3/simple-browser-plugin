@@ -123,3 +123,13 @@ test("맡긴 작업(#123)은 이번 대화 허락을 못 쓰게 돼도 맡긴 �
   assert.equal(d.mode, "task");
   assert.equal(withoutChatGrant(d, "이유").mode, "task");
 });
+
+test("승인 규칙: 칸을 구조로 추정한 선택지(nearest)는 묻기·자동·맡기기 모두 카드", () => {
+  const preview = { autoBlock: null, alwaysAsk: "추정", inferredChoice: true, linkHrefs: [], fillValues: [] };
+  for (const over of [{}, { autoApprove: true }, { taskMode: true }]) {
+    const d = decideApproval(input({ ...over, preview }));
+    assert.equal(d.mode, "card", JSON.stringify({ over, d }));
+  }
+  // 추정이 아니면 기존 결과 그대로(맡기기 → 맡긴 작업).
+  assert.equal(decideApproval(input({ taskMode: true, preview: { autoBlock: null, linkHrefs: [], fillValues: [] } })).mode, "task");
+});

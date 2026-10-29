@@ -305,4 +305,15 @@ export default [
       expect(r.cards === 1 && /이미 자동 로그인/.test(summary), `두 번째는 묻는다(${summary})`);
     },
   },
+  {
+    name: "아이디 칸이 자동완성(role=combobox)이어도 sign_in은 아이디·비밀번호를 모두 넣는다(자동완성 순서 규칙 밖)",
+    pages: {
+      "/login": loginPage().replace("<input name=u autocomplete=username>", "<input name=u autocomplete=username role=combobox aria-expanded=false aria-haspopup=listbox>"),
+    },
+    async run(h) {
+      await connect(h);
+      const r = await h.turn([findF, { signIn: "password" }, describe], { path: "/login" });
+      expect(r.out === `로그인됨 ${USER} / ${PW}`, `값이 들어가 제출됨(out='${r.out}')`);
+    },
+  },
 ];

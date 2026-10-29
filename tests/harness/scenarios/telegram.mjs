@@ -122,6 +122,24 @@ export default [
     },
   },
   {
+    name: "원격 요청에서는 remember_page를 쓰지 않는다(패널 카드 없음)",
+    pages2: { "/": `<title>shop</title><p>상품</p>` },
+    async run(h) {
+      await connect(h);
+      await h.sw.evaluate((url) => {
+        const realCreate = chrome.tabs.create.bind(chrome.tabs);
+        chrome.tabs.create = (p) => realCreate(p?.url === "chrome://newtab/" ? { ...p, url } : p);
+        globalThis.__steps = [{ tool: "remember_page", args: {} }, { text: "못 함" }];
+        globalThis.__toolLog = [];
+      }, `${h.base2}/?q=1`);
+      await deliver(h, "이 페이지 기억해줘");
+      await waitSent(h, 1, 20_000);
+      const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
+      expect(log[0]?.startsWith("remember_page:") && !log[0].endsWith(":ok"), `거절(${log.join(", ")})`);
+      expect((await h.panel.locator(".page-offer").count()) === 0, "패널에 저장 카드 없음");
+    },
+  },
+  {
     name: "/stop·/help 명령, 연결 끊기 뒤에는 받지 않음, 반복 작업 알림은 켰을 때 제목만",
     pages: { "/watch": `<title>공연</title><button>예매하기</button><div id=out></div>` },
     async run(h) {
