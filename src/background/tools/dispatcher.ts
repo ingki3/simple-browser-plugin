@@ -83,7 +83,7 @@ import {
 } from "@/lib/actionLog";
 import { finishAction, notePendingAction } from "../actionLog";
 import { noteRead, readHintsFor } from "../readRecipes";
-import { recipeArgs, usefulResult } from "@/lib/readRecipe";
+import { recipeArgs, usefulResult, type ReadHint } from "@/lib/readRecipe";
 import { prepareSignIn, runSignIn, stepLabel, type SignInPreview } from "../signIn";
 import { loginShapeBlocks } from "@/lib/loginPolicy";
 import { httpOrigin } from "@/lib/url";
@@ -217,9 +217,15 @@ async function observeRead(
   failed: boolean,
 ) {
   if (!before?.skeleton) return;
+  const useful = !failed && usefulResult(picked.tool, data);
+  // 제안한 레시피를 그대로 다시 부른 것이면 로그에 남긴다(#156).
+  const offered = offeredHints.get(turnKeyOf(turnTab));
+  if (offered && offered.page === pageKeyId(before) && offered.hints.some((h) => h.tool === picked.tool && sameRecipeArgs(h.args, picked.args))) {
+    debugLog("read_recipe:used", `${picked.tool} ${recipeArgsText(picked.args)} · ${useful ? "결과 있음" : "결과 없음"}`);
+  }
   const after = await pageKeyFor(turnTab);
   if (!after || pageKeyId(after) !== pageKeyId(before)) return;
-  noteRead(turnTab, before, picked.tool, picked.args, !failed && usefulResult(picked.tool, data));
+  noteRead(turnTab, before, picked.tool, picked.args, useful);
 }
 
 export async function buildToolPreview(
@@ -682,8 +688,35 @@ export async function executeTool(
   return result;
 }
 
+// 턴 탭마다 마지막으로 제안한 레시피(페이지 키와 함께). 레시피 도구 호출이 그중 하나와 같으면 로그에 남긴다(#156).
+const offeredHints = new Map<string, { page: string; hints: ReadHint[] }>();
+const MAX_OFFERED = 20;
+
+function turnKeyOf(turnTab: TurnTab): string {
+  return "tabId" in turnTab ? String(turnTab.tabId) : "error";
+}
+
+// 턴을 시작할 때 그 탭의 예전 제안을 지운다(새 턴의 read_recipe:used는 이 턴에서 제안한 것만).
+export function clearOfferedHints(turnTab: TurnTab): void {
+  offeredHints.delete(turnKeyOf(turnTab));
+}
+
+// 레시피 인자를 로그용 한 줄로(값은 각 120자까지).
+function recipeArgsText(args: Record<string, string | number | boolean>): string {
+  return Object.entries(args)
+    .map(([k, v]) => `${k}=${typeof v === "string" ? `'${truncate(v, 120)}'` : String(v)}`)
+    .join(" ");
+}
+
+function sameRecipeArgs(a: Record<string, string | number | boolean>, b: Record<string, string | number | boolean>): boolean {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+}
+
 // describe_page 결과에 같은 구조의 페이지에서 전에 통한 읽기 방법을 붙인다. 실패해도 결과는 그대로 돌려준다.
 async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promise<ToolExecResult> {
+  // 새 관측마다 이전 제안을 지운다(제안이 없는 관측 뒤나 새 대화에서 예전 제안으로 read_recipe:used를 남기지 않게).
+  offeredHints.delete(turnKeyOf(turnTab));
   try {
     // 관측한 뒤 탭이 다른 주소로 옮겼으면, 지금 페이지의 후보를 관측 결과에 섞지 않는다.
     const observed = (result.data as PageDescription).url;
@@ -693,6 +726,14 @@ async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promis
     if (!page?.skeleton) return result;
     const hints = await readHintsFor(page);
     if (!hints.length) return result;
+    offeredHints.set(turnKeyOf(turnTab), { page: pageKeyId(page), hints });
+    while (offeredHints.size > MAX_OFFERED) {
+      const oldest = offeredHints.keys().next().value;
+      if (oldest === undefined) break;
+      offeredHints.delete(oldest);
+    }
+    // 제안한 레시피의 도구·인자를 디버그 로그에 남긴다(#156). 모델이 만든 인자만 — 입력 칸 값은 없다.
+    for (const h of hints) debugLog("read_recipe:offered", `${h.tool} ${recipeArgsText(h.args)} · 성공 ${h.successes}번`);
     return {
       ...result,
       summary: `${result.summary} / 전에 통한 읽기 방법 ${hints.length}개`,
@@ -995,6 +1036,9 @@ async function runTool(
       return { ok: data.savedCount > 0, summary: captureSummary(data), data };
     }
     case "query_dom": {
+      const qa = parsedArgs as ToolArgs["query_dom"];
+      // 디버그 로그에 선택자를 남긴다(#156). 모델이 만든 인자만 — 입력 칸 값은 없다.
+      debugLog("tool:query_dom:args", `selector='${truncate(qa.selector, 120)}'${qa.attr ? ` attr=${qa.attr}` : ""}`);
       const data = await callContentTool<Array<{ text: string; attrs: Record<string, string> }>>(
         toolName,
         parsedArgs,

@@ -60,6 +60,12 @@ export default [
       const r = await h.turn([{ tool: "open_saved_link", args: { id: saved[0].id, values: { 상품명: "아이패드" } } }, { text: "열었습니다" }]);
       expect(!r.stoppedAtCard, "카드가 뜨면 안 된다");
       expect(decodeURIComponent(new URL(r.url).search) === "?q=아이패드", `연 주소(${r.url})`);
+      // 디버그 로그에 턴마다 붙인 후보 수·이름이 한 번 남는다(#156). 주소는 남기지 않는다.
+      const lines = r.logs.filter((l) => l.includes("saved_links:candidates"));
+      const last = lines.at(-1) ?? "";
+      expect(last.includes("1개 · '가격 검색'"), `후보 로그(${JSON.stringify(lines)})`);
+      expect(lines.filter((l) => l.includes("1개")).length === 1, `이 턴에 한 번만(${JSON.stringify(lines)})`);
+      expect(!last.includes("/s?"), "주소는 남기지 않는다");
     },
   },
   {

@@ -22,7 +22,7 @@ import {
 import { functionDeclarations } from "./tools/declarations";
 import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
 import { registerRepeatTask } from "./repeatTasks";
-import { buildToolPreview, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
+import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
 import { settlePopups, watchNewTabs } from "./popups";
 
@@ -407,6 +407,8 @@ export class ChatAgent {
   // 문맥을 서명하는 제공자(Anthropic)에서 이 대화 기록에 남긴 저장 링크 후보(마지막 글자와 지금까지 보낸 id). 기록에서 거둘 수
   // 없으니, 그중 하나를 지웠거나 기능을 껐으면 다음 요청을 새 대화로 시작한다(forceNewConversation).
   private committedCandidates: { text: string; ids: Set<string> } | null = null;
+  // 저장한 링크 후보를 로그에 남긴 턴(턴마다 한 번).
+  private candidatesLoggedTurn = -1;
   private forceNewConversation = false;
   private turnTab: TurnTab = { error: "활성 탭을 찾을 수 없습니다." };
   // 이 대화에서 translate_page를 실행한 탭. 중단·새 대화·패널 종료 시 번역을 멈춘다.
@@ -918,6 +920,7 @@ export class ChatAgent {
     const endTurn = timeSpan("turn");
     const prevTurnTab = this.turnTab;
     this.turnTab = opts.tabId !== undefined ? await turnTabOf(opts.tabId) : await captureTurnTab();
+    clearOfferedHints(this.turnTab);
     // 기록에 넣을 때 쓰는 가림 목록을 미리 읽어 둔다(서비스 워커가 다시 시작된 뒤 첫 결과도 가리게). 읽지 못하면 이 요청을
     // 보내지 않는다(가릴 값을 모른 채 페이지 글자를 보내지 않게).
     try {
@@ -1032,7 +1035,10 @@ export class ChatAgent {
     // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
     // 마무리 요청(wrapUpNote)에는 붙이지 않는다(이동 후보가 필요 없음).
     // 지금 저장 링크 후보(마무리 요청에도 읽는다 — 기록에 남긴 후보가 지워졌는지 검사용). 실을지는 아래에서 정한다.
-    const currentCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null).catch(() => null);
+    // 후보를 붙였는지는 턴마다 첫 요청에서만 로그에 남긴다(#156).
+    const logCandidates = this.candidatesLoggedTurn !== turn;
+    this.candidatesLoggedTurn = turn;
+    const currentCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null, logCandidates).catch(() => null);
     const savedCandidates = opts.wrapUpNote ? null : currentCandidates;
     if (this.isStale(turn)) {
       clearTimeout(connectTimer);

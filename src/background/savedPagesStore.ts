@@ -298,15 +298,26 @@ export async function updateLink(id: string, patch: { name?: unknown; purpose?: 
 }
 
 // 매 모델 요청 직전: 턴 탭이 시크릿이거나 확인할 수 없으면 후보를 주지 않는다. 사이트와 관계없이 저장 링크를 준다(#86).
-export async function candidatesMessage(tabId: number | null): Promise<string | null> {
-  if (tabId === null || !(await getSettings()).rememberPages) return null;
-  try {
-    if ((await chrome.tabs.get(tabId)).incognito) return null;
-  } catch {
+// log면 붙인 후보 수·이름(주소는 남기지 않는다) 또는 붙이지 않은 이유를 디버그 로그에 남긴다(#156, 턴마다 한 번).
+export async function candidatesMessage(tabId: number | null, log = false): Promise<string | null> {
+  const skip = (why: string) => {
+    if (log) debugLog("saved_links:candidates", `없음 · ${why}`);
     return null;
+  };
+  if (tabId === null) return skip("탭 없음");
+  if (!(await getSettings()).rememberPages) return skip("저장한 링크 기능 꺼짐");
+  try {
+    if ((await chrome.tabs.get(tabId)).incognito) return skip("시크릿 탭");
+  } catch {
+    return skip("탭 확인 실패");
   }
   const items = candidatesFor(await load());
-  return items.length ? candidatesText(items) : null;
+  if (!items.length) return skip("저장한 링크 없음");
+  if (log) {
+    const names = items.map((l) => `'${l.name.slice(0, 30)}'`).join(", ");
+    debugLog("saved_links:candidates", `${items.length}개 · ${names.slice(0, 300)}`);
+  }
+  return candidatesText(items);
 }
 
 // open_saved_link로 쓸 링크(설정이 꺼져 있으면 쓰지 않는다).
