@@ -72,7 +72,7 @@ export default [
       await h.panel.waitForTimeout(400);
       // B(열 때 자동 실행 방식이던 서랍): 생각 보기만 켜기
       await other.locator("details.settings-group summary", { hasText: "고급" }).click();
-      await other.locator(".field", { hasText: "생각" }).locator("input[type=checkbox]").first().check();
+      await other.locator(".field", { hasText: "생각 과정 보기" }).locator("input[type=checkbox]").first().check();
       await other.waitForTimeout(400);
       const st = await stored(h);
       await other.close();

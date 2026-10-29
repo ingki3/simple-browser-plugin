@@ -321,3 +321,20 @@ test("handoffFillList: 사용자가 직접 입력할 모든 칸과 값을 자르
   assert.equal(handoffFillList([{ info: { ...field, name: "출발지" }, value: "수서" }]), "출발지: 수서");
   assert.equal(handoffFillList([{ info: { ...field, name: "카드 번호", sensitive: "payment" }, value: "1234" }]), "카드 번호: 1234 ⚠ 결제 정보 칸");
 });
+
+test("describeEffect: 같은 문서 주소 변경 + 대화상자(#158)", () => {
+  const base = { navigation: "same_origin", url: "https://a.test/s?sort=low", sameDocument: true, newTab: false };
+  assert.equal(
+    describeEffect({ ...base, dom: { mutations: 3, dialogOpened: true, dialog: { text: "장바구니에 담았습니다", truncated: false } } }),
+    "페이지 안에서 주소만 바뀌었습니다(/s?…), 대화상자가 열렸습니다(글자는 effect.dom.dialog), 화면이 바뀌었습니다(변경 3건), 목록이 다시 그려졌을 수 있습니다. 목록 항목은 다시 찾은 id로 고르세요.",
+  );
+  assert.equal(
+    describeEffect({ ...base, dom: { mutations: 0, dialogOpened: false } }),
+    "페이지 안에서 주소만 바뀌었습니다(/s?…), 목록이 다시 그려졌을 수 있습니다. 목록 항목은 다시 찾은 id로 고르세요.",
+  );
+  // 다른 문서로 이동했으면 대화상자·목록 안내를 붙이지 않는다.
+  assert.equal(
+    describeEffect({ ...base, sameDocument: false, dom: null }),
+    "같은 사이트의 다른 페이지로 이동했습니다(/s?…).",
+  );
+});

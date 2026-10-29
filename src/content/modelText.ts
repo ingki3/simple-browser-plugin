@@ -124,6 +124,16 @@ export function modelText(root: Element, max: number, opts: { substitute?: Reado
   return subtreeTextInfo(root, max, opts).text;
 }
 
+// modelText와 같은 보호 경로로 글자와 잘림 여부(cut)를 함께 돌려준다. exclude: 하위 트리를 건너뛸 요소(목록 항목에서 안쪽 항목).
+export function modelTextInfo(
+  root: Element,
+  max: number,
+  opts: { exclude?: ReadonlySet<Element> } = {},
+): { text: string; cut: boolean } {
+  if (inProtectedArea(root)) return { text: "", cut: false };
+  return subtreeTextInfo(root, max, opts);
+}
+
 // root 아래 글자만 모은다(root 자신과 조상의 보호 판정은 부르는 쪽이 한다 — select 안의 선택지처럼 조상이 값 컨트롤인 경우).
 export function subtreeText(root: Element, max: number): string {
   return subtreeTextInfo(root, max).text;
@@ -135,7 +145,7 @@ export function subtreeText(root: Element, max: number): string {
 export function subtreeTextInfo(
   root: Element,
   max: number,
-  opts: { substitute?: ReadonlyMap<Element, string> } = {},
+  opts: { substitute?: ReadonlyMap<Element, string>; exclude?: ReadonlySet<Element> } = {},
 ): { text: string; cut: boolean } {
   const limit = max * 4;
   let out = "";
@@ -163,6 +173,7 @@ export function subtreeTextInfo(
       continue;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    if (opts.exclude?.has(node as Element)) continue;
     const facts = factsOf(node as Element);
     if (protectedReason(facts) !== null) continue;
     // 입력 도중 비교용: 이번 호출이 쓴 select의 대리 콤보박스 글자는 승인 때 글자로 바꿔 넣는다(#88).

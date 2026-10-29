@@ -90,3 +90,9 @@ test("mergeSettingsPatch: 바꾼 필드만, 제공자별 키·모델은 한 단�
   assert.deepEqual(next.providerModels, { openai: "gpt-5", gemini: "gemini-3.6-flash" });
   assert.deepEqual(next.apiKeys, { openai: "a", gemini: "g2" });
 });
+
+test("normalizeSettings: quickThinking은 true일 때만 켠다(#160)", () => {
+  assert.equal(normalizeSettings({}).quickThinking, false);
+  assert.equal(normalizeSettings({ quickThinking: "yes" }).quickThinking, false);
+  assert.equal(normalizeSettings({ quickThinking: true }).quickThinking, true);
+});
