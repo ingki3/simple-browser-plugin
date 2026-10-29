@@ -280,6 +280,11 @@ async function installMockModel(sw) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
         out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       } else if (step) out = step;
+      // lengthEmpty: 생각만 하다 응답 상한에 걸린 빈 응답(글자·도구 호출 없음, #160 재시도 시험).
+      if (step?.lengthEmpty) {
+        if (anthropic) return anthropicSse([{ type: "message_delta", delta: { stop_reason: "max_tokens" } }, { type: "message_stop" }]);
+        return sse([{ choices: [{ delta: {}, finish_reason: "length" }] }]);
+      }
       if (anthropic) {
         const ev = [];
         // 생각 블록(서명 포함)을 먼저 보낸다 — 다음 요청에 그대로 돌아오는지 본다.

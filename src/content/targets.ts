@@ -19,7 +19,7 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { groupLabel, modelText, selectProxyOf, subtreeText, subtreeTextInfo } from "./modelText";
+import { groupLabel, modelText, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -1217,7 +1217,8 @@ export function approvedElement(id: string, callId: string, prefix: string): HTM
 interface EffectWatch {
   observers: MutationObserver[];
   mutations: number;
-  dialogsBefore: number;
+  // 클릭 직전에 보이던 대화상자(새로 열린 것만 결과에 싣는다).
+  dialogsBefore: Set<Element>;
   // 클릭 직전 재확인에서 멈췄으면 그 이유(클릭하지 않음).
   aborted: string | null;
   // 대상이 같은 출처 iframe 안이면 그 프레임과 클릭 당시 문서. 프레임만 이동하면 탭 주소는 그대로라 따로 본다.
@@ -1229,14 +1230,27 @@ const watches = new Map<string, EffectWatch>();
 const DIALOG_SELECTOR = "dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true']";
 const WATCH_MAX_MS = 30_000;
 
-function openDialogs(): number {
-  let n = 0;
+function openDialogs(): HTMLElement[] {
+  const out: HTMLElement[] = [];
   for (const root of getAccessibleRoots()) {
     for (const el of root.querySelectorAll<HTMLElement>(DIALOG_SELECTOR)) {
-      if (el.getClientRects().length > 0) n++;
+      if (el.getClientRects().length > 0) out.push(el);
     }
   }
-  return n;
+  return out;
+}
+
+const DIALOG_TEXT_MAX = 600;
+
+// 클릭 뒤 새로 열린 대화상자의 화면 글자(#158). modelText 경로라 입력 칸 값·편집 영역·숨은 글자는 빠진다(#43).
+// 대화상자가 보호 영역(편집 영역 등) 안이면 빈 글자가 되어 싣지 않는다. 안쪽 대화상자는 바깥 것과 겹치므로 첫 것만.
+function newDialogText(before: Set<Element>): { text: string; truncated: boolean } | undefined {
+  const opened = openDialogs().filter((d) => !before.has(d));
+  const first = opened.find((d) => !opened.some((o) => o !== d && o.contains(d)));
+  if (!first) return undefined;
+  const info = modelTextInfo(first, DIALOG_TEXT_MAX);
+  if (!info.text) return undefined;
+  return info.cut ? { text: info.text, truncated: true } : { text: info.text, truncated: false };
 }
 
 export function startEffectWatch(token: string, target: HTMLElement, aborted: string | null = null): void {
@@ -1247,7 +1261,7 @@ export function startEffectWatch(token: string, target: HTMLElement, aborted: st
     mutations: 0,
     aborted,
     frame: frameEl ? { el: frameEl, doc } : null,
-    dialogsBefore: openDialogs(),
+    dialogsBefore: new Set(openDialogs()),
     timer: setTimeout(() => stopEffectWatch(token), WATCH_MAX_MS),
   };
   // 문서의 subtree 관찰은 shadow root 안으로 이어지지 않아, 열린 shadow root마다 따로 관찰한다.
@@ -1279,7 +1293,13 @@ function stopEffectWatch(token: string): EffectWatch | undefined {
 // 같은 문서면 변화를, 이 문서에서 시작한 관찰이 아니면(페이지가 바뀜) null을 돌려준다.
 export function readEffect(
   token: string,
-): { mutations: number; dialogOpened: boolean; aborted: string | null; frameNavigated: boolean } | null {
+): {
+  mutations: number;
+  dialogOpened: boolean;
+  dialog?: { text: string; truncated: boolean };
+  aborted: string | null;
+  frameNavigated: boolean;
+} | null {
   const watch = stopEffectWatch(token);
   if (!watch) return null;
   let frameNavigated = false;
@@ -1288,9 +1308,12 @@ export function readEffect(
     const f = watch.frame.el as HTMLIFrameElement;
     frameNavigated = !f.isConnected || f.contentDocument !== watch.frame.doc;
   }
+  const dialog = newDialogText(watch.dialogsBefore);
+  const dialogOpened = openDialogs().some((d) => !watch.dialogsBefore.has(d));
   return {
     mutations: watch.mutations,
-    dialogOpened: openDialogs() > watch.dialogsBefore,
+    dialogOpened,
+    ...(dialog ? { dialog } : {}),
     aborted: watch.aborted,
     frameNavigated,
   };

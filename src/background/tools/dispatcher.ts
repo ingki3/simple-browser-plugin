@@ -839,9 +839,14 @@ async function clickTool(
   return {
     ok: data.clicked && !effect.dom?.aborted,
     summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}${inputLabel(data)}`,
-    // 팝업 창이 열리거나 막히거나 닫혔으면 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
-    data: { text: data.text, href: data.href, effect, ...(effect.popup ? { note: describeEffect(effect) } : {}) },
+    // 팝업 창이 열리거나 막히거나 닫혔거나, 같은 문서 안에서 주소가 바뀌었거나(목록 다시 찾기 안내) 대화상자가 열렸으면(#158)
+    // 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
+    data: { text: data.text, href: data.href, effect, ...(clickNoteNeeded(effect) ? { note: describeEffect(effect) } : {}) },
   };
+}
+
+function clickNoteNeeded(effect: ClickEffect): boolean {
+  return !!effect.popup || !!effect.dom?.dialogOpened || (effect.navigation === "same_origin" && effect.sameDocument === true);
 }
 
 async function runTool(
