@@ -188,4 +188,28 @@ export default [
       expect(r3.stoppedAtCard, "선택 자리의 개인정보 모양 값도 카드");
     },
   },
+  {
+    name: "직접 적은 자리 이름에 연속 공백이 있어도 비워도 됨·설명이 저장된다",
+    pages: { "/s": search },
+    async run(h) {
+      await h.settings({ autoApprove: true });
+      await h.sw.evaluate(() => {
+        globalThis.__draftDelayMs = 0;
+        globalThis.__draft = { name: "가격 검색", purpose: "상품 검색", params: [{ index: 0, mode: "slot", slot: "상품명", optional: false }, { index: 1, mode: "keep" }] };
+      });
+      await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=a&max=900000` } }, { text: "끝" }], { text: "찾아줘" });
+      await h.panel.waitForTimeout(500);
+      await h.panel.getByText("이 페이지 기억하기").click();
+      await h.panel.waitForTimeout(1200);
+      const card = h.panel.locator(".page-offer.open");
+      await card.locator(".offer-params select").nth(1).selectOption("slot");
+      await card.locator(".offer-slot-name").nth(1).fill("최고  가격");
+      await card.locator(".check-row", { hasText: "비워도 됨" }).nth(1).locator("input").check();
+      await card.locator(".btn-approve").click();
+      await h.panel.waitForTimeout(500);
+      const saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages);
+      const slot = saved.flatMap((l) => l.slots).find((x) => x.key === "최고 가격");
+      expect(slot?.optional === true, `정규화한 이름으로 선택 자리(${JSON.stringify(saved.map((l) => l.slots))})`);
+    },
+  },
 ];

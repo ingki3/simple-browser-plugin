@@ -9,7 +9,6 @@ import {
   MAX_SLOT_HINT,
   normalizeName,
   normalizePurpose,
-  normalizeSlotKey,
   parseLinkDraft,
   parseSaved,
   type LinkDraft,
@@ -259,8 +258,8 @@ export async function savePage(req: SaveRequest): Promise<{ evicted: string | nu
     slots: slots.map((key) => ({
       key,
       hint: cleanHint(ownString(req.hints, key)),
-      // 카드가 보낸 자리 이름도 makeTemplate과 같은 정규화로 비교한다(연속 공백 등).
-      ...(req.optional.some((k) => normalizeSlotKey(k) === key) ? { optional: true as const } : {}),
+      // 카드는 정규화한 자리 이름으로 보낸다. 같은 이름으로만 비교한다(다른 원문이 합쳐져 필수 자리가 선택이 되지 않게).
+      ...(req.optional.includes(key) ? { optional: true as const } : {}),
     })),
     site: offer.site,
     savedAt: now,

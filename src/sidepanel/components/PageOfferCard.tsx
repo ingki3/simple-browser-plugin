@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { makeTemplate, MAX_PURPOSE, MAX_SLOT_KEY, templateText, type ParamChoice } from "@/lib/savedPages";
+import { makeTemplate, MAX_PURPOSE, MAX_SLOT_KEY, normalizeSlotKey, templateText, type ParamChoice } from "@/lib/savedPages";
 import type { ChatMessage } from "../state/chatStore";
 import { useSettings } from "../hooks/useSettings";
 
@@ -52,7 +52,15 @@ export function PageOfferCard({ offer }: Props) {
   } catch (err) {
     previewError = err instanceof Error ? err.message : String(err);
   }
-  const slotNames = [...new Set(modes.flatMap((m, i) => (m === "slot" && slots[i].trim() ? [slots[i].trim()] : [])))];
+  // 자리 이름은 저장(makeTemplate)과 같은 정규화로 묶는다(연속 공백 등이 달라도 한 자리 — 설명·비워도 됨을 함께 쓴다).
+  const slotNames = [
+    ...new Set(
+      modes.flatMap((m, i) => {
+        const k = m === "slot" ? normalizeSlotKey(slots[i]) : null;
+        return k ? [k] : [];
+      }),
+    ),
+  ];
 
   const requestDraft = async () => {
     // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(경로·제목·본문으로도 값이 샐 수 있어 사용자가 직접 정한다).
