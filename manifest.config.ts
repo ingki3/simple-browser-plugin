@@ -67,7 +67,8 @@ export default defineManifest({
     "debugger",
   ],
   // 자동 로그인의 KeePassXC 연결(native messaging). 설정에서 켤 때만 요청한다.
-  optional_permissions: ["nativeMessaging"],
+  // 방문 기록에서 기억할 페이지 찾기(#175, history)도 설정에서 누를 때만 요청한다.
+  optional_permissions: ["nativeMessaging", "history"],
   host_permissions: ["<all_urls>"],
   // read_document의 문서 변환기(docling.rs-wasm)가 offscreen 문서의 Worker에서 WebAssembly를 쓴다. MV3는 'wasm-unsafe-eval'만 따로 허용할 수 있다.
   content_security_policy: {

@@ -59,8 +59,9 @@ export async function startHarness() {
   const ext = mkdtempSync(join(tmpdir(), "sbp-ext-"));
   cpSync(EXT, ext, { recursive: true });
   const manifest = JSON.parse(readFileSync(join(ext, "manifest.json"), "utf8"));
-  manifest.permissions = [...new Set([...(manifest.permissions ?? []), "nativeMessaging"])];
-  manifest.optional_permissions = (manifest.optional_permissions ?? []).filter((p) => p !== "nativeMessaging");
+  // 방문 기록(#175, history)도 같은 이유로 사본에서만 필수 권한으로 옮긴다(권한 거절 분기는 패널의 permissions 대역으로 시험).
+  manifest.permissions = [...new Set([...(manifest.permissions ?? []), "nativeMessaging", "history"])];
+  manifest.optional_permissions = (manifest.optional_permissions ?? []).filter((p) => p !== "nativeMessaging" && p !== "history");
   writeFileSync(join(ext, "manifest.json"), JSON.stringify(manifest));
   const userDataDir = mkdtempSync(join(tmpdir(), "sbp-harness-"));
   const ctx = await chromium.launchPersistentContext(userDataDir, {
