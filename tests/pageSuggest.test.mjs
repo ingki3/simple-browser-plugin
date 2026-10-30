@@ -51,3 +51,8 @@ test("normalizeRuleInput·parseRules·ruleFor", () => {
   assert.equal(ruleFor(rules, "https://a.com/x/1")?.id, "2");
   assert.equal(ruleFor(rules, "https://b.com/x/1"), null);
 });
+
+test("normalizeRuleInput: 긴 요청은 자르지 않고 거절", () => {
+  assert.throws(() => normalizeRuleInput({ origin: "https://a.com", path: "/", request: "가".repeat(501) }), /500자/);
+  assert.equal(normalizeRuleInput({ origin: "https://a.com", path: "/", request: "가".repeat(500) }).request.length, 500);
+});

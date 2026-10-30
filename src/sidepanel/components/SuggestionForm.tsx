@@ -21,6 +21,7 @@ export function SuggestionForm({ initial, originEditable, onSave, onCancel }: Pr
   const [d, setD] = useState<SuggestionDraft>(initial);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const tooLong = d.request.trim().length > MAX_REQUEST;
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -53,14 +54,15 @@ export function SuggestionForm({ initial, originEditable, onSave, onCancel }: Pr
       </label>
       <label className="field">
         <span className="field-label">실행하면 보낼 요청</span>
-        <textarea className="suggestion-request" value={d.request} maxLength={MAX_REQUEST} rows={2} onChange={(e) => setD({ ...d, request: e.target.value })} />
+        <textarea className="suggestion-request" value={d.request} rows={2} onChange={(e) => setD({ ...d, request: e.target.value })} />
+        {tooLong && <span className="field-help error-text">보낼 요청은 {MAX_REQUEST}자까지입니다({d.request.trim().length}자). 줄여 주세요.</span>}
       </label>
       {error && <span className="field-help error-text">{error}</span>}
       <div className="page-offer-actions">
         <button type="button" className="btn-cancel" onClick={onCancel}>
           취소
         </button>
-        <button type="button" className="btn-approve suggestion-save" disabled={saving || !d.request.trim()} onClick={() => void save()}>
+        <button type="button" className="btn-approve suggestion-save" disabled={saving || !d.request.trim() || tooLong} onClick={() => void save()}>
           저장
         </button>
       </div>

@@ -104,8 +104,10 @@ export function normalizeRuleInput(input: { origin?: unknown; path?: unknown; la
   if (!origin) throw new Error("사이트 주소(http·https 출처)가 올바르지 않습니다.");
   const path = typeof input.path === "string" ? normalizePathPattern(input.path) : null;
   if (!path) throw new Error("경로 패턴이 올바르지 않습니다('/'로 시작, '*'는 세그먼트 전체, '**'는 맨 끝에만).");
-  const request = typeof input.request === "string" ? input.request.trim().slice(0, MAX_REQUEST) : "";
+  const request = typeof input.request === "string" ? input.request.trim() : "";
   if (!request) throw new Error("보낼 요청을 적어 주세요.");
+  // 자르지 않는다(뒤쪽 조건이 빠진 요청이 저장·실행되지 않게).
+  if (request.length > MAX_REQUEST) throw new Error(`보낼 요청은 ${MAX_REQUEST}자까지입니다. 줄여 주세요.`);
   const label = clean(input.label, MAX_LABEL) || clean(request, MAX_LABEL);
   return { origin, path, label, request };
 }

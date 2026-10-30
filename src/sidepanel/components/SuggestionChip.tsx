@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ruleFor, type SuggestionRule } from "@/lib/pageSuggest";
 import { useCurrentTabContext } from "../state/currentTab";
 import { useSettings } from "../hooks/useSettings";
@@ -18,11 +18,8 @@ export function SuggestionChip({ rules, onRun, onDisable }: Props) {
   const { settings, loaded } = useSettings();
   const streaming = useChatStore((s) => s.streaming);
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
+  // 페이지 = 탭 + 그 탭의 로드 횟수 + 주소. 탭을 오가도 닫은 기록은 남는다(패널을 다시 열면 지워진다).
   const pageKey = tab ? `${tab.tabId}|${loadSeq}|${tab.url}` : "";
-  // 오래된 페이지 키는 버린다(지금 페이지 것만 남긴다).
-  useEffect(() => {
-    setDismissed((cur) => (cur.size && ![...cur].every((k) => k === pageKey) ? new Set([...cur].filter((k) => k === pageKey)) : cur));
-  }, [pageKey]);
 
   if (!loaded || !settings.pageSuggestions || !tab || !tab.web || dismissed.has(pageKey)) return null;
   const rule = ruleFor(rules, tab.url);
