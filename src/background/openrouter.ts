@@ -877,9 +877,11 @@ export class ChatAgent {
     endTurn("fail");
   }
 
+  // attached.pdfUrl: 이번에 PDF 파일을 붙였으면 그 주소(부르는 쪽이 기록에 넣을 때 lastAttachedPdfUrl로 확정한다).
   private async buildUserContent(
     userText: string,
     expect?: TurnExpect,
+    attached: { pdfUrl: string | null } = { pdfUrl: null },
   ): Promise<string | OpenRouterContentPart[] | typeof EXPECT_MISMATCH> {
     const pdfTabId = await this.requestTabId();
     // 제안 턴: 따라가는 탭이 확인한 탭이어야 한다(팝업을 잇지 않으므로 같아야 정상).
@@ -911,7 +913,8 @@ export class ChatAgent {
       try {
         const { data, bytes } = await fetchPdfAsBase64(pdfInfo.url);
         endFetch(`${Math.round(bytes / 1024)}KB`);
-        this.lastAttachedPdfUrl = pdfInfo.url;
+        // 첨부했다고 치는 것은 기록에 넣을 때(runUserTurn)다 — 그 전에 멈추면 다음에 다시 붙인다.
+        attached.pdfUrl = pdfInfo.url;
         // 파일 자체가 모델 제공자로 가는 순간을 알린다(#129).
         this.send({
           kind: "info",
@@ -1033,19 +1036,17 @@ export class ChatAgent {
       debugLog("turn:model", model);
 
       // 원격 대화는 요청 앞에 원격 안내를 붙인다(요청 글의 주소 판정·카드의 요청 원문은 사용자가 보낸 글 그대로).
-      const prevAttachedPdf = this.lastAttachedPdfUrl;
       const prevExternal = this.externalContent;
-      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel)}\n\n요청: ${userText}` : userText, opts.expect);
+      const attached = { pdfUrl: null as string | null };
+      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel)}\n\n요청: ${userText}` : userText, opts.expect, attached);
       if (this.isStale(turn)) {
         endTurn("aborted");
         return;
       }
       // 문맥을 다 읽은 뒤에도 같은 문서·주소여야 한다(아니면 기록·모델 요청 없이 끝낸다).
       if (userContent === EXPECT_MISMATCH || (opts.expect && !(await this.expectHolds(turnTab, opts.expect)))) {
-        // 기록에 넣지 않은 PDF 첨부는 첨부한 것으로 치지 않는다(다음에 같은 PDF면 다시 붙인다). 중단된 턴이면 새 턴의 상태를
-        // 건드리지 않는다.
+        // 기록에 넣지 않으므로 PDF 첨부도 확정하지 않는다(다음에 같은 PDF면 다시 붙인다). 중단된 턴이면 새 턴의 상태를 건드리지 않는다.
         if (!this.isStale(turn)) {
-          this.lastAttachedPdfUrl = prevAttachedPdf;
           // 받은 PDF를 대화에 넣지 않았으니 외부 본문 보호도 되돌린다(이 턴이 켰을 때만).
           if (!prevExternal && this.externalContent) {
             this.externalContent = false;
@@ -1062,6 +1063,8 @@ export class ChatAgent {
         endTurn("aborted");
         return;
       }
+      // 이제 기록에 넣는다 — 붙인 PDF를 첨부한 것으로 확정한다.
+      if (attached.pdfUrl) this.lastAttachedPdfUrl = attached.pdfUrl;
       this.closeDanglingToolCalls();
       // 사용자 글·탭 문맥(제목 등)도 기록에 넣기 전에 가린다(탭을 닫아 가림 목록이 지워진 뒤에도 원문이 남지 않게).
       const maskedUser = maskSyncMessages<OpenRouterMessage>([{ role: "user", content: userContent }]);
