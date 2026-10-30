@@ -38,17 +38,45 @@ function segments(path: string): string[] {
   return path.split("/").filter((s) => s !== "");
 }
 
-// 경로 패턴을 정규화한다: "/"로 시작, 빈 세그먼트 제거, "**"는 맨 끝에만. 형식이 틀리면 null.
+// 글자 세그먼트를 주소(pathname)와 같은 꼴로 인코딩한다(한글 등 — "/뉴스" → "/%EB%89%B4%EC%8A%A4"). 이미 인코딩된 값은 그대로.
+function encodeSegment(seg: string): string | null {
+  try {
+    const out = segments(new URL(`https://x.invalid/${seg}`).pathname);
+    return out.length === 1 ? out[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+// 경로 패턴을 정규화한다: "/"로 시작, 빈 세그먼트 제거, "**"는 맨 끝에만, 글자 세그먼트는 주소와 같은 인코딩. 형식이 틀리면 null.
 export function normalizePathPattern(raw: string): string | null {
   const p = raw.trim();
-  if (!p.startsWith("/") || p.length > MAX_PATH || /[?#\s]/.test(p)) return null;
+  if (!p.startsWith("/") || /[?#\s]/.test(p)) return null;
   const segs = segments(p);
+  const out: string[] = [];
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
     if (s === "**" && i !== segs.length - 1) return null;
-    if (s !== "*" && s !== "**" && s.includes("*")) return null;
+    if (s === "*" || s === "**") {
+      out.push(s);
+      continue;
+    }
+    if (s.includes("*")) return null;
+    const enc = encodeSegment(s);
+    if (!enc) return null;
+    out.push(enc);
   }
-  return "/" + segs.join("/");
+  const norm = "/" + out.join("/");
+  return norm.length > MAX_PATH ? null : norm;
+}
+
+// 보일 때(폼·목록)는 사람이 읽을 글자로. 풀 수 없으면 그대로.
+export function displayPath(path: string): string {
+  try {
+    return decodeURI(path);
+  } catch {
+    return path;
+  }
 }
 
 // 경로(pathname)가 패턴과 맞는지. 세그먼트 비교는 퍼센트 인코딩된 그대로 한다.
@@ -86,7 +114,7 @@ export function defaultPattern(url: string): string {
   const segs = segments(u.pathname);
   if (!segs.length) return "/";
   segs[segs.length - 1] = "*";
-  return "/" + segs.join("/");
+  return displayPath("/" + segs.join("/"));
 }
 
 function clean(s: unknown, max: number): string {

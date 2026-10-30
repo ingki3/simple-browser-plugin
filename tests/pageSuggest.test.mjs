@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultPattern, matchPath, matchesRule, normalizePathPattern, normalizeRuleInput, parseRules, ruleFor } from "../src/lib/pageSuggest.ts";
+import { defaultPattern, displayPath, matchPath, matchesRule, normalizePathPattern, normalizeRuleInput, parseRules, ruleFor } from "../src/lib/pageSuggest.ts";
 
 test("matchPath: 세그먼트 단위 *, 끝의 **", () => {
   assert.equal(matchPath("/*/*", "/@user/my-article"), true);
@@ -55,4 +55,13 @@ test("normalizeRuleInput·parseRules·ruleFor", () => {
 test("normalizeRuleInput: 긴 요청은 자르지 않고 거절", () => {
   assert.throws(() => normalizeRuleInput({ origin: "https://a.com", path: "/", request: "가".repeat(501) }), /500자/);
   assert.equal(normalizeRuleInput({ origin: "https://a.com", path: "/", request: "가".repeat(500) }).request.length, 500);
+});
+
+test("한글 경로: 주소와 같은 인코딩으로 저장해 맞추고, 보일 때는 풀어서", () => {
+  const path = normalizePathPattern("/뉴스/*");
+  assert.equal(path, "/%EB%89%B4%EC%8A%A4/*");
+  assert.equal(normalizePathPattern("/%EB%89%B4%EC%8A%A4/*"), path);
+  assert.equal(matchesRule({ origin: "https://example.com", path }, "https://example.com/뉴스/1"), true);
+  assert.equal(displayPath(path), "/뉴스/*");
+  assert.equal(defaultPattern("https://example.com/뉴스/1"), "/뉴스/*");
 });

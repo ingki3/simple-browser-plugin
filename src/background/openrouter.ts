@@ -1041,16 +1041,16 @@ export class ChatAgent {
       }
       // 문맥을 다 읽은 뒤에도 같은 문서·주소여야 한다(아니면 기록·모델 요청 없이 끝낸다).
       if (userContent === EXPECT_MISMATCH || (opts.expect && !(await this.expectHolds(turnTab, opts.expect)))) {
-        // 기록에 넣지 않은 PDF 첨부는 첨부한 것으로 치지 않는다(다음에 같은 PDF면 다시 붙인다).
-        this.lastAttachedPdfUrl = prevAttachedPdf;
+        // 기록에 넣지 않은 PDF 첨부는 첨부한 것으로 치지 않는다(다음에 같은 PDF면 다시 붙인다). 중단된 턴이면 새 턴의 상태를
+        // 건드리지 않는다.
+        if (!this.isStale(turn)) this.lastAttachedPdfUrl = prevAttachedPdf;
         commitReads(turnTab, false);
         // 끝내기(endKeepalive)는 아래 finally가 한다.
         this.expectFailed(turn, endTurn, false);
         return;
       }
-      // 확인을 기다리는 사이 중단·새 요청이 있었으면 기록을 바꾸지 않는다.
+      // 확인을 기다리는 사이 중단·새 요청이 있었으면 기록·첨부 상태를 바꾸지 않는다.
       if (this.isStale(turn)) {
-        this.lastAttachedPdfUrl = prevAttachedPdf;
         endTurn("aborted");
         return;
       }
