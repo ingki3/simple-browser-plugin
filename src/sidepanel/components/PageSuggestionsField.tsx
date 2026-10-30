@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { displayPath } from "@/lib/pageSuggest";
+import { displayPath, editablePath } from "@/lib/pageSuggest";
 import { useSuggestionRules } from "../hooks/useSuggestionRules";
 import { SuggestionForm } from "./SuggestionForm";
 
@@ -36,7 +36,7 @@ export function PageSuggestionsField({ enabled, onToggle }: Props) {
           editing === r.id ? (
             <li key={r.id}>
               <SuggestionForm
-                initial={{ origin: r.origin, path: displayPath(r.path), label: r.label, request: r.request }}
+                initial={{ origin: r.origin, path: editablePath(r.path), label: r.label, request: r.request }}
                 originEditable
                 onCancel={() => setEditing(null)}
                 onSave={async (d) => {

@@ -70,13 +70,19 @@ export function normalizePathPattern(raw: string): string | null {
   return norm.length > MAX_PATH ? null : norm;
 }
 
-// 보일 때(폼·목록)는 사람이 읽을 글자로. 풀 수 없으면 그대로.
+// 목록에 보일 때는 사람이 읽을 글자로. 풀 수 없으면 그대로.
 export function displayPath(path: string): string {
   try {
     return decodeURI(path);
   } catch {
     return path;
   }
+}
+
+// 폼에 넣을 때: 풀어 쓴 글자를 다시 정규화해 같은 패턴이 될 때만 풀어 쓴다(공백·%2A처럼 풀면 뜻이 바뀌는 값은 그대로).
+export function editablePath(path: string): string {
+  const d = displayPath(path);
+  return normalizePathPattern(d) === path ? d : path;
 }
 
 // 경로(pathname)가 패턴과 맞는지. 세그먼트 비교는 퍼센트 인코딩된 그대로 한다.
@@ -114,7 +120,9 @@ export function defaultPattern(url: string): string {
   const segs = segments(u.pathname);
   if (!segs.length) return "/";
   segs[segs.length - 1] = "*";
-  return displayPath("/" + segs.join("/"));
+  const pattern = "/" + segs.join("/");
+  const norm = normalizePathPattern(pattern);
+  return norm ? editablePath(norm) : pattern;
 }
 
 function clean(s: unknown, max: number): string {

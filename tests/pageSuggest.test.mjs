@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultPattern, displayPath, matchPath, matchesRule, normalizePathPattern, normalizeRuleInput, parseRules, ruleFor } from "../src/lib/pageSuggest.ts";
+import { defaultPattern, displayPath, editablePath, matchPath, matchesRule, normalizePathPattern, normalizeRuleInput, parseRules, ruleFor } from "../src/lib/pageSuggest.ts";
 
 test("matchPath: 세그먼트 단위 *, 끝의 **", () => {
   assert.equal(matchPath("/*/*", "/@user/my-article"), true);
@@ -64,4 +64,12 @@ test("한글 경로: 주소와 같은 인코딩으로 저장해 맞추고, 보�
   assert.equal(matchesRule({ origin: "https://example.com", path }, "https://example.com/뉴스/1"), true);
   assert.equal(displayPath(path), "/뉴스/*");
   assert.equal(defaultPattern("https://example.com/뉴스/1"), "/뉴스/*");
+});
+
+test("editablePath: 풀면 뜻이 바뀌는 경로는 그대로", () => {
+  assert.equal(defaultPattern("https://a.com/My%20Folder/x"), "/My%20Folder/*");
+  assert.equal(normalizePathPattern(defaultPattern("https://a.com/My%20Folder/x")), "/My%20Folder/*");
+  assert.equal(defaultPattern("https://a.com/%2A/x"), "/%2A/*");
+  assert.equal(editablePath("/%2A/*"), "/%2A/*");
+  assert.equal(editablePath("/%EB%89%B4%EC%8A%A4/*"), "/뉴스/*");
 });

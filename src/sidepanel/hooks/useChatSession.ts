@@ -258,6 +258,8 @@ export function useChatSession() {
   };
 
   const sendUser = (text: string) => {
+    // 직접 보낸 요청이 앞선 제안 실행을 대신한다(늦게 온 시작 알림을 붙이지 않는다).
+    lastRunId.current = "";
     const { conversationId, appendUser } = useChatStore.getState();
     appendUser(text);
     localDebug("user_msg", `${text.length}자`);
@@ -314,6 +316,7 @@ export function useChatSession() {
 
   // 반복 작업의 "이어서 진행"(#138): 새 대화를 열고 백그라운드에 그 대화로 시작하게 한다. 요청 글은 백그라운드가 정한다.
   const continueRepeat = (taskId: string) => {
+    lastRunId.current = "";
     useChatStore.getState().reset();
     const { conversationId } = useChatStore.getState();
     localDebug("repeat_continue", taskId);
@@ -321,6 +324,8 @@ export function useChatSession() {
   };
 
   const resetConversation = () => {
+    // 새 대화에는 이전 대화의 제안 실행 알림을 붙이지 않는다.
+    lastRunId.current = "";
     useChatStore.getState().reset();
     const { conversationId } = useChatStore.getState();
     send({ kind: "reset_conversation", conversationId });
