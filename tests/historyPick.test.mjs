@@ -83,3 +83,11 @@ test("parsePicks: 보낸 항목만, 정수·중복 없음·최대 8개, params�
   const snap20 = makeSnapshot(Array.from({ length: 20 }, (_, i) => ({ url: `https://a.com/${i}`, title: `t${i}`, visits: 1, typed: 0, last: now, distinct: 1, score: 1 })));
   assert.equal(parsePicks(JSON.stringify(many), new Set(snap20.map((s) => s.i)), snap20, () => 0).length, MAX_PICKS);
 });
+
+test("makeSnapshot: 결제·개인정보 단서는 빼지 않고 warning으로 붙인다", () => {
+  const g = (url) => ({ url, title: "t", visits: 1, typed: 0, last: now, distinct: 1, score: 1 });
+  const snap = makeSnapshot([g("https://a.com/order/history"), g("https://a.com/books")], (u) => (u.includes("order") ? "주문" : null));
+  assert.equal(snap.length, 2);
+  assert.equal(snap[0].warning, "주문");
+  assert.equal(snap[1].warning, undefined);
+});

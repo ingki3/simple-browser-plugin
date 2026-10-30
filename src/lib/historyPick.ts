@@ -30,6 +30,8 @@ export interface SnapshotItem {
   base: string;
   // p: 원본 주소의 쿼리 값 위치(앞 MAX_SNAPSHOT_PARAMS개). key는 표시·전송용으로 자른 이름이라 식별에 쓰지 않는다.
   params: Array<{ p: number; key: string }>;
+  // 주소에 결제·개인정보 단서가 보이면 그 이유(확인 화면에서 기본으로 체크하지 않고 ⚠로 보인다 — 더 묻는 쪽으로만 쓰는 신호).
+  warning?: string;
 }
 
 export interface HistoryPick {
@@ -115,15 +117,17 @@ export function matchesSavedTemplate(url: string, template: LinkTemplate): boole
   return true;
 }
 
-// 보낼 스냅샷(사용자가 확인 화면에서 그대로 본다).
-export function makeSnapshot(groups: readonly HistoryGroup[]): SnapshotItem[] {
+// 보낼 스냅샷(사용자가 확인 화면에서 그대로 본다). warningOf: 주소의 결제·개인정보 단서(있으면 항목에 붙인다).
+export function makeSnapshot(groups: readonly HistoryGroup[], warningOf: (url: string) => string | null = () => null): SnapshotItem[] {
   return groups.map((g, i) => {
     const parts = splitUrl(g.url);
+    const warning = warningOf(g.url);
     return {
       i,
       title: g.title.replace(/\s+/g, " ").trim().slice(0, MAX_SNAPSHOT_TITLE),
       base: (parts?.base ?? "").slice(0, MAX_SNAPSHOT_BASE),
       params: (parts?.params ?? []).slice(0, MAX_SNAPSHOT_PARAMS).map((p, idx) => ({ p: idx, key: p.key.slice(0, MAX_SNAPSHOT_KEY) })),
+      ...(warning ? { warning } : {}),
     };
   });
 }

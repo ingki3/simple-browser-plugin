@@ -8,6 +8,7 @@ interface SnapshotItem {
   title: string;
   base: string;
   params: Array<{ p: number; key: string }>;
+  warning?: string;
 }
 
 interface Pick {
@@ -82,7 +83,8 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
       return;
     }
     if (m.kind === "prepared" && m.items) {
-      setChecked(new Set(m.items.map((x) => x.i)));
+      // 결제·개인정보 단서가 보이는 항목은 기본으로 체크하지 않는다(사용자가 골라야 보낸다).
+      setChecked(new Set(m.items.filter((x) => !x.warning).map((x) => x.i)));
       setView({ step: "confirm", items: m.items, provider: m.provider ?? "", model: m.model ?? "" });
       return;
     }
@@ -131,8 +133,14 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
     port.current = p;
     jobId.current = crypto.randomUUID();
     p.onMessage.addListener(onMessage);
+    // 백그라운드 연결이 끊기면(서비스 워커 재시작 등) 작업이 사라졌으니 처음으로 돌아가 알린다.
     p.onDisconnect.addListener(() => {
-      if (port.current === p) port.current = null;
+      if (port.current !== p) return;
+      port.current = null;
+      jobId.current = "";
+      if (!alive.current) return;
+      setError("연결이 끊겨 작업을 멈췄습니다. 다시 찾아 주세요.");
+      setView({ step: "idle" });
     });
     setView({ step: "preparing" });
     p.postMessage({ kind: "prepare", jobId: jobId.current, windowId });
@@ -203,6 +211,7 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
                       />
                       <span>
                         <span className="history-pick-title">{it.title || "(제목 없음)"}</span>
+                        {it.warning && <span className="field-help history-pick-warn">⚠ 주소에 {it.warning} 단서가 있어 보입니다. 보내려면 직접 체크하세요.</span>}
                         <span className="history-pick-url">
                           {it.base}
                           {it.params.length ? `?${it.params.map((p) => p.key).join("&")}` : ""}

@@ -99,14 +99,15 @@ async function prepare(job: Job): Promise<{ items: SnapshotItem[]; provider: str
   for (const h of raw) {
     const url = h.url ?? "";
     const title = h.title ?? "";
-    // 결제·개인정보 단서·자동 로그인 값·이미 저장한 링크 형태는 보내지 않는다(덜 보내는 쪽으로만 쓰는 신호).
-    if (!/^https?:\/\//i.test(url) || sensitiveUrlReason(url)) continue;
+    // 자동 로그인 값·이미 저장한 링크 형태는 후보에서 뺀다(구조). 결제·개인정보 단서(낱말)는 빼지 않고 확인 화면에서 ⚠로
+    // 보이며 기본으로 체크하지 않는다(사용자가 골라야 보낸다 — 낱말은 더 묻는 쪽으로만 쓴다).
+    if (!/^https?:\/\//i.test(url)) continue;
     if (saved.some((l) => matchesSavedTemplate(url, l.template))) continue;
     if (await containsSecret({ url, title })) continue;
     entries.push({ url, title, visitCount: h.visitCount ?? 0, typedCount: h.typedCount ?? 0, lastVisitTime: h.lastVisitTime ?? 0 });
   }
   const groups = groupHistory(entries, Date.now(), () => false);
-  const snapshot = makeSnapshot(groups);
+  const snapshot = makeSnapshot(groups, (url) => sensitiveUrlReason(url));
   if (job.state !== "preparing") throw new Error("취소했습니다.");
   job.provider = provider;
   job.model = model;

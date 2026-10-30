@@ -8,6 +8,7 @@ async function visit(h) {
   await h.tab.goto(`${h.base}/shop/search?q=${encodeURIComponent("맥북")}&trk=t1`);
   await h.tab.goto(`${h.base}/shop/search?q=${encodeURIComponent("아이패드")}&trk=t2`);
   await h.tab.goto(`${h.base}/news/today`);
+  await h.tab.goto(`${h.base}/order/history`);
   await h.tab.waitForTimeout(300);
 }
 
@@ -32,7 +33,7 @@ const draftReqs = (h) => h.sw.evaluate(() => (globalThis.__draftReqs ?? []).leng
 export default [
   {
     name: "방문 기록 찾기(#175): 쿼리 값 없이 고른 항목만 보내고, 추천으로 채운 카드는 누를 때만 저장",
-    pages: { "/shop/search": page("상품 검색"), "/news/today": page("오늘 뉴스") },
+    pages: { "/shop/search": page("상품 검색"), "/news/today": page("오늘 뉴스"), "/order/history": page("주문 내역") },
     async run(h) {
       await h.settings({});
       await visit(h);
@@ -41,6 +42,10 @@ export default [
       const news = rows.findIndex((r) => r.includes("/news/today"));
       expect(shop >= 0 && news >= 0, `후보(${JSON.stringify(rows)})`);
       expect(rows[shop].includes("?q&trk") && !rows.join(" ").includes("맥북") && !rows.join(" ").includes("t1"), `쿼리 값은 보이지도 보내지도 않음(${rows[shop]})`);
+      // 결제·개인정보 단서가 보이는 주소는 빼지 않고 ⚠로 보이며 기본으로 체크하지 않는다.
+      const order = rows.findIndex((r) => r.includes("/order/history"));
+      expect(order >= 0 && rows[order].includes("⚠"), `주문 주소는 경고와 함께 보인다(${rows[order]})`);
+      expect(!(await h.panel.locator(".history-pick-confirm .history-pick-list li").nth(order).locator("input").isChecked()), "기본으로 체크하지 않음");
       // 뉴스는 체크를 푼다. 모델이 그 항목을 돌려줘도 무시해야 한다.
       await h.panel.locator(".history-pick-confirm .history-pick-list li").nth(news).locator("input").uncheck();
       await h.sw.evaluate(({ shop, news }) => {
@@ -57,7 +62,7 @@ export default [
       const req = await h.sw.evaluate(() => globalThis.__draftReqs.at(-1));
       const content = req?.messages?.[0]?.content ?? "";
       const data = JSON.parse(content.slice(content.indexOf("데이터:\n") + 4));
-      expect(data.length === rows.length - 1 && !data.some((d) => d.base.includes("/news/")), `체크한 항목만(${JSON.stringify(data.map((d) => d.base))})`);
+      expect(data.length === rows.length - 2 && !data.some((d) => d.base.includes("/news/") || d.base.includes("/order/")), `체크한 항목만(${JSON.stringify(data.map((d) => d.base))})`);
       expect(!content.includes("맥북") && !content.includes("아이패드") && !content.includes("t1") && !/"visits"|"typed"/.test(content), "쿼리 값·통계 없음");
       const picks = await h.panel.locator(".history-pick-results .history-pick-list li").allInnerTexts();
       expect(picks.length === 1 && picks[0].includes("상품 검색"), `보낸 항목의 추천만(${JSON.stringify(picks)})`);
