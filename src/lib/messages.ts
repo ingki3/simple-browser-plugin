@@ -220,6 +220,8 @@ export type PanelToBg =
   | { kind: "user_msg"; text: string; conversationId: string }
   // 반복 작업의 "이어서 진행"(#138). conversationId는 패널이 새로 연 대화.
   | { kind: "repeat_continue"; taskId: string; conversationId: string }
+  // 페이지 제안 칩의 [실행](#173): 표시할 때의 규칙·버전과 패널 창의 탭·주소. 백그라운드가 다시 확인하고 규칙의 요청을 보낸다.
+  | { kind: "suggestion_run"; conversationId: string; runId: string; windowId: number; ruleId: string; ruleVersion: number; tabId: number; url: string }
   // allowLinksThisTurn: 카드가 제안했을 때만 유효. 이번 요청 동안 같은 사이트 안의 일반 링크 이동은 묻지 않는다.
   // choiceIds: 선택 카드(choices)에서 고른 후보 id. 백그라운드가 고정한 후보의 부분집합만 받아들인다.
   // allowToolThisChat: 카드가 제안했을 때만 유효(chatGrantOffer). 이번 대화 동안 이 도구는 같은 조건이면 묻지 않는다(#53).
@@ -257,6 +259,9 @@ export type BgToPanel =
   // 반복 작업(#138): 목록이 바뀌었다(패널이 다시 읽는다) / 이어서 진행을 시작했다(새 대화의 첫 요청 글).
   | { kind: "repeat_update" }
   | { kind: "repeat_started"; text: string }
+  // 페이지 제안을 확인하고 시작했다(#173). runId가 패널이 보낸 마지막 실행일 때만 사용자 글로 보인다.
+  | { kind: "suggestion_started"; runId: string; text: string }
+  | { kind: "suggestion_failed"; runId: string; message: string }
   | { kind: "thought_chunk"; text: string }
   | { kind: "assistant_done"; finishReason?: string }
   | { kind: "status"; text: string | null }
@@ -431,6 +436,8 @@ export interface Settings {
   quickThinking: boolean;
   // "이 페이지 기억하기": 사용자가 저장한 페이지를 같은 사이트에서 모델에 이동 후보로 준다(#30).
   rememberPages: boolean;
+  // 주소 기반 동작 제안(#173): 사용자가 만든 규칙과 맞는 페이지에서 입력창 위에 제안을 띄운다(실행은 누를 때만).
+  pageSuggestions: boolean;
   // 클릭을 chrome.debugger의 실제 마우스 입력으로 보낼지(0.2.0). 끄면(기본) 페이지 스크립트로 누른다.
   trustedInput: boolean;
   // 직접 조작할 사이트(출처 목록, 0.2.2). 이 사이트에서는 클릭·입력을 대신하지 않고 대상을 표시해 사용자가 직접 한다.

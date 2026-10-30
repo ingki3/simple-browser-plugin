@@ -357,6 +357,16 @@ async function turnTabOf(tabId: number): Promise<TurnTab> {
   }
 }
 
+// 턴 시작 옵션. tabId·site: 반복 작업의 이어서 진행(#138). expect: 페이지 제안 실행(#173) — 확인한 탭·주소·문서.
+export interface TurnExpect {
+  tabId: number;
+  url: string;
+  documentId: string;
+}
+type TurnOpts = { tabId?: number; site?: string; expect?: TurnExpect };
+// buildUserContent가 제안 턴의 대상이 바뀐 것을 알릴 때.
+const EXPECT_MISMATCH = Symbol("expect_mismatch");
+
 export class ChatAgent {
   private history: OpenRouterMessage[] = [];
   private apiKey: string | null = null;
@@ -843,11 +853,42 @@ export class ChatAgent {
     });
   }
 
+  // 제안 턴(expect)의 대상이 그대로인지: 따라가는 탭이 그 탭이고, 지금 문서·주소가 확인한 것과 같다.
+  private async expectHolds(turnTab: TurnTab, expect: TurnExpect): Promise<boolean> {
+    if (!("tabId" in turnTab) || turnTab.tabId !== expect.tabId) return false;
+    try {
+      const url = (await chrome.tabs.get(expect.tabId)).url ?? "";
+      return url === expect.url && (await topDocumentId(expect.tabId)) === expect.documentId;
+    } catch {
+      return false;
+    }
+  }
+
+  // keepalive: 턴의 try 밖에서 부를 때 true(그 안에서는 finally가 끝낸다).
+  private expectFailed(turn: number, endTurn: (outcome: string) => void, keepalive = true): void {
+    if (keepalive) endKeepalive();
+    if (this.isStale(turn)) {
+      endTurn("aborted");
+      return;
+    }
+    debugLog("turn:suggestion_changed", "제안을 확인한 뒤 페이지가 바뀜", "warn");
+    this.send({ kind: "error", message: "페이지가 바뀌어 제안을 실행하지 않았습니다. 지금 페이지를 확인한 뒤 다시 요청하세요." });
+    this.send({ kind: "assistant_done" });
+    endTurn("fail");
+  }
+
+  // attached.pdfUrl: 이번에 PDF 파일을 붙였으면 그 주소(부르는 쪽이 기록에 넣을 때 lastAttachedPdfUrl로 확정한다).
   private async buildUserContent(
     userText: string,
-  ): Promise<string | OpenRouterContentPart[]> {
+    expect?: TurnExpect,
+    attached: { pdfUrl: string | null } = { pdfUrl: null },
+  ): Promise<string | OpenRouterContentPart[] | typeof EXPECT_MISMATCH> {
     const pdfTabId = await this.requestTabId();
+    // 제안 턴: 따라가는 탭이 확인한 탭이어야 한다(팝업을 잇지 않으므로 같아야 정상).
+    if (expect && pdfTabId !== expect.tabId) return EXPECT_MISMATCH;
     const pdfInfo = pdfTabId !== null ? await detectPdfAtTab(pdfTabId) : null;
+    // 제안 턴: PDF를 받기 전에 확인한 주소·문서인지 본다(다른 페이지의 파일을 받지 않게).
+    if (expect && (pdfInfo?.url !== expect.url || (await topDocumentId(expect.tabId)) !== expect.documentId)) return EXPECT_MISMATCH;
 
     if (pdfInfo?.isPdf) {
       // PDF 본문(또는 주소·파일 이름이 실릴 수 있는 자동 로드 실패 안내)이 문맥에 들어간다.
@@ -872,7 +913,8 @@ export class ChatAgent {
       try {
         const { data, bytes } = await fetchPdfAsBase64(pdfInfo.url);
         endFetch(`${Math.round(bytes / 1024)}KB`);
-        this.lastAttachedPdfUrl = pdfInfo.url;
+        // 첨부했다고 치는 것은 기록에 넣을 때(runUserTurn)다 — 그 전에 멈추면 다음에 다시 붙인다.
+        attached.pdfUrl = pdfInfo.url;
         // 파일 자체가 모델 제공자로 가는 순간을 알린다(#129).
         this.send({
           kind: "info",
@@ -908,7 +950,7 @@ export class ChatAgent {
 
   // 요청 하나를 처리하고 결과를 돌려준다(원격 채널이 최종 답만 보내는 데 쓴다, #139). finalText: 이번 요청에 들어간 기록 중
   // 도구 호출이 없는 마지막 답. aborted: 중단·새 요청에 밀림. error: 오류로 끝남(action은 다음 행동의 종류).
-  async sendUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<TurnOutcome> {
+  async sendUserTurn(userText: string, opts: TurnOpts = {}): Promise<TurnOutcome> {
     this.turnErrors = [];
     const running = this.runUserTurn(userText, opts);
     // runUserTurn은 첫 await 전에 턴 번호를 올린다.
@@ -933,7 +975,9 @@ export class ChatAgent {
 
   // tabId: 반복 작업의 "이어서 진행"(#138)처럼 백그라운드가 정한 탭에서 시작할 때. 없으면 지금 활성 탭.
   // site: 이 요청의 자동 실행 기준 사이트를 탭 주소 대신 이 출처로 고정한다(반복 작업의 이어서 진행 — 등록한 사이트).
-  private async runUserTurn(userText: string, opts: { tabId?: number; site?: string } = {}): Promise<void> {
+  // expect: 페이지 제안(#173)의 실행 — 확인한 탭의 문서·주소에서만 시작한다(앞 턴의 팝업을 잇지 않고, 문맥을 읽기 전후로
+  // 다시 확인해 바뀌었으면 기록·모델 요청 없이 끝낸다).
+  private async runUserTurn(userText: string, opts: TurnOpts = {}): Promise<void> {
     // 이전 턴이 아직 돌고 있으면 끊는다. 백그라운드 번역은 대화가 이어지는 동안 유지한다.
     this.cancelInFlight();
     const turn = ++this.currentTurn;
@@ -956,7 +1000,7 @@ export class ChatAgent {
     // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
     const turnTab = this.turnTab;
     // 앞 턴에서 우리 클릭으로 열려 따라가던 팝업 창이 아직 열려 있으면 같은 탭에서 시작한 이번 턴도 그 창에서 이어 간다.
-    if (!this.remote && (await inheritPopups(prevTurnTab, turnTab))) debugLog("turn:popup", "앞 턴의 팝업 창을 이어 따라감");
+    if (!this.remote && !opts.expect && (await inheritPopups(prevTurnTab, turnTab))) debugLog("turn:popup", "앞 턴의 팝업 창을 이어 따라감");
     if ("tabId" in this.turnTab) {
       debugLog("turn:tab", `tab ${this.turnTab.tabId}${this.turnTab.internal ? " (내부 페이지)" : ""}`);
     } else {
@@ -975,6 +1019,10 @@ export class ChatAgent {
         /* 탭을 못 읽으면 신뢰 사이트 없이 진행(이동은 카드로 묻는다) */
       }
     }
+    if (opts.expect && !(await this.expectHolds(turnTab, opts.expect))) {
+      this.expectFailed(turn, endTurn);
+      return;
+    }
     if (!this.isStale(turn)) {
       this.turnSite = site;
       this.turnNamedSites = userNamedSites(userText);
@@ -988,11 +1036,35 @@ export class ChatAgent {
       debugLog("turn:model", model);
 
       // 원격 대화는 요청 앞에 원격 안내를 붙인다(요청 글의 주소 판정·카드의 요청 원문은 사용자가 보낸 글 그대로).
-      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel)}\n\n요청: ${userText}` : userText);
+      const prevExternal = this.externalContent;
+      const attached = { pdfUrl: null as string | null };
+      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel)}\n\n요청: ${userText}` : userText, opts.expect, attached);
       if (this.isStale(turn)) {
         endTurn("aborted");
         return;
       }
+      // 문맥을 다 읽은 뒤에도 같은 문서·주소여야 한다(아니면 기록·모델 요청 없이 끝낸다).
+      if (userContent === EXPECT_MISMATCH || (opts.expect && !(await this.expectHolds(turnTab, opts.expect)))) {
+        // 기록에 넣지 않으므로 PDF 첨부도 확정하지 않는다(다음에 같은 PDF면 다시 붙인다). 중단된 턴이면 새 턴의 상태를 건드리지 않는다.
+        if (!this.isStale(turn)) {
+          // 받은 PDF를 대화에 넣지 않았으니 외부 본문 보호도 되돌린다(이 턴이 켰을 때만).
+          if (!prevExternal && this.externalContent) {
+            this.externalContent = false;
+            debugLog("guard:external_content", "제안 실행을 멈춰 PDF를 넣지 않음 — 보호 되돌림");
+          }
+        }
+        commitReads(turnTab, false);
+        // 끝내기(endKeepalive)는 아래 finally가 한다.
+        this.expectFailed(turn, endTurn, false);
+        return;
+      }
+      // 확인을 기다리는 사이 중단·새 요청이 있었으면 기록·첨부 상태를 바꾸지 않는다.
+      if (this.isStale(turn)) {
+        endTurn("aborted");
+        return;
+      }
+      // 이제 기록에 넣는다 — 붙인 PDF를 첨부한 것으로 확정한다.
+      if (attached.pdfUrl) this.lastAttachedPdfUrl = attached.pdfUrl;
       this.closeDanglingToolCalls();
       // 사용자 글·탭 문맥(제목 등)도 기록에 넣기 전에 가린다(탭을 닫아 가림 목록이 지워진 뒤에도 원문이 남지 않게).
       const maskedUser = maskSyncMessages<OpenRouterMessage>([{ role: "user", content: userContent }]);

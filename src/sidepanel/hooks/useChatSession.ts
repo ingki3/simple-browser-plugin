@@ -8,6 +8,8 @@ const RECONNECT_DELAY_MS = 500;
 
 export function useChatSession() {
   const portRef = useRef<chrome.runtime.Port | null>(null);
+  // 마지막으로 누른 페이지 제안 실행(#173). 늦게 온 시작·실패 알림이 다른 실행에 붙지 않게.
+  const lastRunId = useRef("");
 
   useEffect(() => {
     let alive = true;
@@ -120,6 +122,13 @@ export function useChatSession() {
           return;
         case "repeat_update":
           s.bumpRepeat();
+          return;
+        case "suggestion_started":
+          // 페이지 제안 실행(#173): 백그라운드가 확인한 뒤 보낸 요청 글. 마지막으로 누른 실행일 때만 보인다.
+          if (msg.runId === lastRunId.current) s.appendUser(msg.text);
+          return;
+        case "suggestion_failed":
+          if (msg.runId === lastRunId.current) s.addInfo("제안을 실행하지 않았습니다", msg.message);
           return;
         case "repeat_started":
           // 이어서 진행(#138): 백그라운드가 저장된 작업으로 만든 첫 요청 글.
@@ -239,7 +248,18 @@ export function useChatSession() {
     [localDebug],
   );
 
+  // 페이지 제안 칩의 실행(#173): 요청 글은 백그라운드가 규칙에서 정한다(확인한 뒤 suggestion_started로 알려 준다).
+  const runSuggestion = (rule: { id: string; version: number }, tab: { windowId: number; tabId: number; url: string }) => {
+    const { conversationId } = useChatStore.getState();
+    const runId = crypto.randomUUID();
+    lastRunId.current = runId;
+    localDebug("suggestion_run", rule.id);
+    send({ kind: "suggestion_run", conversationId, runId, windowId: tab.windowId, ruleId: rule.id, ruleVersion: rule.version, tabId: tab.tabId, url: tab.url });
+  };
+
   const sendUser = (text: string) => {
+    // 직접 보낸 요청이 앞선 제안 실행을 대신한다(늦게 온 시작 알림을 붙이지 않는다).
+    lastRunId.current = "";
     const { conversationId, appendUser } = useChatStore.getState();
     appendUser(text);
     localDebug("user_msg", `${text.length}자`);
@@ -296,6 +316,7 @@ export function useChatSession() {
 
   // 반복 작업의 "이어서 진행"(#138): 새 대화를 열고 백그라운드에 그 대화로 시작하게 한다. 요청 글은 백그라운드가 정한다.
   const continueRepeat = (taskId: string) => {
+    lastRunId.current = "";
     useChatStore.getState().reset();
     const { conversationId } = useChatStore.getState();
     localDebug("repeat_continue", taskId);
@@ -303,10 +324,12 @@ export function useChatSession() {
   };
 
   const resetConversation = () => {
+    // 새 대화에는 이전 대화의 제안 실행 알림을 붙이지 않는다.
+    lastRunId.current = "";
     useChatStore.getState().reset();
     const { conversationId } = useChatStore.getState();
     send({ kind: "reset_conversation", conversationId });
   };
 
-  return { sendUser, approveTool, cancelTool, abortStream, resetConversation, revokeChatGrant, revokeTask, continueRepeat };
+  return { sendUser, approveTool, cancelTool, abortStream, resetConversation, revokeChatGrant, revokeTask, continueRepeat, runSuggestion };
 }
