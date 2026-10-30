@@ -23,8 +23,10 @@ async function installTelegram(h) {
         return ok({ message_id: globalThis.__tg.sent.length });
       }
       if (method === "getUpdates") {
-        const ready = globalThis.__tg.updates.filter((x) => x.update_id >= (body.offset ?? 0));
-        if (!ready.length && body.timeout) await new Promise((r) => setTimeout(r, 300));
+        const take = () => globalThis.__tg.updates.filter((x) => x.update_id >= (body.offset ?? 0));
+        if (!take().length && body.timeout) await new Promise((r) => setTimeout(r, 300));
+        // 기다리는 사이 들어온 업데이트도 돌려준다(버리지 않음).
+        const ready = take();
         globalThis.__tg.updates = [];
         return ok(ready);
       }
@@ -137,6 +139,37 @@ export default [
       const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
       expect(log[0]?.startsWith("remember_page:") && !log[0].endsWith(":ok"), `거절(${log.join(", ")})`);
       expect((await h.panel.locator(".page-offer").count()) === 0, "패널에 저장 카드 없음");
+    },
+  },
+  {
+    name: "원격 안내에 요청 글에 적은 사이트를 알린다(없으면 주소를 함께 보내 달라고 답하게)",
+    async run(h) {
+      await connect(h);
+      // 이번 요청의 원격 안내(원격 요청 표시가 있는 마지막 사용자 메시지)를 읽는다.
+      const lastUser = () =>
+        h.sw.evaluate(() => {
+          const msgs = globalThis.__modelReqs.flatMap((r) => r.body?.messages ?? []);
+          const text = (m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""));
+          const u = [...msgs].reverse().find((m) => m.role === "user" && text(m).includes("원격 요청"));
+          return u ? text(u) : "";
+        });
+      await h.sw.evaluate(() => {
+        globalThis.__modelReqs = [];
+        globalThis.__steps = [{ text: "정리" }];
+      });
+      await deliver(h, "news.naver.com 경제 뉴스 정리해줘");
+      await waitSent(h, 1);
+      let note = await lastUser();
+      expect(note.includes("https://news.naver.com") && note.includes("승인 없이 이동할 수 있다"), `적은 사이트 안내(${note.slice(0, 400)})`);
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__modelReqs = [];
+        globalThis.__steps = [{ text: "주소를 알려 주세요" }];
+      });
+      await deliver(h, "오늘 경제 뉴스 정리해줘");
+      await waitSent(h, 1);
+      note = await lastUser();
+      expect(note.includes("사이트 주소가 없어") && !note.includes("승인 없이 이동할 수 있다"), `주소 없음 안내(${note.slice(0, 400)})`);
     },
   },
   {

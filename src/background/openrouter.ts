@@ -332,12 +332,16 @@ export interface AgentSink {
 }
 const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page"]);
 const REMOTE_REFUSED_NOTE =
-  "이 요청은 원격(텔레그램·MCP)에서 왔다. 승인이 필요한 동작은 원격 요청에서 하지 않는다. 더 시도하지 말고, 지금까지 한 일과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
+  "이 요청은 원격(텔레그램·MCP)에서 왔다. 승인이 필요한 동작은 원격 요청에서 하지 않는다. 더 시도하지 말고, 지금까지 한 일과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라. 거절된 것이 요청 글에 없는 사이트로의 이동이면, 그 사이트 주소를 띄어 써서 요청과 함께 다시 보내면 원격에서도 갈 수 있다고 알려라.";
 const REMOTE_STOP_NOTE =
   "승인이 필요한 동작이라 원격 요청에서 하지 않았다. 도구를 더 부르지 말고, 지금까지 알아낸 것과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
-const remoteTurnNote = (channel: AgentChannel) =>
+// namedSites: 이번 요청 글에 사용자가 적은 사이트(userNamedSites). 그 사이트 안의 이동은 승인 없이 되므로(#54) 모델이 미리 포기하지 않게 알린다.
+const remoteTurnNote = (channel: AgentChannel, namedSites: readonly string[]) =>
   (channel === "mcp" ? "이 요청은 사용자의 다른 AI 도구(MCP)에서 왔다(원격 요청). 답은 그 도구로 간다." : "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다.") +
-  " 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·다른 사이트 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 짧은 평문으로.";
+  " 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·요청 글에 없는 사이트로 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 짧은 평문으로." +
+  (namedSites.length
+    ? ` 이번 요청 글에 사용자가 적은 사이트(${namedSites.join(", ")}) 중 하나로는 새 탭에서 승인 없이 이동할 수 있다(같은 사이트의 하위 도메인·페이지 포함) — 거절될 거라 미리 단정하지 말고 navigate_to_url로 가서 일하라. 단, 한 사이트에 들어간 뒤에는 그 사이트 안에서만 이동되고(적은 다른 사이트로 옮기는 것도 거절), 여러 사람이 주소를 나눠 쓰는 공유 호스팅(github.io 등) 주소는 거절된다.`
+    : " 이번 요청 글에는 사이트 주소가 없어 다른 사이트로는 이동할 수 없다(지금 페이지와 같은 사이트 안은 된다). 지금 페이지로 할 수 없는 일이면 도구를 부르지 말고, 볼 사이트 주소를 띄어 써서 요청과 함께 다시 보내 달라고 답하라(예: news.naver.com 경제 뉴스 정리해줘).");
 
 const LIMIT_STOP_NOTE =
   "[확장 안내 — 사용자 글 아님] 도구 호출 순환 한도에 닿아 사용자가 더 진행하지 않기로 했습니다. 도구를 더 부르지 말고, 지금까지 관측한 결과만으로 사용자의 요청에 답하세요. 끝내지 못한 부분이 있으면 무엇이 남았는지와 다음에 할 일을 짧게 밝히세요.";
@@ -1038,7 +1042,7 @@ export class ChatAgent {
       // 원격 대화는 요청 앞에 원격 안내를 붙인다(요청 글의 주소 판정·카드의 요청 원문은 사용자가 보낸 글 그대로).
       const prevExternal = this.externalContent;
       const attached = { pdfUrl: null as string | null };
-      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel)}\n\n요청: ${userText}` : userText, opts.expect, attached);
+      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel, userNamedSites(userText))}\n\n요청: ${userText}` : userText, opts.expect, attached);
       if (this.isStale(turn)) {
         endTurn("aborted");
         return;
