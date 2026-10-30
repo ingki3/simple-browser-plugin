@@ -20,16 +20,18 @@ type Mode = ParamChoice["mode"];
 // 카드를 열면 모델에 초안(이름·용도·값마다 고정·자리·빼기·비워도 되는 자리)을 한 번 자동으로 묻고(이 턴의 요청·답·페이지
 // 글자를 함께 보낸다 — 사용자 결정으로 #129의 "누를 때만"을 바꿈), 사용자가 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면
 // 초안을 묻지 않고, 저장할 때 한 번 더 확인한다. 페이지 기억하기가 꺼져 있으면 묻지도 저장하지도 않는다.
-export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
+export function PageOfferCard({ offer, startOpen, autoDraft = true, initialDraft }: Props) {
   const [open, setOpen] = useState(!!startOpen);
-  const [name, setName] = useState(offer.title);
-  const [purpose, setPurpose] = useState("");
-  const [modes, setModes] = useState<Mode[]>(() => offer.params.map(() => "keep"));
-  const [slots, setSlots] = useState<string[]>(() => offer.params.map(() => ""));
-  const [hints, setHints] = useState<Record<string, string>>({});
+  // 방문 기록 추천(#175) 카드는 추천을 초기값으로 쓰고 초안을 묻지 않는다.
+  const init = initialDraft && initialDraft.choices.length === offer.params.length ? initialDraft : null;
+  const [name, setName] = useState(initialDraft?.name || offer.title);
+  const [purpose, setPurpose] = useState(initialDraft?.purpose ?? "");
+  const [modes, setModes] = useState<Mode[]>(() => (init ? init.choices.map((c) => c.mode) : offer.params.map(() => "keep")));
+  const [slots, setSlots] = useState<string[]>(() => (init ? init.choices.map((c) => (c.mode === "slot" ? c.slot : "")) : offer.params.map(() => "")));
+  const [hints, setHints] = useState<Record<string, string>>(() => ({ ...(init?.hints ?? {}) }));
   // 비워도 되는 자리 이름(사용자가 체크박스로 고름, 초안이 제안).
-  const [optional, setOptional] = useState<Set<string>>(() => new Set());
-  const [overflow, setOverflow] = useState<string[]>([]);
+  const [optional, setOptional] = useState<Set<string>>(() => new Set(init?.optional ?? []));
+  const [overflow, setOverflow] = useState<string[]>(() => init?.overflow ?? []);
   const [drafting, setDrafting] = useState(false);
   const [draftFailed, setDraftFailed] = useState(false);
   const { settings, loaded } = useSettings();
@@ -114,7 +116,7 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
   const close = () => setOpen(false);
   useEffect(() => {
     // autoDraft가 false면(외부 본문 보호 중 remember_page) 자동으로 묻지 않는다 — "다시 채우기"를 누를 때만.
-    if (!open || !autoDraft || autoTried.current || offer.warning || !loaded || !settings.rememberPages) return;
+    if (!open || !autoDraft || initialDraft || autoTried.current || offer.warning || !loaded || !settings.rememberPages) return;
     autoTried.current = true;
     void requestDraft();
   }, [open, loaded, settings.rememberPages]);
@@ -176,7 +178,12 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
   return (
     <div className="page-offer open">
       {!enabled && <span className="field-help error-text">페이지 기억하기가 꺼져 있어 저장할 수 없습니다(설정 → 페이지 기억하기).</span>}
-      {!offer.warning && enabled && (
+      {initialDraft && (
+        <span className="field-help page-offer-history">
+          방문 기록 추천으로 채웠습니다(쿼리 값은 보내지 않았습니다). 확인하고 고친 뒤 저장하세요.
+        </span>
+      )}
+      {!initialDraft && !offer.warning && enabled && (
         <div className="page-offer-draft">
           <button type="button" className="ghost-btn" disabled={drafting} onClick={() => void requestDraft()}>
             {drafting ? "채우는 중…" : "다시 채우기"}

@@ -109,7 +109,8 @@ const MAX_CONTEXT_PAGE = 3000;
 // titleFromUrl: 탭 제목이 없어 주소를 제목으로 쓴 경우(초안 요청에는 쿼리·해시가 든 그 제목을 보내지 않는다).
 // draft: 초안 요청에 보낼 데이터를 제안을 만들 때 만들어, 자동 로그인으로 넣은 값을 그때 가려 둔다(탭을 닫아 가림 목록이 지워진 뒤
 // 카드를 열어도 원문이 가지 않게).
-const contexts = new Map<string, { draft: Record<string, unknown> }>();
+// history: 방문 기록 추천으로 만든 카드(#175) — 추천이 곧 초안이라 초안을 다시 묻지 않는다(보낸 범위를 넓히지 않게).
+const contexts = new Map<string, { draft: Record<string, unknown>; source?: "history" }>();
 
 async function load(): Promise<SavedLink[]> {
   const obj = await chrome.storage.local.get(SAVED_PAGES_KEY);
@@ -214,15 +215,52 @@ export async function makeOfferResult(
       page: page.replace(/\s+/g, " ").trim().slice(0, MAX_CONTEXT_PAGE),
     }),
   });
+  trimOffers();
+  return { offer };
+}
+
+
+// 방문 기록 추천(#175)에서 고른 페이지의 저장 카드(탭 없이 주소로). 부르는 쪽이 기능·권한·패널 창을 이미 확인했다.
+// 초안 데이터는 사용자가 확인하고 보낸 스냅샷과 같은 범위(제목·출처+경로·쿼리 이름)만 둔다 — 초안을 다시 묻지 않는다.
+export async function historyOffer(
+  url: string,
+  title: string,
+  snap: { base: string; title: string; params: Array<{ p: number; key: string }> },
+): Promise<{ offer: PageOffer } | { refused: string }> {
+  if (!(await getSettings()).rememberPages) return { refused: BUTTON_REFUSAL_TEXT.disabled };
+  const parts = splitUrl(url);
+  const site = siteOf(url);
+  if (!parts || !site) return { refused: BUTTON_REFUSAL_TEXT.not_web };
+  const list = await load();
+  const lru = list.length >= MAX_LINKS ? leastRecentlyUsed(list) : null;
+  const offer: PageOffer = {
+    offerId: crypto.randomUUID(),
+    url,
+    title: normalizeName(title) || url,
+    site,
+    warning: sensitiveUrlReason(url),
+    params: parts.params.map((p) => ({ key: p.key, value: p.value })),
+    evicts: lru ? { id: lru.id, name: lru.name } : null,
+    savedTemplates: list.map((l) => templateText(l.template)),
+  };
+  if (await containsSecret({ title: offer.title, url: offer.url })) return { refused: BUTTON_REFUSAL_TEXT.secret };
+  offers.set(offer.offerId, offer);
+  contexts.set(offer.offerId, {
+    draft: { request: "", answer: "", title: snap.title, base: snap.base, query: snap.params.map((p) => ({ index: p.p, key: p.key, value: "" })), page: "" },
+    source: "history",
+  });
+  trimOffers();
+  return { offer };
+}
+
+function trimOffers(): void {
   while (offers.size > MAX_OFFERS) {
     const oldest = offers.keys().next().value;
     if (oldest === undefined) break;
     offers.delete(oldest);
     contexts.delete(oldest);
   }
-  return { offer };
 }
-
 
 // 패널의 "이 페이지 기억" 버튼(#174): 패널 창의 활성 탭으로 저장 카드를 만든다. shown은 패널이 버튼을 보일 때의 탭·주소로,
 // 지금 탭이 그것과 다르면 만들지 않는다. 문서를 먼저 고정하고(확인 못 하면 거절) 그 문서·주소로 화면 글자까지 읽는다.
@@ -268,6 +306,8 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
   if (!apiKey) return null;
   if (offer.warning) return null;
   const ctx = contexts.get(offerId);
+  // 방문 기록 추천 카드는 추천이 초안이다(카드도 다시 채우기를 보이지 않는다).
+  if (ctx?.source === "history") return null;
   const prompt = [
     "사용자가 도우미와 대화하다 도착한 웹 페이지 주소를 다시 쓸 수 있는 링크 템플릿으로 저장하려 한다. 이번 요청 하나가 아니라 다음에 다른 값으로도 널리 쓸 수 있는 일반적인 링크로 만든다. JSON 하나로만 답한다.",
     '형식: {"name": "짧은 이름(40자)", "purpose": "이 링크로 할 수 있는 일(80자)", "params": [{"index": 쿼리 값 번호, "mode": "keep|slot|drop", "slot": "자리 이름(mode가 slot일 때)", "hint": "자리에 넣을 값 설명과 형식(mode가 slot일 때)", "optional": 비워도 되는지(mode가 slot일 때, true|false)}]}',

@@ -5,6 +5,7 @@ import { ChatAgent } from "./openrouter";
 import { applySettingsPatch, invalidateSettingsCache } from "./storage";
 import { deletePages, draftLink, listPages, rememberCurrentPage, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
+import { handleHistoryPickPort, HISTORY_PICK_PORT } from "./historyPickStore";
 import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
@@ -49,6 +50,12 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.runtime.onConnect.addListener((port) => {
+  // 방문 기록에서 기억할 페이지 찾기(#175): 이 확장의 화면(설정)에서 연 연결만.
+  if (port.name === HISTORY_PICK_PORT) {
+    if (port.sender?.id === chrome.runtime.id && port.sender.url?.startsWith(chrome.runtime.getURL(""))) handleHistoryPickPort(port);
+    else port.disconnect();
+    return;
+  }
   if (port.name !== PORT_NAME) return;
 
   let agent: ChatAgent | null = null;
