@@ -20,16 +20,18 @@ type Mode = ParamChoice["mode"];
 // 카드를 열면 모델에 초안(이름·용도·값마다 고정·자리·빼기·비워도 되는 자리)을 한 번 자동으로 묻고(이 턴의 요청·답·페이지
 // 글자를 함께 보낸다 — 사용자 결정으로 #129의 "누를 때만"을 바꿈), 사용자가 고쳐 저장한다. 주소에 결제·개인정보 단서가 보이면
 // 초안을 묻지 않고, 저장할 때 한 번 더 확인한다. 페이지 기억하기가 꺼져 있으면 묻지도 저장하지도 않는다.
-export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
+export function PageOfferCard({ offer, startOpen, autoDraft = true, initialDraft }: Props) {
   const [open, setOpen] = useState(!!startOpen);
-  const [name, setName] = useState(offer.title);
-  const [purpose, setPurpose] = useState("");
-  const [modes, setModes] = useState<Mode[]>(() => offer.params.map(() => "keep"));
-  const [slots, setSlots] = useState<string[]>(() => offer.params.map(() => ""));
-  const [hints, setHints] = useState<Record<string, string>>({});
+  // 방문 기록 추천(#175) 카드는 추천을 초기값으로 쓰고 초안을 묻지 않는다.
+  const init = initialDraft && initialDraft.choices.length === offer.params.length ? initialDraft : null;
+  const [name, setName] = useState(initialDraft?.name || offer.title);
+  const [purpose, setPurpose] = useState(initialDraft?.purpose ?? "");
+  const [modes, setModes] = useState<Mode[]>(() => (init ? init.choices.map((c) => c.mode) : offer.params.map(() => "keep")));
+  const [slots, setSlots] = useState<string[]>(() => (init ? init.choices.map((c) => (c.mode === "slot" ? c.slot : "")) : offer.params.map(() => "")));
+  const [hints, setHints] = useState<Record<string, string>>(() => ({ ...(init?.hints ?? {}) }));
   // 비워도 되는 자리 이름(사용자가 체크박스로 고름, 초안이 제안).
-  const [optional, setOptional] = useState<Set<string>>(() => new Set());
-  const [overflow, setOverflow] = useState<string[]>([]);
+  const [optional, setOptional] = useState<Set<string>>(() => new Set(init?.optional ?? []));
+  const [overflow, setOverflow] = useState<string[]>(() => init?.overflow ?? []);
   const [drafting, setDrafting] = useState(false);
   const [draftFailed, setDraftFailed] = useState(false);
   const { settings, loaded } = useSettings();
@@ -38,6 +40,9 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
   const [evicted, setEvicted] = useState<string | null>(null);
+  // 저장할 때 지워질 링크가 카드를 띄울 때와 달라졌으면 백그라운드가 알려 준 새 예고. 그때의 템플릿(preview)에만 쓰고,
+  // 템플릿을 고치면 카드를 띄울 때의 예고로 돌아간다(백그라운드가 저장할 때 다시 확인한다).
+  const [evictOverride, setEvictOverride] = useState<{ preview: string; value: { id: string; name: string } | null } | null>(null);
   // 초안을 기다리는 사이 사용자가 고친 칸은 늦게 온 초안으로 덮지 않는다. 카드를 닫았다 다시 열면 이전 요청의 응답은 버린다.
   const touched = useRef({ name: false, purpose: false, params: false, hints: new Set<string>(), optional: false });
   const draftSeq = useRef(0);
@@ -61,6 +66,14 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
       }),
     ),
   ];
+
+  // 사용자에게 보여 준(저장하면 지워질) 링크. 같은 템플릿을 다시 저장하면 지우지 않는다.
+  const shownEvict =
+    evictOverride && evictOverride.preview === preview
+      ? evictOverride.value
+      : offer.evicts && !previewError && !offer.savedTemplates.includes(preview)
+        ? offer.evicts
+        : null;
 
   const requestDraft = async () => {
     // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(경로·제목·본문으로도 값이 샐 수 있어 사용자가 직접 정한다).
@@ -103,7 +116,7 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
   const close = () => setOpen(false);
   useEffect(() => {
     // autoDraft가 false면(외부 본문 보호 중 remember_page) 자동으로 묻지 않는다 — "다시 채우기"를 누를 때만.
-    if (!open || !autoDraft || autoTried.current || offer.warning || !loaded || !settings.rememberPages) return;
+    if (!open || !autoDraft || initialDraft || autoTried.current || offer.warning || !loaded || !settings.rememberPages) return;
     autoTried.current = true;
     void requestDraft();
   }, [open, loaded, settings.rememberPages]);
@@ -120,9 +133,21 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
         hints,
         optional: slotNames.filter((k) => optional.has(k)),
         confirmedWarning: confirmed,
-      })) as { ok: boolean; data?: { evicted: string | null }; error?: string } | undefined;
-      if (res?.ok) {
-        setEvicted(res.data?.evicted ?? null);
+        expectEvictId: shownEvict?.id ?? null,
+      })) as
+        | { ok: boolean; data?: { evicted: string | null } | { evictChanged: { id: string; name: string } | null }; error?: string }
+        | undefined;
+      if (res?.ok && res.data && "evictChanged" in res.data) {
+        // 다른 카드를 먼저 저장해 지워질 링크가 바뀌었다. 새 예고를 보이고 다시 누르게 한다(저장하지 않았다).
+        setEvictOverride({ preview, value: res.data.evictChanged });
+        setError(
+          res.data.evictChanged
+            ? `지워질 링크가 '${res.data.evictChanged.name}'(으)로 바뀌었습니다. 확인한 뒤 다시 저장을 누르세요.`
+            : "이제 저장해도 지워지는 링크가 없습니다. 다시 저장을 누르세요.",
+        );
+        setState("error");
+      } else if (res?.ok) {
+        setEvicted(res.data && "evicted" in res.data ? res.data.evicted : null);
         setState("saved");
       } else {
         setError(res?.error ?? "저장하지 못했습니다.");
@@ -153,7 +178,12 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
   return (
     <div className="page-offer open">
       {!enabled && <span className="field-help error-text">페이지 기억하기가 꺼져 있어 저장할 수 없습니다(설정 → 페이지 기억하기).</span>}
-      {!offer.warning && enabled && (
+      {initialDraft && (
+        <span className="field-help page-offer-history">
+          방문 기록 추천으로 채웠습니다(쿼리 값은 보내지 않았습니다). 확인하고 고친 뒤 저장하세요.
+        </span>
+      )}
+      {!initialDraft && !offer.warning && enabled && (
         <div className="page-offer-draft">
           <button type="button" className="ghost-btn" disabled={drafting} onClick={() => void requestDraft()}>
             {drafting ? "채우는 중…" : "다시 채우기"}
@@ -269,8 +299,8 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
           <span>⚠ 이 주소에 {offer.warning} 단서가 있어 보입니다. 그 값을 고정으로 남겨도 저장합니다.</span>
         </label>
       )}
-      {offer.evicts && !previewError && !offer.savedTemplates.includes(preview) && (
-        <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{offer.evicts}'이(가) 지워집니다.</span>
+      {shownEvict && (
+        <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{shownEvict.name}'이(가) 지워집니다.</span>
       )}
       <span className="field-help">
         입력 자리의 지금 값은 저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 고른 모델 제공자에 후보로

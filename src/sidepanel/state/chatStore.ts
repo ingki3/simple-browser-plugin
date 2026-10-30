@@ -1,7 +1,15 @@
 import { create } from "zustand";
 import type { DebugEvent, PageOfferData, ToolName } from "@/lib/messages";
+import type { LinkDraft } from "@/lib/savedPages";
 
 const DEBUG_BUFFER_MAX = 500;
+
+// 응답을 받는 중이면 스트리밍 중인 답 말풍선 앞에 끼워 넣는다(청크는 마지막 메시지에 이어 붙으므로, 맨 끝에 넣으면 답이 갈라진다).
+function beforeStreaming(msgs: ChatMessage[], item: ChatMessage): ChatMessage[] {
+  const last = msgs[msgs.length - 1];
+  if (last?.type === "assistant_text" && last.streaming) return [...msgs.slice(0, -1), item, last];
+  return [...msgs, item];
+}
 
 export type ChatMessage =
   | { id: string; type: "user"; text: string }
@@ -59,6 +67,8 @@ export type ChatMessage =
       // remember_page로 띄운 카드: 펼친 채로 보이고, autoDraft가 false면(외부 본문 보호 중) 초안을 자동으로 묻지 않는다.
       startOpen?: boolean;
       autoDraft?: boolean;
+      // 방문 기록 추천(#175)으로 만든 카드: 추천이 초안이라 이 값으로 채우고 초안을 다시 묻지 않는다.
+      initialDraft?: LinkDraft;
     }
   // detail: 원래 오류 문구(자세히), action: 다음 행동 버튼(#130).
   | { id: string; type: "error"; message: string; detail?: string; action?: "settings" | "usage"; usageUrl?: string }
@@ -93,9 +103,11 @@ interface ChatState {
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string, extra?: { detail?: string; action?: "settings" | "usage"; usageUrl?: string }) => void;
   addInfo: (title: string, message: string) => void;
+  // 대화 밖 동작(기억하기 버튼)의 안내: 응답 중이면 스트리밍 중인 답 앞에 넣는다.
+  addNote: (title: string, message: string) => void;
   addPageOffer: (
     offer: Extract<ChatMessage, { type: "page_offer" }>["offer"],
-    opts?: { open?: boolean; autoDraft?: boolean },
+    opts?: { open?: boolean; autoDraft?: boolean; initialDraft?: LinkDraft },
   ) => void;
   setStatus: (text: string | null) => void;
   abortLocal: () => void;
@@ -228,17 +240,18 @@ export const useChatStore = create<ChatState>((set) => ({
 
   addPageOffer: (offer, opts) =>
     set((s) => ({
-      messages: [
-        ...s.messages,
-        {
-          id: mid(),
-          type: "page_offer",
-          offer,
-          ...(opts?.open ? { startOpen: true } : {}),
-          ...(opts?.autoDraft === false ? { autoDraft: false } : {}),
-        },
-      ],
+      messages: beforeStreaming(s.messages, {
+        id: mid(),
+        type: "page_offer",
+        offer,
+        ...(opts?.open ? { startOpen: true } : {}),
+        ...(opts?.autoDraft === false ? { autoDraft: false } : {}),
+        ...(opts?.initialDraft ? { initialDraft: opts.initialDraft } : {}),
+      }),
     })),
+
+  addNote: (title, message) =>
+    set((s) => ({ messages: beforeStreaming(s.messages, { id: mid(), type: "info", title, message }) })),
 
   addInfo: (title, message) =>
     set((s) => ({

@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { ActionLogField } from "./ActionLogField";
 import { RunModeField } from "./RunModeField";
 import { RememberPagesField } from "./RememberPagesField";
+import { HistoryPickField } from "./HistoryPickField";
+import { PageSuggestionsField } from "./PageSuggestionsField";
 import { TrustedInputField } from "./TrustedInputField";
 import { ManualSitesField } from "./ManualSitesField";
 import { LoginSitesField } from "./LoginSitesField";
@@ -115,7 +117,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const dirty = useRef<Partial<Settings>>({});
   const inflight = useRef<Partial<Settings> | null>(null);
   const timer = useRef(0);
-  const saving = useRef<Promise<void> | null>(null);
+  const saving = useRef<Promise<boolean> | null>(null);
   // 저장이 끝날 때마다 화면을 저장소의 확정 값(범위로 고친 값 포함)으로 다시 맞춘다.
   const [syncTick, setSyncTick] = useState(0);
   const [savedAt, setSavedAt] = useState(0);
@@ -160,10 +162,12 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
   // 보내지 않은 변경을 하나씩 차례로 저장한다(백그라운드가 바꾼 필드만 최신 설정에 합친다). 저장 중에 생긴 변경은 끝난 뒤 이어서.
   // 실패한 변경은 다시 넣지 않는다(옛 변경이 나중 선택을 되돌리지 않게) — 오류를 보이고 화면을 저장된 값으로 되돌린다.
-  const flush = (): Promise<void> => {
+  // 결과: 이번 저장들이 모두 성공했는지(방문 기록 찾기는 실패면 시작하지 않는다 — 화면과 다른 모델로 보내지 않게).
+  const flush = (): Promise<boolean> => {
     window.clearTimeout(timer.current);
     if (saving.current) return saving.current;
     const run = (async () => {
+      let ok = true;
       while (Object.keys(dirty.current).length) {
         const patch = dirty.current;
         dirty.current = {};
@@ -173,12 +177,14 @@ export function SettingsDrawer({ open, onClose }: Props) {
           setSaveError(null);
           setSavedAt(Date.now());
         } catch (err) {
+          ok = false;
           setSaveError(`${err instanceof Error ? err.message : String(err)} — 바뀌지 않은 값이 보입니다. 다시 바꿔 주세요.`);
         } finally {
           inflight.current = null;
           setSyncTick((t) => t + 1);
         }
       }
+      return ok;
     })();
     saving.current = run.finally(() => {
       saving.current = null;
@@ -502,6 +508,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
           <details className="settings-group">
             <summary>기억·기록</summary>
             <RememberPagesField enabled={draft.rememberPages} onToggle={(rememberPages) => update({ rememberPages })} />
+            {draft.rememberPages && <HistoryPickField beforeStart={flush} onOpened={() => void handleClose()} />}
+            <PageSuggestionsField enabled={draft.pageSuggestions} onToggle={(pageSuggestions) => update({ pageSuggestions })} />
             <ActionLogField enabled={draft.actionLogEnabled} onToggle={(actionLogEnabled) => update({ actionLogEnabled })} />
           </details>
 
