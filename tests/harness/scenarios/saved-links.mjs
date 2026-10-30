@@ -276,4 +276,125 @@ export default [
       expect((await h.panel.locator(".page-offer.open").innerText()).includes("자동으로 채우지 않았습니다"), "안내");
     },
   },
+  {
+    name: "기억하기 버튼(#174): 지금 페이지 카드를 펼쳐 초안을 채우고(요청·답 없이), 저장은 누를 때만",
+    pages: { "/s": search },
+    async run(h) {
+      await h.settings({});
+      await h.sw.evaluate(() => {
+        globalThis.__draft = { name: "가격 검색", purpose: "상품 가격 비교", params: [{ index: 0, mode: "slot", slot: "상품명" }, { index: 1, mode: "drop" }] };
+      });
+      await h.tab.goto(`${h.base}/s?q=${encodeURIComponent("맥북")}&trk=abc`);
+      await h.panel.waitForTimeout(800);
+      const btn = h.panel.locator(".remember-btn");
+      expect(!(await btn.isDisabled()), "웹 페이지면 버튼이 켜져 있다");
+      await btn.click();
+      await h.panel.waitForTimeout(1200);
+      expect((await h.panel.locator(".page-offer.open").count()) === 1, "펼친 카드");
+      const reqs = await h.sw.evaluate(() => globalThis.__draftReqs ?? []);
+      expect(reqs.length === 1, `초안 요청 1회(${reqs.length})`);
+      const content = reqs[0]?.messages?.[0]?.content ?? "";
+      const data = JSON.parse(content.slice(content.indexOf("데이터:\n") + 4));
+      expect(data.request === "" && data.answer === "", `요청·답은 보내지 않는다(${data.request}/${data.answer})`);
+      expect(data.page.includes("최저가 상품 목록") && !data.page.includes("비밀메모"), `화면 글자만(${data.page})`);
+      const before = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages ?? []);
+      expect(before.length === 0, "누르기 전에는 저장하지 않는다");
+      expect((await h.panel.locator(".page-offer.open input").first().inputValue()) === "가격 검색", "초안 이름");
+      await h.panel.locator(".page-offer.open .btn-approve").click();
+      await h.panel.waitForTimeout(500);
+      const saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages ?? []);
+      expect(saved.length === 1 && saved[0].template.params.length === 1, `저장(${JSON.stringify(saved)})`);
+      const msgs = await h.sw.evaluate(() => globalThis.__modelReqs.filter((r) => !r.body.response_format).length);
+      expect(msgs === 0, `대화 요청은 보내지 않는다(${msgs})`);
+    },
+  },
+  {
+    name: "기억하기 버튼(#174): 설정이 꺼져 있거나 웹 페이지가 아니면 비활성",
+    pages: { "/s": search },
+    async run(h) {
+      await h.settings({ rememberPages: false });
+      await h.tab.goto(`${h.base}/s?q=a`);
+      await h.panel.waitForTimeout(800);
+      expect(await h.panel.locator(".remember-btn").isDisabled(), "설정이 꺼지면 비활성");
+      await h.settings({ rememberPages: true });
+      await h.panel.waitForTimeout(300);
+      expect(!(await h.panel.locator(".remember-btn").isDisabled()), "다시 켜면 활성");
+      await h.tab.goto("about:blank");
+      await h.panel.waitForTimeout(800);
+      expect(await h.panel.locator(".remember-btn").isDisabled(), "웹 페이지가 아니면 비활성");
+    },
+  },
+  {
+    name: "기억하기 버튼(#174): 응답을 받는 중에 눌러도 답 말풍선이 갈라지지 않는다",
+    pages: { "/s": search },
+    async run(h) {
+      await h.settings({});
+      await h.tab.goto(`${h.base}/s?q=a`);
+      await h.panel.waitForTimeout(600);
+      await h.sw.evaluate(() => {
+        globalThis.__steps = [{ textParts: ["앞부분 ", "뒷부분"], gapMs: 2500 }];
+      });
+      await h.panel.fill("textarea.composer-input", "시험");
+      await h.panel.click("button.composer-btn.primary");
+      await h.panel.waitForFunction(() => document.querySelector(".bubble-assistant")?.textContent?.includes("앞부분"), null, { timeout: 5000 });
+      await h.panel.locator(".remember-btn").click();
+      await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 10000 });
+      const bubbles = await h.panel.locator(".bubble-assistant").allInnerTexts();
+      expect(bubbles.length === 1 && bubbles[0].includes("앞부분") && bubbles[0].includes("뒷부분"), `답 하나(${JSON.stringify(bubbles)})`);
+      const order = await h.panel.evaluate(() => {
+        const offer = document.querySelector(".page-offer");
+        const bubble = document.querySelector(".bubble-assistant");
+        return offer && bubble ? !!(offer.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING) : null;
+      });
+      expect(order === true, `카드는 답 앞(${order})`);
+    },
+  },
+  {
+    name: "기억하기(#174): 지워질 링크가 카드를 띄운 뒤 바뀌면 저장하지 않고 다시 확인받는다",
+    pages: { "/s": search },
+    async run(h) {
+      await h.settings({});
+      // 저장 링크를 가득(20개) 채운다. link-0이 가장 오래 쓰지 않은 링크.
+      await h.sw.evaluate(async () => {
+        const list = Array.from({ length: 20 }, (_, i) => ({
+          id: `link-${i}`,
+          name: `링크 ${i}`,
+          purpose: "",
+          template: { base: `https://example.com/p${i}`, params: [], hash: "" },
+          slots: [],
+          site: "https://example.com",
+          savedAt: 1000 + i,
+          lastUsedAt: 1000 + i,
+          uses: 0,
+        }));
+        await chrome.storage.local.set({ savedPages: list });
+        globalThis.__draft = null;
+      });
+      await h.tab.goto(`${h.base}/s?q=a`);
+      await h.panel.waitForTimeout(800);
+      await h.panel.locator(".remember-btn").click();
+      await h.panel.waitForTimeout(800);
+      await h.tab.goto(`${h.base}/s?q=b&x=1`);
+      await h.panel.waitForTimeout(800);
+      await h.panel.locator(".remember-btn").click();
+      await h.panel.waitForTimeout(800);
+      const cards = h.panel.locator(".page-offer.open");
+      expect((await cards.count()) === 2, `카드 둘(${await cards.count()})`);
+      expect((await cards.nth(0).innerText()).includes("'링크 0'") && (await cards.nth(1).innerText()).includes("'링크 0'"), "둘 다 링크 0을 지운다고 예고");
+      await cards.nth(0).locator(".btn-approve").click();
+      await h.panel.waitForTimeout(500);
+      // 첫 카드 저장으로 링크 0이 지워져, 둘째 카드는 이제 링크 1을 지운다 — 저장하지 않고 새 예고를 보인다.
+      const second = h.panel.locator(".page-offer.open");
+      await second.locator(".btn-approve").click();
+      await h.panel.waitForTimeout(500);
+      const text = await second.innerText();
+      expect(text.includes("'링크 1'(으)로 바뀌었습니다"), `새 예고(${text})`);
+      let saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages);
+      expect(saved.length === 20 && saved.some((l) => l.id === "link-1"), "아직 링크 1을 지우지 않았다");
+      await second.locator(".btn-approve").click();
+      await h.panel.waitForTimeout(500);
+      saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages);
+      expect(saved.length === 20 && !saved.some((l) => l.id === "link-1"), "다시 누르면 저장하고 링크 1을 지운다");
+    },
+  },
 ];

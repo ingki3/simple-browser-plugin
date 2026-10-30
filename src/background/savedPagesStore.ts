@@ -26,6 +26,7 @@ import { siteOf } from "@/lib/siteTrust";
 import { getSettings } from "./storage";
 import { enqueue } from "./actionLog";
 import { debugLog } from "./debug";
+import { panelTarget } from "./panelTarget";
 
 // "이 페이지 기억하기"(#30)와 링크 템플릿(#86). 저장은 사용자가 패널에서 이름·용도·자리를 확인하고 누를 때만 한다.
 // 저장 링크 후보는 대화 기록에 남기지 않는 임시 데이터 메시지로 매 모델 요청 직전에 새로 만든다(지우기·끄기가 다음 요청부터 반영).
@@ -43,8 +44,8 @@ export interface PageOffer {
   warning: string | null;
   // 쿼리 값(카드에서 고정·자리·빼기를 고른다).
   params: Array<{ key: string; value: string }>;
-  // 저장 링크가 가득 차 있으면, 새 링크를 저장할 때 지워질 링크 이름(같은 템플릿을 바꾸면 지우지 않음).
-  evicts: string | null;
+  // 저장 링크가 가득 차 있으면, 새 링크를 저장할 때 지워질 링크(같은 템플릿을 바꾸면 지우지 않음). 카드가 확인한 id를 저장 때 돌려보낸다.
+  evicts: { id: string; name: string } | null;
   // 이미 저장한 템플릿(보이기용 문자열). 카드가 최종 템플릿이 그중 하나면 지우지 않는다고 판단한다.
   savedTemplates: string[];
 }
@@ -121,14 +122,18 @@ export const OFFER_REFUSAL_TEXT: Record<OfferRefusal, string> = {
   changed: "확인하는 사이 페이지가 바뀌어 기억하지 않았습니다. 지금 페이지를 다시 확인한 뒤 요청하세요.",
 };
 
-// expectDocumentId: 부르는 쪽이 이미 확인한 문서(remember_page — 따라가는 탭 검사). 지금 문서가 다르면 만들지 않는다.
+// expectDocumentId: 부르는 쪽이 이미 확인한 문서(remember_page — 따라가는 탭 검사, 기억하기 버튼). 지금 문서가 다르면 만들지 않는다.
+// expectUrl: 부르는 쪽이 확인한 주소(기억하기 버튼). 같은 문서 안에서 주소만 바뀐 경우(SPA 이동)도 만들지 않는다.
 export async function makeOfferResult(
   tabId: number,
   startUrl: string | null,
   context?: OfferContext,
   expectDocumentId?: string | null,
+  expectUrl?: string,
 ): Promise<{ offer: PageOffer } | { reason: OfferRefusal }> {
   if (!(await getSettings()).rememberPages) return { reason: "disabled" };
+  // 확인한 문서를 넘기기로 한 호출(null 포함)인데 문서를 확인하지 못했으면 만들지 않는다(문서 고정 검사가 꺼지지 않게).
+  if (expectDocumentId === null) return { reason: "changed" };
   // 문서를 먼저 고정한 뒤 탭 주소·제목을 읽는다. 그 사이 새로고침·이동하면 고정한 문서가 없어져 페이지 글자를 읽지 않는다.
   const documentId = context ? await topDocumentId(tabId) : null;
   if (expectDocumentId && documentId !== expectDocumentId) return { reason: "changed" };
@@ -141,6 +146,7 @@ export async function makeOfferResult(
   // 탭 정보를 읽는 사이 문서가 바뀌었으면(확인한 문서가 있을 때) 만들지 않는다 — 바뀐 페이지의 주소·제목을 쓰지 않게.
   if (expectDocumentId && (await topDocumentId(tabId)) !== expectDocumentId) return { reason: "changed" };
   const url = tab.url ?? "";
+  if (expectUrl !== undefined && url !== expectUrl) return { reason: "changed" };
   if (tab.incognito) return { reason: "incognito" };
   if (!url || url === startUrl) return { reason: "same_page" };
   const parts = splitUrl(url);
@@ -157,7 +163,7 @@ export async function makeOfferResult(
     site,
     warning: sensitiveUrlReason(url),
     params: parts.params.map((p) => ({ key: p.key, value: p.value })),
-    evicts: lru?.name ?? null,
+    evicts: lru ? { id: lru.id, name: lru.name } : null,
     savedTemplates: list.map((l) => templateText(l.template)),
   };
   // 제목·주소에 자동 로그인으로 넣은 값이 보이면 기억하기를 제안하지 않는다(저장 링크는 브라우저를 다시 켠 뒤에도 남아 모델 후보로 간다).
@@ -165,8 +171,15 @@ export async function makeOfferResult(
   // 페이지 글자는 지금(턴이 끝난 화면) 읽어 둔다. 카드를 늦게 열면 탭이 다른 화면일 수 있다.
   // 경고가 있는 주소는 초안을 묻지 않으므로 읽지 않는다.
   const page = context && !offer.warning ? await screenText(tabId, documentId, url) : "";
-  // 화면 글자를 읽은 뒤에도 같은 문서여야 한다(확인한 문서가 있을 때).
+  // 화면 글자를 읽은 뒤에도 같은 문서·주소여야 한다(확인한 문서가 있을 때).
   if (expectDocumentId && (await topDocumentId(tabId)) !== expectDocumentId) return { reason: "changed" };
+  if (expectUrl !== undefined) {
+    const now = await chrome.tabs.get(tabId).then(
+      (t) => t.url ?? "",
+      () => "",
+    );
+    if (now !== expectUrl) return { reason: "changed" };
+  }
   offers.set(offer.offerId, offer);
   const titleFromUrl = !normalizeName(tab.title ?? "");
   contexts.set(offer.offerId, {
@@ -189,6 +202,36 @@ export async function makeOfferResult(
   return { offer };
 }
 
+
+// 패널의 "이 페이지 기억" 버튼(#174): 패널 창의 활성 탭으로 저장 카드를 만든다. shown은 패널이 버튼을 보일 때의 탭·주소로,
+// 지금 탭이 그것과 다르면 만들지 않는다. 문서를 먼저 고정하고(확인 못 하면 거절) 그 문서·주소로 화면 글자까지 읽는다.
+// 대화 밖 동작이라 사용자 요청·답은 보내지 않는다(초안에는 탭 제목·주소·화면 글자만 — #43).
+export async function rememberCurrentPage(
+  windowId: unknown,
+  shown: { tabId?: unknown; url?: unknown },
+): Promise<{ offer: PageOffer } | { refused: string }> {
+  let target;
+  try {
+    target = await panelTarget(windowId);
+  } catch (err) {
+    return { refused: err instanceof Error ? err.message : String(err) };
+  }
+  if (target.tabId !== shown.tabId || target.url !== shown.url) return { refused: "페이지가 바뀌었습니다. 지금 페이지를 확인한 뒤 다시 누르세요." };
+  const expectDoc = await topDocumentId(target.tabId);
+  const res = await makeOfferResult(target.tabId, null, { query: "", answer: "" }, expectDoc, target.url).catch(() => ({ reason: "tab_gone" as const }));
+  if ("reason" in res) return { refused: BUTTON_REFUSAL_TEXT[res.reason] };
+  return res;
+}
+
+const BUTTON_REFUSAL_TEXT: Record<OfferRefusal, string> = {
+  disabled: "설정에서 '페이지 기억하기'가 꺼져 있습니다.",
+  tab_gone: "기억할 탭을 찾지 못했습니다.",
+  incognito: "시크릿 창의 페이지는 기억하지 않습니다.",
+  same_page: "이 페이지는 기억할 수 없습니다.",
+  not_web: "웹 주소(http·https)가 아닌 페이지는 기억할 수 없습니다.",
+  secret: "주소나 제목에 자동 로그인으로 넣은 값이 보여 기억하지 않습니다.",
+  changed: "확인하는 사이 페이지가 바뀌었습니다. 다시 누르세요.",
+};
 
 // 저장 카드의 초안: 이름·용도와 쿼리 값마다 고정·자리·빼기를 모델이 제안한다(어떤 값이 검색어인지는 뜻의 판단이라 코드가
 // 파라미터 이름으로 정하지 않는다). 사용자 요청·모델의 답·페이지 글자를 함께 보내 이 페이지를 왜 열었는지에 맞게 정하게 한다.
@@ -268,9 +311,14 @@ export interface SaveRequest {
   // 사용자가 카드에서 "비워도 됨"으로 고른 자리 이름.
   optional: string[];
   confirmedWarning: boolean;
+  // 카드가 보여 준(사용자가 확인한) 지워질 링크 id. 없으면 null.
+  expectEvictId: string | null;
 }
 
-export async function savePage(req: SaveRequest): Promise<{ evicted: string | null }> {
+// evictChanged: 저장하면 실제로 지워질 링크가 카드가 보여 준 것과 달라 저장하지 않았다(새 값으로 다시 확인받는다).
+export type SaveResult = { evicted: string | null } | { evictChanged: { id: string; name: string } | null };
+
+export async function savePage(req: SaveRequest): Promise<SaveResult> {
   const offer = offers.get(req.offerId);
   if (!offer) throw new Error("저장 제안이 만료됐습니다. 다시 요청해 주세요.");
   if (!(await getSettings()).rememberPages) throw new Error("페이지 기억하기가 꺼져 있습니다.");
@@ -298,11 +346,17 @@ export async function savePage(req: SaveRequest): Promise<{ evicted: string | nu
   };
   // 저장할 이름·용도·템플릿·자리 설명에 자동 로그인 값이 있으면 저장하지 않는다.
   if (await containsSecret(entry)) throw new Error("자동 로그인으로 넣은 값이 들어 있어 저장하지 않았습니다.");
-  const evicted = await enqueue(async () => {
+  // 실제 지워질 링크는 저장 순서 안에서 다시 계산한다. 다른 카드를 먼저 저장해 달라졌으면 저장하지 않고 새 예고를 돌려준다.
+  type Outcome = { kind: "changed"; actual: { id: string; name: string } | null } | { kind: "saved"; evicted: SavedLink | null };
+  const outcome = await enqueue(async (): Promise<Outcome> => {
     const result = addLink(await load(), entry);
+    const actual = result.evicted ? { id: result.evicted.id, name: result.evicted.name } : null;
+    if ((actual?.id ?? null) !== req.expectEvictId) return { kind: "changed", actual };
     await store(result.list);
-    return result.evicted;
+    return { kind: "saved", evicted: result.evicted };
   });
+  if (outcome.kind === "changed") return { evictChanged: outcome.actual };
+  const evicted = outcome.evicted;
   // 저장에 성공한 뒤에만 제안을 쓴다(쓰기 실패면 같은 카드로 다시 시도할 수 있게).
   offers.delete(req.offerId);
   contexts.delete(req.offerId);

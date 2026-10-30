@@ -330,7 +330,7 @@ export interface PageOfferData {
   site: string;
   warning: string | null;
   params: Array<{ key: string; value: string }>;
-  evicts: string | null;
+  evicts: { id: string; name: string } | null;
   savedTemplates: string[];
 }
 

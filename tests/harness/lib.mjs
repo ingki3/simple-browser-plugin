@@ -101,6 +101,7 @@ export async function startHarness() {
       globalThis.__toolLog = [];
       globalThis.__draftReqs = [];
       globalThis.__draft = null;
+      globalThis.__realWindowQuery = false;
       globalThis.__modelReqs = [];
     });
     logs.length = 0;
@@ -197,6 +198,11 @@ async function installMockModel(sw) {
     chrome.tabs.query = async (q) => {
       if (q && q.active && q.lastFocusedWindow) {
         const all = await realQuery({});
+        return all.filter((t) => /^https?:/.test(t.url ?? ""));
+      }
+      // 패널 창의 활성 탭(#174, windowId로 조회)도 그 창의 시험 페이지 탭으로. __realWindowQuery면 실제 조회(다중 창 시험).
+      if (q && q.active && q.windowId !== undefined && !globalThis.__realWindowQuery) {
+        const all = await realQuery({ windowId: q.windowId });
         return all.filter((t) => /^https?:/.test(t.url ?? ""));
       }
       return realQuery(q);
@@ -342,6 +348,22 @@ async function installMockModel(sw) {
         }
         ev.push({ type: "message_delta", delta: { stop_reason: out.tool ? "tool_use" : "end_turn" } }, { type: "message_stop" });
         return anthropicSse(ev);
+      }
+      // textParts + gapMs: 답 글자를 여러 조각으로 나눠 사이를 띄워 보낸다(응답을 받는 중의 패널 동작 시험).
+      if (step?.textParts && !anthropic) {
+        const parts = [...step.textParts.map((t) => ({ choices: [{ delta: { content: t } }] })), { choices: [{ delta: {}, finish_reason: "stop" }] }];
+        const enc = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(c) {
+            for (let k = 0; k < parts.length; k++) {
+              if (k > 0 && k < parts.length - 1) await new Promise((r) => setTimeout(r, step.gapMs ?? 1000));
+              c.enqueue(enc.encode(`data: ${JSON.stringify(parts[k])}\n\n`));
+            }
+            c.enqueue(enc.encode("data: [DONE]\n\n"));
+            c.close();
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "text/event-stream" } });
       }
       const chunks = out.tool
         ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "call" + ++globalThis.__n, type: "function", function: { name: out.tool, arguments: JSON.stringify(out.args) }, ...(out.extra ? { extra_content: out.extra } : {}) }] } }] }]

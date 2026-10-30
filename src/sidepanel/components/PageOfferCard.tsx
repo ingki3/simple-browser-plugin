@@ -38,6 +38,8 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
   const [evicted, setEvicted] = useState<string | null>(null);
+  // 저장할 때 지워질 링크가 카드를 띄울 때와 달라졌으면 백그라운드가 알려 준 새 예고(undefined면 카드를 띄울 때의 예고를 쓴다).
+  const [evictOverride, setEvictOverride] = useState<{ id: string; name: string } | null | undefined>(undefined);
   // 초안을 기다리는 사이 사용자가 고친 칸은 늦게 온 초안으로 덮지 않는다. 카드를 닫았다 다시 열면 이전 요청의 응답은 버린다.
   const touched = useRef({ name: false, purpose: false, params: false, hints: new Set<string>(), optional: false });
   const draftSeq = useRef(0);
@@ -61,6 +63,10 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
       }),
     ),
   ];
+
+  // 사용자에게 보여 준(저장하면 지워질) 링크. 같은 템플릿을 다시 저장하면 지우지 않는다.
+  const shownEvict =
+    evictOverride !== undefined ? evictOverride : offer.evicts && !previewError && !offer.savedTemplates.includes(preview) ? offer.evicts : null;
 
   const requestDraft = async () => {
     // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(경로·제목·본문으로도 값이 샐 수 있어 사용자가 직접 정한다).
@@ -120,9 +126,21 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
         hints,
         optional: slotNames.filter((k) => optional.has(k)),
         confirmedWarning: confirmed,
-      })) as { ok: boolean; data?: { evicted: string | null }; error?: string } | undefined;
-      if (res?.ok) {
-        setEvicted(res.data?.evicted ?? null);
+        expectEvictId: shownEvict?.id ?? null,
+      })) as
+        | { ok: boolean; data?: { evicted: string | null } | { evictChanged: { id: string; name: string } | null }; error?: string }
+        | undefined;
+      if (res?.ok && res.data && "evictChanged" in res.data) {
+        // 다른 카드를 먼저 저장해 지워질 링크가 바뀌었다. 새 예고를 보이고 다시 누르게 한다(저장하지 않았다).
+        setEvictOverride(res.data.evictChanged);
+        setError(
+          res.data.evictChanged
+            ? `지워질 링크가 '${res.data.evictChanged.name}'(으)로 바뀌었습니다. 확인한 뒤 다시 저장을 누르세요.`
+            : "이제 저장해도 지워지는 링크가 없습니다. 다시 저장을 누르세요.",
+        );
+        setState("error");
+      } else if (res?.ok) {
+        setEvicted(res.data && "evicted" in res.data ? res.data.evicted : null);
         setState("saved");
       } else {
         setError(res?.error ?? "저장하지 못했습니다.");
@@ -269,8 +287,8 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
           <span>⚠ 이 주소에 {offer.warning} 단서가 있어 보입니다. 그 값을 고정으로 남겨도 저장합니다.</span>
         </label>
       )}
-      {offer.evicts && !previewError && !offer.savedTemplates.includes(preview) && (
-        <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{offer.evicts}'이(가) 지워집니다.</span>
+      {shownEvict && (
+        <span className="field-help">저장 링크가 가득 찼습니다. 저장하면 가장 오래 쓰지 않은 '{shownEvict.name}'이(가) 지워집니다.</span>
       )}
       <span className="field-help">
         입력 자리의 지금 값은 저장하지 않습니다. 저장한 이름·용도·자리 이름·사이트는 사이트와 관계없이 고른 모델 제공자에 후보로
