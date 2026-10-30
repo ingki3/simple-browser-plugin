@@ -160,7 +160,7 @@ export default [
       await deliver(h, "news.naver.com 경제 뉴스 정리해줘");
       await waitSent(h, 1);
       let note = await lastUser();
-      expect(note.includes("https://news.naver.com") && note.includes("승인 없이 된다"), `적은 사이트 안내(${note.slice(0, 400)})`);
+      expect(note.includes("https://news.naver.com") && note.includes("승인 없이 이동할 수 있다"), `적은 사이트 안내(${note.slice(0, 400)})`);
       await h.sw.evaluate(() => {
         globalThis.__tg.sent = [];
         globalThis.__modelReqs = [];
@@ -169,7 +169,7 @@ export default [
       await deliver(h, "오늘 경제 뉴스 정리해줘");
       await waitSent(h, 1);
       note = await lastUser();
-      expect(note.includes("사이트 주소가 없어") && !note.includes("승인 없이 된다"), `주소 없음 안내(${note.slice(0, 400)})`);
+      expect(note.includes("사이트 주소가 없어") && !note.includes("승인 없이 이동할 수 있다"), `주소 없음 안내(${note.slice(0, 400)})`);
     },
   },
   {
