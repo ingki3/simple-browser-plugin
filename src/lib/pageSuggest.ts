@@ -85,10 +85,15 @@ export function editablePath(path: string): string {
   return normalizePathPattern(d) === path ? d : path;
 }
 
-// 경로(pathname)가 패턴과 맞는지. 세그먼트 비교는 퍼센트 인코딩된 그대로 한다.
+// 퍼센트 인코딩의 대소문자를 맞춘다(%eb → %EB).
+function canonPercent(s: string): string {
+  return s.replace(/%[0-9a-fA-F]{2}/g, (m) => m.toUpperCase());
+}
+
+// 경로(pathname)가 패턴과 맞는지. 세그먼트 비교는 퍼센트 인코딩된 그대로(대소문자만 맞춰) 한다.
 export function matchPath(pattern: string, pathname: string): boolean {
-  const pat = segments(pattern);
-  const path = segments(pathname);
+  const pat = segments(canonPercent(pattern));
+  const path = segments(canonPercent(pathname));
   for (let i = 0; i < pat.length; i++) {
     if (pat[i] === "**") return true;
     if (i >= path.length) return false;

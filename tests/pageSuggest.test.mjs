@@ -73,3 +73,7 @@ test("editablePath: 풀면 뜻이 바뀌는 경로는 그대로", () => {
   assert.equal(editablePath("/%2A/*"), "/%2A/*");
   assert.equal(editablePath("/%EB%89%B4%EC%8A%A4/*"), "/뉴스/*");
 });
+
+test("matchPath: 퍼센트 인코딩 대소문자 무시", () => {
+  assert.equal(matchPath("/%EB%89%B4%EC%8A%A4/*", "/%eb%89%b4%ec%8a%a4/1"), true);
+});

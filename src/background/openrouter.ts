@@ -1034,6 +1034,7 @@ export class ChatAgent {
 
       // 원격 대화는 요청 앞에 원격 안내를 붙인다(요청 글의 주소 판정·카드의 요청 원문은 사용자가 보낸 글 그대로).
       const prevAttachedPdf = this.lastAttachedPdfUrl;
+      const prevExternal = this.externalContent;
       const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel)}\n\n요청: ${userText}` : userText, opts.expect);
       if (this.isStale(turn)) {
         endTurn("aborted");
@@ -1043,7 +1044,14 @@ export class ChatAgent {
       if (userContent === EXPECT_MISMATCH || (opts.expect && !(await this.expectHolds(turnTab, opts.expect)))) {
         // 기록에 넣지 않은 PDF 첨부는 첨부한 것으로 치지 않는다(다음에 같은 PDF면 다시 붙인다). 중단된 턴이면 새 턴의 상태를
         // 건드리지 않는다.
-        if (!this.isStale(turn)) this.lastAttachedPdfUrl = prevAttachedPdf;
+        if (!this.isStale(turn)) {
+          this.lastAttachedPdfUrl = prevAttachedPdf;
+          // 받은 PDF를 대화에 넣지 않았으니 외부 본문 보호도 되돌린다(이 턴이 켰을 때만).
+          if (!prevExternal && this.externalContent) {
+            this.externalContent = false;
+            debugLog("guard:external_content", "제안 실행을 멈춰 PDF를 넣지 않음 — 보호 되돌림");
+          }
+        }
         commitReads(turnTab, false);
         // 끝내기(endKeepalive)는 아래 finally가 한다.
         this.expectFailed(turn, endTurn, false);
