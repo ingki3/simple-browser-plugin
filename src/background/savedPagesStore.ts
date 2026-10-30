@@ -27,6 +27,7 @@ import { getSettings } from "./storage";
 import { enqueue } from "./actionLog";
 import { debugLog } from "./debug";
 import { panelTarget } from "./panelTarget";
+import { INJECT_READY_DELAYS_MS, injectContentScriptInDocument, isMissingReceiver } from "./tools/handlers";
 
 // "이 페이지 기억하기"(#30)와 링크 템플릿(#86). 저장은 사용자가 패널에서 이름·용도·자리를 확인하고 누를 때만 한다.
 // 저장 링크 후보는 대화 기록에 남기지 않는 임시 데이터 메시지로 매 모델 요청 직전에 새로 만든다(지우기·끄기가 다음 요청부터 반영).
@@ -69,18 +70,38 @@ async function topDocumentId(tabId: number): Promise<string | null> {
   }
 }
 
+// 확장을 다시 불러오기 전에 열려 있던 탭에는 content script가 없으므로, 그 문서에만 주입(documentIds로 고정 — 그 사이 문서가
+// 바뀌었으면 주입이 실패한다)한 뒤 잠깐씩 기다리며 다시 묻는다(기억하기 버튼은 대화 없이 누를 수 있어 주입된 적 없는 탭이 흔하다).
 async function screenText(tabId: number, documentId: string | null, url: string): Promise<string> {
   if (!documentId) return "";
-  try {
+  const send = async () => {
     const res = (await withTimeout(
       chrome.tabs.sendMessage(tabId, { kind: "screen_text", expectUrl: url, max: MAX_CONTEXT_PAGE }, { documentId }),
       SCREEN_TEXT_TIMEOUT_MS,
       "screen_text 응답 없음",
     )) as { ok?: boolean; data?: unknown } | null;
     return res?.ok && typeof res.data === "string" ? res.data : "";
-  } catch {
-    return "";
+  };
+  try {
+    return await send();
+  } catch (err) {
+    if (!isMissingReceiver(err)) return "";
   }
+  try {
+    debugLog("saved_link:inject_retry", String(tabId), "warn");
+    await injectContentScriptInDocument(tabId, documentId);
+    for (const delay of INJECT_READY_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        return await send();
+      } catch (err) {
+        if (!isMissingReceiver(err)) return "";
+      }
+    }
+  } catch {
+    /* 주입 실패(문서가 바뀜 등) — 화면 글자 없이 */
+  }
+  return "";
 }
 const MAX_CONTEXT_QUERY = 1000;
 const MAX_CONTEXT_ANSWER = 1500;

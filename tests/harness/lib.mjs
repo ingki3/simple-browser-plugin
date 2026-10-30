@@ -201,7 +201,10 @@ async function installMockModel(sw) {
         return all.filter((t) => /^https?:/.test(t.url ?? ""));
       }
       // 패널 창의 활성 탭(#174, windowId로 조회)도 그 창의 시험 페이지 탭으로. __realWindowQuery면 실제 조회(다중 창 시험).
+      // 그 창의 실제 활성 탭이 패널(확장 페이지)이 아니면 그 탭을, 패널이면 그 창의 시험 페이지 탭을 돌려준다.
       if (q && q.active && q.windowId !== undefined && !globalThis.__realWindowQuery) {
+        const act = (await realQuery({ active: true, windowId: q.windowId })).filter((t) => !(t.url ?? "").startsWith("chrome-extension://"));
+        if (act.length) return act;
         const all = await realQuery({ windowId: q.windowId });
         return all.filter((t) => /^https?:/.test(t.url ?? ""));
       }
