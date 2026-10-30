@@ -1704,10 +1704,13 @@ export class ChatAgent {
     // 다른 도구와 같은 탭 검사(따라가는 탭이 앞에 보이는지, 첫 도구 전이면 따라가기 시작한 문서 그대로인지)를 거친다.
     let tabId: number;
     let expectDoc: string | null;
+    let expectUrl: string;
     try {
       tabId = await resolveTurnTab(turnTab);
-      // 따라가는 탭 팝업이면 확인한 문서에 고정한다(그 사이 바뀌면 만들지 않음). 아니면 지금 문서.
+      // 따라가는 탭 팝업이면 확인한 문서에 고정한다(그 사이 바뀌면 만들지 않음). 아니면 지금 문서. 확인하지 못하면(null) 만들지 않는다.
       expectDoc = (await recheckTabPopup(turnTab, tabId)) ?? (await topDocumentId(tabId));
+      // 문서를 고정한 뒤의 주소(같은 문서 안 주소 이동도 막는다).
+      expectUrl = (await chrome.tabs.get(tabId)).url ?? "";
     } catch (err) {
       if (this.isStale(turn)) return false;
       const msg = err instanceof Error ? err.message : String(err);
@@ -1716,7 +1719,7 @@ export class ChatAgent {
       return true;
     }
     if (this.isStale(turn)) return false;
-    const res = await makeOfferResult(tabId, null, { query: this.turnRequest, answer: "" }, expectDoc).catch(() => ({ reason: "tab_gone" as const }));
+    const res = await makeOfferResult(tabId, null, { query: this.turnRequest, answer: "" }, expectDoc, expectUrl).catch(() => ({ reason: "tab_gone" as const }));
     if (this.isStale(turn)) return false;
     if ("reason" in res) {
       const msg = OFFER_REFUSAL_TEXT[res.reason];

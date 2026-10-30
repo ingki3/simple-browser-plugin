@@ -3,6 +3,13 @@ import type { DebugEvent, PageOfferData, ToolName } from "@/lib/messages";
 
 const DEBUG_BUFFER_MAX = 500;
 
+// 응답을 받는 중이면 스트리밍 중인 답 말풍선 앞에 끼워 넣는다(청크는 마지막 메시지에 이어 붙으므로, 맨 끝에 넣으면 답이 갈라진다).
+function beforeStreaming(msgs: ChatMessage[], item: ChatMessage): ChatMessage[] {
+  const last = msgs[msgs.length - 1];
+  if (last?.type === "assistant_text" && last.streaming) return [...msgs.slice(0, -1), item, last];
+  return [...msgs, item];
+}
+
 export type ChatMessage =
   | { id: string; type: "user"; text: string }
   | {
@@ -93,6 +100,8 @@ interface ChatState {
   addToolResult: (m: Extract<ChatMessage, { type: "tool_result" }>) => void;
   addError: (message: string, extra?: { detail?: string; action?: "settings" | "usage"; usageUrl?: string }) => void;
   addInfo: (title: string, message: string) => void;
+  // 대화 밖 동작(기억하기 버튼)의 안내: 응답 중이면 스트리밍 중인 답 앞에 넣는다.
+  addNote: (title: string, message: string) => void;
   addPageOffer: (
     offer: Extract<ChatMessage, { type: "page_offer" }>["offer"],
     opts?: { open?: boolean; autoDraft?: boolean },
@@ -228,17 +237,17 @@ export const useChatStore = create<ChatState>((set) => ({
 
   addPageOffer: (offer, opts) =>
     set((s) => ({
-      messages: [
-        ...s.messages,
-        {
-          id: mid(),
-          type: "page_offer",
-          offer,
-          ...(opts?.open ? { startOpen: true } : {}),
-          ...(opts?.autoDraft === false ? { autoDraft: false } : {}),
-        },
-      ],
+      messages: beforeStreaming(s.messages, {
+        id: mid(),
+        type: "page_offer",
+        offer,
+        ...(opts?.open ? { startOpen: true } : {}),
+        ...(opts?.autoDraft === false ? { autoDraft: false } : {}),
+      }),
     })),
+
+  addNote: (title, message) =>
+    set((s) => ({ messages: beforeStreaming(s.messages, { id: mid(), type: "info", title, message }) })),
 
   addInfo: (title, message) =>
     set((s) => ({

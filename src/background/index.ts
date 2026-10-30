@@ -3,7 +3,8 @@ import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/me
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
 import { applySettingsPatch, invalidateSettingsCache } from "./storage";
-import { deletePages, draftLink, listPages, savePage, updateLink } from "./savedPagesStore";
+import { deletePages, draftLink, listPages, rememberCurrentPage, savePage, updateLink } from "./savedPagesStore";
+import { panelTarget } from "./panelTarget";
 import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
@@ -173,7 +174,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     m.kind === "saved_pages_list" ||
     m.kind === "saved_pages_delete" ||
     m.kind === "saved_link_draft" ||
-    m.kind === "saved_link_update"
+    m.kind === "saved_link_update" ||
+    m.kind === "remember_current_page" ||
+    m.kind === "current_tab_info"
   ) {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
@@ -188,6 +191,10 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       confirmedWarning?: unknown;
       optional?: unknown;
       id?: unknown;
+      expectEvictId?: unknown;
+      windowId?: unknown;
+      tabId?: unknown;
+      url?: unknown;
     };
     const job: Promise<unknown> =
       m.kind === "save_page"
@@ -200,14 +207,20 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             // 비워도 되는 자리 이름(문자열 배열만, #저장 링크 선택 자리).
             optional: Array.isArray(p.optional) ? p.optional.filter((k): k is string => typeof k === "string").slice(0, 20) : [],
             confirmedWarning: p.confirmedWarning === true,
+            expectEvictId: typeof p.expectEvictId === "string" ? p.expectEvictId : null,
           })
-        : m.kind === "saved_link_draft"
-          ? draftLink(String(p.offerId ?? ""))
-          : m.kind === "saved_link_update"
-            ? updateLink(String(p.id ?? ""), { name: p.name, purpose: p.purpose, hints: p.hints }).then(() => listPages())
-            : m.kind === "saved_pages_delete"
-              ? deletePages(typeof p.id === "string" ? p.id : null).then(() => listPages())
-              : listPages();
+        : m.kind === "remember_current_page"
+          ? rememberCurrentPage(p.windowId, { tabId: p.tabId, url: p.url })
+          : m.kind === "current_tab_info"
+            ? // 패널 버튼 표시용(실행 때 다시 확인한다). 시크릿 창·활성 탭 없음이면 null.
+              panelTarget(p.windowId).catch(() => null)
+            : m.kind === "saved_link_draft"
+              ? draftLink(String(p.offerId ?? ""))
+              : m.kind === "saved_link_update"
+                ? updateLink(String(p.id ?? ""), { name: p.name, purpose: p.purpose, hints: p.hints }).then(() => listPages())
+                : m.kind === "saved_pages_delete"
+                  ? deletePages(typeof p.id === "string" ? p.id : null).then(() => listPages())
+                  : listPages();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));

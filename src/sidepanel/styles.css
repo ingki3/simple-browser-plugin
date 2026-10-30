@@ -91,6 +91,15 @@ body,
   background: var(--bg-alt);
 }
 
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.icon-btn:disabled:hover {
+  background: transparent;
+}
+
 .app-main {
   flex: 1;
   display: flex;
