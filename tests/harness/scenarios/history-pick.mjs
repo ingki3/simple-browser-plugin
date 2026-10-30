@@ -67,9 +67,13 @@ export default [
       const picks = await h.panel.locator(".history-pick-results .history-pick-list li").allInnerTexts();
       expect(picks.length === 1 && picks[0].includes("상품 검색"), `보낸 항목의 추천만(${JSON.stringify(picks)})`);
       await h.panel.locator(".history-pick-open").first().click();
-      await h.panel.waitForSelector(".page-offer.open", { timeout: 5000 });
+      await h.panel.waitForSelector(".page-offer.open", { state: "attached", timeout: 5000 });
+      await h.panel.waitForTimeout(300);
+      const label = await h.panel.locator(".history-pick-open").first().innerText().catch((e) => `없음: ${e.message.slice(0, 80)}`);
+      expect(label.includes("띄움"), `띄운 추천 표시, 서랍은 그대로(다른 추천도 열 수 있게)(${label})`);
+      await h.panel.locator(".history-pick-show").click();
       await h.panel.waitForSelector(".drawer", { state: "detached", timeout: 3000 }).catch(() => {});
-      expect((await h.panel.locator(".drawer").count()) === 0, "설정 서랍을 닫는다");
+      expect((await h.panel.locator(".drawer").count()) === 0, "카드 보기로 서랍을 닫는다");
       const card = h.panel.locator(".page-offer.open");
       expect((await card.locator("input").first().inputValue()) === "상품 검색", "추천 이름");
       expect((await card.innerText()).includes("방문 기록 추천으로 채웠습니다"), "출처 안내");

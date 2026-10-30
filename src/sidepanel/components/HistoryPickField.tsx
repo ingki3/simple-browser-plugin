@@ -39,6 +39,8 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
   const [view, setView] = useState<View>({ step: "idle" });
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  // 저장 카드를 채팅에 띄운 추천(번호).
+  const [opened, setOpened] = useState<Set<number>>(() => new Set());
   const addPageOffer = useChatStore((s) => s.addPageOffer);
   const port = useRef<chrome.runtime.Port | null>(null);
   const stepRef = useRef<View["step"]>("idle");
@@ -93,8 +95,10 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
       return;
     }
     if (m.kind === "offer" && m.offer) {
+      // 카드를 채팅에 띄우고 서랍은 그대로 둔다(다른 추천도 이어서 열 수 있게). "카드 보기"로 닫는다.
       addPageOffer(m.offer, { open: true, autoDraft: false, ...(m.draft ? { initialDraft: m.draft } : {}) });
-      onOpened();
+      const idx = (raw as { index?: unknown }).index;
+      if (typeof idx === "number") setOpened((cur) => new Set(cur).add(idx));
     }
   };
 
@@ -142,6 +146,7 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
       setError("연결이 끊겨 작업을 멈췄습니다. 다시 찾아 주세요.");
       setView({ step: "idle" });
     });
+    setOpened(new Set());
     setView({ step: "preparing" });
     p.postMessage({ kind: "prepare", jobId: jobId.current, windowId });
   };
@@ -255,16 +260,24 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
                     {p.reason ? ` — ${p.reason}` : ""}
                   </span>
                   {it && <span className="history-pick-url">{it.base}</span>}
-                  <button type="button" className="ghost-btn history-pick-open" onClick={() => openCard(p.i)}>
-                    저장 카드 열기
+                  <button type="button" className="ghost-btn history-pick-open" disabled={opened.has(p.i)} onClick={() => openCard(p.i)}>
+                    {opened.has(p.i) ? "✓ 채팅에 띄움" : "저장 카드 열기"}
                   </button>
                 </li>
               );
             })}
           </ul>
-          <button type="button" className="btn-cancel" onClick={cancel}>
-            닫기
-          </button>
+          {opened.size > 0 && <span className="field-help">저장 카드는 채팅에 있습니다. 카드에서 확인하고 저장을 누르세요.</span>}
+          <div className="page-offer-actions">
+            <button type="button" className="btn-cancel" onClick={cancel}>
+              닫기
+            </button>
+            {opened.size > 0 && (
+              <button type="button" className="btn-approve history-pick-show" onClick={onOpened}>
+                카드 보기
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
