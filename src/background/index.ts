@@ -6,6 +6,7 @@ import { applySettingsPatch, invalidateSettingsCache } from "./storage";
 import { deletePages, draftLink, listPages, rememberCurrentPage, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
 import { handleHistoryPickPort, HISTORY_PICK_PORT } from "./historyPickStore";
+import { addRule, checkSuggestionRun, deleteRule, listRules, updateRule } from "./pageSuggestStore";
 import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { translateBatch } from "./translator";
@@ -72,7 +73,7 @@ chrome.runtime.onConnect.addListener((port) => {
     const msg = raw as PanelToBg;
     if (!msg || typeof msg !== "object") return;
 
-    if (msg.kind === "user_msg" || msg.kind === "abort_stream" || msg.kind === "reset_conversation" || msg.kind === "repeat_continue") actionSeq += 1;
+    if (msg.kind === "user_msg" || msg.kind === "abort_stream" || msg.kind === "reset_conversation" || msg.kind === "repeat_continue" || msg.kind === "suggestion_run") actionSeq += 1;
     switch (msg.kind) {
       case "user_msg": {
         if (!agent || activeConversationId !== msg.conversationId) {
@@ -143,6 +144,38 @@ chrome.runtime.onConnect.addListener((port) => {
             if (seq !== actionSeq || disconnected) return;
             try {
               port.postMessage({ kind: "error", message: `반복 작업을 이어서 진행하지 못했습니다(${err instanceof Error ? err.message : String(err)}).` });
+            } catch {
+              /* port closed */
+            }
+          });
+        return;
+      }
+      case "suggestion_run": {
+        // 페이지 제안 실행(#173): 규칙·탭·문서를 다시 확인한 뒤 저장된 규칙의 요청으로 시작한다(패널이 보낸 글자는 쓰지 않는다).
+        // 같은 대화면 대화 객체를 그대로 쓴다(외부 본문 보호 등 대화 상태 유지).
+        if (!port.sender?.url?.startsWith(chrome.runtime.getURL(""))) return;
+        const runId = String(msg.runId);
+        const conversationId = String(msg.conversationId);
+        const seq = actionSeq;
+        checkSuggestionRun(msg)
+          .then(({ rule, tabId, url, documentId }) => {
+            if (seq !== actionSeq || disconnected) return;
+            try {
+              port.postMessage({ kind: "suggestion_started", runId, text: rule.request });
+            } catch {
+              return;
+            }
+            if (!agent || activeConversationId !== conversationId) {
+              agent?.abort();
+              agent = new ChatAgent(port);
+              activeConversationId = conversationId;
+            }
+            agent.sendUserTurn(rule.request, { tabId, expect: { tabId, url, documentId } }).catch((err) => console.error("[sendUserTurn]", err));
+          })
+          .catch((err: unknown) => {
+            if (seq !== actionSeq || disconnected) return;
+            try {
+              port.postMessage({ kind: "suggestion_failed", runId, message: err instanceof Error ? err.message : String(err) });
             } catch {
               /* port closed */
             }
@@ -228,6 +261,27 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
                 : m.kind === "saved_pages_delete"
                   ? deletePages(typeof p.id === "string" ? p.id : null).then(() => listPages())
                   : listPages();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 페이지 제안 규칙(#173): 이 확장의 화면에서만.
+  if (m.kind === "page_suggest_list" || m.kind === "page_suggest_add" || m.kind === "page_suggest_update" || m.kind === "page_suggest_delete") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { id?: unknown; origin?: unknown; path?: unknown; label?: unknown; request?: unknown; enabled?: unknown };
+    const job =
+      m.kind === "page_suggest_add"
+        ? addRule(p)
+        : m.kind === "page_suggest_update"
+          ? updateRule(String(p.id ?? ""), { origin: p.origin, path: p.path, label: p.label, request: p.request, enabled: p.enabled })
+          : m.kind === "page_suggest_delete"
+            ? deleteRule(String(p.id ?? ""))
+            : listRules();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));

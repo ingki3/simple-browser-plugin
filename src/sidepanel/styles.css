@@ -195,6 +195,9 @@ body,
 
 .msg-user {
   justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
 }
 
 .msg-assistant,
@@ -1531,4 +1534,83 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 페이지 제안(#173) */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-btn:hover {
+  color: var(--primary);
+}
+
+.suggest-from-msg {
+  width: 100%;
+  max-width: 100%;
+  font-size: 12px;
+}
+
+.suggest-from-msg.saved {
+  color: var(--fg-muted);
+  text-align: right;
+}
+
+.suggestion-form {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggestion-form input,
+.suggestion-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.suggestion-origin-fixed {
+  overflow-wrap: anywhere;
+}
+
+.suggestion-chip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 10px 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-alt);
+}
+
+.suggestion-label {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.suggestion-list {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggestion-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }

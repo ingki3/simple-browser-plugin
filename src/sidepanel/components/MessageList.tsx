@@ -73,6 +73,7 @@ export function MessageList({ onApprove, onCancel, needsKey, onOpenSettings, onS
           showThinking={settings.showThinking}
           onOpenSettings={onOpenSettings}
           usageUrl={PROVIDER_LINKS[settings.provider].usageUrl}
+          suggestEnabled={settings.pageSuggestions}
         />
       ))}
       {showThinking && <ThinkingIndicator />}

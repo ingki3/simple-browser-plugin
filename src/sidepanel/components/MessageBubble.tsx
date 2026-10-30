@@ -8,6 +8,7 @@ import { ToolPreviewCard } from "./ToolPreviewCard";
 import { ToolResultCard } from "./ToolResultCard";
 import { PageOfferCard } from "./PageOfferCard";
 import { HopLimitCard } from "./HopLimitCard";
+import { SuggestFromMessage } from "./SuggestFromMessage";
 
 interface Props {
   message: ChatMessage;
@@ -24,14 +25,17 @@ interface Props {
   onOpenSettings: () => void;
   // 지금 제공자의 사용량 확인 주소(오류의 "사용량 확인" 버튼, #130).
   usageUrl: string;
+  // 사용자 말풍선에 "이 페이지에서 제안"을 보일지(설정의 페이지 제안, #173).
+  suggestEnabled?: boolean;
 }
 
-export function MessageBubble({ message, onApprove, onCancel, showThinking, onOpenSettings, usageUrl }: Props) {
+export function MessageBubble({ message, onApprove, onCancel, showThinking, onOpenSettings, usageUrl, suggestEnabled }: Props) {
   switch (message.type) {
     case "user":
       return (
         <div className="msg msg-user">
           <div className="bubble bubble-user">{message.text}</div>
+          {suggestEnabled && <SuggestFromMessage text={message.text} />}
         </div>
       );
     case "assistant_text": {

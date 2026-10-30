@@ -6,6 +6,7 @@ import { ActionLogField } from "./ActionLogField";
 import { RunModeField } from "./RunModeField";
 import { RememberPagesField } from "./RememberPagesField";
 import { HistoryPickField } from "./HistoryPickField";
+import { PageSuggestionsField } from "./PageSuggestionsField";
 import { TrustedInputField } from "./TrustedInputField";
 import { ManualSitesField } from "./ManualSitesField";
 import { LoginSitesField } from "./LoginSitesField";
@@ -508,6 +509,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
             <summary>기억·기록</summary>
             <RememberPagesField enabled={draft.rememberPages} onToggle={(rememberPages) => update({ rememberPages })} />
             {draft.rememberPages && <HistoryPickField beforeStart={flush} onOpened={() => void handleClose()} />}
+            <PageSuggestionsField enabled={draft.pageSuggestions} onToggle={(pageSuggestions) => update({ pageSuggestions })} />
             <ActionLogField enabled={draft.actionLogEnabled} onToggle={(actionLogEnabled) => update({ actionLogEnabled })} />
           </details>
 
