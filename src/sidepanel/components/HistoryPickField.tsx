@@ -49,7 +49,15 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
     port.current = null;
     jobId.current = "";
   };
-  useEffect(() => disconnect, []);
+  // 화면이 닫힌 뒤에는 진행 중이던 시작을 이어 가지 않는다(새 포트를 만들지 않음).
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      disconnect();
+    };
+  }, []);
 
   const onMessage = (raw: unknown) => {
     const m = raw as {
@@ -102,8 +110,20 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
       setError("방문 기록 권한을 허락하지 않아 찾지 않았습니다.");
       return;
     }
+    if (!alive.current) return;
     if (!(await beforeStart())) {
-      setError("설정을 저장하지 못해 시작하지 않았습니다.");
+      if (alive.current) setError("설정을 저장하지 못해 시작하지 않았습니다.");
+      return;
+    }
+    let windowId: number | undefined;
+    try {
+      windowId = (await chrome.windows.getCurrent()).id;
+    } catch {
+      windowId = undefined;
+    }
+    if (!alive.current) return;
+    if (windowId === undefined) {
+      setError("창을 확인하지 못했습니다.");
       return;
     }
     disconnect();
@@ -115,7 +135,6 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
       if (port.current === p) port.current = null;
     });
     setView({ step: "preparing" });
-    const windowId = (await chrome.windows.getCurrent()).id;
     p.postMessage({ kind: "prepare", jobId: jobId.current, windowId });
   };
 
