@@ -38,8 +38,9 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
   const [evicted, setEvicted] = useState<string | null>(null);
-  // 저장할 때 지워질 링크가 카드를 띄울 때와 달라졌으면 백그라운드가 알려 준 새 예고(undefined면 카드를 띄울 때의 예고를 쓴다).
-  const [evictOverride, setEvictOverride] = useState<{ id: string; name: string } | null | undefined>(undefined);
+  // 저장할 때 지워질 링크가 카드를 띄울 때와 달라졌으면 백그라운드가 알려 준 새 예고. 그때의 템플릿(preview)에만 쓰고,
+  // 템플릿을 고치면 카드를 띄울 때의 예고로 돌아간다(백그라운드가 저장할 때 다시 확인한다).
+  const [evictOverride, setEvictOverride] = useState<{ preview: string; value: { id: string; name: string } | null } | null>(null);
   // 초안을 기다리는 사이 사용자가 고친 칸은 늦게 온 초안으로 덮지 않는다. 카드를 닫았다 다시 열면 이전 요청의 응답은 버린다.
   const touched = useRef({ name: false, purpose: false, params: false, hints: new Set<string>(), optional: false });
   const draftSeq = useRef(0);
@@ -66,7 +67,11 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
 
   // 사용자에게 보여 준(저장하면 지워질) 링크. 같은 템플릿을 다시 저장하면 지우지 않는다.
   const shownEvict =
-    evictOverride !== undefined ? evictOverride : offer.evicts && !previewError && !offer.savedTemplates.includes(preview) ? offer.evicts : null;
+    evictOverride && evictOverride.preview === preview
+      ? evictOverride.value
+      : offer.evicts && !previewError && !offer.savedTemplates.includes(preview)
+        ? offer.evicts
+        : null;
 
   const requestDraft = async () => {
     // 결제·개인정보 단서가 보이는 주소는 초안을 묻지 않는다(경로·제목·본문으로도 값이 샐 수 있어 사용자가 직접 정한다).
@@ -132,7 +137,7 @@ export function PageOfferCard({ offer, startOpen, autoDraft = true }: Props) {
         | undefined;
       if (res?.ok && res.data && "evictChanged" in res.data) {
         // 다른 카드를 먼저 저장해 지워질 링크가 바뀌었다. 새 예고를 보이고 다시 누르게 한다(저장하지 않았다).
-        setEvictOverride(res.data.evictChanged);
+        setEvictOverride({ preview, value: res.data.evictChanged });
         setError(
           res.data.evictChanged
             ? `지워질 링크가 '${res.data.evictChanged.name}'(으)로 바뀌었습니다. 확인한 뒤 다시 저장을 누르세요.`
