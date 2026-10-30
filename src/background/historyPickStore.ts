@@ -127,10 +127,18 @@ async function send(job: Job, indices: unknown): Promise<Array<{ i: number; name
   if (!sent.size) throw new Error("보낼 항목을 하나 이상 고르세요.");
   job.state = "sending";
   job.sent = sent;
+  // 첫 await 전에 만든다: 검사를 기다리는 사이 취소(abortJob)가 와도 이 신호가 중단된다.
+  const controller = new AbortController();
+  job.controller = controller;
+  const stillSending = () => {
+    if (job.state !== "sending" || controller.signal.aborted) throw new Error("취소했습니다.");
+  };
   try {
     await checkContext(job);
+    stillSending();
     if (job.gen !== settingsGen) throw new Error("설정이 바뀌었습니다. 다시 찾아 주세요.");
     const settings = await getSettings();
+    stillSending();
     const { provider, apiKey, model } = activeModel(settings);
     if (provider !== job.provider || model !== job.model || !apiKey) throw new Error("설정이 바뀌었습니다. 다시 찾아 주세요.");
     const data = snapshot.filter((s) => sent.has(s.i));
@@ -145,21 +153,24 @@ async function send(job: Job, indices: unknown): Promise<Array<{ i: number; name
       "데이터:",
       JSON.stringify(data),
     ].join("\n");
-    job.controller = new AbortController();
-    const timer = setTimeout(() => job.controller?.abort(), PICK_TIMEOUT_MS);
+    const masked = (await maskStringForModel(prompt)).text;
+    // 보내기 직전: 그 사이 취소·화면 닫기·설정 변경이 없었는지.
+    stillSending();
+    if (job.gen !== settingsGen) throw new Error("설정이 바뀌었습니다. 다시 찾아 주세요.");
+    const timer = setTimeout(() => controller.abort(), PICK_TIMEOUT_MS);
     let text: string;
     try {
       text = await providerAdapter(provider).complete(
         apiKey,
         {
           model,
-          messages: [{ role: "user", content: (await maskStringForModel(prompt)).text }],
+          messages: [{ role: "user", content: masked }],
           temperature: 0,
           reasoning: "off",
           maxTokens: 3000,
           responseFormat: { type: "json_object" },
         },
-        job.controller.signal,
+        controller.signal,
       );
     } finally {
       clearTimeout(timer);
