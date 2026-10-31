@@ -8,11 +8,12 @@ interface Status {
   lastOkAt: number;
   bridgeVersion: string;
   lastError: string;
+  askApproval: boolean;
 }
 
 type Req =
   | { kind: "mcp_status" }
-  | { kind: "mcp_set"; enabled?: boolean; port?: number }
+  | { kind: "mcp_set"; enabled?: boolean; port?: number; askApproval?: boolean }
   | { kind: "mcp_regenerate" };
 
 const when = (ms: number) => new Date(ms).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -79,6 +80,13 @@ export function McpField() {
             {st.connected ? `● 다리와 연결됨 (v${st.bridgeVersion})` : st.lastOkAt ? `마지막 연결 ${when(st.lastOkAt)}` : "다리를 기다리는 중 — AI 도구에서 다리가 실행되면 연결됩니다."}
           </span>
           {!st.connected && st.lastError && <span className="field-hint">{st.lastError}</span>}
+          <label className="check-row">
+            <input type="checkbox" checked={st.askApproval} disabled={busy} onChange={(e) => void request({ kind: "mcp_set", askApproval: e.target.checked })} />
+            <span>승인이 필요한 이동·클릭은 MCP 클라이언트에 묻기(대상·주소를 클라이언트로 보냄)</span>
+          </label>
+          <span className="field-hint">
+            켜면 승인을 MCP 클라이언트 프로그램에 맡깁니다. 클라이언트가 질문 창(elicitation)을 사람에게 보여 주지 않고 자동으로 답하게 만들어져 있으면 사람이 확인하지 않은 채 실행될 수 있습니다. 직접 쓰는 클라이언트(Claude Code·Claude Desktop 등)에서만 켜세요. 클라이언트가 질문 창을 지원하지 않으면 지금처럼 하지 않습니다.
+          </span>
           <div className="key-row">
             <input value={port} inputMode="numeric" onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} aria-label="포트" />
             <button type="button" className="ghost-btn" disabled={busy || Number(port) === st.port} onClick={() => void request({ kind: "mcp_set", port: Number(port) })}>

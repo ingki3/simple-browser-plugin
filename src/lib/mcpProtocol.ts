@@ -107,9 +107,22 @@ export const aadOf = (method: string, path: string, header: string) => `${method
 export interface McpNext {
   bridgeId: string;
   version: string;
-  job?: { jobId: string; request: string; deadline: number };
+  // 다리가 아는 기능(#185 "ask" — 승인 질문). 구 다리(1.0.x)는 보내지 않는다.
+  features?: string[];
+  // canAsk: 그 작업의 클라이언트가 form elicitation을 지원하는지(features에 "ask"가 있을 때만 의미).
+  job?: { jobId: string; request: string; deadline: number; canAsk?: boolean };
   cancel?: string[];
+  // 승인 질문의 답(확장이 ack할 때까지 다시 온다).
+  answers?: McpAnswer[];
 }
+
+export type McpAskResult = "approved" | "denied" | "cancelled" | "error";
+export interface McpAnswer {
+  jobId: string;
+  askId: string;
+  result: McpAskResult;
+}
+const ASK_RESULTS: ReadonlySet<string> = new Set(["approved", "denied", "cancelled", "error"]);
 
 export function parseNext(v: unknown): McpNext | null {
   if (!v || typeof v !== "object") return null;
@@ -120,7 +133,22 @@ export function parseNext(v: unknown): McpNext | null {
     const j = o.job as Record<string, unknown> | null;
     if (!j || typeof j.jobId !== "string" || typeof j.request !== "string" || typeof j.deadline !== "number") return null;
     if (!j.request.trim() || j.request.length > 4000) return null;
-    out.job = { jobId: j.jobId, request: j.request, deadline: j.deadline };
+    if (j.canAsk !== undefined && typeof j.canAsk !== "boolean") return null;
+    out.job = { jobId: j.jobId, request: j.request, deadline: j.deadline, ...(j.canAsk !== undefined ? { canAsk: j.canAsk } : {}) };
+  }
+  if (o.features !== undefined) {
+    if (!Array.isArray(o.features) || !o.features.every((x) => typeof x === "string")) return null;
+    out.features = o.features as string[];
+  }
+  if (o.answers !== undefined) {
+    if (!Array.isArray(o.answers)) return null;
+    const answers: McpAnswer[] = [];
+    for (const a of o.answers as unknown[]) {
+      const x = a as Record<string, unknown> | null;
+      if (!x || typeof x.jobId !== "string" || typeof x.askId !== "string" || typeof x.result !== "string" || !ASK_RESULTS.has(x.result)) return null;
+      answers.push({ jobId: x.jobId, askId: x.askId, result: x.result as McpAskResult });
+    }
+    out.answers = answers;
   }
   if (o.cancel !== undefined) {
     if (!Array.isArray(o.cancel) || !o.cancel.every((x) => typeof x === "string")) return null;

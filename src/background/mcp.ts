@@ -1,11 +1,13 @@
 // MCP 연동(#140): 로컬 다리(mcp/sbp-mcp.mjs)를 폴링해 다른 AI 도구의 요청을 원격 대화(channel "mcp")로 처리하고 최종 답을 돌려준다.
 // - 다리와는 설정의 비밀로 서로를 확인하고 본문을 암호화한다(src/lib/mcpProtocol.ts). 응답을 복호화하지 못하면 버린다.
-// - 원격 정책은 텔레그램과 같다(승인이 필요한 동작은 하지 않음 — openrouter.ts의 원격 정책).
+// - 원격 정책은 텔레그램과 같다(openrouter.ts의 원격 정책). 승인이 필요한 이동·클릭은 설정 "MCP 클라이언트에 승인 묻기"(기본 끔)를
+//   켜고 다리·클라이언트가 form elicitation을 지원할 때만 다리를 거쳐 클라이언트에 묻는다(#185 — 승인을 클라이언트 프로그램에 맡기는 것).
 // - 작업 계약: 실행 전에 작업 id를 저장하고 같은 작업은 다시 실행하지 않는다. 결과 전송만 다시 시도한다. 다리에 60초 넘게 닿지 않거나
 //   기한이 지나면 스스로 멈춘다. 서비스 워커가 다시 뜨면 진행 중이던 작업은 중단으로 보고한다(자동 재실행 없음).
 import {
   MCP_DEFAULT_PORT,
   aadOf,
+  b64url,
   deriveKeys,
   makeHeader,
   newSecret,
@@ -13,9 +15,11 @@ import {
   parseNext,
   seal,
   signRequest,
+  type McpAskResult,
   type McpKeys,
   type McpNext,
 } from "@/lib/mcpProtocol";
+import type { RemoteApprover, RemoteAskResult, RemoteQuestion } from "@/lib/remoteApproval";
 import { remoteErrorText } from "@/lib/telegram";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
@@ -49,6 +53,8 @@ interface McpState {
   bridgeVersion: string;
   lastOkAt: number;
   lastError: string;
+  // 승인이 필요한 이동·클릭을 MCP 클라이언트에 묻기(#185, 기본 끔 — 클라이언트 프로그램에 승인을 맡긴다).
+  askApproval: boolean;
   // 실행 중인 작업(서비스 워커가 다시 뜨면 중단으로 보고한다).
   job: McpJob | null;
   pending: McpPending | null;
@@ -56,7 +62,7 @@ interface McpState {
   seen: string[];
 }
 
-const EMPTY: McpState = { enabled: false, port: MCP_DEFAULT_PORT, secret: "", bridgeId: "", bridgeVersion: "", lastOkAt: 0, lastError: "", job: null, pending: null, seen: [] };
+const EMPTY: McpState = { enabled: false, port: MCP_DEFAULT_PORT, secret: "", bridgeId: "", bridgeVersion: "", lastOkAt: 0, lastError: "", askApproval: false, job: null, pending: null, seen: [] };
 
 let queue: Promise<unknown> = Promise.resolve();
 function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -88,6 +94,7 @@ export interface McpStatus {
   lastOkAt: number;
   bridgeVersion: string;
   lastError: string;
+  askApproval: boolean;
 }
 
 function statusOf(s: McpState): McpStatus {
@@ -99,6 +106,7 @@ function statusOf(s: McpState): McpStatus {
     lastOkAt: s.lastOkAt,
     bridgeVersion: s.bridgeVersion,
     lastError: s.lastError,
+    askApproval: s.askApproval,
   };
 }
 
@@ -114,16 +122,25 @@ export async function mcpSecret(): Promise<string> {
   return s.secret;
 }
 
-export async function mcpSet(patch: { enabled?: boolean; port?: number }): Promise<McpStatus> {
+export async function mcpSet(patch: { enabled?: boolean; port?: number; askApproval?: boolean }): Promise<McpStatus> {
   await recovered;
+  // 승인 묻기만 바꾸면 연결은 그대로 두고, 끄면 기다리는 질문을 거둔다(물을 수 없는 것으로).
+  if (patch.askApproval !== undefined && patch.enabled === undefined && patch.port === undefined) {
+    const s = await update((cur) => ({ ...cur, askApproval: patch.askApproval === true }));
+    askEnabled = s.askApproval;
+    if (!askEnabled) for (const w of [...askWaiters.values()]) w.cancel("unavailable");
+    return statusOf(s);
+  }
   if (patch.port !== undefined && (!Number.isInteger(patch.port) || patch.port < 1024 || patch.port > 65535)) throw new Error("포트는 1024~65535 사이 정수여야 합니다.");
   const s = await update((cur) => ({
     ...cur,
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
     ...(patch.port !== undefined ? { port: patch.port } : {}),
     secret: cur.secret || newSecret(),
+    ...(patch.askApproval !== undefined ? { askApproval: patch.askApproval } : {}),
     lastError: "",
   }));
+  askEnabled = s.askApproval;
   restart();
   if (s.enabled) await chrome.alarms.create(ALARM, { periodInMinutes: 1 });
   else await chrome.alarms.clear(ALARM).catch(() => false);
@@ -148,7 +165,7 @@ async function keysOf(secret: string): Promise<McpKeys> {
   return keyCache.keys;
 }
 
-async function bridgeFetch(s: McpState, method: "GET" | "POST", path: "/v1/next" | "/v1/result", value: unknown, signal: AbortSignal): Promise<unknown> {
+async function bridgeFetch(s: McpState, method: "GET" | "POST", path: "/v1/next" | "/v1/result" | "/v1/ask", value: unknown, signal: AbortSignal): Promise<unknown> {
   if (signal.aborted) throw new BridgeError("멈춤");
   const keys = await keysOf(s.secret);
   const header = makeHeader(Date.now());
@@ -318,6 +335,13 @@ async function handleNext(conn: Conn, n: McpNext): Promise<void> {
     conn.s = await update((cur) => ({ ...cur, lastOkAt: Date.now(), lastError: "", bridgeVersion: n.version }));
   }
   const st = conn.s;
+  bridgeFeatures = n.features ?? [];
+  // 승인 질문의 답: 지금 작업의 기다리는 질문이면 전하고, 어느 경우든 받았다고 알린다(다리가 다시 보내지 않게).
+  for (const a of n.answers ?? []) {
+    const w = askWaiters.get(a.askId);
+    if (w && current?.jobId === a.jobId && w.jobId === a.jobId) w.answer(a.result);
+    else void postAsk(conn, { op: "ack", jobId: a.jobId, askId: a.askId }, cleanupSignal());
+  }
   // 서비스 워커가 다시 뜨기 전에 실행 중이던 작업: 다시 실행하지 않고 중단으로 보고한다.
   if (st.job && st.job.bridgeId === n.bridgeId && current?.jobId !== st.job.jobId) {
     const jobId = st.job.jobId;
@@ -357,7 +381,7 @@ function startJob(conn: Conn, bridgeId: string, job: NonNullable<McpNext["job"]>
       await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));
       return;
     }
-    const running = runner.run(job.request);
+    const running = runner.run(job.request, undefined, approverFor(conn, job));
     if (!running) return;
     current = { jobId: job.jobId, deadline: job.deadline };
     void postResult(conn, job.jobId, "accepted", "");
@@ -385,6 +409,83 @@ function startJob(conn: Conn, bridgeId: string, job: NonNullable<McpNext["job"]>
   })();
 }
 
+// ---- 승인 질문(#185) ----
+
+const ASK_TTL_MS = 5 * 60_000;
+// 다리가 알린 기능(구 다리는 없음 → 묻지 않는다)과 설정.
+let bridgeFeatures: string[] = [];
+let askEnabled = false;
+// 기다리는 질문(askId → 답·거두기). 답은 /v1/next의 answers로 온다.
+const askWaiters = new Map<string, { jobId: string; answer(r: McpAskResult): void; cancel(r: "unavailable"): void }>();
+
+// ack·withdraw는 턴 신호를 쓰지 않는다(턴이 끝난 뒤에도 다리에 닿아야 한다). 연결이 바뀌거나 10초가 지나면 그만.
+function cleanupSignal(): AbortSignal {
+  return AbortSignal.any([loopAbort.signal, AbortSignal.timeout(10_000)]);
+}
+
+type AskBody = { op: "ask" | "ack" | "withdraw"; jobId: string; askId: string; message?: string };
+
+// /v1/ask를 같은 본문으로 몇 번 다시 보낸다(1·2·4초). 다리는 같은 id·같은 본문을 멱등으로 처리한다.
+async function postAsk(conn: Conn, body: AskBody, signal: AbortSignal): Promise<{ ok: boolean; state?: string } | null> {
+  for (let i = 0; i < 3; i++) {
+    if (conn.gen !== connGen || signal.aborted) return null;
+    try {
+      const r = (await bridgeFetch(conn.s, "POST", "/v1/ask", body, signal)) as { ok?: unknown; state?: unknown } | null;
+      return { ok: r?.ok === true, state: typeof r?.state === "string" ? r.state : undefined };
+    } catch (err) {
+      if (signal.aborted || conn.gen !== connGen) return null;
+      debugLog("mcp:ask_retry", `${body.op} · ${err instanceof Error ? err.message : String(err)}`, "warn");
+      await abortableSleep(1000 * 2 ** i, signal);
+    }
+  }
+  return null;
+}
+
+function approverFor(conn: Conn, job: NonNullable<McpNext["job"]>): RemoteApprover {
+  return {
+    canAsk: () => askEnabled && conn.gen === connGen && bridgeFeatures.includes("ask") && job.canAsk === true,
+    ask: (q, signal) => askByBridge(conn, job, q, signal),
+  };
+}
+
+async function askByBridge(conn: Conn, job: NonNullable<McpNext["job"]>, q: RemoteQuestion, signal: AbortSignal): Promise<RemoteAskResult> {
+  if (signal.aborted) return "aborted";
+  const expiresAt = Math.min(Date.now() + ASK_TTL_MS, job.deadline - 30_000);
+  if (expiresAt <= Date.now()) return "unavailable";
+  const askId = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  type Outcome = McpAskResult | "expired" | "aborted" | "unavailable";
+  let resolve!: (v: Outcome) => void;
+  const settled = new Promise<Outcome>((r) => (resolve = r));
+  let done = false;
+  const settle = (v: Outcome) => {
+    if (done) return;
+    done = true;
+    askWaiters.delete(askId);
+    clearTimeout(timer);
+    resolve(v);
+  };
+  // 보내기 전에 기다림을 등록한다(답이 /v1/ask 응답보다 먼저 와도 받게). 답은 절대 만료 시각으로 다시 본다.
+  askWaiters.set(askId, {
+    jobId: job.jobId,
+    answer: (r) => settle(Date.now() > expiresAt ? "expired" : r),
+    cancel: (r) => settle(r),
+  });
+  const timer = setTimeout(() => settle("expired"), expiresAt - Date.now());
+  const onAbort = () => settle("aborted");
+  signal.addEventListener("abort", onAbort, { once: true });
+  const sent = await postAsk(conn, { op: "ask", jobId: job.jobId, askId, message: q.text }, AbortSignal.any([loopAbort.signal, signal]));
+  if (!sent || !sent.ok || sent.state === "withdrawn" || sent.state === "gone") settle("unavailable");
+  const r = await settled;
+  signal.removeEventListener("abort", onAbort);
+  if (r === "approved" || r === "denied" || r === "cancelled" || r === "error") {
+    void postAsk(conn, { op: "ack", jobId: job.jobId, askId }, cleanupSignal());
+    return r === "error" ? "unavailable" : r;
+  }
+  // 만료·중단·보내지 못함: 다리에 질문을 거두게 한다(클라이언트의 질문 창을 닫고 늦은 답을 버린다).
+  void postAsk(conn, { op: "withdraw", jobId: job.jobId, askId }, cleanupSignal());
+  return r;
+}
+
 // ---- 알람·복구 ----
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -399,6 +500,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 const recovered = (async () => {
   try {
     const s = await load();
+    askEnabled = s.askApproval;
     if (s.enabled) {
       if (!(await chrome.alarms.get(ALARM))) await chrome.alarms.create(ALARM, { periodInMinutes: 1 });
       void loop();

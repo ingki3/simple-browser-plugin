@@ -12,7 +12,7 @@ import { StringDecoder } from "node:string_decoder";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export const BRIDGE_VERSION = "1.0.0";
+export const BRIDGE_VERSION = "1.1.0";
 export const PROTOCOL_VERSION = 1;
 // 2025-03-26은 JSON-RPC batch 수신이 필수라 넣지 않는다(batch를 처리하지 않는다).
 export const SUPPORTED_MCP_VERSIONS = ["2025-11-25", "2025-06-18", "2024-11-05"];
@@ -27,6 +27,37 @@ const MAX_BODY = 256 * 1024;
 const MAX_LINE = 1024 * 1024;
 const MAX_CONNECTIONS = 8;
 const MAX_REQUEST = 4000;
+// 승인 질문(#185): 작업당 질문 수·질문 길이 상한, 다시 보낼 간격(받았다는 확인이 없을 때).
+const MAX_ASKS_PER_JOB = 20;
+const MAX_ASK_MESSAGE = 2000;
+const ASK_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+const ANSWER_RESEND_MS = 3_000;
+// 확장에 알리는 기능(wire 프로토콜 버전은 그대로 1 — 구 확장은 모르는 필드를 무시한다).
+export const BRIDGE_FEATURES = ["ask"];
+
+// 클라이언트가 form 모드 elicitation을 지원하는지(협상한 버전별). 2024-11-05는 elicitation 없음, 2025-06-18은
+// capabilities.elicitation이 객체면 form, 2025-11-25는 빈 객체(form으로 간주)이거나 form 키가 있을 때만(url만이면 아님).
+export function supportsFormElicitation(version, capabilities) {
+  const e = capabilities && typeof capabilities === "object" ? capabilities.elicitation : undefined;
+  if (!e || typeof e !== "object" || Array.isArray(e)) return false;
+  if (version === "2025-06-18") return true;
+  if (version === "2025-11-25") return Object.keys(e).length === 0 || (typeof e.form === "object" && e.form !== null);
+  return false;
+}
+
+// 클라이언트의 elicitation 응답을 결과로. accept + approve === true만 승인. 그 밖의 모양은 error(사용자 거절로 보지 않는다).
+export function elicitationResult(msg) {
+  if (msg.error) return "error";
+  const r = msg.result;
+  if (!r || typeof r !== "object") return "error";
+  if (r.action === "accept") {
+    if (!r.content || typeof r.content !== "object" || typeof r.content.approve !== "boolean") return "error";
+    return r.content.approve === true ? "approved" : "denied";
+  }
+  if (r.action === "decline") return "denied";
+  if (r.action === "cancel") return "cancelled";
+  return "error";
+}
 
 // ---- 프로토콜(src/lib/mcpProtocol.ts와 같은 계산) ----
 
@@ -96,7 +127,7 @@ export async function open(key, aad, body) {
 const TOOL = {
   name: "browser_task",
   description:
-    "사용자의 Chrome에 설치된 '간편 브라우저 도우미'에게 브라우저 일을 시키고 최종 답을 받는다(새 탭에서 처리). 페이지 읽기·요약, 요청에 적은 사이트로 이동, 그 사이트 안의 일반 클릭·입력을 한다. 승인이 필요한 동작(결제·주문, 삭제, 개인정보·비밀번호 입력, 로그인, 파일 저장, 요청에 적지 않은 사이트로 이동)은 하지 않고, 그런 일은 사용자가 브라우저 패널에서 직접 하라고 답한다. 한 번에 하나만 처리하며 최대 10분 걸린다.",
+    "사용자의 Chrome에 설치된 '간편 브라우저 도우미'에게 브라우저 일을 시키고 최종 답을 받는다(새 탭에서 처리). 페이지 읽기·요약, 요청에 적은 사이트로 이동, 그 사이트 안의 일반 클릭·입력을 한다. 승인이 필요한 이동·클릭은 사용자가 확장 설정에서 켜 두고 이 클라이언트가 elicitation(form)을 지원하면 사용자에게 승인을 묻고, 아니면 하지 않는다. 그 밖의 승인이 필요한 동작(개인정보·비밀번호 입력, 로그인, 파일 저장 등)은 하지 않고, 그런 일은 사용자가 브라우저 패널에서 직접 하라고 답한다. 한 번에 하나만 처리하며 최대 10분 걸린다.",
   inputSchema: {
     type: "object",
     properties: { request: { type: "string", description: "할 일(한국어 가능, 4000자 이내). 이동할 사이트는 주소나 도메인으로 적는다(예: naver.com)." } },
@@ -109,6 +140,9 @@ const TOOL = {
 export function createBridge({ keys, write, now = () => Date.now(), log = () => {} }) {
   const bridgeId = b64url(crypto.getRandomValues(new Uint8Array(12)));
   let initialized = false;
+  // 협상한 버전·클라이언트의 form elicitation 지원(승인 질문, #185).
+  let canAsk = false;
+  let negotiated = "";
   // {jobId, rpcId, request, deadline, state: "queued"|"leased"|"cancelling", acked, leasedAt, timers}
   // leased: 확장에 보냈다. acked: 확장이 저장하고 받았다고 알렸다(그 전에는 같은 작업을 다시 보낸다 — 응답 유실 대비, 확장은 같은 id를 두 번 실행하지 않는다).
   // cancelling: 취소했고 확장이 멈췄다고 알릴 때까지(또는 60초) 슬롯을 붙잡는다(멈추는 중인 작업과 다음 작업이 겹치지 않게).
@@ -122,9 +156,19 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
   const fail = (id, code, message) => write({ jsonrpc: "2.0", id, error: { code, message } });
   const toolError = (id, text) => reply(id, { content: [{ type: "text", text }], isError: true });
 
+  // 작업의 열린 질문을 거둔다(클라이언트에 취소 알림, 늦은 응답은 버린다).
+  function withdrawAsks(j, reason) {
+    for (const a of j.asks.values()) {
+      if (a.state !== "open") continue;
+      a.state = "withdrawn";
+      write({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: a.rpcId, reason } });
+    }
+  }
+
   function finish(state, why) {
     if (!job) return;
     for (const t of job.timers) clearTimeout(t);
+    withdrawAsks(job, "작업이 끝남");
     log(`작업 ${job.jobId.slice(0, 6)} ${state}${why ? `: ${why}` : ""}`);
     if (state === "cancelled" && job.state === "leased") {
       // 확장이 가져간 작업: 멈추라고 알리고, 멈췄다는 확인이 올 때까지 슬롯을 붙잡는다.
@@ -150,7 +194,8 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
 
   function startJob(rpcId, request) {
     const jobId = b64url(crypto.getRandomValues(new Uint8Array(12)));
-    job = { jobId, rpcId, request, deadline: now() + JOB_DEADLINE_MS, state: "queued", acked: false, leasedAt: 0, timers: [] };
+    // asks: askId → { message, rpcId, state: "open"|"answered"|"done"|"withdrawn", result, sentAt }(작업이 끝날 때까지 기억 — 소비한 id를 다시 쓰지 않게).
+    job = { jobId, rpcId, request, deadline: now() + JOB_DEADLINE_MS, state: "queued", acked: false, leasedAt: 0, timers: [], asks: new Map(), canAsk };
     const mine = job;
     mine.timers.push(
       setTimeout(() => {
@@ -173,7 +218,8 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
   // JSON-RPC 메시지 하나(이미 파싱한 값). 응답은 write로.
   function handleRpc(msg) {
     if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
-      if (msg && typeof msg === "object" && "id" in msg && !("method" in msg)) return; // 응답(우리는 요청을 보내지 않는다)
+      // 응답: 우리가 보낸 승인 질문(elicitation/create)의 답일 때만 쓴다. 그 밖(모르는 id·이미 답한 질문)은 버린다.
+      if (msg && typeof msg === "object" && "id" in msg && !("method" in msg)) return onResponse(msg);
       return fail(msg?.id ?? null, -32600, "Invalid Request");
     }
     const isNote = !("id" in msg);
@@ -187,8 +233,11 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
     if (method === "initialize") {
       const asked = params?.protocolVersion;
       initialized = true;
+      const version = SUPPORTED_MCP_VERSIONS.includes(asked) ? asked : SUPPORTED_MCP_VERSIONS[0];
+      canAsk = supportsFormElicitation(version, params?.capabilities);
+      negotiated = version;
       return reply(id, {
-        protocolVersion: SUPPORTED_MCP_VERSIONS.includes(asked) ? asked : SUPPORTED_MCP_VERSIONS[0],
+        protocolVersion: version,
         capabilities: { tools: {} },
         serverInfo: { name: "simple-browser-helper", version: BRIDGE_VERSION },
       });
@@ -208,6 +257,70 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
     return fail(id, -32601, `Method not found: ${method}`);
   }
 
+  function onResponse(msg) {
+    if (!job || typeof msg.id !== "string" || !msg.id.startsWith("sbp-ask-")) return;
+    for (const a of job.asks.values()) {
+      if (a.rpcId !== msg.id) continue;
+      if (a.state !== "open") return; // 거둔·이미 답한 질문의 늦은·중복 응답
+      a.state = "answered";
+      a.result = elicitationResult(msg);
+      a.sentAt = 0;
+      log(`질문 답: ${a.result}`);
+      wake();
+      return;
+    }
+  }
+
+  // /v1/ask: 승인 질문(ask)·답 확인(ack)·거두기(withdraw). 모두 멱등이다.
+  async function askRoute(header, body) {
+    const aad = aadOf("POST", "/v1/ask", header);
+    const r = await open(keys.extEnc, aad, body);
+    const answer = (v) => seal(keys.bridgeEnc, aad, v);
+    if (!r || typeof r !== "object" || typeof r.jobId !== "string" || typeof r.askId !== "string" || !ASK_ID_RE.test(r.askId)) throw new Error("bad ask");
+    // 지금 작업이 아니면(끝났거나 다른 작업) 질문을 열지 않는다.
+    if (!job || job.jobId !== r.jobId) return answer({ ok: r.op !== "ask", state: "gone" });
+    const a = job.asks.get(r.askId);
+    if (r.op === "ack") {
+      if (a && a.state === "answered") a.state = "done";
+      return answer({ ok: true, state: a?.state ?? "unknown" });
+    }
+    if (r.op === "withdraw") {
+      if (!a) {
+        // 아직 모르는 질문이어도 거둔 것으로 기억한다(뒤늦게 온 ask가 질문을 열지 않게).
+        job.asks.set(r.askId, { message: null, rpcId: null, state: "withdrawn", result: null, sentAt: 0 });
+      } else if (a.state === "open") {
+        a.state = "withdrawn";
+        write({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: a.rpcId, reason: "확장이 질문을 거둠" } });
+      } else if (a.state === "answered") a.state = "done";
+      return answer({ ok: true, state: "withdrawn" });
+    }
+    if (r.op !== "ask") throw new Error("bad op");
+    const message = typeof r.message === "string" ? r.message : "";
+    if (a) {
+      if (a.state === "withdrawn") return answer({ ok: true, state: "withdrawn" });
+      // 같은 id·같은 글이면 같은 질문(응답 유실 뒤 다시 보냄 — 질문을 다시 띄우지 않는다). 다른 글이면 거절.
+      return answer(a.message === message ? { ok: true, state: a.state } : { ok: false, error: "conflict" });
+    }
+    if (!job.canAsk || job.state !== "leased") return answer({ ok: false, error: "unavailable" });
+    if (!message.trim() || message.length > MAX_ASK_MESSAGE) return answer({ ok: false, error: "bad message" });
+    if (job.asks.size >= MAX_ASKS_PER_JOB) return answer({ ok: false, error: "too many" });
+    if ([...job.asks.values()].some((x) => x.state === "open")) return answer({ ok: false, error: "busy" });
+    const rpcId = `sbp-ask-${b64url(crypto.getRandomValues(new Uint8Array(12)))}`;
+    job.asks.set(r.askId, { message, rpcId, state: "open", result: null, sentAt: 0 });
+    const params = {
+      message,
+      requestedSchema: {
+        type: "object",
+        properties: { approve: { type: "boolean", title: "승인", description: "이 동작을 실행하려면 켜세요", default: false } },
+        required: ["approve"],
+      },
+    };
+    // 2025-11-25는 mode를 밝히고, 2025-06-18은 mode 없이 보낸다.
+    write({ jsonrpc: "2.0", id: rpcId, method: "elicitation/create", params: negotiated === "2025-11-25" ? { mode: "form", ...params } : params });
+    log("승인 질문을 보냄");
+    return answer({ ok: true, state: "open" });
+  }
+
   // 확장 요청 인증. 성공하면 머리(문자열), 실패하면 null. 인증한 nonce만 기억한다.
   async function authenticate(method, path, header, mac) {
     if (typeof header !== "string" || typeof mac !== "string" || header.length > 512 || mac.length > 128) return null;
@@ -224,15 +337,25 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
   // /v1/next: 작업·취소가 있으면 바로, 없으면 최대 POLL_HOLD_MS 기다린다.
   async function next(header, signal) {
     const pick = () => {
-      const out = { bridgeId, version: BRIDGE_VERSION };
+      const out = { bridgeId, version: BRIDGE_VERSION, features: BRIDGE_FEATURES };
       if (cancels.size) out.cancel = [...cancels];
+      // 확인(ack)을 받지 않은 질문 답: 보낸 지 ANSWER_RESEND_MS가 지났으면 다시 싣는다.
+      const answers = [];
+      if (job) {
+        for (const [askId, a] of job.asks) {
+          if (a.state !== "answered" || (a.sentAt && now() - a.sentAt < ANSWER_RESEND_MS)) continue;
+          a.sentAt = now();
+          answers.push({ jobId: job.jobId, askId, result: a.result });
+        }
+      }
+      if (answers.length) out.answers = answers;
       // 아직 받았다는 확인이 없는 작업은 5초 뒤 다시 보낸다(응답 유실 대비).
       if (job && (job.state === "queued" || (job.state === "leased" && !job.acked && now() - job.leasedAt > 5_000))) {
         job.state = "leased";
         job.leasedAt = now();
-        out.job = { jobId: job.jobId, request: job.request, deadline: job.deadline };
+        out.job = { jobId: job.jobId, request: job.request, deadline: job.deadline, canAsk: job.canAsk };
       }
-      return out.job || out.cancel ? out : null;
+      return out.job || out.cancel || out.answers ? out : null;
     };
     let value = pick();
     if (!value) {
@@ -246,7 +369,7 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
         waiters.add(done);
         signal?.addEventListener("abort", done, { once: true });
       });
-      value = signal?.aborted ? null : (pick() ?? { bridgeId, version: BRIDGE_VERSION });
+      value = signal?.aborted ? null : (pick() ?? { bridgeId, version: BRIDGE_VERSION, features: BRIDGE_FEATURES });
     }
     if (!value) return null;
     return seal(keys.bridgeEnc, aadOf("GET", "/v1/next", header), value);
@@ -280,7 +403,16 @@ export function createBridge({ keys, write, now = () => Date.now(), log = () => 
     if (job) finish("cancelled", "클라이언트 종료");
   }
 
-  return { bridgeId, handleRpc, authenticate, next, result, shutdown, state: () => ({ job, cancels: [...cancels], lastContact }) };
+  return {
+    bridgeId,
+    handleRpc,
+    authenticate,
+    next,
+    result,
+    ask: askRoute,
+    shutdown,
+    state: () => ({ job, cancels: [...cancels], lastContact, canAsk }),
+  };
 }
 
 // HTTP 창구. 127.0.0.1에만. 정확한 경로·메서드·Host만, 웹 페이지 Origin은 거절, CORS 없음.
@@ -301,7 +433,7 @@ export function createHttp(bridge, port) {
     if (origin && !origin.startsWith("chrome-extension://")) return send(403);
     const path = (req.url ?? "").split("?")[0];
     const route = `${req.method} ${path}`;
-    if (route !== "GET /v1/next" && route !== "POST /v1/result") return send(404);
+    if (route !== "GET /v1/next" && route !== "POST /v1/result" && route !== "POST /v1/ask") return send(404);
     const header = await bridge.authenticate(req.method, path, req.headers["x-sbp"], req.headers["x-sbp-mac"]);
     if (!header) return send(401);
     try {
@@ -319,7 +451,8 @@ export function createHttp(bridge, port) {
         if (size > MAX_BODY) return send(413);
         chunks.push(c);
       }
-      send(200, await bridge.result(header, Buffer.concat(chunks).toString("utf8")));
+      const text = Buffer.concat(chunks).toString("utf8");
+      send(200, route === "POST /v1/ask" ? await bridge.ask(header, text) : await bridge.result(header, text));
     } catch {
       send(400);
     }
