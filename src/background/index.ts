@@ -405,7 +405,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
     }
-    const p = msg as { enabled?: unknown; port?: unknown };
+    const p = msg as { enabled?: unknown; port?: unknown; askApproval?: unknown };
     const job: Promise<unknown> =
       m.kind === "mcp_secret"
         ? mcpSecret()
@@ -415,6 +415,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             ? mcpSet({
                 ...(typeof p.enabled === "boolean" ? { enabled: p.enabled } : {}),
                 ...(typeof p.port === "number" ? { port: p.port } : {}),
+                ...(typeof p.askApproval === "boolean" ? { askApproval: p.askApproval } : {}),
               })
             : mcpStatus();
     job
