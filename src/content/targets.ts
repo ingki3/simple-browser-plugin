@@ -19,7 +19,7 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { groupLabel, inProtectedArea, modelText, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo } from "./modelText";
+import { groupLabelInfo, inProtectedArea, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo, type TextInfo } from "./modelText";
 
 export interface TargetKind {
   // id 앞글자("c" 클릭, "f" 입력 칸).
@@ -31,8 +31,8 @@ export interface TargetKind {
   name(el: HTMLElement): string;
   // 모델에 돌려주는 이름(입력값·편집 영역·숨은 글자 제외, modelText.ts). 비교에도 넣는다.
   modelName(el: HTMLElement): string;
-  // 클릭 대상: 한도를 늘려 만든 modelName(같으면 잘리지 않은 것 — modelNameClipped, #185).
-  modelNameLong?(el: HTMLElement): string;
+  // 클릭 대상: modelName이 어느 단계에서든 한도에서 잘렸는지(modelNameClipped, #185).
+  modelNameCut?(el: HTMLElement): boolean;
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
@@ -307,32 +307,17 @@ const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role='heading'], caption, leg
 
 // 모델에 돌려주는 묶음 문맥: 행 글자를 modelText로(입력 칸·편집 영역·숨은 글자 제외) 만들고, 묶음의 접근성 이름이나
 // 묶음 안 첫 표제가 있으면 앞에 둔다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼을 구분하게).
-function modelContextOf(row: Element | null, opts: { substitute?: ReadonlyMap<Element, string>; limits?: ContextLimits } = {}): string {
-  return modelContextInfoOf(row, opts).text;
-}
-
-interface ContextLimits {
-  max: number;
-  heading: number;
-}
-const CONTEXT_LIMITS: ContextLimits = { max: MODEL_CONTEXT_MAX, heading: 80 };
-// 잘림 확인용(#185): 한도를 5배로 늘려 만든 글자가 같으면 어느 단계(행 글자·표제)에서도 잘리지 않은 것이다.
-const LONG_CONTEXT_LIMITS: ContextLimits = { max: MODEL_CONTEXT_MAX * 5, heading: 80 * 5 };
-
-// modelContextOf와 같은 글자와, 한도에서 잘렸는지(cut — 행 글자 순회가 끝나지 않았거나 표제를 붙인 뒤 한도를 넘음, #159).
-function modelContextInfoOf(
-  row: Element | null,
-  opts: { substitute?: ReadonlyMap<Element, string>; limits?: ContextLimits } = {},
-): { text: string; cut: boolean } {
+// cut: 한도에서 잘렸는지(행 글자 순회가 끝나지 않았거나 표제를 붙인 뒤 한도를 넘음 #159, 표제를 만들 때(80자) 잘림 #185).
+function modelContextInfoOf(row: Element | null, opts: { substitute?: ReadonlyMap<Element, string> } = {}): { text: string; cut: boolean } {
   if (!row) return { text: "", cut: false };
   if (inProtectedArea(row)) return { text: "", cut: false };
-  const limits = opts.limits ?? CONTEXT_LIMITS;
-  const info = subtreeTextInfo(row, limits.max, opts);
+  const info = subtreeTextInfo(row, MODEL_CONTEXT_MAX, opts);
   if (!info.text) return { text: "", cut: false };
-  const heading = groupHeading(row, limits.heading);
+  const h = groupHeading(row);
+  const heading = h.text;
   const joined = heading && !info.text.startsWith(heading) ? `${heading} · ${info.text}` : info.text;
-  const text = cleanModelText(joined, limits.max);
-  return { text, cut: info.cut || joined.replace(/\s+/g, " ").trim().length > limits.max };
+  const text = cleanModelText(joined, MODEL_CONTEXT_MAX);
+  return { text, cut: info.cut || (!!heading && h.cut) || joined.replace(/\s+/g, " ").trim().length > MODEL_CONTEXT_MAX };
 }
 
 // 클릭 대상의 모델용 묶음 문맥과 잘림 여부(find_clickables의 contextTruncated·matchContext, #159). 등록 기술의 modelContext와
@@ -346,15 +331,16 @@ const GROUP_CLIMB = 6;
 // 행의 표제. 행 자신의 접근성 이름·행 안의 첫 표제, 없으면 위로 올라가며(최대 6단계) 그 묶음에 구조로 연결된 표제를 찾는다:
 // 접근성 이름, 표의 caption, fieldset의 legend, 그리고 묶음 안의 표제가 하나뿐이면 그 표제
 // (여럿이면 어느 것이 이 행의 표제인지 구조로 정할 수 없어 쓰지 않는다).
-function groupHeading(row: Element, max = 80): string {
-  const own = groupLabel(row, max);
-  if (own) return own;
+function groupHeading(row: Element): TextInfo {
+  const none = { text: "", cut: false };
+  const own = groupLabelInfo(row, 80);
+  if (own.text) return own;
   const inRow = row.querySelector(HEADING_SELECTOR);
-  if (inRow) return modelText(inRow, max);
+  if (inRow) return modelTextInfo(inRow, 80);
   let cur = parentAcross(row);
   for (let depth = 0; cur && cur !== cur.ownerDocument.body && depth < GROUP_CLIMB; depth++) {
-    const label = groupLabel(cur, max);
-    if (label) return label;
+    const label = groupLabelInfo(cur, 80);
+    if (label.text) return label;
     const tag = cur.localName;
     const child =
       tag === "table"
@@ -363,18 +349,18 @@ function groupHeading(row: Element, max = 80): string {
           ? (Array.from(cur.children).find((c) => c.localName === "legend") ?? null)
           : null;
     if (child) {
-      const t = modelText(child, max);
-      if (t) return t;
+      const t = modelTextInfo(child, 80);
+      if (t.text) return t;
     }
     const headings = cur.querySelectorAll(HEADING_SELECTOR);
     if (headings.length === 1) {
-      const t = modelText(headings[0], max);
-      if (t) return t;
+      const t = modelTextInfo(headings[0], 80);
+      if (t.text) return t;
     }
-    if (headings.length > 1) return "";
+    if (headings.length > 1) return none;
     cur = parentAcross(cur);
   }
-  return "";
+  return none;
 }
 
 // 대상의 ARIA·HTML 상태. class 이름으로 상태를 추측하지 않는다.
@@ -422,12 +408,10 @@ function baseInfo(
     : null;
   const detail: Partial<TargetInfo> = {};
   if (kind.detail || kind.rowContext) {
-    const modelContext = modelContextOf(row?.row ?? null, { substitute: substitute?.model });
-    if (modelContext) detail.modelContext = modelContext;
-    // 클릭 대상: 한도에서 잘렸는지(원격 승인 질문은 잘린 대상을 묻지 않는다, #185).
-    if (kind.detail && modelContext && modelContextOf(row?.row ?? null, { substitute: substitute?.model, limits: LONG_CONTEXT_LIMITS }) !== modelContext) {
-      detail.modelContextClipped = true;
-    }
+    const ctx = modelContextInfoOf(row?.row ?? null, { substitute: substitute?.model });
+    if (ctx.text) detail.modelContext = ctx.text;
+    // 클릭 대상: 어느 단계에서든 한도에서 잘렸는지(원격 승인 질문은 잘린 대상을 묻지 않는다, #185).
+    if (kind.detail && ctx.text && ctx.cut) detail.modelContextClipped = true;
   }
   // 행에 숨긴 select의 대리 콤보박스가 있으면 그 글자를 기록한다(#88 — 입력 도중 비교에서 이번 호출이 쓴 것만 되돌린다).
   const pairs = row ? proxyPairsIn(row.row) : [];
@@ -453,7 +437,7 @@ function baseInfo(
     role: implicitRole(el),
     name: kind.name(el),
     modelName,
-    ...(kind.modelNameLong && modelName && kind.modelNameLong(el) !== modelName ? { modelNameClipped: true } : {}),
+    ...(kind.modelNameCut && modelName && kind.modelNameCut(el) ? { modelNameClipped: true } : {}),
     href: hrefOf(el),
     region: detectRegion(el),
     inFrame: el.ownerDocument !== document,

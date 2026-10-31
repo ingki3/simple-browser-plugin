@@ -198,15 +198,32 @@ export function subtreeTextInfo(
   return { text, cut };
 }
 
-function refText(el: Element, attr: string, max: number): string {
+// 글자와 잘림 여부(#185 — 원격 승인 질문은 어느 단계에서든 잘린 대상을 묻지 않는다).
+export interface TextInfo {
+  text: string;
+  cut: boolean;
+}
+
+function cleanInfo(raw: string, max: number): TextInfo {
+  const s = raw.replace(/\s+/g, " ").trim();
+  return { text: cleanModelText(s, max), cut: s.length > max };
+}
+
+function refTextInfo(el: Element, attr: string, max: number): TextInfo {
   const root = el.getRootNode() as Document | ShadowRoot;
   const parts: string[] = [];
+  let cut = false;
   for (const id of (el.getAttribute(attr) ?? "").split(/\s+/).filter(Boolean)) {
     // 같은 Document/ShadowRoot 안에서만 찾는다(다른 루트의 같은 id로 대신하지 않는다).
     const ref = root.getElementById?.(id) ?? null;
-    if (ref) parts.push(modelText(ref, max));
+    if (ref) {
+      const info = modelTextInfo(ref, max);
+      parts.push(info.text);
+      cut ||= info.cut;
+    }
   }
-  return cleanModelText(parts.join(" "), max);
+  const joined = cleanInfo(parts.join(" "), max);
+  return { text: joined.text, cut: cut || joined.cut };
 }
 
 const BUTTON_INPUT_TYPES = new Set(["button", "submit", "reset"]);
@@ -214,40 +231,53 @@ const BUTTON_INPUT_TYPES = new Set(["button", "submit", "reset"]);
 // 모델에 보여 줄 대상 이름. 순서: aria-labelledby → aria-label → 연결된 label → 자신의 글자 → title → placeholder → alt.
 // 첫 번째로 비지 않은 것을 쓴다. 값 컨트롤의 값은 읽지 않는다(버튼형 input의 value·alt는 페이지가 만든 버튼 이름).
 export function modelName(el: HTMLElement, max = 200): string {
+  return modelNameInfo(el, max).text;
+}
+
+// modelName과 같은 글자와, 고른 후보를 만드는 어느 단계에서든 한도에서 잘렸는지.
+export function modelNameInfo(el: HTMLElement, max = 200): TextInfo {
+  const empty = { text: "", cut: false };
   const control = VALUE_CONTROL_TAGS.has(el.localName);
-  if (inProtectedArea(el, control)) return "";
-  const attr = (name: string) => cleanModelText(el.getAttribute(name) ?? "", max);
-  const candidates: Array<() => string> = [
-    () => refText(el, "aria-labelledby", max),
+  if (inProtectedArea(el, control)) return empty;
+  const attr = (name: string) => cleanInfo(el.getAttribute(name) ?? "", max);
+  const candidates: Array<() => TextInfo> = [
+    () => refTextInfo(el, "aria-labelledby", max),
     () => attr("aria-label"),
     () => {
       const labels = control ? Array.from((el as HTMLInputElement).labels ?? []) : [];
-      return cleanModelText(labels.map((l) => modelText(l, max)).join(" "), max);
+      const infos = labels.map((l) => modelTextInfo(l, max));
+      const joined = cleanInfo(infos.map((i) => i.text).join(" "), max);
+      return { text: joined.text, cut: joined.cut || infos.some((i) => i.cut) };
     },
     () => {
       if (isTag(el, "input")) {
         const type = (el.type || "text").toLowerCase();
-        if (BUTTON_INPUT_TYPES.has(type)) return cleanModelText(el.value ?? "", max);
+        if (BUTTON_INPUT_TYPES.has(type)) return cleanInfo(el.value ?? "", max);
         if (type === "image") return attr("alt");
-        return "";
+        return empty;
       }
-      return control ? "" : modelText(el, max);
+      return control ? empty : modelTextInfo(el, max);
     },
     () => attr("title"),
-    () => (isTag(el, "input") || isTag(el, "textarea") ? attr("placeholder") : ""),
+    () => (isTag(el, "input") || isTag(el, "textarea") ? attr("placeholder") : empty),
     () => attr("alt"),
   ];
   for (const get of candidates) {
     const v = get();
-    if (v) return v;
+    if (v.text) return v;
   }
-  return "";
+  return empty;
 }
 
 // 묶음(행·패널)의 접근성 이름: aria-labelledby → aria-label. 보호 영역 안이면 "".
 export function groupLabel(el: Element, max: number): string {
-  if (inProtectedArea(el)) return "";
-  return refText(el, "aria-labelledby", max) || cleanModelText(el.getAttribute("aria-label") ?? "", max);
+  return groupLabelInfo(el, max).text;
+}
+
+export function groupLabelInfo(el: Element, max: number): TextInfo {
+  if (inProtectedArea(el)) return { text: "", cut: false };
+  const ref = refTextInfo(el, "aria-labelledby", max);
+  return ref.text ? ref : cleanInfo(el.getAttribute("aria-label") ?? "", max);
 }
 
 // query_dom 한 항목: 보호 영역 안이면 글자를 비우고 이름 성격의 속성도 돌려주지 않는다.

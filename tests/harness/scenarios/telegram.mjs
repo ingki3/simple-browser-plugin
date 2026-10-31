@@ -24,7 +24,13 @@ async function installTelegram(h) {
         // 승인 질문(#185): 버튼 데이터를 남기고, holdAsk가 있으면 응답을 늦춘다(버튼이 응답보다 먼저 오는 경우).
         if (body.reply_markup) {
           (globalThis.__tg.asks ??= []).push(body);
-          if (globalThis.__tg.holdAsk) await globalThis.__tg.holdAsk;
+          if (globalThis.__tg.holdAsk) {
+            // 실제 fetch처럼 중단 신호를 따른다.
+            await Promise.race([
+              globalThis.__tg.holdAsk,
+              new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })),
+            ]);
+          }
         }
         return ok({ message_id: id });
       }
@@ -301,6 +307,30 @@ export default [
       const stopped = await toolLog(h);
       expect(!stopped.includes("navigate_to_url:ok"), `멈춘 뒤 누름은 무시(${stopped.join(",")})`);
 
+      // 질문 전송 응답이 오지 않는 동안 /stop: 응답을 기다리지 않고 슬롯이 비어 다음 요청을 바로 받는다.
+      await h.sw.evaluate((url) => {
+        let release;
+        globalThis.__tg.holdAsk = new Promise((r) => (release = r));
+        globalThis.__tg.releaseAsk = release;
+        globalThis.__tg.asks = [];
+        globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "멈춤" }];
+      }, `${h.base}/news`);
+      await deliver(h, "오늘 경제 뉴스 정리해줘");
+      await waitAsk(h);
+      await deliver(h, "/stop");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__steps = [{ text: "바로 받음" }];
+      });
+      await h.panel.waitForTimeout(300);
+      await deliver(h, "다음 요청");
+      const next = await waitReply(h, 1, 5000);
+      await h.sw.evaluate(() => {
+        globalThis.__tg.holdAsk = null;
+        globalThis.__tg.releaseAsk();
+      });
+      expect(next.includes("바로 받음"), `멈춘 뒤 바로 다음 요청(${JSON.stringify(next)})`);
+
       const off = await ask(h, { kind: "telegram_set_ask", on: false });
       expect(off.ok && off.data.askApproval === false, "설정 끔");
       await h.sw.evaluate((url) => {
@@ -323,7 +353,8 @@ export default [
       "/": `<title>shop</title><ul>
         <li><h3>상품 A</h3><span contenteditable>내가 쓴 비밀 메모</span><button onclick="document.title='결제됨'">결제하기</button></li>
         <li><h3>상품 B</h3><button>담기</button></li><li><h3>상품 C</h3><button>담기</button></li></ul>
-        <section aria-label="${"긴표제".repeat(30)}"><ul><li>행 하나 <button onclick="document.title='눌림2'">결제 진행</button></li><li>행 둘</li><li>행 셋</li></ul></section>`,
+        <section aria-label="${"긴표제".repeat(30)}"><ul><li>행 하나 <button onclick="document.title='눌림2'">결제 진행</button></li><li>행 둘</li><li>행 셋</li></ul></section>
+        <ol><li>상품 D<span>${" ".repeat(4500)}</span>금액 9,900원 <button>결제 확정</button></li><li>다른 행</li><li>또 다른 행</li></ol>`,
     },
     async run(h) {
       await connect(h);
@@ -351,6 +382,19 @@ export default [
       await waitReply(h);
       const log = await toolLog(h);
       expect((await asks(h)).length === 0 && log.includes("click_element:remote_needs_approval"), `잘린 표제는 묻지 않음(${log.join(",")})`);
+
+      // 공백이 길어 순회 한도에서 멈춘 행(뒤쪽 금액이 빠짐)도 잘린 것으로 본다.
+      await deliver(h, "/new");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__tg.asks = [];
+        globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "결제 확정" }, { text: "못 함" }];
+        globalThis.__toolLog = [];
+      });
+      await deliver(h, "결제 확정 눌러 줘");
+      await waitReply(h);
+      const log2 = await toolLog(h);
+      expect((await asks(h)).length === 0 && log2.includes("click_element:remote_needs_approval"), `순회가 멈춘 행은 묻지 않음(${log2.join(",")})`);
     },
   },
   {

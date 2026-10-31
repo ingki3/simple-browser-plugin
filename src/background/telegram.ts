@@ -577,7 +577,8 @@ async function askByTelegram(s: TelegramState, conn: AbortSignal, q: RemoteQuest
           ]],
         },
       },
-      conn,
+      // 턴이 끝나면(/stop 등) 보내기 응답을 기다리지 않는다(실행 슬롯이 바로 비게).
+      AbortSignal.any([conn, signal]),
     );
     if (typeof sent?.message_id === "number") {
       p.messageId = sent.message_id;
