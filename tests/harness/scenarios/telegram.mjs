@@ -160,7 +160,17 @@ export default [
       // 시험 서버 주소(localhost·IP)는 요청 글의 사이트로 인정하지 않으므로, 원격 대화의 새 작업 탭을 시험 페이지로 연다.
       await h.sw.evaluate((url) => {
         const realCreate = chrome.tabs.create.bind(chrome.tabs);
-        chrome.tabs.create = (p) => realCreate(p?.url === "chrome://newtab/" ? { ...p, url } : p);
+        // 다 읽힌 뒤 돌려준다 — 실제 새 탭 화면처럼 시작 주소를 바로 읽을 수 있게(느린 CI에서 빈 주소로 읽히던 경합).
+        chrome.tabs.create = async (p) => {
+          if (p?.url !== "chrome://newtab/") return realCreate(p);
+          const tab = await realCreate({ ...p, url });
+          for (let i = 0; i < 50; i++) {
+            const t = await chrome.tabs.get(tab.id);
+            if (t.url === url && !t.pendingUrl && t.status === "complete") return t;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          return tab;
+        };
         globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "적용" }, { tool: "find_clickables", args: {} }, { click: "결제하기" }, { text: "여기까지" }];
         globalThis.__toolLog = [];
       }, `${h.base2}/`);
@@ -186,7 +196,17 @@ export default [
       await connect(h);
       await h.sw.evaluate((url) => {
         const realCreate = chrome.tabs.create.bind(chrome.tabs);
-        chrome.tabs.create = (p) => realCreate(p?.url === "chrome://newtab/" ? { ...p, url } : p);
+        // 다 읽힌 뒤 돌려준다 — 실제 새 탭 화면처럼 시작 주소를 바로 읽을 수 있게(느린 CI에서 빈 주소로 읽히던 경합).
+        chrome.tabs.create = async (p) => {
+          if (p?.url !== "chrome://newtab/") return realCreate(p);
+          const tab = await realCreate({ ...p, url });
+          for (let i = 0; i < 50; i++) {
+            const t = await chrome.tabs.get(tab.id);
+            if (t.url === url && !t.pendingUrl && t.status === "complete") return t;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          return tab;
+        };
         globalThis.__steps = [{ tool: "remember_page", args: {} }, { text: "못 함" }];
         globalThis.__toolLog = [];
       }, `${h.base2}/?q=1`);
@@ -363,7 +383,17 @@ export default [
       await connect(h);
       await h.sw.evaluate((url) => {
         const realCreate = chrome.tabs.create.bind(chrome.tabs);
-        chrome.tabs.create = (p) => realCreate(p?.url === "chrome://newtab/" ? { ...p, url } : p);
+        // 다 읽힌 뒤 돌려준다 — 실제 새 탭 화면처럼 시작 주소를 바로 읽을 수 있게(느린 CI에서 빈 주소로 읽히던 경합).
+        chrome.tabs.create = async (p) => {
+          if (p?.url !== "chrome://newtab/") return realCreate(p);
+          const tab = await realCreate({ ...p, url });
+          for (let i = 0; i < 50; i++) {
+            const t = await chrome.tabs.get(tab.id);
+            if (t.url === url && !t.pendingUrl && t.status === "complete") return t;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          return tab;
+        };
         globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "결제하기" }, { text: "끝" }];
         globalThis.__toolLog = [];
       }, `${h.base2}/`);
