@@ -318,7 +318,7 @@ function modelContextInfoOf(row: Element | null, opts: { substitute?: ReadonlyMa
   const heading = h.text;
   const joined = heading && !info.text.startsWith(heading) ? `${heading} · ${info.text}` : info.text;
   const text = cleanModelText(joined, MODEL_CONTEXT_MAX);
-  return { text, cut: info.cut || (!!heading && h.cut) || joined.replace(/\s+/g, " ").trim().length > MODEL_CONTEXT_MAX };
+  return { text, cut: info.cut || h.cut || joined.replace(/\s+/g, " ").trim().length > MODEL_CONTEXT_MAX };
 }
 
 // 클릭 대상의 모델용 묶음 문맥과 잘림 여부(find_clickables의 contextTruncated·matchContext, #159). 등록 기술의 modelContext와
@@ -333,15 +333,21 @@ const GROUP_CLIMB = 6;
 // 접근성 이름, 표의 caption, fieldset의 legend, 그리고 묶음 안의 표제가 하나뿐이면 그 표제
 // (여럿이면 어느 것이 이 행의 표제인지 구조로 정할 수 없어 쓰지 않는다).
 function groupHeading(row: Element): TextInfo {
-  const none = { text: "", cut: false };
-  const own = groupLabelInfo(row, 80);
-  if (own.text) return own;
+  // 잘린 채 비어 건너뛴 후보가 있으면 고른 표제(또는 표제 없음)도 잘린 것으로 본다(#185 — 그 후보의 글자를 보지 못했다).
+  let skippedCut = false;
+  const pick = (t: TextInfo): TextInfo | null => {
+    if (t.text) return skippedCut ? { text: t.text, cut: true } : t;
+    skippedCut ||= t.cut;
+    return null;
+  };
+  const own = pick(groupLabelInfo(row, 80));
+  if (own) return own;
   const inRow = row.querySelector(HEADING_SELECTOR);
-  if (inRow) return modelTextInfo(inRow, 80);
+  if (inRow) return pick(modelTextInfo(inRow, 80)) ?? { text: "", cut: skippedCut };
   let cur = parentAcross(row);
   for (let depth = 0; cur && cur !== cur.ownerDocument.body && depth < GROUP_CLIMB; depth++) {
-    const label = groupLabelInfo(cur, 80);
-    if (label.text) return label;
+    const label = pick(groupLabelInfo(cur, 80));
+    if (label) return label;
     const tag = cur.localName;
     const child =
       tag === "table"
@@ -350,18 +356,18 @@ function groupHeading(row: Element): TextInfo {
           ? (Array.from(cur.children).find((c) => c.localName === "legend") ?? null)
           : null;
     if (child) {
-      const t = modelTextInfo(child, 80);
-      if (t.text) return t;
+      const t = pick(modelTextInfo(child, 80));
+      if (t) return t;
     }
     const headings = cur.querySelectorAll(HEADING_SELECTOR);
     if (headings.length === 1) {
-      const t = modelTextInfo(headings[0], 80);
-      if (t.text) return t;
+      const t = pick(modelTextInfo(headings[0], 80));
+      if (t) return t;
     }
-    if (headings.length > 1) return none;
+    if (headings.length > 1) return { text: "", cut: skippedCut };
     cur = parentAcross(cur);
   }
-  return none;
+  return { text: "", cut: skippedCut };
 }
 
 // 대상의 ARIA·HTML 상태. class 이름으로 상태를 추측하지 않는다.

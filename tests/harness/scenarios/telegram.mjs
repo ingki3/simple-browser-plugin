@@ -355,7 +355,9 @@ export default [
         <li><h3>상품 B</h3><button>담기</button></li><li><h3>상품 C</h3><button>담기</button></li></ul>
         <section aria-label="${"긴표제".repeat(30)}"><ul><li>행 하나 <button onclick="document.title='눌림2'">결제 진행</button></li><li>행 둘</li><li>행 셋</li></ul></section>
         <ol><li>상품 D<span>${" ".repeat(4500)}</span>금액 9,900원 <button>결제 확정</button></li><li>다른 행</li><li>또 다른 행</li></ol>
-        <ol><li><span>${" ".repeat(4500)}</span>상품 X · 9,900,000원 <button>최종 결제</button></li><li>다른 행</li><li>또 다른 행</li></ol>`,
+        <ol><li><span>${" ".repeat(4500)}</span>상품 X · 9,900,000원 <button>최종 결제</button></li><li>다른 행</li><li>또 다른 행</li></ol>
+        <p id="price"><span>${" ".repeat(4500)}</span>가격 1,000,000원</p>
+        <ol aria-labelledby="price"><li>상품 Y <button>바로 구매</button></li><li>다른 행</li><li>또 다른 행</li></ol>`,
     },
     async run(h) {
       await connect(h);
@@ -409,6 +411,19 @@ export default [
       await waitReply(h);
       const log3 = await toolLog(h);
       expect((await asks(h)).length === 0 && log3.includes("click_element:remote_needs_approval"), `비어 있는 잘린 문맥도 묻지 않음(${log3.join(",")})`);
+
+      // 행 밖 표제(aria-labelledby)가 잘린 채 비어도 잘린 것으로 본다.
+      await deliver(h, "/new");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__tg.asks = [];
+        globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "바로 구매" }, { text: "못 함" }];
+        globalThis.__toolLog = [];
+      });
+      await deliver(h, "바로 구매 눌러 줘");
+      await waitReply(h);
+      const log4 = await toolLog(h);
+      expect((await asks(h)).length === 0 && log4.includes("click_element:remote_needs_approval"), `잘린 빈 표제도 묻지 않음(${log4.join(",")})`);
     },
   },
   {

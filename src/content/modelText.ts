@@ -280,7 +280,10 @@ export function groupLabel(el: Element, max: number): string {
 export function groupLabelInfo(el: Element, max: number): TextInfo {
   if (inProtectedArea(el)) return { text: "", cut: false };
   const ref = refTextInfo(el, "aria-labelledby", max);
-  return ref.text ? ref : cleanInfo(el.getAttribute("aria-label") ?? "", max);
+  if (ref.text) return ref;
+  // 연결한 표제가 잘린 채 비었으면(앞쪽 긴 공백 등) 대신 쓴 aria-label도 잘린 것으로 본다(#185).
+  const label = cleanInfo(el.getAttribute("aria-label") ?? "", max);
+  return { text: label.text, cut: label.cut || ref.cut };
 }
 
 // query_dom 한 항목: 보호 영역 안이면 글자를 비우고 이름 성격의 속성도 돌려주지 않는다.
