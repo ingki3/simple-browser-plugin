@@ -141,3 +141,36 @@ function isHighSurrogate(c: number): boolean {
 export function backoffMs(failures: number): number {
   return Math.min(300_000, 1000 * 2 ** Math.max(0, failures - 1));
 }
+
+// ---- 원격 승인 버튼(#185) ----
+
+// 질문 하나의 id(16바이트 난수의 b64url, 22자). callback_data는 "a:<id>:y|n"(64바이트 이내).
+const ASK_ID_RE = /^[A-Za-z0-9_-]{22}$/;
+export const TELEGRAM_ASK_TTL_MS = 10 * 60_000;
+
+export function newAskId(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function askCallbackData(askId: string, approve: boolean): string {
+  return `a:${askId}:${approve ? "y" : "n"}`;
+}
+
+// 버튼 데이터를 푼다. 모양이 틀리면 null(승인으로 보지 않는다).
+export function parseAskCallback(data: string): { askId: string; approve: boolean } | null {
+  const m = /^a:([^:]+):([yn])$/.exec(data);
+  if (!m || !ASK_ID_RE.test(m[1])) return null;
+  return { askId: m[1], approve: m[2] === "y" };
+}
+
+// 질문 메시지 글. 질문 글(원격 질문, 자르지 않음) 뒤에 버튼 안내.
+export function askMessageText(question: string): string {
+  return `${question}\n\n아래 버튼으로 답해 주세요. ${TELEGRAM_ASK_TTL_MS / 60_000}분 안에 누르지 않으면 하지 않습니다.`;
+}
+
+// 답한 뒤 메시지 끝에 붙일 결과.
+export function askResultLine(result: "approved" | "denied" | "expired" | "withdrawn"): string {
+  return result === "approved" ? "→ 승인함" : result === "denied" ? "→ 거절함" : result === "expired" ? "→ 응답이 없어 하지 않음" : "→ 취소됨";
+}

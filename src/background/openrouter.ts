@@ -2,6 +2,7 @@ import { SENSITIVE_TOOLS, type BgToPanel, type RunMode, type Settings, type Tool
 import { MissingKeyError, friendlyError } from "@/lib/friendlyError";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { describePopup, popupWhere } from "@/lib/actionTarget";
+import { remoteHopQuestion, remoteRefusal, remoteToolQuestion, type RemoteApprover, type RemoteAskResult, type RemoteQuestion } from "@/lib/remoteApproval";
 import type { ModelId } from "@/lib/models";
 import { isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
@@ -35,7 +36,7 @@ import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } 
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
 import { loginSiteFor, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
 import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "./signIn";
-import { allSecrets, maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "./loginSecrets";
+import { allSecrets, containsSecret, maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "./loginSecrets";
 import { detachSession, InputSession } from "./trustedInput";
 import { prepareGrantImages } from "./tools/grantImages";
 import { applySettingsUpdate, getSettings, readFlags, setFlag } from "./storage";
@@ -336,15 +337,27 @@ const REMOTE_REFUSED_NOTE =
 const REMOTE_STOP_NOTE =
   "승인이 필요한 동작이라 원격 요청에서 하지 않았다. 도구를 더 부르지 말고, 지금까지 알아낸 것과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
 // namedSites: 이번 요청 글에 사용자가 적은 사이트(userNamedSites). 그 사이트 안의 이동은 승인 없이 되므로(#54) 모델이 미리 포기하지 않게 알린다.
-const remoteTurnNote = (channel: AgentChannel, namedSites: readonly string[]) =>
+// canAsk: 이번 요청에서 승인이 필요한 이동·클릭을 원격 채널로 사용자에게 물을 수 있는지(#185 — 텔레그램 승인 버튼 등).
+const remoteTurnNote = (channel: AgentChannel, namedSites: readonly string[], canAsk: boolean) =>
   (channel === "mcp" ? "이 요청은 사용자의 다른 AI 도구(MCP)에서 왔다(원격 요청). 답은 그 도구로 간다." : "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다.") +
-  " 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·요청 글에 없는 사이트로 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 짧은 평문으로." +
+  (canAsk
+    ? " 승인이 필요한 동작 중 이동(navigate_to_url)과 클릭은 사용자에게 원격으로 승인을 묻는다 — 승인하면 실행되고, 거절·무응답이면 하지 않는다. 미리 포기하지 말고 필요한 도구를 불러라. 그 밖의 승인이 필요한 동작(입력·저장·로그인 등)은 원격에서 할 수 없고 거절된다 — 그럴 땐 패널에서 요청하라고 답하라. 답은 짧은 평문으로."
+    : " 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·요청 글에 없는 사이트로 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 짧은 평문으로.") +
   (namedSites.length
-    ? ` 이번 요청 글에 사용자가 적은 사이트(${namedSites.join(", ")}) 중 하나로는 새 탭에서 승인 없이 이동할 수 있다(같은 사이트의 하위 도메인·페이지 포함) — 거절될 거라 미리 단정하지 말고 navigate_to_url로 가서 일하라. 단, 한 사이트에 들어간 뒤에는 그 사이트 안에서만 이동되고(적은 다른 사이트로 옮기는 것도 거절), 여러 사람이 주소를 나눠 쓰는 공유 호스팅(github.io 등) 주소는 거절된다.`
-    : " 이번 요청 글에는 사이트 주소가 없어 다른 사이트로는 이동할 수 없다(지금 페이지와 같은 사이트 안은 된다). 지금 페이지로 할 수 없는 일이면 도구를 부르지 말고, 볼 사이트 주소를 띄어 써서 요청과 함께 다시 보내 달라고 답하라(예: news.naver.com 경제 뉴스 정리해줘).");
+    ? ` 이번 요청 글에 사용자가 적은 사이트(${namedSites.join(", ")}) 중 하나로는 새 탭에서 승인 없이 이동할 수 있다(같은 사이트의 하위 도메인·페이지 포함) — 거절될 거라 미리 단정하지 말고 navigate_to_url로 가서 일하라.` +
+      (canAsk
+        ? " 그 밖의 사이트로 옮기는 이동은 사용자에게 승인을 묻는다."
+        : " 단, 한 사이트에 들어간 뒤에는 그 사이트 안에서만 이동되고(적은 다른 사이트로 옮기는 것도 거절), 여러 사람이 주소를 나눠 쓰는 공유 호스팅(github.io 등) 주소는 거절된다.")
+    : canAsk
+      ? " 이번 요청 글에는 사이트 주소가 없다. 알맞은 사이트를 골라 navigate_to_url로 가라 — 다른 사이트로의 이동은 사용자에게 승인을 묻는다."
+      : " 이번 요청 글에는 사이트 주소가 없어 다른 사이트로는 이동할 수 없다(지금 페이지와 같은 사이트 안은 된다). 지금 페이지로 할 수 없는 일이면 도구를 부르지 말고, 볼 사이트 주소를 띄어 써서 요청과 함께 다시 보내 달라고 답하라(예: news.naver.com 경제 뉴스 정리해줘).");
 
 const LIMIT_STOP_NOTE =
   "[확장 안내 — 사용자 글 아님] 도구 호출 순환 한도에 닿아 사용자가 더 진행하지 않기로 했습니다. 도구를 더 부르지 말고, 지금까지 관측한 결과만으로 사용자의 요청에 답하세요. 끝내지 못한 부분이 있으면 무엇이 남았는지와 다음에 할 일을 짧게 밝히세요.";
+
+// 원격 대화에서 한도에 닿아 계속할지 물었지만 응답이 없거나 물을 수 없었을 때(#185).
+const LIMIT_NO_ANSWER_NOTE =
+  "[확장 안내 — 사용자 글 아님] 도구 호출 순환 한도에 닿아 사용자에게 계속할지 물었지만 응답이 없어(또는 물을 수 없어) 멈췄습니다. 도구를 더 부르지 말고, 지금까지 관측한 결과만으로 사용자의 요청에 답하세요. 끝내지 못한 부분과 다시 요청하면 이어서 할 수 있음을 짧게 밝히세요.";
 
 function spinStopNote(what: string): string {
   return `[확장 안내 — 사용자 글 아님] 같은 동작이 되풀이되어 확장이 도구 사용을 멈췄습니다(${what}). 도구를 더 부르지 말고, 지금까지 관측한 결과로 사용자에게 답하세요. 무엇을 시도했고 무엇이 반복해서 안 됐는지, 사용자가 대신 해 볼 만한 일을 짧게 밝히세요.`;
@@ -367,7 +380,8 @@ export interface TurnExpect {
   url: string;
   documentId: string;
 }
-type TurnOpts = { tabId?: number; site?: string; expect?: TurnExpect };
+// approver: 원격 대화의 승인 질문(#185). 요청마다 채널이 넘긴다(재사용하는 대화가 앞 요청의 연결·신호를 붙잡지 않게).
+type TurnOpts = { tabId?: number; site?: string; expect?: TurnExpect; approver?: RemoteApprover };
 // buildUserContent가 제안 턴의 대상이 바뀐 것을 알릴 때.
 const EXPECT_MISMATCH = Symbol("expect_mismatch");
 
@@ -453,6 +467,11 @@ export class ChatAgent {
   private readonly channel: AgentChannel;
   // 원격 대화에서 카드가 필요해 거절한 호출이 있었던 턴(그 턴은 도구 없이 마무리한다).
   private remoteRefusedTurn = -1;
+  // 그 턴을 마무리하는 이유(원격 질문의 결과에 따라 마무리 지침이 다르다, #185).
+  private remoteStopReason: Exclude<RemoteAskResult, "approved" | "aborted"> = "unavailable";
+  // 이번 턴의 원격 승인자와, 기다리는 원격 질문의 중단(턴이 끝나면 바로 푼다).
+  private turnApprover: RemoteApprover | null = null;
+  private remoteAskAbort: AbortController | null = null;
   // 이번 턴에 패널로 보낼 오류(원격 대화의 결과 판정).
   private turnErrors: Array<{ action?: "settings" | "usage" }> = [];
   // 이번 요청의 사용자 메시지를 기록에 넣었으면 그 턴과 위치. 넣기 전에 실패했으면 이전 요청의 답을 이번 답으로 보지 않는다.
@@ -498,6 +517,8 @@ export class ChatAgent {
     this.activeTool = null;
     for (const resolve of this.pendingApprovals.values()) resolve(false);
     this.pendingApprovals.clear();
+    this.remoteAskAbort?.abort();
+    this.remoteAskAbort = null;
     this.linkGrantOffers.clear();
     this.chatGrantOffers.clear();
     this.personalUrlOffers.clear();
@@ -667,7 +688,10 @@ export class ChatAgent {
     if (this.remote && (msg.kind === "tool_pending" || msg.kind === "hop_limit")) {
       const callId = msg.callId;
       const turn = this.currentTurn;
-      if (msg.kind === "tool_pending") this.remoteRefusedTurn = turn;
+      if (msg.kind === "tool_pending") {
+        this.remoteRefusedTurn = turn;
+        this.remoteStopReason = "unavailable";
+      }
       debugLog("remote:refuse", msg.kind === "tool_pending" ? msg.toolName : "hop_limit");
       setTimeout(() => this.pendingApprovals.get(callId)?.(false), 0);
       return;
@@ -985,6 +1009,7 @@ export class ChatAgent {
     // 이전 턴이 아직 돌고 있으면 끊는다. 백그라운드 번역은 대화가 이어지는 동안 유지한다.
     this.cancelInFlight();
     const turn = ++this.currentTurn;
+    this.turnApprover = this.remote ? (opts.approver ?? null) : null;
     beginKeepalive();
     const endTurn = timeSpan("turn");
     const prevTurnTab = this.turnTab;
@@ -1042,7 +1067,7 @@ export class ChatAgent {
       // 원격 대화는 요청 앞에 원격 안내를 붙인다(요청 글의 주소 판정·카드의 요청 원문은 사용자가 보낸 글 그대로).
       const prevExternal = this.externalContent;
       const attached = { pdfUrl: null as string | null };
-      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel, userNamedSites(userText))}\n\n요청: ${userText}` : userText, opts.expect, attached);
+      const userContent = await this.buildUserContent(this.remote ? `${remoteTurnNote(this.channel, userNamedSites(userText), !!this.turnApprover?.canAsk())}\n\n요청: ${userText}` : userText, opts.expect, attached);
       if (this.isStale(turn)) {
         endTurn("aborted");
         return;
@@ -1310,17 +1335,56 @@ export class ChatAgent {
 
   // 도구 호출 순환 한도에 닿았을 때 지금까지 한 일을 보여 주고 extra번 더 진행할지 묻는다(#55). 사용자의 명시적 선택으로만
   // 한도를 넓힌다. 승인 카드와 같은 대기 목록(pendingApprovals)을 써서 중단·새 요청·패널 닫힘이면 거부로 풀린다.
-  private async askToContinue(turn: number, used: number, extra: number, runs: readonly ToolRunRecord[]): Promise<boolean> {
+  private async askToContinue(turn: number, used: number, extra: number, runs: readonly ToolRunRecord[]): Promise<{ proceed: boolean; note: string }> {
     const callId = `hop-limit-${turn}-${used}`;
     debugLog("hop:limit", `${used}회 · +${extra} 물음`);
+    const summary = summarizeRuns(runs);
+    // 원격 대화: 패널 카드 대신 원격 채널로 묻는다(결과 글은 넣지 않고 수치만, #185).
+    if (this.remote) {
+      const r = await this.remoteAsk(turn, remoteHopQuestion({ used, extra, total: summary.total, failed: summary.failed, cancelled: summary.cancelled, byTool: summary.byTool }));
+      if (!this.isStale(turn)) debugLog("hop:limit_result", r === "approved" ? `continue +${extra}` : `stop (${String(r)})`);
+      if (r === "approved") return { proceed: true, note: "" };
+      return { proceed: false, note: r === "denied" || r === "cancelled" ? LIMIT_STOP_NOTE : LIMIT_NO_ANSWER_NOTE };
+    }
     this.send({ kind: "status", text: null });
-    this.send({ kind: "hop_limit", callId, used, extra, summary: summarizeRuns(runs) });
+    this.send({ kind: "hop_limit", callId, used, extra, summary });
     const proceed = await new Promise<boolean>((resolve) => {
       this.pendingApprovals.set(callId, resolve);
     });
     this.pendingApprovals.delete(callId);
     if (!this.isStale(turn)) debugLog("hop:limit_result", proceed ? `continue +${extra}` : "stop");
-    return proceed;
+    return { proceed, note: LIMIT_STOP_NOTE };
+  }
+
+  // 원격 승인 질문(#185). 질문을 만들지 못했거나(null) 이번 턴에 물을 곳이 없으면 unavailable. 턴이 끝나면(중단·새 요청) STALE.
+  // 질문마다 새 중단 신호를 쓰고, 결과는 이 호출의 반환값으로만 전한다(pendingApprovals를 거치지 않는다 — 같은 callId의 다른 대기를 건드리지 않게).
+  private async remoteAsk(turn: number, q: RemoteQuestion | null): Promise<Exclude<RemoteAskResult, "aborted"> | typeof STALE> {
+    const approver = this.turnApprover;
+    if (!q || !approver || !approver.canAsk()) return "unavailable";
+    // 질문 글에 자동 로그인 값이 들어 있으면 묻지 않는다(가리면 무엇을 승인하는지 보이지 않는다). 목록을 못 읽으면 들어 있다고 본다.
+    const secret = await containsSecret(q.text).catch(() => true);
+    if (this.isStale(turn)) return STALE;
+    if (secret) {
+      debugLog("remote:ask_skipped", "자동 로그인 값이 들어 있음");
+      return "unavailable";
+    }
+    const ctl = new AbortController();
+    this.remoteAskAbort?.abort();
+    this.remoteAskAbort = ctl;
+    debugLog("remote:ask", `${q.text.length}자`);
+    let r: RemoteAskResult;
+    try {
+      r = await approver.ask(q, ctl.signal);
+    } catch (err) {
+      debugLog("remote:ask_error", err instanceof Error ? err.message : String(err), "warn");
+      r = "unavailable";
+    } finally {
+      if (this.remoteAskAbort === ctl) this.remoteAskAbort = null;
+    }
+    if (this.isStale(turn)) return STALE;
+    debugLog("remote:ask_result", r);
+    // 턴이 끝나지 않았는데 중단으로 돌아왔으면(채널 쪽 철회) 물을 수 없었던 것으로 본다.
+    return r === "aborted" ? "unavailable" : r;
   }
 
   // 도구 없이 지금까지의 관측으로 답을 한 번 받아 턴을 끝낸다(한도에서 그만두기·헛돌기 감지). 모델이 그래도 도구를
@@ -1565,6 +1629,32 @@ export class ChatAgent {
       // 이후 클릭·입력의 자동 실행 범위로 쓴다(카드로 허락한 이동이 approvedSites가 되는 것과 같은 범위).
       const internalNavSite = fromInternal && !this.turnSite ? siteOf(String(preview.details ?? "")) : null;
       return { kind: "run", execArgs, via: "auto", signInAttempt, internalNavSite };
+    }
+    // 원격 대화: 카드 대신 원격 채널로 묻는다(#185). 질문은 모델에 보낸 글·고정 문구로만 만들고, 만들 수 없으면 거절.
+    if (this.remote) {
+      const question = remoteToolQuestion({
+        toolName,
+        url: toolName === "navigate_to_url" ? String(preview.details ?? "") : undefined,
+        target: preview.remoteTarget,
+        linkHrefs: preview.linkHrefs,
+        pageUrl,
+        guarded,
+        block: decision.block,
+        chatGrantReason: decision.chatGrant.reason,
+      });
+      const r = await this.remoteAsk(turn, question);
+      if (typeof r !== "string") {
+        discardSignIn(signInToken);
+        return STALE;
+      }
+      if (r !== "approved") return this.cancelCall(call, signInToken, r);
+      // 원격으로 허락한 이동의 출처도 카드로 허락한 것과 같게 이 대화의 자동 이동 범위에 둔다.
+      if (toolName === "navigate_to_url") {
+        const site = siteOf(String(preview.details ?? ""));
+        if (site) this.approvedSites.add(site);
+      }
+      debugLog("tool:remote_approved", toolName);
+      return { kind: "run", execArgs, via: null, signInAttempt, internalNavSite: null };
     }
     const asked = await this.askByCard(call, preview, decision, guarded, loginOffer);
     if (asked.kind === "cancelled") return this.cancelCall(call, signInToken);
@@ -2015,7 +2105,11 @@ export class ChatAgent {
   }
 
   // 사용자가 취소한 호출(카드 취소·손 넘기기 취소)의 결과를 남기고 준비한 것을 버린다.
-  private cancelCall(call: ToolCallContext, signInToken: string | null): typeof DONE {
+  private cancelCall(
+    call: ToolCallContext,
+    signInToken: string | null,
+    remoteResult: Exclude<RemoteAskResult, "approved" | "aborted"> = "unavailable",
+  ): typeof DONE {
     const { turnTab, callId, toolName, argsKey } = call;
     recordCancelledAction(callId, turnTab);
     discardSignIn(signInToken);
@@ -2025,9 +2119,12 @@ export class ChatAgent {
     if (this.remote) {
       // 원격 대화에서 승인이 필요해 하지 않은 호출.
       this.remoteRefusedTurn = call.turn;
-      this.send({ kind: "tool_result", callId, toolName, ok: false, summary: "원격 요청이라 하지 않음", cancelled: true });
-      this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: "remote_needs_approval", note: REMOTE_REFUSED_NOTE }) });
-      call.record(toolName, argsKey, false, "remote_needs_approval", "원격 요청이라 하지 않음", { cancelled: true });
+      this.remoteStopReason = remoteResult;
+      const refusal = remoteRefusal(remoteResult);
+      const note = remoteResult === "unavailable" ? REMOTE_REFUSED_NOTE : refusal.note;
+      this.send({ kind: "tool_result", callId, toolName, ok: false, summary: refusal.summary, cancelled: true });
+      this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: refusal.error, note }) });
+      call.record(toolName, argsKey, false, refusal.error, refusal.summary, { cancelled: true });
       return DONE;
     }
     this.send({
@@ -2187,10 +2284,10 @@ export class ChatAgent {
       // 한도에 닿음: 마지막 단계의 도구 결과까지 기록에 있다. 이어 가면 다음 요청이 그 결과를 보고, 그만두면
       // 도구 없이 지금까지의 결과로 답한다.
       if (hop >= limit) {
-        const proceed = await this.askToContinue(turn, hop, maxToolHops, runs);
+        const asked = await this.askToContinue(turn, hop, maxToolHops, runs);
         if (this.isStale(turn)) return false;
-        if (!proceed) {
-          await this.finishWithoutTools(apiKey, model, systemPrompt, turn, LIMIT_STOP_NOTE);
+        if (!asked.proceed) {
+          await this.finishWithoutTools(apiKey, model, systemPrompt, turn, asked.note);
           return false;
         }
         limit += maxToolHops;
@@ -2250,7 +2347,8 @@ export class ChatAgent {
       }
       if (this.remoteRefusedTurn === turn && !this.isStale(turn)) {
         this.closeDanglingToolCalls();
-        await this.finishWithoutTools(apiKey, model, systemPrompt, turn, REMOTE_STOP_NOTE);
+        const stopNote = this.remoteStopReason === "unavailable" ? REMOTE_STOP_NOTE : `${remoteRefusal(this.remoteStopReason).note} 도구를 더 부르지 마라.`;
+        await this.finishWithoutTools(apiKey, model, systemPrompt, turn, stopNote);
         return false;
       }
 

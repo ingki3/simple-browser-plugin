@@ -12,6 +12,10 @@ export interface TargetInfo {
   name: string;
   // 모델에 돌려준 이름(입력값·편집 영역·숨은 글자를 뺀 것). 모델이 본 근거가 바뀌어도 다른 대상으로 본다.
   modelName?: string;
+  // modelName·modelContext가 한도(이름 200자, 문맥 200자·표제 80자)에서 잘렸는지(클릭 대상만, 구조 플래그 — 글자 없음).
+  // 잘린 대상은 원격 승인 질문(#185)에서 묻지 않는다(뒤쪽이 다른 두 대상이 같아 보인다). 비교에도 넣는다.
+  modelNameClipped?: boolean;
+  modelContextClipped?: boolean;
   // 링크의 절대 주소. 링크가 아니면 "".
   href: string;
   region: PageRegion;
@@ -119,6 +123,8 @@ export function sameBase(a: TargetInfo, b: TargetInfo): boolean {
     a.sensitive === b.sensitive &&
     a.context === b.context &&
     (a.modelContext ?? "") === (b.modelContext ?? "") &&
+    !!a.modelNameClipped === !!b.modelNameClipped &&
+    !!a.modelContextClipped === !!b.modelContextClipped &&
     !!a.proxy === !!b.proxy &&
     (a.proxyLabel ?? "") === (b.proxyLabel ?? "") &&
     statesKey(a.states) === statesKey(b.states)
@@ -234,7 +240,7 @@ export function roleLabel(info: TargetInfo): string {
   return "요소";
 }
 
-function placeLine(info: TargetInfo): string {
+export function placeLine(info: TargetInfo): string {
   const parts = [REGION_LABELS[info.region]];
   if (info.list && (info.list.semantic || info.list.count >= 5)) {
     parts.push(`목록 ${info.list.count}개 중 ${info.list.index}번째`);
