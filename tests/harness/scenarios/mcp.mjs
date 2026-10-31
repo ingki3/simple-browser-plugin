@@ -137,6 +137,28 @@ export default [
     },
   },
   {
+    name: "승인 질문(#185): 기다리는 중 MCP 연동을 끄면 질문을 보낸 다리에 거두기를 보낸다",
+    pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "멈춤" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해줘" } } });
+        const q = await bridge.request("elicitation/create");
+        expect(!!q, "질문");
+        await ask(h, { kind: "mcp_set", enabled: false });
+        const withdrawn = await bridge.request("notifications/cancelled", 1, 15_000);
+        expect(withdrawn?.params?.requestId === q.id, `연결을 바꾼 뒤에도 거둠(${JSON.stringify(withdrawn)})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
     name: "승인 질문(#185): 설정이 꺼져 있거나 클라이언트가 form elicitation을 지원하지 않으면 묻지 않고 거절한다",
     pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
     async run(h) {

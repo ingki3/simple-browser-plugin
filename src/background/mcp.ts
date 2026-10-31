@@ -418,22 +418,25 @@ let askEnabled = false;
 // 기다리는 질문(askId → 답·거두기). 답은 /v1/next의 answers로 온다.
 const askWaiters = new Map<string, { jobId: string; answer(r: McpAskResult): void; cancel(r: "unavailable"): void }>();
 
-// ack·withdraw는 턴 신호를 쓰지 않는다(턴이 끝난 뒤에도 다리에 닿아야 한다). 연결이 바뀌거나 10초가 지나면 그만.
+// ack·withdraw는 턴 신호도 연결 세대도 보지 않는다 — 턴이 끝났거나 설정을 바꿔 연결을 다시 시작한 뒤에도(restart) 질문을 보낸
+// 그 다리에 닿아야 클라이언트의 질문 창이 닫힌다. 그 연결 정보(conn.s)로 보내고 10초가 지나면 그만.
 function cleanupSignal(): AbortSignal {
-  return AbortSignal.any([loopAbort.signal, AbortSignal.timeout(10_000)]);
+  return AbortSignal.timeout(10_000);
 }
 
 type AskBody = { op: "ask" | "ack" | "withdraw"; jobId: string; askId: string; message?: string };
 
 // /v1/ask를 같은 본문으로 몇 번 다시 보낸다(1·2·4초). 다리는 같은 id·같은 본문을 멱등으로 처리한다.
 async function postAsk(conn: Conn, body: AskBody, signal: AbortSignal): Promise<{ ok: boolean; state?: string } | null> {
+  // 정리(ack·withdraw)는 연결이 바뀐 뒤에도 보낸다. 새 질문(ask)은 지금 연결일 때만.
+  const cleanup = body.op !== "ask";
   for (let i = 0; i < 3; i++) {
-    if (conn.gen !== connGen || signal.aborted) return null;
+    if ((!cleanup && conn.gen !== connGen) || signal.aborted) return null;
     try {
       const r = (await bridgeFetch(conn.s, "POST", "/v1/ask", body, signal)) as { ok?: unknown; state?: unknown } | null;
       return { ok: r?.ok === true, state: typeof r?.state === "string" ? r.state : undefined };
     } catch (err) {
-      if (signal.aborted || conn.gen !== connGen) return null;
+      if (signal.aborted || (!cleanup && conn.gen !== connGen)) return null;
       debugLog("mcp:ask_retry", `${body.op} · ${err instanceof Error ? err.message : String(err)}`, "warn");
       await abortableSleep(1000 * 2 ** i, signal);
     }
