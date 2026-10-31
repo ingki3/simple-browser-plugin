@@ -354,7 +354,8 @@ export default [
         <li><h3>상품 A</h3><span contenteditable>내가 쓴 비밀 메모</span><button onclick="document.title='결제됨'">결제하기</button></li>
         <li><h3>상품 B</h3><button>담기</button></li><li><h3>상품 C</h3><button>담기</button></li></ul>
         <section aria-label="${"긴표제".repeat(30)}"><ul><li>행 하나 <button onclick="document.title='눌림2'">결제 진행</button></li><li>행 둘</li><li>행 셋</li></ul></section>
-        <ol><li>상품 D<span>${" ".repeat(4500)}</span>금액 9,900원 <button>결제 확정</button></li><li>다른 행</li><li>또 다른 행</li></ol>`,
+        <ol><li>상품 D<span>${" ".repeat(4500)}</span>금액 9,900원 <button>결제 확정</button></li><li>다른 행</li><li>또 다른 행</li></ol>
+        <ol><li><span>${" ".repeat(4500)}</span>상품 X · 9,900,000원 <button>최종 결제</button></li><li>다른 행</li><li>또 다른 행</li></ol>`,
     },
     async run(h) {
       await connect(h);
@@ -395,6 +396,19 @@ export default [
       await waitReply(h);
       const log2 = await toolLog(h);
       expect((await asks(h)).length === 0 && log2.includes("click_element:remote_needs_approval"), `순회가 멈춘 행은 묻지 않음(${log2.join(",")})`);
+
+      // 앞쪽 공백만으로 한도에 닿아 행 문맥이 비어도 잘린 것으로 본다.
+      await deliver(h, "/new");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__tg.asks = [];
+        globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "최종 결제" }, { text: "못 함" }];
+        globalThis.__toolLog = [];
+      });
+      await deliver(h, "최종 결제 눌러 줘");
+      await waitReply(h);
+      const log3 = await toolLog(h);
+      expect((await asks(h)).length === 0 && log3.includes("click_element:remote_needs_approval"), `비어 있는 잘린 문맥도 묻지 않음(${log3.join(",")})`);
     },
   },
   {

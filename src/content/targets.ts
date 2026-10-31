@@ -312,7 +312,8 @@ function modelContextInfoOf(row: Element | null, opts: { substitute?: ReadonlyMa
   if (!row) return { text: "", cut: false };
   if (inProtectedArea(row)) return { text: "", cut: false };
   const info = subtreeTextInfo(row, MODEL_CONTEXT_MAX, opts);
-  if (!info.text) return { text: "", cut: false };
+  // 글자가 비어도 순회 한도에서 멈췄으면(앞쪽 긴 공백 등) 잘림을 남긴다(#185).
+  if (!info.text) return { text: "", cut: info.cut };
   const h = groupHeading(row);
   const heading = h.text;
   const joined = heading && !info.text.startsWith(heading) ? `${heading} · ${info.text}` : info.text;
@@ -411,7 +412,7 @@ function baseInfo(
     const ctx = modelContextInfoOf(row?.row ?? null, { substitute: substitute?.model });
     if (ctx.text) detail.modelContext = ctx.text;
     // 클릭 대상: 어느 단계에서든 한도에서 잘렸는지(원격 승인 질문은 잘린 대상을 묻지 않는다, #185).
-    if (kind.detail && ctx.text && ctx.cut) detail.modelContextClipped = true;
+    if (kind.detail && ctx.cut) detail.modelContextClipped = true;
   }
   // 행에 숨긴 select의 대리 콤보박스가 있으면 그 글자를 기록한다(#88 — 입력 도중 비교에서 이번 호출이 쓴 것만 되돌린다).
   const pairs = row ? proxyPairsIn(row.row) : [];

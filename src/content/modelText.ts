@@ -262,11 +262,14 @@ export function modelNameInfo(el: HTMLElement, max = 200): TextInfo {
     () => (isTag(el, "input") || isTag(el, "textarea") ? attr("placeholder") : empty),
     () => attr("alt"),
   ];
+  // 잘린 채 비어 건너뛴 후보(긴 공백 뒤의 글자 등)가 있으면 고른 이름도 잘린 것으로 본다(앞 후보의 뒤쪽을 보지 못했다).
+  let skippedCut = false;
   for (const get of candidates) {
     const v = get();
-    if (v.text) return v;
+    if (v.text) return skippedCut ? { text: v.text, cut: true } : v;
+    skippedCut ||= v.cut;
   }
-  return empty;
+  return { text: "", cut: skippedCut };
 }
 
 // 묶음(행·패널)의 접근성 이름: aria-labelledby → aria-label. 보호 영역 안이면 "".
