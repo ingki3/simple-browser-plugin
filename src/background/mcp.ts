@@ -171,9 +171,10 @@ async function bridgeFetch(s: McpState, method: "GET" | "POST", path: "/v1/next"
   const header = makeHeader(Date.now());
   const mac = await signRequest(keys, method, path, header);
   const aad = aadOf(method, path, header);
+  const body = method === "POST" ? await seal(keys.extEnc, aad, value) : undefined;
+  // 키·서명·봉인을 기다리는 사이 멈췄으면 보내지 않는다.
+  if (signal.aborted) throw new BridgeError("멈춤");
   const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  signal.addEventListener("abort", onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), FETCH_LIMIT_MS);
   try {
     let res: Response;
@@ -181,8 +182,8 @@ async function bridgeFetch(s: McpState, method: "GET" | "POST", path: "/v1/next"
       res = await fetch(`http://127.0.0.1:${s.port}${path}`, {
         method,
         headers: { "x-sbp": header, "x-sbp-mac": mac, ...(method === "POST" ? { "content-type": "text/plain" } : {}) },
-        body: method === "POST" ? await seal(keys.extEnc, aad, value) : undefined,
-        signal: controller.signal,
+        body,
+        signal: AbortSignal.any([signal, controller.signal]),
         redirect: "error",
         cache: "no-store",
         credentials: "omit",
@@ -201,7 +202,6 @@ async function bridgeFetch(s: McpState, method: "GET" | "POST", path: "/v1/next"
     }
   } finally {
     clearTimeout(timer);
-    signal.removeEventListener("abort", onAbort);
   }
 }
 
@@ -453,6 +453,9 @@ function approverFor(conn: Conn, job: NonNullable<McpNext["job"]>): RemoteApprov
 
 async function askByBridge(conn: Conn, job: NonNullable<McpNext["job"]>, q: RemoteQuestion, signal: AbortSignal): Promise<RemoteAskResult> {
   if (signal.aborted) return "aborted";
+  // 부르는 쪽이 canAsk를 본 뒤 기다리는 사이(자동 로그인 값 검사 등) 설정을 끄거나 연결을 바꿨을 수 있다. 등록 직전에 다시 본다
+  // (여기서 등록까지 await가 없어, 그 뒤 끄면 mcpSet이 이 질문을 거둔다).
+  if (!askEnabled || conn.gen !== connGen || !bridgeFeatures.includes("ask") || job.canAsk !== true) return "unavailable";
   const expiresAt = Math.min(Date.now() + ASK_TTL_MS, job.deadline - 30_000);
   if (expiresAt <= Date.now()) return "unavailable";
   const askId = b64url(crypto.getRandomValues(new Uint8Array(16)));
