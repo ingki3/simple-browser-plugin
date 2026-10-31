@@ -9,6 +9,7 @@ interface Status {
   pairingExpiresAt: number | null;
   status: "idle" | "stopped_auth" | "stopped_conflict";
   notifyRepeat: boolean;
+  askApproval: boolean;
   recent: Array<{ at: number; preview: string; status: string }>;
 }
 
@@ -18,7 +19,8 @@ type Req =
   | { kind: "telegram_pair" }
   | { kind: "telegram_disconnect" }
   | { kind: "telegram_clear" }
-  | { kind: "telegram_set_notify"; on: boolean };
+  | { kind: "telegram_set_notify"; on: boolean }
+  | { kind: "telegram_set_ask"; on: boolean };
 
 const RECENT_STATUS: Record<string, string> = {
   running: "처리 중",
@@ -108,6 +110,10 @@ export function TelegramField() {
               연결하기(확인 코드 받기)
             </button>
           )}
+          <label className="check-row">
+            <input type="checkbox" checked={st.askApproval} disabled={busy} onChange={(e) => void request({ kind: "telegram_set_ask", on: e.target.checked })} />
+            <span>승인이 필요한 이동·클릭은 텔레그램 버튼으로 묻기(대상·주소를 텔레그램으로 보냄, 끄면 원격에서는 하지 않음)</span>
+          </label>
           <label className="check-row">
             <input type="checkbox" checked={st.notifyRepeat} disabled={busy} onChange={(e) => void request({ kind: "telegram_set_notify", on: e.target.checked })} />
             <span>반복 작업의 조건이 맞으면 텔레그램으로 알리기(작업 이름만 보냄)</span>

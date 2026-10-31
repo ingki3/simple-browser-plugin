@@ -1,11 +1,18 @@
 // 텔레그램 연동(#139): 봇으로 받은 요청을 원격 대화(ChatAgent channel "telegram")로 처리하고 최종 답만 보낸다.
-// - 원격 대화는 승인 카드가 필요한 동작을 하지 않는다(openrouter.ts의 원격 정책). 카드 내용·버튼을 보내지 않는다.
+// - 원격 대화는 승인 카드를 띄우지 않는다(openrouter.ts의 원격 정책). 승인이 필요한 이동·클릭은 설정에서 켜 두면(기본 켬)
+//   원격용으로 만든 질문(remoteApproval.ts — 패널 카드 글이 아님)을 [승인][거절] 버튼으로 묻는다(#185). 그 밖은 거절.
 // - 허용 대상은 확인 코드로 연결한 개인 대화 하나(그 채팅의 그 사용자). 그 밖의 메시지는 답하지 않고 버린다.
 // - 받기는 1분 알람마다, 요청을 처리하는 동안에는 이어서(/stop을 빨리 받으려고). 수신 루프는 하나만 돈다.
 // - 토큰은 패널에 돌려주지 않고, 오류·로그에 요청 주소(토큰 포함)를 남기지 않는다.
 import {
+  askCallbackData,
+  askMessageText,
+  askResultLine,
   backoffMs,
   checkPairing,
+  newAskId,
+  parseAskCallback,
+  TELEGRAM_ASK_TTL_MS,
   newPairing,
   parseUpdate,
   remoteErrorText,
@@ -13,6 +20,7 @@ import {
   staleMessage,
   type Pairing,
 } from "@/lib/telegram";
+import type { RemoteApprover, RemoteAskResult, RemoteQuestion } from "@/lib/remoteApproval";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { onRepeatTriggered } from "./repeatTasks";
@@ -41,6 +49,8 @@ interface TelegramState {
   epoch: number;
   offset: number;
   notifyRepeat: boolean;
+  // 승인이 필요한 이동·클릭을 텔레그램 버튼으로 묻기(#185, 기본 켬). 끄면 지금처럼 거절한다.
+  askApproval: boolean;
   status: "idle" | "stopped_auth" | "stopped_conflict";
   failures: number;
   pairing: Pairing | null;
@@ -56,6 +66,7 @@ const EMPTY: TelegramState = {
   epoch: 0,
   offset: 0,
   notifyRepeat: false,
+  askApproval: true,
   status: "idle",
   failures: 0,
   pairing: null,
@@ -170,6 +181,7 @@ export interface TelegramStatus {
   pairingExpiresAt: number | null;
   status: TelegramState["status"];
   notifyRepeat: boolean;
+  askApproval: boolean;
   recent: TelegramRecent[];
 }
 
@@ -184,6 +196,7 @@ function statusOf(s: TelegramState): TelegramStatus {
     pairingExpiresAt: pairing?.expiresAt ?? null,
     status: s.status,
     notifyRepeat: s.notifyRepeat,
+    askApproval: s.askApproval,
     recent: s.recent,
   };
 }
@@ -208,7 +221,7 @@ export async function telegramSaveToken(raw: string): Promise<TelegramStatus> {
     throw new Error(err instanceof TgError && err.status === 401 ? "텔레그램이 이 토큰을 받지 않았습니다. 토큰을 다시 확인하세요." : "텔레그램에 연결하지 못했습니다. 인터넷 연결을 확인하세요.");
   }
   endSession("토큰을 바꿈");
-  const s = await update((cur) => ({ ...EMPTY, epoch: cur.epoch + 1, token, botName: me.username ? `@${me.username}` : (me.first_name ?? "봇"), notifyRepeat: cur.notifyRepeat }));
+  const s = await update((cur) => ({ ...EMPTY, epoch: cur.epoch + 1, token, botName: me.username ? `@${me.username}` : (me.first_name ?? "봇"), notifyRepeat: cur.notifyRepeat, askApproval: cur.askApproval }));
   debugLog("telegram:token", s?.botName ?? "");
   return statusOf(s ?? (await load()));
 }
@@ -245,6 +258,15 @@ export async function telegramClear(): Promise<TelegramStatus> {
 export async function telegramSetNotify(on: boolean): Promise<TelegramStatus> {
   await recovered;
   const s = await update((cur) => ({ ...cur, notifyRepeat: on }));
+  return statusOf(s ?? (await load()));
+}
+
+export async function telegramSetAskApproval(on: boolean): Promise<TelegramStatus> {
+  await recovered;
+  const s = await update((cur) => ({ ...cur, askApproval: on }));
+  askEnabled = on;
+  // 끄면 기다리는 질문을 거둔다(물을 수 없는 것으로 — 사용자 거절이 아님).
+  if (!on && pendingAsk) settleAsk(pendingAsk, "unavailable", "withdrawn");
   return statusOf(s ?? (await load()));
 }
 
@@ -308,7 +330,9 @@ async function handleUpdate(s: TelegramState, u: unknown, conn: AbortSignal): Pr
   const now = Date.now();
   switch (a.kind) {
     case "ignore":
+      return;
     case "callback":
+      onAskCallback(s, a.queryId, a.data, now);
       return;
     case "pair": {
       const r = checkPairing(s.pairing, a.code, now);
@@ -352,7 +376,8 @@ async function handleUpdate(s: TelegramState, u: unknown, conn: AbortSignal): Pr
 const HELP = [
   "간편 브라우저 도우미 텔레그램 연동",
   "- 할 일을 글로 보내면 브라우저의 새 탭에서 처리하고 최종 답만 보냅니다. 예: \"naver.com에서 오늘 날씨 알려 줘\"",
-  "- 이동은 요청에 적은 사이트 안에서만 합니다. 결제·삭제·개인정보 입력·로그인·저장 같은 승인이 필요한 동작은 하지 않습니다(패널에서 요청하세요).",
+  "- 요청에 적은 사이트로는 바로 이동합니다. 그 밖의 이동이나 승인이 필요한 클릭은 [승인][거절] 버튼으로 묻습니다(설정에서 끌 수 있음, 10분 안에 누르지 않으면 하지 않음).",
+  "- 입력·로그인·저장처럼 그 밖에 승인이 필요한 동작은 원격에서 하지 않습니다(패널에서 요청하세요).",
   "- /stop: 진행 중인 요청 멈추기, /new: 새 대화",
   "- 브라우저가 켜져 있어야 하고, 받는 데 최대 1분쯤 걸립니다.",
 ].join("\n");
@@ -369,6 +394,7 @@ let sending = 0;
 let sendAbort: AbortController | null = null;
 
 function stopRun(): boolean {
+  if (pendingAsk) settleAsk(pendingAsk, "aborted", "withdrawn");
   const stopped = runner.stop();
   if (sendAbort) {
     sendAbort.abort();
@@ -381,6 +407,7 @@ function stopRun(): boolean {
 // 연결 끊기·토큰 바꾸기: 진행 중인 요청·받기를 멈추고 대화를 버린다.
 function endSession(why: string): void {
   if (runner.busy) debugLog("telegram:stop", why);
+  if (pendingAsk) settleAsk(pendingAsk, "aborted", "withdrawn");
   pollAbort?.abort();
   connAbort.abort();
   connAbort = new AbortController();
@@ -391,6 +418,7 @@ function endSession(why: string): void {
 
 function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
   // 요청을 처리하는 동안에는 이어서 받아 /stop을 빨리 처리한다. 받기가 멈췄으면(401·409·연결 끊기) 그만, 실패는 간격을 둔다.
+  askEnabled = s.askApproval;
   const run = runner.run(text, (mine) => {
     void (async () => {
       let failures = 0;
@@ -401,7 +429,7 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
         if (failures) await new Promise((res) => setTimeout(res, Math.min(20_000, backoffMs(failures))));
       }
     })();
-  });
+  }, approverFor(s, conn));
   if (!run) return;
   debugLog("telegram:request", `${text.length}자`);
   // 이 요청의 중단(/stop·새 대화)과 연결 끊기: 실행과 결과 보내기(가림·나눠 보내기·재시도)를 함께 멈춘다.
@@ -450,6 +478,139 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
       await update((st) => ({ ...st, recent: st.recent.map((r) => (r.at === at && r.status === "running" ? { ...r, status } : r)) }), s.epoch).catch(() => {});
     }
   })();
+}
+
+// ---- 원격 승인 버튼(#185) ----
+
+// 기다리는 질문(한 번에 하나, 메모리). 서비스 워커가 다시 뜨면 사라지고 그 턴도 끝난다 — 그 뒤 온 버튼은 모르는 id라 "끝난 질문".
+interface PendingAsk {
+  askId: string;
+  epoch: number;
+  // 절대 만료 시각. 타이머는 깨우기 용도이고 판정은 늘 이 시각으로 한다(절전 뒤 늦은 타이머·버튼).
+  expiresAt: number;
+  token: string;
+  chatId: number;
+  text: string;
+  messageId: number | null;
+  settled: boolean;
+  // 확정한 결과의 표시(메시지를 고칠 때 쓴다).
+  line: "approved" | "denied" | "expired" | "withdrawn" | null;
+  resolve: (r: RemoteAskResult) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+let pendingAsk: PendingAsk | null = null;
+// 설정의 "텔레그램으로 묻기"(요청을 시작할 때 저장소 값으로 맞추고, 설정을 바꾸면 바로 바꾼다).
+let askEnabled = true;
+
+// 한 번만 확정한다. 확정을 먼저 하고, 메시지 고치기(버튼 지우기)는 최선 노력(실패해도 확정은 그대로).
+function settleAsk(p: PendingAsk, r: RemoteAskResult, line: "approved" | "denied" | "expired" | "withdrawn"): boolean {
+  if (p.settled) return false;
+  p.settled = true;
+  if (p.timer) clearTimeout(p.timer);
+  if (pendingAsk === p) pendingAsk = null;
+  p.line = line;
+  p.resolve(r);
+  debugLog("telegram:ask_settled", r);
+  closeAskMessage(p);
+  return true;
+}
+
+// 확정한 질문의 메시지에서 버튼을 지우고 결과를 붙인다(메시지 id를 아직 모르면 보내기가 끝난 뒤 다시 부른다).
+function closeAskMessage(p: PendingAsk): void {
+  if (p.messageId === null || !p.line) return;
+  void tgCall(p.token, "editMessageText", {
+    chat_id: p.chatId,
+    message_id: p.messageId,
+    text: `${askMessageText(p.text)}\n\n${askResultLine(p.line)}`,
+    link_preview_options: { is_disabled: true },
+  }).catch(() => {});
+}
+
+function approverFor(s: TelegramState, conn: AbortSignal): RemoteApprover {
+  return {
+    canAsk: () => askEnabled && !conn.aborted && s.chatId !== null,
+    ask: (q, signal) => askByTelegram(s, conn, q, signal),
+  };
+}
+
+async function askByTelegram(s: TelegramState, conn: AbortSignal, q: RemoteQuestion, signal: AbortSignal): Promise<RemoteAskResult> {
+  if (signal.aborted || conn.aborted) return "aborted";
+  if (!askEnabled || s.chatId === null) return "unavailable";
+  // 한 번에 하나(앞 질문이 남았으면 거둔다).
+  if (pendingAsk) settleAsk(pendingAsk, "aborted", "withdrawn");
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const askId = newAskId(bytes);
+  let resolve!: (r: RemoteAskResult) => void;
+  const done = new Promise<RemoteAskResult>((r) => (resolve = r));
+  // 보내기 전에 대기를 등록한다(버튼이 sendMessage 응답보다 먼저 와도 반영되게).
+  const p: PendingAsk = {
+    askId,
+    epoch: s.epoch,
+    expiresAt: Date.now() + TELEGRAM_ASK_TTL_MS,
+    token: s.token,
+    chatId: s.chatId,
+    text: q.text,
+    messageId: null,
+    settled: false,
+    line: null,
+    resolve,
+    timer: null,
+  };
+  pendingAsk = p;
+  p.timer = setTimeout(() => settleAsk(p, "expired", "expired"), TELEGRAM_ASK_TTL_MS);
+  const onAbort = () => settleAsk(p, "aborted", "withdrawn");
+  signal.addEventListener("abort", onAbort, { once: true });
+  conn.addEventListener("abort", onAbort, { once: true });
+  try {
+    const sent = await tgCall<{ message_id?: number }>(
+      s.token,
+      "sendMessage",
+      {
+        chat_id: s.chatId,
+        text: askMessageText(q.text),
+        link_preview_options: { is_disabled: true },
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "승인", callback_data: askCallbackData(askId, true) },
+            { text: "거절", callback_data: askCallbackData(askId, false) },
+          ]],
+        },
+      },
+      conn,
+    );
+    if (typeof sent?.message_id === "number") {
+      p.messageId = sent.message_id;
+      // 보내는 사이 이미 확정됐으면(빠른 버튼·중단) 이제 메시지를 고칠 수 있다.
+      if (p.settled) closeAskMessage(p);
+    }
+  } catch (err) {
+    debugLog("telegram:ask_send_error", err instanceof TgError ? String(err.status) : "error", "warn");
+    settleAsk(p, "unavailable", "withdrawn");
+  }
+  try {
+    return await done;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    conn.removeEventListener("abort", onAbort);
+  }
+}
+
+// 버튼을 눌렀을 때. 지금 기다리는 질문(같은 id·같은 연결 세대·미확정·만료 전)일 때만 반영한다. 그 밖은 승인으로 보지 않고 알리기만.
+function onAskCallback(s: TelegramState, queryId: string, data: string, now: number): void {
+  const parsed = parseAskCallback(data);
+  const p = pendingAsk;
+  let reply = "이미 끝난 질문입니다.";
+  if (parsed && p && !p.settled && p.askId === parsed.askId && p.epoch === s.epoch) {
+    if (now > p.expiresAt) {
+      settleAsk(p, "expired", "expired");
+      reply = "응답 시간이 지나 하지 않았습니다.";
+    } else {
+      settleAsk(p, parsed.approve ? "approved" : "denied", parsed.approve ? "approved" : "denied");
+      reply = parsed.approve ? "승인했습니다." : "거절했습니다.";
+    }
+  }
+  void tgCall(s.token, "answerCallbackQuery", { callback_query_id: queryId, text: reply }).catch(() => {});
 }
 
 // ---- 알람·복구 ----

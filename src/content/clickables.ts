@@ -227,6 +227,7 @@ const CLICK_KIND: TargetKind = {
   requireVisible: true,
   name: clickText,
   modelName: (el) => modelName(el),
+  modelNameLong: (el) => modelName(el, 1000),
   detail: true,
   fieldType: () => "",
   sensitive: () => null,

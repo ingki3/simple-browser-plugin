@@ -117,6 +117,8 @@ export interface ToolPreview {
   baseUrls?: string[];
   // 클릭 대상(이번 요청 동안 링크 이동 허락 판정용, grantableLink).
   clickTarget?: TargetInfo;
+  // 원격 승인 질문(#185)에 보일 클릭 대상. 판정에는 쓰지 않는다. 트리거가 있는 선택지 클릭은 비운다(이번 범위에서 원격으로 묻지 않음).
+  remoteTarget?: TargetInfo;
   // 선택 카드(다른 탭 고르기)의 후보와 최대 선택 수.
   choices?: Array<{ id: string; label: string; sub: string }>;
   choiceLimit?: number;
@@ -392,7 +394,7 @@ export async function buildToolPreview(
         alwaysAsk: destructive ?? (inferred ? INFERRED_CHOICE : null),
         ...(inferred ? { inferredChoice: true } : {}),
         // 트리거가 있는 선택지는 링크 이동 허락(grantableLink) 대상이 아니다.
-        ...(info.trigger ? {} : { clickTarget: info }),
+        ...(info.trigger ? {} : { clickTarget: info, remoteTarget: info }),
         linkHrefs: sides
           .flatMap((t) => [
             t.href,
