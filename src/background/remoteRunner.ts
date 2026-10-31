@@ -2,6 +2,7 @@
 // 받기·보내기·연결 상태는 채널 모듈이 맡는다. 원격 대화의 정책(승인이 필요한 동작은 하지 않음)은 ChatAgent의 channel이 정한다.
 import { SETTINGS_KEY, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
+import type { RemoteApprover } from "@/lib/remoteApproval";
 import { ChatAgent, type AgentChannel, type AgentSink, type TurnOutcome } from "./openrouter";
 
 // 이 시간 동안 요청이 없으면 다음 요청은 새 대화로 시작한다.
@@ -69,7 +70,8 @@ export class RemoteRunner {
 
   // 요청 하나의 슬롯을 잡는다. 이미 실행 중이면 null(부르는 쪽이 바쁘다고 답한다).
   // onRunning(mine): 실행하는 동안 채널이 할 일(텔레그램은 /stop을 빨리 받으려고 이어서 받는다). mine()이 false가 되면 그만둔다.
-  run(text: string, onRunning?: (mine: () => boolean) => void): RunHandle | null {
+  // approver: 이 요청에서 승인이 필요한 동작을 원격으로 물을 곳(#185). 요청마다 넘긴다.
+  run(text: string, onRunning?: (mine: () => boolean) => void, approver?: RemoteApprover): RunHandle | null {
     if (this.slot) return null;
     if (!this.session || this.opts.perRequest || Date.now() - this.session.lastAt > IDLE_RESET_MS) {
       this.session?.agent.abort();
@@ -112,7 +114,7 @@ export class RemoteRunner {
           const tabId = await workTab(cur);
           if (!mine()) return { status: "stopped" };
           onRunning?.(mine);
-          const result = await cur.agent.sendUserTurn(text, { tabId });
+          const result = await cur.agent.sendUserTurn(text, { tabId, approver });
           // 이 요청이 끝난 주소를 기억한다(다음 요청은 이 탭이 이 주소 그대로일 때만 새 탭 화면으로 되돌려 다시 쓴다).
           const tab = await chrome.tabs.get(tabId).catch(() => null);
           cur.tab = tab?.url ? { tabId, url: tab.url } : null;

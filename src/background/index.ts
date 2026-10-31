@@ -24,7 +24,7 @@ import {
   runRepeatNow,
 } from "./repeatTasks";
 import { mcpRegenerate, mcpSecret, mcpSet, mcpStatus } from "./mcp";
-import { telegramClear, telegramDisconnect, telegramSaveToken, telegramSetNotify, telegramStartPairing, telegramStatus } from "./telegram";
+import { telegramClear, telegramDisconnect, telegramSaveToken, telegramSetAskApproval, telegramSetNotify, telegramStartPairing, telegramStatus } from "./telegram";
 import {
   clearGoogleToken,
   connectGoogle,
@@ -371,7 +371,8 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     m.kind === "telegram_pair" ||
     m.kind === "telegram_disconnect" ||
     m.kind === "telegram_clear" ||
-    m.kind === "telegram_set_notify"
+    m.kind === "telegram_set_notify" ||
+    m.kind === "telegram_set_ask"
   ) {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
@@ -389,7 +390,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
               ? telegramClear()
               : m.kind === "telegram_set_notify"
                 ? telegramSetNotify(p.on === true)
-                : telegramStatus();
+                : m.kind === "telegram_set_ask"
+                  ? telegramSetAskApproval(p.on === true)
+                  : telegramStatus();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
@@ -402,7 +405,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
     }
-    const p = msg as { enabled?: unknown; port?: unknown };
+    const p = msg as { enabled?: unknown; port?: unknown; askApproval?: unknown };
     const job: Promise<unknown> =
       m.kind === "mcp_secret"
         ? mcpSecret()
@@ -412,6 +415,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             ? mcpSet({
                 ...(typeof p.enabled === "boolean" ? { enabled: p.enabled } : {}),
                 ...(typeof p.port === "number" ? { port: p.port } : {}),
+                ...(typeof p.askApproval === "boolean" ? { askApproval: p.askApproval } : {}),
               })
             : mcpStatus();
     job

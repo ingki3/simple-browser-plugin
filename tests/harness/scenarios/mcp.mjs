@@ -10,6 +10,8 @@ const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/sbp-m
 function startBridge(secret) {
   const child = spawn(process.execPath, [BRIDGE], { env: { ...process.env, SBP_SECRET: secret, SBP_PORT: "0" }, stdio: ["pipe", "pipe", "pipe"] });
   const replies = new Map();
+  // 다리가 클라이언트에 보낸 요청·알림(승인 질문 elicitation/create, 취소 알림 — #185).
+  const requests = [];
   let buf = "";
   child.stdout.on("data", (c) => {
     buf += c.toString("utf8");
@@ -17,7 +19,8 @@ function startBridge(secret) {
     while ((i = buf.indexOf("\n")) >= 0) {
       const m = JSON.parse(buf.slice(0, i));
       buf = buf.slice(i + 1);
-      replies.set(m.id, m);
+      if (m.method) requests.push(m);
+      else replies.set(m.id, m);
     }
   });
   const port = new Promise((resolve, reject) => {
@@ -38,12 +41,147 @@ function startBridge(secret) {
     }
     return null;
   };
-  return { child, port, send, reply, stop: () => child.kill() };
+  const request = async (method, n = 1, ms = 20_000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      const got = requests.filter((r) => r.method === method);
+      if (got.length >= n) return got[n - 1];
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return null;
+  };
+  return { child, port, send, reply, request, requests, stop: () => child.kill() };
 }
 
 const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
 
+// 승인 질문 시나리오의 준비: 켜기·질문 설정·다리·초기화(elicitation 지원 여부는 capabilities로).
+async function askReady(h, { askApproval = true, capabilities = { elicitation: {} }, version = "2025-11-25" } = {}) {
+  await ask(h, { kind: "mcp_set", enabled: true });
+  await ask(h, { kind: "mcp_set", askApproval });
+  const secret = (await ask(h, { kind: "mcp_secret" })).data;
+  const bridge = startBridge(secret);
+  const port = await bridge.port;
+  await ask(h, { kind: "mcp_set", port });
+  bridge.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: version, capabilities, clientInfo: { name: "harness", version: "1" } } });
+  await bridge.reply(1);
+  bridge.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+  return bridge;
+}
+
+const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
+
 export default [
+  {
+    name: "승인 질문(#185): 주소 없는 이동은 클라이언트에 elicitation으로 묻고, accept+approve면 이동한다",
+    pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "정리했습니다" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해줘" } } });
+        const q = await bridge.request("elicitation/create");
+        expect(q?.params?.mode === "form" && q.params.message.includes(`${h.base}/news`) && q.params.requestedSchema.properties.approve.default === false, `질문(${JSON.stringify(q)})`);
+        expect((await toolLog(h)).length === 0, "답 전에는 실행 안 함");
+        bridge.send({ jsonrpc: "2.0", id: q.id, result: { action: "accept", content: { approve: true } } });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result?.content?.[0]?.text === "정리했습니다", `최종 답(${JSON.stringify(res)})`);
+        const log = await toolLog(h);
+        expect(log[0] === "navigate_to_url:ok", `승인 후 이동(${log.join(",")})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "승인 질문(#185): decline이면 이동하지 않고, 작업을 취소하면 질문을 거둔다",
+    pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "안 함" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해줘" } } });
+        const q = await bridge.request("elicitation/create");
+        bridge.send({ jsonrpc: "2.0", id: q.id, result: { action: "decline" } });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result && !res.result.isError, `마무리 답(${JSON.stringify(res)})`);
+        const log = await toolLog(h);
+        expect(log.length === 1 && log[0] === "navigate_to_url:remote_user_denied", `거절(${log.join(",")})`);
+
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "멈춤" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해줘" } } });
+        const q2 = await bridge.request("elicitation/create", 2);
+        expect(!!q2, "두 번째 질문");
+        bridge.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 3 } });
+        const withdrawn = await bridge.request("notifications/cancelled");
+        expect(withdrawn?.params?.requestId === q2.id, `질문을 거둠(${JSON.stringify(withdrawn)})`);
+        // 거둔 뒤 온 승인은 쓰지 않는다.
+        bridge.send({ jsonrpc: "2.0", id: q2.id, result: { action: "accept", content: { approve: true } } });
+        await h.panel.waitForTimeout(1500);
+        const log2 = await toolLog(h);
+        expect(!log2.includes("navigate_to_url:ok"), `취소 뒤 실행 안 함(${log2.join(",")})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "승인 질문(#185): 기다리는 중 MCP 연동을 끄면 질문을 보낸 다리에 거두기를 보낸다",
+    pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "멈춤" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해줘" } } });
+        const q = await bridge.request("elicitation/create");
+        expect(!!q, "질문");
+        await ask(h, { kind: "mcp_set", enabled: false });
+        const withdrawn = await bridge.request("notifications/cancelled", 1, 15_000);
+        expect(withdrawn?.params?.requestId === q.id, `연결을 바꾼 뒤에도 거둠(${JSON.stringify(withdrawn)})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "승인 질문(#185): 설정이 꺼져 있거나 클라이언트가 form elicitation을 지원하지 않으면 묻지 않고 거절한다",
+    pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
+    async run(h) {
+      for (const opts of [{ askApproval: false }, { capabilities: { elicitation: { url: {} } } }, { version: "2024-11-05" }]) {
+        const bridge = await askReady(h, opts);
+        try {
+          await h.sw.evaluate((url) => {
+            globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "못 함" }];
+            globalThis.__toolLog = [];
+          }, `${h.base}/news`);
+          bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해줘" } } });
+          const res = await bridge.reply(2, 30_000);
+          expect(!!res?.result, `답(${JSON.stringify(opts)})`);
+          expect(!bridge.requests.some((r) => r.method === "elicitation/create"), `묻지 않음(${JSON.stringify(opts)})`);
+          const log = await toolLog(h);
+          expect(log.includes("navigate_to_url:remote_needs_approval"), `거절(${JSON.stringify(opts)} ${log.join(",")})`);
+        } finally {
+          bridge.stop();
+          await ask(h, { kind: "mcp_set", enabled: false });
+        }
+      }
+    },
+  },
   {
     name: "다리의 tools/call을 확장이 가져가 처리하고 최종 답을 돌려준다, 비밀이 다르면 가져가지 않는다",
     async run(h) {

@@ -3,7 +3,7 @@ import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
 import { getAccessibleRoots, isTag } from "./docs";
-import { modelName } from "./modelText";
+import { modelName, modelNameInfo } from "./modelText";
 import {
   choiceUrlsOf,
   controlHasPersonalValue,
@@ -227,6 +227,7 @@ const CLICK_KIND: TargetKind = {
   requireVisible: true,
   name: clickText,
   modelName: (el) => modelName(el),
+  modelNameCut: (el) => modelNameInfo(el).cut,
   detail: true,
   fieldType: () => "",
   sensitive: () => null,
