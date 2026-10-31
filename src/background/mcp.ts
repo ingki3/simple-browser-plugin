@@ -460,9 +460,12 @@ async function askByBridge(conn: Conn, job: NonNullable<McpNext["job"]>, q: Remo
   let resolve!: (v: Outcome) => void;
   const settled = new Promise<Outcome>((r) => (resolve = r));
   let done = false;
+  // 질문 보내기(재시도 포함)의 중단. 결과가 정해지면(설정 끔·만료·중단·답) 더 보내지 않는다.
+  const sendCtl = new AbortController();
   const settle = (v: Outcome) => {
     if (done) return;
     done = true;
+    sendCtl.abort();
     askWaiters.delete(askId);
     clearTimeout(timer);
     resolve(v);
@@ -476,7 +479,7 @@ async function askByBridge(conn: Conn, job: NonNullable<McpNext["job"]>, q: Remo
   const timer = setTimeout(() => settle("expired"), expiresAt - Date.now());
   const onAbort = () => settle("aborted");
   signal.addEventListener("abort", onAbort, { once: true });
-  const sent = await postAsk(conn, { op: "ask", jobId: job.jobId, askId, message: q.text }, AbortSignal.any([loopAbort.signal, signal]));
+  const sent = await postAsk(conn, { op: "ask", jobId: job.jobId, askId, message: q.text }, AbortSignal.any([loopAbort.signal, signal, sendCtl.signal]));
   if (!sent || !sent.ok || sent.state === "withdrawn" || sent.state === "gone") settle("unavailable");
   const r = await settled;
   signal.removeEventListener("abort", onAbort);
