@@ -328,3 +328,22 @@ test("rememberedLinkFor: 들어맞는 첫 링크", () => {
   assert.equal(rememberedLinkFor("https://search.shopping.naver.com/search/all?query=x#top", [a]), null);
   assert.equal(rememberedLinkFor("https://x.example/", []), null);
 });
+
+test("matchesTemplate: 같은 쿼리가 반복돼도 탐색이 폭증하지 않는다", () => {
+  for (const n of [10, 20, 29]) {
+    const url = `https://s.example/s?${Array.from({ length: n }, () => "q=a").join("&")}&z=a`;
+    const l = tpl(url, [...Array.from({ length: n }, () => ({ mode: "slot", slot: "값" })), { mode: "slot", slot: "값" }]);
+    const visit = `https://s.example/s?${Array.from({ length: n }, () => "q=x").join("&")}&z=y`;
+    const t0 = Date.now();
+    assert.equal(matchesTemplate(visit, l), false);
+    assert.equal(matchesTemplate(`https://s.example/s?${Array.from({ length: n }, () => "q=x").join("&")}&z=x`, l), true);
+    assert.ok(Date.now() - t0 < 200, `n=${n}: ${Date.now() - t0}ms`);
+  }
+  // 서로 다른 값이 섞여도 단계 상한 안에서 끝난다.
+  const n = 14;
+  const url = `https://s.example/s?${Array.from({ length: n }, (_, i) => `q=${i}`).join("&")}`;
+  const l = tpl(url, Array.from({ length: n }, (_, i) => ({ mode: "slot", slot: `s${i % 2}` })));
+  const t0 = Date.now();
+  matchesTemplate(`https://s.example/s?${Array.from({ length: n }, (_, i) => `q=v${i}`).join("&")}`, l);
+  assert.ok(Date.now() - t0 < 200, `${Date.now() - t0}ms`);
+});

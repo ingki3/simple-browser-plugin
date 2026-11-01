@@ -215,6 +215,8 @@ export function evictionPreview(list: readonly SavedLink[], template: LinkTempla
 // 그 이름의 쿼리 값이 모두 빠졌을 때만 생략으로 본다. 템플릿에 없는 쿼리 값(저장 때 뺀 값일 수 있음)이 있으면 맞지 않는다고 본다 —
 // 판정이 어려우면 "기억하지 않음"(버튼이 보임) 쪽으로 둔다. 표시·안내에만 쓰고 승인·자동 실행에는 쓰지 않는다.
 const MATCH_PARAMS_MAX = 30;
+// 배정 탐색의 전체 단계 상한(서비스 워커에서 동기로 돈다). 넘으면 맞지 않는다고 본다(버튼이 보이는 쪽).
+const MATCH_STEPS_MAX = 5000;
 
 export function matchesTemplate(url: string, link: Pick<SavedLink, "template" | "slots">): boolean {
   const parts = splitUrl(url);
@@ -231,28 +233,43 @@ export function matchesTemplate(url: string, link: Pick<SavedLink, "template" | 
   const slotParams = t.params.filter((p) => p.slot !== undefined);
   const optional = new Set(link.slots.filter((s) => s.optional).map((s) => s.key));
   const optionalNames = [...new Set(slotParams.map((p) => p.slot as string).filter((n) => optional.has(n)))];
+  const budget = { steps: MATCH_STEPS_MAX };
   for (let mask = 0; mask < 1 << optionalNames.length; mask++) {
     const omitted = new Set(optionalNames.filter((_, i) => mask & (1 << i)));
     const used = slotParams.filter((p) => !omitted.has(p.slot as string));
-    if (used.length === rest.length && assignSlots(used, rest, 0, new Set(), new Map())) return true;
+    if (used.length === rest.length && assignSlots(used, rest, 0, new Set(), new Map(), budget)) return true;
+    if (budget.steps <= 0) return false;
   }
   return false;
 }
 
 // 자리 쿼리 값(템플릿 순서)마다 같은 키의 남은 주소 값을 하나씩 배정한다(되돌아가며). fillLink는 자리 값을 비우지 않고(앞뒤 공백 제거)
 // 이름=값으로 쓰므로, 이름만 있거나 빈 값은 자리 값이 될 수 없다. 같은 이름의 자리는 같은 값(읽은 글자)이어야 한다.
-function assignSlots(slots: TemplateParam[], values: UrlParam[], i: number, taken: Set<number>, byName: Map<string, string>): boolean {
+// 같은 키·같은 값의 주소 값은 어느 것을 골라도 결과가 같으므로 한 단계에서 한 번만 시도한다(중복 쿼리의 순열 폭증 방지).
+function assignSlots(
+  slots: TemplateParam[],
+  values: UrlParam[],
+  i: number,
+  taken: Set<number>,
+  byName: Map<string, string>,
+  budget: { steps: number },
+): boolean {
   if (i === slots.length) return true;
+  if (--budget.steps <= 0) return false;
   const p = slots[i];
   const name = p.slot as string;
+  const tried = new Set<string>();
   for (let j = 0; j < values.length; j++) {
     const u = values[j];
     if (taken.has(j) || u.rawKey !== p.key || u.bare || !u.value.trim() || u.value !== u.value.trim()) continue;
+    if (tried.has(u.value)) continue;
+    tried.add(u.value);
     const prev = byName.get(name);
     if (prev !== undefined && prev !== u.value) continue;
     taken.add(j);
     if (prev === undefined) byName.set(name, u.value);
-    if (assignSlots(slots, values, i + 1, taken, byName)) return true;
+    if (assignSlots(slots, values, i + 1, taken, byName, budget)) return true;
+    if (budget.steps <= 0) return false;
     taken.delete(j);
     if (prev === undefined) byName.delete(name);
   }
