@@ -16,7 +16,9 @@ import {
   normalizeMaxToolHops,
   isRunMode,
   type Settings,
+  type SettingsPatch,
 } from "./messages.ts";
+import { DEFAULT_VOICE_INPUT, mergeVoiceInput, normalizeVoiceInput } from "./voice.ts";
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: "openrouter",
@@ -38,6 +40,7 @@ export const DEFAULT_SETTINGS: Settings = {
   trustedInput: false,
   manualSites: [],
   loginSites: [],
+  voiceInput: DEFAULT_VOICE_INPUT,
 };
 
 // 저장소에서 읽은 값(없거나 일부만 있거나 형식이 틀릴 수 있음)을 완전한 설정으로 정리한다.
@@ -70,6 +73,7 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     trustedInput: r.trustedInput === true,
     manualSites: normalizeManualSites(r.manualSites),
     loginSites: normalizeLoginSites(r.loginSites),
+    voiceInput: normalizeVoiceInput(r.voiceInput),
   };
 }
 
@@ -85,6 +89,7 @@ export function settingsForStorage(next: Settings): Settings {
     loginSites: normalizeLoginSites(next.loginSites),
     apiKeys: stringFields(next.apiKeys, ["openai", "gemini", "anthropic"]),
     providerModels: stringFields(next.providerModels, ["openai", "gemini", "anthropic"]),
+    voiceInput: normalizeVoiceInput(next.voiceInput),
   };
 }
 
@@ -115,11 +120,13 @@ export function activeModel(s: Settings): { provider: ProviderId; apiKey: string
 
 // 바꾼 필드(patch)를 설정에 합친다(#99). 제공자별 키·모델(apiKeys·providerModels)은 한 단계 더 합쳐, 한 제공자의 값만 바꾼
 // patch가 다른 제공자의 값을 되돌리지 않게 한다.
-export function mergeSettingsPatch(base: Settings, patch: Partial<Settings>): Settings {
+// 음성 입력(voiceInput)도 하위 필드만 합친다(#184).
+export function mergeSettingsPatch(base: Settings, patch: SettingsPatch): Settings {
   return {
     ...base,
     ...patch,
     apiKeys: { ...base.apiKeys, ...(patch.apiKeys ?? {}) },
     providerModels: { ...base.providerModels, ...(patch.providerModels ?? {}) },
+    voiceInput: mergeVoiceInput(base.voiceInput, patch.voiceInput),
   };
 }

@@ -1,4 +1,5 @@
 import type { HrefTooLong } from "./clickResult";
+import type { VoiceInputPatch, VoiceInputSettings } from "./voice";
 import type { ProviderId } from "./providers/types";
 import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
@@ -417,7 +418,7 @@ export interface ContentResponse<T = unknown> {
 export type RuntimeMsg =
   | { kind: "settings_updated" }
   // 바꾼 필드만 최신 설정에 합쳐 저장(#99). 백그라운드가 차례로 처리해 겹친 저장이 서로 덮지 않는다.
-  | { kind: "settings_patch"; patch: Partial<Settings> }
+  | { kind: "settings_patch"; patch: SettingsPatch }
   // 설정 화면의 동작 기록 개수 보기·지우기. 쓰기를 백그라운드 한곳으로 모은다.
   | { kind: "action_log_count" }
   | { kind: "action_log_clear" }
@@ -457,7 +458,12 @@ export interface Settings {
   // 자동 로그인을 승인한 사이트(정확한 출처 → KeePassXC 항목 묶음, docs/design/login-automation.md). 사용자가 카드나 설정에서
   // 고른 것만 들어간다. 아이디·비밀번호는 두지 않는다.
   loginSites: LoginSite[];
+  // 음성 입력(#184): 전용 음성 모델(제공자·제공자별 모델·언어). 기본은 꺼짐.
+  voiceInput: VoiceInputSettings;
 }
+
+// 바꾼 필드만 보내는 설정 patch. voiceInput은 하위 필드만(VoiceInputPatch).
+export type SettingsPatch = Omit<Partial<Settings>, "voiceInput"> & { voiceInput?: VoiceInputPatch };
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;
 

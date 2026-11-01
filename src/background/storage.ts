@@ -1,4 +1,4 @@
-import { FLAGS_KEY, SETTINGS_KEY, type Flags, type Settings } from "@/lib/messages";
+import { FLAGS_KEY, SETTINGS_KEY, type Flags, type Settings, type SettingsPatch } from "@/lib/messages";
 import { mergeSettingsPatch, normalizeSettings, settingsForStorage } from "@/lib/settings";
 
 export { DEFAULT_SETTINGS } from "@/lib/settings";
@@ -15,7 +15,7 @@ export async function writeSettings(next: Settings): Promise<void> {
 // 바꾼 필드만 최신 설정에 합쳐 쓴다(#99). 읽기·합치기·쓰기를 차례로 처리해, 여러 패널의 저장이 겹쳐도 서로의 변경을
 // 오래된 값으로 덮지 않는다.
 let patchQueue: Promise<unknown> = Promise.resolve();
-export function applySettingsPatch(patch: Partial<Settings>): Promise<void> {
+export function applySettingsPatch(patch: SettingsPatch): Promise<void> {
   const run = patchQueue.then(async () => {
     await writeSettings(mergeSettingsPatch(await readSettings(), patch));
     invalidateSettingsCache();
@@ -25,7 +25,7 @@ export function applySettingsPatch(patch: Partial<Settings>): Promise<void> {
 }
 
 // 지금 설정을 읽어 바꿀 필드를 정하는 patch(목록에 항목 하나 더하기 등). 같은 차례 안에서 읽고 써서 다른 저장과 엇갈리지 않는다.
-export function applySettingsUpdate(fn: (cur: Settings) => Partial<Settings>): Promise<void> {
+export function applySettingsUpdate(fn: (cur: Settings) => SettingsPatch): Promise<void> {
   const run = patchQueue.then(async () => {
     const cur = await readSettings();
     await writeSettings(mergeSettingsPatch(cur, fn(cur)));

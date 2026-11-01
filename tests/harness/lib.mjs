@@ -67,7 +67,8 @@ export async function startHarness() {
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     executablePath: chrome,
     headless: !process.env.HARNESS_HEADED,
-    args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
+    // 음성 입력(#184): 가짜 마이크(삐 소리)와 권한 창 자동 허용.
+    args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
   });
   let [sw] = ctx.serviceWorkers();
   if (!sw) sw = await ctx.waitForEvent("serviceworker");
@@ -104,6 +105,10 @@ export async function startHarness() {
       globalThis.__draft = null;
       globalThis.__realWindowQuery = false;
       globalThis.__modelReqs = [];
+      globalThis.__voiceReqs = [];
+      globalThis.__voiceReply = undefined;
+      globalThis.__voiceDelayMs = 0;
+      globalThis.__voiceStatus = 0;
     });
     logs.length = 0;
     await panel.goto(`chrome-extension://${extId}/src/sidepanel/index.html`);
@@ -217,6 +222,31 @@ async function installMockModel(sw) {
         headers: { "content-type": "text/event-stream" },
       });
     globalThis.fetch = async (url, init) => {
+      // 음성 변환(#184): 대화 요청보다 먼저 가른다(OpenAI는 multipart). 요청은 __voiceReqs에, 응답은 __voiceReply(기본 "음성 글자"),
+      // __voiceDelayMs만큼 늦추며 중단 신호를 따른다(aborted 표시).
+      if (/\/audio\/transcriptions$|:generateContent$/.test(String(url))) {
+        const u = String(url);
+        const rec = { url: u, headers: init.headers, aborted: false };
+        if (init.body instanceof FormData) {
+          const f = init.body.get("file");
+          rec.form = { model: init.body.get("model"), language: init.body.get("language"), fileType: f?.type, fileSize: f ? (await f.arrayBuffer()).byteLength : 0 };
+        } else rec.json = JSON.parse(init.body);
+        (globalThis.__voiceReqs ??= []).push(rec);
+        if (globalThis.__voiceDelayMs) {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(resolve, globalThis.__voiceDelayMs);
+            init.signal?.addEventListener("abort", () => {
+              clearTimeout(t);
+              rec.aborted = true;
+              reject(new DOMException("aborted", "AbortError"));
+            }, { once: true });
+          });
+        }
+        const text = globalThis.__voiceReply ?? "음성 글자";
+        if (globalThis.__voiceStatus) return new Response(JSON.stringify({ error: { message: "bad key" } }), { status: globalThis.__voiceStatus });
+        const body = u.endsWith(":generateContent") ? { candidates: [{ content: { parts: [{ text }] } }] } : { text };
+        return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+      }
       // 모델 제공자 엔드포인트(#97)만 흉내 낸다. 요청 주소·본문은 __modelReqs에 남긴다.
       if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com|api\.anthropic\.com/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
