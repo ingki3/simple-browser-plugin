@@ -353,3 +353,12 @@ test("matchesTemplate: fillLink가 넣을 수 없는 긴 자리 값은 맞지 �
   assert.equal(matchesTemplate(`https://s.example/s?q=${"x".repeat(MAX_SLOT_VALUE)}`, l), true);
   assert.equal(matchesTemplate(`https://s.example/s?q=${"x".repeat(MAX_SLOT_VALUE + 1)}`, l), false);
 });
+
+test("matchesTemplate: fillLink로 다시 만든 주소와 같아야 한다(해독 실패·다른 인코딩)", () => {
+  const l = tpl("https://s.example/s?q=a", [{ mode: "slot", slot: "검색어" }]);
+  assert.equal(matchesTemplate("https://s.example/s?q=%B0%A1", l), false, "UTF-8 해독 실패 값");
+  assert.equal(matchesTemplate("https://s.example/s?q=a+b", l), false, "+ 공백은 fillLink가 %20으로 씀");
+  assert.equal(matchesTemplate("https://s.example/s?q=a%20b", l), true);
+  assert.equal(matchesTemplate("https://s.example/s?q=%ea%b0%80", l), false, "소문자 %xx");
+  assert.equal(matchesTemplate("https://s.example/s?q=%EA%B0%80", l), true);
+});

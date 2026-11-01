@@ -233,11 +233,22 @@ export function matchesTemplate(url: string, link: Pick<SavedLink, "template" | 
   const slotParams = t.params.filter((p) => p.slot !== undefined);
   const optional = new Set(link.slots.filter((s) => s.optional).map((s) => s.key));
   const optionalNames = [...new Set(slotParams.map((p) => p.slot as string).filter((n) => optional.has(n)))];
+  // 마지막 확인: 배정한 값으로 fillLink가 실제로 만드는 주소의 쿼리 값(적힌 그대로)이 지금 주소와 같아야 한다(순서 무시).
+  // 해독에 실패한 값·다른 인코딩(+, 소문자 %xx) 등 다시 인코딩하면 달라지는 값은 여기서 걸러진다.
+  const want = queryMultiset(parts.params);
+  const reproduces = (values: Map<string, string>): boolean => {
+    try {
+      const made = splitUrl(fillLink(link as SavedLink, Object.fromEntries(values)));
+      return !!made && made.base === parts.base && made.hash === parts.hash && sameMultiset(queryMultiset(made.params), want);
+    } catch {
+      return false;
+    }
+  };
   const budget = { steps: MATCH_STEPS_MAX };
   for (let mask = 0; mask < 1 << optionalNames.length; mask++) {
     const omitted = new Set(optionalNames.filter((_, i) => mask & (1 << i)));
     const used = slotParams.filter((p) => !omitted.has(p.slot as string));
-    if (used.length === rest.length && assignSlots(used, rest, 0, new Set(), new Map(), budget)) return true;
+    if (used.length === rest.length && assignSlots(used, rest, 0, new Set(), new Map(), budget, reproduces)) return true;
     if (budget.steps <= 0) return false;
   }
   return false;
@@ -253,8 +264,9 @@ function assignSlots(
   taken: Set<number>,
   byName: Map<string, string>,
   budget: { steps: number },
+  done: (values: Map<string, string>) => boolean,
 ): boolean {
-  if (i === slots.length) return true;
+  if (i === slots.length) return done(byName);
   if (--budget.steps <= 0) return false;
   const p = slots[i];
   const name = p.slot as string;
@@ -269,12 +281,27 @@ function assignSlots(
     if (prev !== undefined && prev !== u.value) continue;
     taken.add(j);
     if (prev === undefined) byName.set(name, u.value);
-    if (assignSlots(slots, values, i + 1, taken, byName, budget)) return true;
+    if (assignSlots(slots, values, i + 1, taken, byName, budget, done)) return true;
     if (budget.steps <= 0) return false;
     taken.delete(j);
     if (prev === undefined) byName.delete(name);
   }
   return false;
+}
+
+function queryMultiset(params: readonly UrlParam[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of params) {
+    const k = p.bare ? p.rawKey : `${p.rawKey}=${p.rawValue}`;
+    m.set(k, (m.get(k) ?? 0) + 1);
+  }
+  return m;
+}
+
+function sameMultiset(a: Map<string, number>, b: Map<string, number>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, n] of a) if (b.get(k) !== n) return false;
+  return true;
 }
 
 // 주소가 들어맞는 첫 저장 링크(없으면 null).
