@@ -261,7 +261,8 @@ function assignSlots(
   const tried = new Set<string>();
   for (let j = 0; j < values.length; j++) {
     const u = values[j];
-    if (taken.has(j) || u.rawKey !== p.key || u.bare || !u.value.trim() || u.value !== u.value.trim()) continue;
+    // fillLink가 넣을 수 있는 값만(비지 않음·앞뒤 공백 없음·MAX_SLOT_VALUE자 이하).
+    if (taken.has(j) || u.rawKey !== p.key || u.bare || !u.value.trim() || u.value !== u.value.trim() || u.value.length > MAX_SLOT_VALUE) continue;
     if (tried.has(u.value)) continue;
     tried.add(u.value);
     const prev = byName.get(name);

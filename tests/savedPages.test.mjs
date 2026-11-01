@@ -347,3 +347,9 @@ test("matchesTemplate: 같은 쿼리가 반복돼도 탐색이 폭증하지 않�
   matchesTemplate(`https://s.example/s?${Array.from({ length: n }, (_, i) => `q=v${i}`).join("&")}`, l);
   assert.ok(Date.now() - t0 < 200, `${Date.now() - t0}ms`);
 });
+
+test("matchesTemplate: fillLink가 넣을 수 없는 긴 자리 값은 맞지 않는다", () => {
+  const l = tpl("https://s.example/s?q=a", [{ mode: "slot", slot: "검색어" }]);
+  assert.equal(matchesTemplate(`https://s.example/s?q=${"x".repeat(MAX_SLOT_VALUE)}`, l), true);
+  assert.equal(matchesTemplate(`https://s.example/s?q=${"x".repeat(MAX_SLOT_VALUE + 1)}`, l), false);
+});
