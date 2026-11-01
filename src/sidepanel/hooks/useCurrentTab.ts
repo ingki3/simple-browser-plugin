@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from "react";
+import { SETTINGS_KEY } from "@/lib/messages";
+import { SAVED_PAGES_KEY } from "@/lib/savedPages";
 
 export interface CurrentTab {
   windowId: number;
   tabId: number;
   url: string;
   web: boolean;
+  // 이미 기억한 페이지면 그 저장 링크(#191, 표시용 — 누르면 백그라운드가 다시 확인한다).
+  remembered: { id: string; name: string } | null;
 }
 
 // 패널이 붙은 창의 활성 탭(#174·#173). 표시용이며, 이 값으로 하는 동작은 백그라운드가 다시 확인한다.
-// 탭 전환·주소 변화·로드 완료마다 다시 묻고, 겹친 조회는 순번으로 늦은 응답을 버린다. 시크릿 창이면 null.
+// 탭 전환·주소 변화·로드 완료·저장 링크나 설정 변경마다 다시 묻고, 겹친 조회는 순번으로 늦은 응답을 버린다. 시크릿 창이면 null.
 // loadSeq: 지금 탭이 새로 로드를 시작한 횟수(새로고침 포함, 탭마다 따로) — 페이지 제안을 페이지마다 한 번만 띄우는 데 쓴다.
 // 탭을 오가도 그 탭의 값은 그대로라, 닫은 제안이 탭 전환만으로 다시 뜨지 않는다.
 export function useCurrentTab(): { tab: CurrentTab | null; loadSeq: number } {
@@ -26,11 +30,11 @@ export function useCurrentTab(): { tab: CurrentTab | null; loadSeq: number } {
         const wid = windowId.current;
         if (wid === null) throw new Error("no window");
         const res = (await chrome.runtime.sendMessage({ kind: "current_tab_info", windowId: wid })) as
-          | { ok: boolean; data?: { tabId: number; url: string; web: boolean } | null }
+          | { ok: boolean; data?: { tabId: number; url: string; web: boolean; remembered?: { id: string; name: string } | null } | null }
           | undefined;
         if (!alive || mine !== seq.current) return;
         const d = res?.ok ? res.data : null;
-        setTab(d ? { windowId: wid, tabId: d.tabId, url: d.url, web: d.web } : null);
+        setTab(d ? { windowId: wid, tabId: d.tabId, url: d.url, web: d.web, remembered: d.remembered ?? null } : null);
       } catch {
         if (alive && mine === seq.current) setTab(null);
       }
@@ -43,13 +47,19 @@ export function useCurrentTab(): { tab: CurrentTab | null; loadSeq: number } {
       if (change.status === "loading") setLoads((cur) => ({ ...cur, [id]: (cur[id] ?? 0) + 1 }));
       if (t.active && (change.url !== undefined || change.status !== undefined)) void refresh();
     };
+    // 저장 링크를 저장·수정·삭제하거나 페이지 기억하기를 켜고 끄면 "이미 기억한 페이지" 표시를 다시 확인한다(#191).
+    const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "local" && (SAVED_PAGES_KEY in changes || SETTINGS_KEY in changes)) void refresh();
+    };
     chrome.tabs.onActivated.addListener(onActivated);
     chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.storage.onChanged.addListener(onStorage);
     void refresh();
     return () => {
       alive = false;
       chrome.tabs.onActivated.removeListener(onActivated);
       chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.storage.onChanged.removeListener(onStorage);
     };
   }, []);
 

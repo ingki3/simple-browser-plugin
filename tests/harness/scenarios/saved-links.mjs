@@ -309,6 +309,93 @@ export default [
     },
   },
   {
+    name: "기억하기 버튼(#191): 이미 기억한 페이지(자리 값만 다른 주소 포함)에서는 숨기고, 저장·삭제하면 바로 바뀐다",
+    pages: { "/s": search },
+    async run(h) {
+      await h.settings({});
+      const link = (base) => ({
+        id: "mine",
+        name: "가격 검색",
+        purpose: "",
+        template: { base, params: [{ key: "q", slot: "검색어" }], hash: "" },
+        slots: [{ key: "검색어", hint: "" }],
+        site: new URL(base).origin,
+        savedAt: Date.now(),
+        lastUsedAt: Date.now(),
+        uses: 0,
+      });
+      const btn = () => h.panel.locator(".remember-btn").count();
+      await h.tab.goto(`${h.base}/s?q=a`);
+      await h.panel.waitForTimeout(800);
+      expect((await btn()) === 1, "저장 전에는 버튼이 있다");
+      await h.sw.evaluate(async (l) => chrome.storage.local.set({ savedPages: [l] }), link(`${h.base}/s`));
+      await h.panel.waitForTimeout(600);
+      expect((await btn()) === 0, "저장하면 버튼이 사라진다");
+      await h.tab.goto(`${h.base}/s?q=${encodeURIComponent("다른 값")}`);
+      await h.panel.waitForTimeout(800);
+      expect((await btn()) === 0, "자리 값만 다른 주소도 기억한 페이지");
+      await h.tab.goto(`${h.base}/s?q=a&page=2`);
+      await h.panel.waitForTimeout(800);
+      expect((await btn()) === 1, "템플릿에 없는 값이 붙으면 버튼이 보인다");
+      await h.tab.goto(`${h.base}/s?q=a`);
+      await h.panel.waitForTimeout(800);
+      expect((await btn()) === 0, "다시 숨김");
+      await h.sw.evaluate(async () => chrome.storage.local.set({ savedPages: [] }));
+      await h.panel.waitForTimeout(600);
+      expect((await btn()) === 1, "삭제하면 다시 보인다");
+      // 기억하기를 끄면 숨기지 않고 기존처럼 비활성으로 이유를 보인다.
+      await h.sw.evaluate(async (l) => chrome.storage.local.set({ savedPages: [l] }), link(`${h.base}/s`));
+      await h.settings({ rememberPages: false });
+      await h.panel.waitForTimeout(600);
+      expect((await btn()) === 1 && (await h.panel.locator(".remember-btn").isDisabled()), "꺼지면 비활성으로 보임");
+    },
+  },
+  {
+    name: "기억하기 버튼(#191): 보이던 버튼을 눌렀는데 이미 기억한 페이지면 카드 없이 안내만(초안 요청 없음), 꺼져 있으면 꺼짐 안내",
+    pages: { "/s": search },
+    async run(h) {
+      await h.settings({});
+      await h.sw.evaluate(() => {
+        globalThis.__draftReqs = [];
+      });
+      await h.tab.goto(`${h.base}/s?q=a`);
+      await h.panel.waitForTimeout(800);
+      const shown = await h.panel.evaluate(async () => {
+        const wid = (await chrome.windows.getCurrent()).id;
+        return chrome.runtime.sendMessage({ kind: "current_tab_info", windowId: wid });
+      });
+      // 패널이 갱신되기 전에 저장된 경우를 흉내: 표시를 확인한 뒤 저장하고 같은 탭·주소로 누름 요청을 보낸다.
+      await h.sw.evaluate(async (base) =>
+        chrome.storage.local.set({
+          savedPages: [
+            {
+              id: "mine",
+              name: "가격 검색",
+              purpose: "",
+              template: { base, params: [{ key: "q", slot: "검색어" }], hash: "" },
+              slots: [{ key: "검색어", hint: "" }],
+              site: new URL(base).origin,
+              savedAt: Date.now(),
+              lastUsedAt: Date.now(),
+              uses: 0,
+            },
+          ],
+        }), `${h.base}/s`);
+      const press = () =>
+        h.panel.evaluate(async (d) => {
+          const wid = (await chrome.windows.getCurrent()).id;
+          return chrome.runtime.sendMessage({ kind: "remember_current_page", windowId: wid, tabId: d.tabId, url: d.url });
+        }, shown.data);
+      const res = await press();
+      expect(res.ok && res.data.already?.name === "가격 검색" && !res.data.offer, `이미 기억함(${JSON.stringify(res)})`);
+      expect((await h.sw.evaluate(() => globalThis.__draftReqs.length)) === 0, "초안 요청 없음");
+      await h.settings({ rememberPages: false });
+      const off = await press();
+      expect(off.ok && off.data.refused?.includes("꺼져"), `꺼짐 안내가 먼저(${JSON.stringify(off)})`);
+      expect((await h.panel.locator(".page-offer").count()) === 0, "카드 없음");
+    },
+  },
+  {
     name: "기억하기 버튼(#174): 설정이 꺼져 있거나 웹 페이지가 아니면 비활성",
     pages: { "/s": search },
     async run(h) {
