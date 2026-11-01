@@ -6,6 +6,7 @@ import { applySettingsPatch, invalidateSettingsCache } from "./storage";
 import { deletePages, draftLink, listPages, rememberCurrentPage, rememberedFor, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
 import { handleHistoryPickPort, HISTORY_PICK_PORT } from "./historyPickStore";
+import { VOICE_PORT, handleVoicePort } from "./voice";
 import { addRule, checkSuggestionRun, deleteRule, listRules, updateRule } from "./pageSuggestStore";
 import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
@@ -54,6 +55,12 @@ chrome.runtime.onConnect.addListener((port) => {
   // 방문 기록에서 기억할 페이지 찾기(#175): 이 확장의 화면(설정)에서 연 연결만.
   if (port.name === HISTORY_PICK_PORT) {
     if (port.sender?.id === chrome.runtime.id && port.sender.url?.startsWith(chrome.runtime.getURL(""))) handleHistoryPickPort(port);
+    else port.disconnect();
+    return;
+  }
+  // 음성 입력(#184): 패널에서 연 연결만.
+  if (port.name === VOICE_PORT) {
+    if (port.sender?.id === chrome.runtime.id && port.sender.url?.startsWith(chrome.runtime.getURL(""))) handleVoicePort(port);
     else port.disconnect();
     return;
   }

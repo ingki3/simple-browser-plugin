@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>마이크 권한</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #ffffff; --fg: #1a1a1a; --muted: #5f6368; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #1f1f1f; --fg: #e8eaed; --muted: #9aa0a6; } }
+      body { margin: 0; padding: 32px 16px; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, sans-serif; }
+      main { max-width: 520px; margin: 0 auto; }
+      p.muted { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>마이크 사용 허용</h1>
+      <p id="status">브라우저가 묻는 창에서 마이크 사용을 허용하세요.</p>
+      <p class="muted">간편 브라우저 도우미의 음성 입력(🎤)에 쓰입니다. 이 페이지는 권한만 받고 녹음하지 않습니다.</p>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
