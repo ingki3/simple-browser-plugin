@@ -239,7 +239,8 @@ export default [
     async run(h) {
       await h.settings(SEND);
       await h.sw.evaluate(() => {
-        globalThis.__steps = [{ textParts: ["앞부분 ", "뒷부분"], gapMs: 5000 }];
+        // 녹음·변환이 끝날 때까지 응답 중이게 간격을 넉넉히 둔다(느린 CI에서 5초면 먼저 끝나 바로 보내졌다).
+        globalThis.__steps = [{ textParts: ["앞부분 ", "뒷부분"], gapMs: 20000 }];
       });
       await h.panel.waitForTimeout(300);
       await input(h).fill("첫 요청");
@@ -249,7 +250,7 @@ export default [
       expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), `입력창에(${await input(h).inputValue()})`);
       expect((await userBubbles(h)).length === 1, "보내지 않음");
       expect((await h.panel.locator(".composer-hint").allInnerTexts()).some((t) => t.includes("응답을 받는 중")), "안내");
-      await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 15000 });
+      await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 30000 });
       await input(h).fill("");
       await h.sw.evaluate(() => {
         globalThis.__voiceReply = "가".repeat(2100);
