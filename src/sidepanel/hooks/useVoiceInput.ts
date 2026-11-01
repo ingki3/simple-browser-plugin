@@ -179,6 +179,9 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
   // 진행 중인 것을 모두 버린다(새 대화·취소·닫힘).
   const cancel = useCallback(() => {
     gen.current += 1;
+    // 기다리던 응답(begin·transcribe)은 백그라운드가 취소하면 오지 않으니 여기서 끝낸다(세대가 바뀌어 결과는 버려진다).
+    for (const [id, w] of waiters.current) w({ kind: "error", jobId: id, message: "취소했습니다." });
+    waiters.current.clear();
     const pend = pending.current;
     pending.current = null;
     if (pend) post({ kind: "cancel", jobId: pend.jobId });
@@ -214,7 +217,7 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
     } catch (err) {
       if (gen.current !== mine) return;
       post({ kind: "cancel", jobId });
-      const text = await micErrorText(err);
+      const text = await micErrorText(err, () => gen.current === mine);
       // 안내를 만드는 사이(권한 조회·탭 열기) 취소·새 녹음이 됐으면 그 상태를 덮지 않는다.
       if (gen.current === mine) setState({ phase: "error", message: text });
       return;
@@ -337,7 +340,8 @@ function isSilent(samples: Float32Array): boolean {
   return peak < SILENCE_RMS;
 }
 
-async function micErrorText(err: unknown): Promise<string> {
+// alive: 그 녹음이 아직 유효한지(취소·새 대화 뒤에는 권한 탭을 열지 않는다).
+async function micErrorText(err: unknown, alive: () => boolean): Promise<string> {
   const name = err instanceof DOMException ? err.name : "";
   if (name === "NotFoundError" || name === "OverconstrainedError") return "마이크를 찾지 못했습니다.";
   if (name === "NotAllowedError" || name === "SecurityError") {
@@ -349,6 +353,7 @@ async function micErrorText(err: unknown): Promise<string> {
     }
     if (st === "denied") return "마이크가 차단되어 있습니다. 주소창에 chrome://settings/content/microphone 을 열어 이 확장을 허용한 뒤 다시 누르세요.";
     // 사이드 패널은 권한 대화상자를 띄우지 못할 수 있다: 확장 페이지(탭)에서 한 번 허용받는다.
+    if (!alive()) return "취소했습니다.";
     try {
       await chrome.tabs.create({ url: chrome.runtime.getURL("src/mic/index.html") });
       return "새 탭에서 마이크 사용을 허용한 뒤, 이 패널에서 🎤를 다시 누르세요.";
