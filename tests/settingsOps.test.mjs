@@ -101,3 +101,28 @@ test("설정 캐시: 읽는 사이 무효화되면 옛 결과를 넣지 않고 �
   assert.equal(await cache.get(), "gemini");
   assert.equal(reads, 2);
 });
+
+import { tabSiteChoices } from "../src/lib/manualSites.ts";
+import { settingsSectionOf } from "../src/lib/settingsSections.ts";
+
+test("열린 탭에서 고르기: 웹 주소 탭의 출처만, 이미 넣은 사이트·중복 빼고, 제목은 60자", () => {
+  const tabs = [
+    { url: "https://etk.srail.kr/main.do", title: "SRT" },
+    { url: "https://etk.srail.kr/other", title: "두 번째" },
+    { url: "chrome://extensions/", title: "확장" },
+    { url: "chrome-extension://abc/src/options/index.html", title: "설정" },
+    { url: "https://a.example/x", title: "가".repeat(80) },
+    { url: "https://done.example/", title: "이미" },
+    { title: "주소 없음" },
+  ];
+  const out = tabSiteChoices(tabs, ["https://done.example"]);
+  assert.deepEqual(out.map((c) => c.site), ["https://etk.srail.kr", "https://a.example"]);
+  assert.equal(out[0].title, "SRT");
+  assert.equal(out[1].title.length, 60);
+});
+
+test("설정 묶음 해시: 다섯 값만, 모르면 모델·연결", () => {
+  assert.equal(settingsSectionOf("#sites"), "sites");
+  assert.equal(settingsSectionOf("advanced"), "advanced");
+  for (const bad of ["", "#", "#Sites", "#x", undefined, "#model?x"]) assert.equal(settingsSectionOf(bad), "model");
+});

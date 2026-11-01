@@ -26,16 +26,14 @@ type View =
   | { step: "results"; items: SnapshotItem[]; picks: Pick[] };
 
 interface Props {
-  // 시작 전에 설정의 저장하지 않은 변경을 저장한다(실패면 false — 시작하지 않는다).
-  beforeStart: () => Promise<boolean>;
-  // 저장 카드를 채팅에 띄운 뒤(설정 서랍을 닫는다).
+  // 저장 카드를 채팅에 띄운 뒤 "카드 보기"(시트를 닫는다).
   onOpened: () => void;
 }
 
 // 방문 기록에서 기억할 페이지 찾기(#175). 누를 때만: 선택 권한(history)을 묻고, 보낼 내용(제목·출처+경로·쿼리 이름 — 쿼리 값과
 // 방문 횟수는 보내지 않음)을 먼저 보여 준 뒤 사용자가 고른 항목만 보낸다. 추천마다 "저장 카드 열기"로 채팅에 카드를 띄우고,
 // 저장은 카드에서 누를 때만 한다. 이 화면을 닫으면(포트가 끊기면) 진행 중인 작업을 버린다.
-export function HistoryPickField({ beforeStart, onOpened }: Props) {
+export function HistoryPickField({ onOpened }: Props) {
   const [view, setView] = useState<View>({ step: "idle" });
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
@@ -95,7 +93,7 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
       return;
     }
     if (m.kind === "offer" && m.offer) {
-      // 카드를 채팅에 띄우고 서랍은 그대로 둔다(다른 추천도 이어서 열 수 있게). "카드 보기"로 닫는다.
+      // 카드를 채팅에 띄우고 시트는 그대로 둔다(다른 추천도 이어서 열 수 있게). "카드 보기"로 닫는다.
       addPageOffer(m.offer, { open: true, autoDraft: false, ...(m.draft ? { initialDraft: m.draft } : {}) });
       const idx = (raw as { index?: unknown }).index;
       if (typeof idx === "number") setOpened((cur) => new Set(cur).add(idx));
@@ -117,10 +115,6 @@ export function HistoryPickField({ beforeStart, onOpened }: Props) {
       return;
     }
     if (!alive.current) return;
-    if (!(await beforeStart())) {
-      if (alive.current) setError("설정을 저장하지 못해 시작하지 않았습니다.");
-      return;
-    }
     let windowId: number | undefined;
     try {
       windowId = (await chrome.windows.getCurrent()).id;

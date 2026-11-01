@@ -12,11 +12,11 @@ async function visit(h) {
   await h.tab.waitForTimeout(300);
 }
 
+// 패널 위쪽 🕘 → 방문 기록 찾기 시트(#127 — 추천을 패널 대화의 저장 카드로 띄우므로 패널에 둔다).
 async function openField(h) {
-  await h.panel.click('button[title="설정"]');
-  await h.panel.waitForTimeout(300);
-  await h.panel.locator("summary", { hasText: "기억·기록" }).click();
-  await h.panel.waitForTimeout(200);
+  await h.panel.bringToFront();
+  await h.panel.locator("button.history-pick-btn").click();
+  await h.panel.waitForSelector(".history-pick-sheet", { timeout: 3000 });
 }
 
 // 확인 화면까지: 항목들의 표시 글자(목록 순서 = 스냅샷 번호).
@@ -72,8 +72,8 @@ export default [
       const label = await h.panel.locator(".history-pick-open").first().innerText().catch((e) => `없음: ${e.message.slice(0, 80)}`);
       expect(label.includes("띄움"), `띄운 추천 표시, 서랍은 그대로(다른 추천도 열 수 있게)(${label})`);
       await h.panel.locator(".history-pick-show").click();
-      await h.panel.waitForSelector(".drawer", { state: "detached", timeout: 3000 }).catch(() => {});
-      expect((await h.panel.locator(".drawer").count()) === 0, "카드 보기로 서랍을 닫는다");
+      await h.panel.waitForSelector(".history-pick-sheet", { state: "detached", timeout: 3000 }).catch(() => {});
+      expect((await h.panel.locator(".history-pick-sheet").count()) === 0, "카드 보기로 시트를 닫는다");
       const card = h.panel.locator(".page-offer.open");
       expect((await card.locator("input").first().inputValue()) === "상품 검색", "추천 이름");
       expect((await card.innerText()).includes("방문 기록 추천으로 채웠습니다"), "출처 안내");
@@ -151,6 +151,33 @@ export default [
       await h.panel.waitForTimeout(800);
       expect((await h.panel.locator(".history-pick").innerText()).includes("설정이 바뀌었습니다"), "다시 준비 안내");
       expect((await draftReqs(h)) === 0, "보내지 않음");
+    },
+  },
+  {
+    name: "방문 기록 찾기(#127): 페이지 기억하기를 끄면 🕘가 없고, 확인 화면에서 시트를 닫으면 작업을 버린다(늦게 보내지 않음)",
+    pages: { "/news/today": page("오늘 뉴스"), "/shop/search": page("상품 검색") },
+    async run(h) {
+      await h.settings({ rememberPages: false });
+      await h.panel.waitForTimeout(300);
+      expect((await h.panel.locator("button.history-pick-btn").count()) === 0, "끄면 버튼 없음");
+      await h.settings({ rememberPages: true });
+      await h.panel.waitForTimeout(300);
+      await visit(h);
+      await prepare(h);
+      await h.sw.evaluate(() => {
+        globalThis.__draftReqs = [];
+      });
+      // 확인 화면에서 시트 바깥을 눌러 닫는다 — 포트가 끊겨 백그라운드가 작업을 버린다.
+      await h.panel.locator(".history-pick-sheet .drawer-header button", { hasText: "닫기" }).click();
+      await h.panel.waitForTimeout(500);
+      expect((await h.panel.locator(".history-pick-sheet").count()) === 0, "시트 닫힘");
+      await openField(h);
+      expect((await h.panel.locator(".history-pick-confirm").count()) === 0 && (await h.panel.locator(".history-pick-start").count()) === 1, "다시 열면 처음부터");
+      expect((await draftReqs(h)) === 0, "보내지 않음");
+      // 설정 페이지에는 안내만 둔다.
+      const opt = await h.openOptions("records");
+      expect((await opt.locator(".history-pick-hint").innerText()).includes("🕘") && (await opt.locator(".history-pick-start").count()) === 0, "설정 페이지는 안내만");
+      await opt.close();
     },
   },
 ];

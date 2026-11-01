@@ -40,8 +40,7 @@ export default [
         expect(text.includes("API 키가 맞지 않거나"), `원인 안내(${text})`);
         expect((await bubble.locator(".error-detail").textContent()).includes("No auth credentials found"), "원문은 자세히에");
         await bubble.getByRole("button", { name: "설정 열기" }).click();
-        await h.panel.waitForTimeout(300);
-        expect((await h.panel.locator(".drawer").count()) === 1, "설정이 열려야 한다");
+        expect(await h.waitOptions("model"), "설정 페이지(모델·연결)가 열려야 한다");
       } finally {
         await h.sw.evaluate(() => {
           globalThis.fetch = globalThis.__realMockFetch;

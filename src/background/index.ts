@@ -4,6 +4,7 @@ import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
 import { applyLoginSiteOp, applyManualSiteOp, applySettingsPatch, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
 import { parseLoginSiteOp, parseManualSiteOp } from "@/lib/settingsOps";
+import { openSettings } from "./settingsTab";
 import { deletePages, draftLink, listPages, rememberCurrentPage, rememberedFor, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
 import { handleHistoryPickPort, HISTORY_PICK_PORT } from "./historyPickStore";
@@ -337,6 +338,19 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             return op ? applyLoginSiteOp(op) : Promise.reject(new Error("잘못된 자동 로그인 항목"));
           })();
     job
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 설정 페이지 열기(#127). 이 확장의 화면(패널)에서만 받는다.
+  if (m.kind === "open_settings") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { section?: unknown; windowId?: unknown };
+    openSettings(p.section, p.windowId)
       .then(() => sendResponse({ ok: true }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
     return true;

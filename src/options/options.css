@@ -1,41 +1,95 @@
+/* 설정 페이지(#127): 넓은 화면은 왼쪽 메뉴 + 오른쪽 묶음, 좁은 창은 메뉴를 위로. */
 body {
-  padding: 24px;
+  margin: 0;
+  background: var(--bg);
 }
 
-.options {
-  max-width: 520px;
+.settings-page {
+  max-width: 920px;
   margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.settings-header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.settings-saved {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 16px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 2px;
 }
 
-.options h1 {
-  font-size: 20px;
-  margin: 0 0 8px;
+.settings-nav a {
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 14px;
 }
 
-.options .intro {
+.settings-nav a:hover {
+  background: var(--bg-alt);
+}
+
+.settings-nav a.active {
+  background: var(--bg-alt);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.settings-body {
+  min-width: 0;
+}
+
+.settings-section h2 {
+  font-size: 17px;
+  margin: 0 0 12px;
+}
+
+.settings-sub {
+  font-size: 14px;
+  margin: 24px 0 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-note {
+  font-size: 12px;
   color: var(--fg-muted);
-  font-size: 13px;
-  line-height: 1.55;
+  margin: 0 0 12px;
 }
 
-.options .actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-}
-
-.test-result {
-  font-size: 13px;
-}
-
-.test-result.ok {
-  color: #188038;
-}
-
-.test-result.err {
-  color: var(--error);
+@media (max-width: 640px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
 }
