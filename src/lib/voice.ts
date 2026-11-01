@@ -15,6 +15,8 @@ export interface VoiceInputSettings {
   models: Partial<Record<VoiceProvider, string>>;
   // ISO-639-1 두 글자. 빈 값은 자동 감지.
   language: string;
+  // 받아쓴 뒤 바로 보내기(사용자 요청, 기본 켜짐). 끄면 입력창에만 넣는다.
+  autoSend: boolean;
 }
 
 // 바꾼 하위 필드만 보내는 patch(저장 대기 중 연속 편집·다른 패널의 다른 하위 필드 변경을 통째로 덮지 않게).
@@ -22,9 +24,10 @@ export interface VoiceInputPatch {
   provider?: "off" | VoiceProvider;
   models?: Partial<Record<VoiceProvider, string>>;
   language?: string;
+  autoSend?: boolean;
 }
 
-export const DEFAULT_VOICE_INPUT: VoiceInputSettings = { provider: "off", models: {}, language: "ko" };
+export const DEFAULT_VOICE_INPUT: VoiceInputSettings = { provider: "off", models: {}, language: "ko", autoSend: true };
 
 export const VOICE_DEFAULT_MODELS: Record<VoiceProvider, string> = {
   openrouter: "openai/gpt-4o-transcribe",
@@ -93,6 +96,7 @@ export function normalizeVoiceInput(raw: unknown): VoiceInputSettings {
     provider: isVoiceProvider(r.provider) ? r.provider : "off",
     models: normalizeModels(r.models),
     language: normalizeLanguage(r.language) ?? DEFAULT_VOICE_INPUT.language,
+    autoSend: r.autoSend !== false,
   };
 }
 
@@ -112,6 +116,7 @@ export function mergeVoiceInput(base: VoiceInputSettings, patch: VoiceInputPatch
     provider: patch.provider ?? base.provider,
     models,
     language: patch.language ?? base.language,
+    autoSend: typeof patch.autoSend === "boolean" ? patch.autoSend : base.autoSend,
   });
 }
 

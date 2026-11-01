@@ -265,8 +265,11 @@ export async function telegramSetAskApproval(on: boolean): Promise<TelegramStatu
   await recovered;
   const s = await update((cur) => ({ ...cur, askApproval: on }));
   askEnabled = on;
-  // 끄면 기다리는 질문을 거둔다(물을 수 없는 것으로 — 사용자 거절이 아님).
-  if (!on && pendingAsk) settleAsk(pendingAsk, "unavailable", "withdrawn");
+  // 끄면 기다리는 질문을 거두고(물을 수 없는 것으로 — 사용자 거절이 아님) 맡긴 작업도 거둔다(다시 켜도 그 요청의 승인이 되살아나지 않게).
+  if (!on) {
+    if (pendingAsk) settleAsk(pendingAsk, "unavailable", "withdrawn");
+    runner.withdrawTask();
+  }
   return statusOf(s ?? (await load()));
 }
 
@@ -376,8 +379,8 @@ async function handleUpdate(s: TelegramState, u: unknown, conn: AbortSignal): Pr
 const HELP = [
   "간편 브라우저 도우미 텔레그램 연동",
   "- 할 일을 글로 보내면 브라우저의 새 탭에서 처리하고 최종 답만 보냅니다. 예: \"naver.com에서 오늘 날씨 알려 줘\"",
-  "- 요청에 적은 사이트로는 바로 이동합니다. 그 밖의 이동이나 승인이 필요한 클릭은 [승인][거절] 버튼으로 묻습니다(설정에서 끌 수 있음, 10분 안에 누르지 않으면 하지 않음).",
-  "- 입력·로그인·저장처럼 그 밖에 승인이 필요한 동작은 원격에서 하지 않습니다(패널에서 요청하세요).",
+  "- 이동·클릭·입력처럼 승인이 필요한 일은 요청마다 처음 한 번 [승인][거절] 버튼으로 맡길지 묻고, 맡기면 그 요청이 끝날 때까지 묻지 않고 진행합니다(결제·삭제도 묻지 않음, 10분 안에 누르지 않으면 하지 않음).",
+  "- 설정에서 버튼으로 묻기를 끄면 승인이 필요한 일은 원격에서 하지 않습니다. 자동 로그인·저장한 링크 열기·반복 작업 등록은 원격에서 하지 않습니다(패널에서 요청하세요).",
   "- /stop: 진행 중인 요청 멈추기, /new: 새 대화",
   "- 브라우저가 켜져 있어야 하고, 받는 데 최대 1분쯤 걸립니다.",
 ].join("\n");

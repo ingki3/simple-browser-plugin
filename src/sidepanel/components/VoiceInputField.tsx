@@ -74,6 +74,10 @@ export function VoiceInputField({ settings, onPatch }: Props) {
               ))}
             </select>
           </label>
+          <label className="check-row">
+            <input type="checkbox" checked={v.autoSend} onChange={(e) => onPatch({ voiceInput: { autoSend: e.target.checked } })} />
+            <span>받아쓴 뒤 바로 보내기(끄면 입력창에만 넣고 직접 보냄)</span>
+          </label>
           {needsKey && (
             <div className="key-row">
               <input
@@ -100,10 +104,11 @@ export function VoiceInputField({ settings, onPatch }: Props) {
           {needsKey && <span className="field-help error-text">{VOICE_LABELS[provider]} 키가 없어 음성 입력을 쓸 수 없습니다.</span>}
         </>
       )}
-      <FieldHelp summary="입력창의 🎤로 말하면 글자로 바꿔 입력창에 넣습니다(자동으로 보내지 않음).">
+      <FieldHelp summary="입력창의 🎤로 말하면 글자로 바꿔 바로 보냅니다(끄면 입력창에만).">
         녹음한 음성은 여기서 고른 제공자로만 보냅니다(대화 제공자와 달라도 됨). 녹음은 버튼을 누른 동안만 하고(최대 60초, 말이 끝나고
         조용하면 멈춤), 녹음 데이터는 저장하지 않습니다. 쓴 만큼 그 서비스에 요금이 나갑니다. 키는 그 제공자의 대화용 키와 같은 자리에
-        저장됩니다. Claude API는 음성 입력을 받지 않아 고를 수 없습니다.
+        저장됩니다. Claude API는 음성 입력을 받지 않아 고를 수 없습니다. 바로 보내기를 켜 두면 잘못 알아들은 글도 그대로 요청이 되니,
+        보내기 전에 확인하려면 끄세요(응답 중이거나 글자가 잘렸으면 켜져 있어도 입력창에만 넣습니다).
       </FieldHelp>
     </div>
   );
