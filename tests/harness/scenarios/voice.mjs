@@ -2,7 +2,14 @@
 // 받아쓴 글자는 입력창에만 들어가고 보내지 않는다. 녹음을 시작할 때 고정한 제공자로만 보내고, 설정이 바뀌면 보내지 않거나 멈춘다.
 import { expect } from "../lib.mjs";
 
-const OPENAI = { voiceInput: { provider: "openai", models: {}, language: "ko" }, apiKeys: { openai: "sk-voice-test" } };
+// 기존 시나리오는 입력창에만 넣는 동작(autoSend 끔)을 본다. 바로 보내기는 아래 SEND 시나리오들.
+const OPENAI = { voiceInput: { provider: "openai", models: {}, language: "ko", autoSend: false }, apiKeys: { openai: "sk-voice-test" } };
+const SEND = { voiceInput: { provider: "openai", models: {}, language: "ko", autoSend: true }, apiKeys: { openai: "sk-voice-test" } };
+const userBubbles = (h) => h.panel.locator(".bubble-user").allInnerTexts();
+const chatTexts = (h) =>
+  h.sw.evaluate(() =>
+    (globalThis.__modelReqs ?? []).flatMap((r) => (r.body?.messages ?? []).filter((m) => m.role === "user" && typeof m.content === "string").map((m) => m.content)),
+  );
 const mic = (h) => h.panel.locator("button.composer-btn.mic");
 const voiceReqs = (h) => h.sw.evaluate(() => globalThis.__voiceReqs ?? []);
 const chatReqs = (h) => h.sw.evaluate(() => (globalThis.__modelReqs ?? []).length);
@@ -65,7 +72,7 @@ export default [
   {
     name: "음성 입력(#184): Gemini·OpenRouter는 각자 형식으로, 제공자별 모델은 따로 보관",
     async run(h) {
-      await h.settings({ voiceInput: { provider: "gemini", models: { gemini: "gemini-x", openai: "whisper-1" }, language: "en" }, apiKeys: { gemini: "g-key" } });
+      await h.settings({ voiceInput: { provider: "gemini", models: { gemini: "gemini-x", openai: "whisper-1" }, language: "en", autoSend: false }, apiKeys: { gemini: "g-key" } });
       await h.panel.waitForTimeout(300);
       await speak(h);
       expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), "Gemini 글자");
@@ -73,7 +80,7 @@ export default [
       expect(reqs[0].url.endsWith("/models/gemini-x:generateContent") && reqs[0].headers["x-goog-api-key"] === "g-key", `Gemini(${reqs[0].url})`);
       expect(reqs[0].json.contents[0].parts[0].inline_data.mime_type === "audio/wav" && reqs[0].json.contents[0].parts[1].text.includes("영어"), "Gemini 본문");
       await input(h).fill("");
-      await h.settings({ voiceInput: { provider: "openrouter", models: { gemini: "gemini-x", openai: "whisper-1" }, language: "" } });
+      await h.settings({ voiceInput: { provider: "openrouter", models: { gemini: "gemini-x", openai: "whisper-1" }, language: "", autoSend: false } });
       await h.panel.waitForTimeout(300);
       await speak(h);
       expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), "OpenRouter 글자");
@@ -207,6 +214,101 @@ export default [
       });
       await speak(h);
       expect(await waitFor(h, async () => (await input(h).inputValue()) === "앞 음성 글자뒤"), `커서 자리(${await input(h).inputValue()})`);
+    },
+  },
+  {
+    name: "음성 입력: 바로 보내기(기본) — 받아쓰면 기존 글자와 합쳐 바로 보내고 입력창을 비운다",
+    async run(h) {
+      await h.settings(SEND);
+      await h.sw.evaluate(() => {
+        globalThis.__steps = [{ text: "알겠습니다" }];
+      });
+      await h.panel.waitForTimeout(300);
+      await input(h).fill("앞말");
+      await h.panel.locator("body").click({ position: { x: 5, y: 5 } });
+      await speak(h);
+      expect(await waitFor(h, async () => (await userBubbles(h)).length === 1), "사용자 말풍선");
+      const b = await userBubbles(h);
+      expect(b[0].includes("앞말 음성 글자"), `합친 글을 보냄(${b[0]})`);
+      expect(await waitFor(h, async () => (await chatTexts(h)).some((t) => t.includes("앞말 음성 글자"))), "모델 요청에 그 글");
+      expect((await input(h).inputValue()) === "", "입력창 비움");
+    },
+  },
+  {
+    name: "음성 입력: 바로 보내기 — 응답 중이거나 글자가 잘렸으면 보내지 않고 입력창에 넣고 알린다",
+    async run(h) {
+      await h.settings(SEND);
+      await h.sw.evaluate(() => {
+        globalThis.__steps = [{ textParts: ["앞부분 ", "뒷부분"], gapMs: 5000 }];
+      });
+      await h.panel.waitForTimeout(300);
+      await input(h).fill("첫 요청");
+      await h.panel.click("button.composer-btn.primary");
+      await h.panel.waitForFunction(() => !!document.querySelector("button.composer-btn.danger"), null, { timeout: 5000 });
+      await speak(h);
+      expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), `입력창에(${await input(h).inputValue()})`);
+      expect((await userBubbles(h)).length === 1, "보내지 않음");
+      expect((await h.panel.locator(".composer-hint").allInnerTexts()).some((t) => t.includes("응답을 받는 중")), "안내");
+      await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 15000 });
+      await input(h).fill("");
+      await h.sw.evaluate(() => {
+        globalThis.__voiceReply = "가".repeat(2100);
+      });
+      await speak(h);
+      expect(await waitFor(h, async () => (await input(h).inputValue()).length === 2000), "잘린 글은 입력창에");
+      expect((await userBubbles(h)).length === 1, "잘린 글은 보내지 않음");
+    },
+  },
+  {
+    name: "음성 입력: 바로 보내기 — 변환 중 취소·새 대화면 보내지 않는다",
+    async run(h) {
+      await h.settings(SEND);
+      await h.sw.evaluate(() => {
+        globalThis.__voiceDelayMs = 2500;
+        globalThis.__steps = [{ text: "x" }, { text: "y" }];
+      });
+      await h.panel.waitForTimeout(300);
+      await speak(h);
+      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 1), "요청 시작");
+      await mic(h).click();
+      await speak(h);
+      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 2), "다시");
+      await h.panel.locator('button.icon-btn[title="새 대화"]').click();
+      await h.panel.waitForTimeout(3500);
+      expect((await userBubbles(h)).length === 0 && (await chatReqs(h)) === 0, `보내지 않음(${(await userBubbles(h)).length}/${await chatReqs(h)})`);
+    },
+  },
+  {
+    name: "음성 입력: 바로 보내기 — 변환 중 고친 글은 합쳐 보내고, 그사이 직접 보낸 초안은 다시 보내지 않으며, 변환 중 끄면 입력창에만",
+    async run(h) {
+      await h.settings(SEND);
+      await h.sw.evaluate(() => {
+        globalThis.__voiceDelayMs = 2000;
+        globalThis.__steps = [{ text: "a" }, { text: "b" }, { text: "c" }];
+      });
+      await h.panel.waitForTimeout(300);
+      // 1) 변환 중 입력창에 글을 쓰면 그 글 뒤에 붙여 보낸다.
+      await speak(h);
+      await input(h).fill("고친글");
+      await h.panel.locator("body").click({ position: { x: 5, y: 5 } });
+      expect(await waitFor(h, async () => (await userBubbles(h)).length === 1), "보냄");
+      expect((await userBubbles(h))[0].includes("고친글 음성 글자"), `최근 편집 유지(${(await userBubbles(h))[0]})`);
+      await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 10000 });
+      // 2) 변환 중 초안을 직접 보내면, 도착한 받아쓰기는 그 초안 없이 보낸다(초안 재전송 없음).
+      await speak(h);
+      await input(h).fill("직접보냄");
+      await h.panel.click("button.composer-btn.primary");
+      expect(await waitFor(h, async () => (await userBubbles(h)).length === 2), "직접 보냄");
+      await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 10000 });
+      await h.panel.waitForTimeout(2500);
+      const b = await userBubbles(h);
+      expect(b.filter((t) => t.includes("직접보냄")).length === 1, `초안은 한 번만(${JSON.stringify(b)})`);
+      // 3) 변환 중 바로 보내기를 끄면 입력창에만.
+      const n = (await userBubbles(h)).length;
+      await speak(h);
+      await patchVoice(h, { autoSend: false });
+      expect(await waitFor(h, async () => (await input(h).inputValue()).includes("음성 글자")), "입력창에");
+      expect((await userBubbles(h)).length === n, "끄면 보내지 않음");
     },
   },
 ];

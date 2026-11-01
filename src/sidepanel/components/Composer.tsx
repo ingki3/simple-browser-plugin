@@ -1,6 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useChatStore } from "../state/chatStore";
 import { useVoiceInput } from "../hooks/useVoiceInput";
+import { useSettings } from "../hooks/useSettings";
 import { KO } from "../i18n/ko";
 
 interface Props {
@@ -14,6 +15,10 @@ export function Composer({ onSend, onAbort, needsKey, onOpenSettings }: Props) {
   const [value, setValue] = useState("");
   const streaming = useChatStore((s) => s.streaming);
   const conversationId = useChatStore((s) => s.conversationId);
+  const { settings, loaded } = useSettings();
+  // 받아쓴 결과가 도착한 순간의 값으로 판단하려고 최신 값을 ref에 둔다(콜백이 예전 렌더의 값을 쓰지 않게).
+  const latest = useRef({ value, streaming, needsKey, autoSend: false });
+  latest.current = { value, streaming, needsKey, autoSend: loaded && settings.voiceInput.autoSend };
   const input = useRef<HTMLTextAreaElement>(null);
   // 입력창의 마지막 선택 위치(🎤를 누르면 포커스가 버튼으로 가므로 미리 기억한다). null이면 끝에 넣는다.
   const sel = useRef<{ start: number; end: number } | null>(null);
@@ -22,20 +27,37 @@ export function Composer({ onSend, onAbort, needsKey, onOpenSettings }: Props) {
     if (el) sel.current = { start: el.selectionStart, end: el.selectionEnd };
   };
   const [voiceNote, setVoiceNote] = useState<string | null>(null);
-  // 음성 입력(#184): 받아쓴 글자는 입력창의 커서 자리에 끼워 넣기만 한다(기존 글자 보존, 자동으로 보내지 않음).
+  // 음성 입력(#184): 받아쓴 글자를 입력창의 커서 자리에 끼워 넣는다(기존 글자 보존). "받아쓴 뒤 바로 보내기"(기본 켜짐)면
+  // 합친 글을 바로 보낸다. 설정을 아직 못 읽었거나·응답 중·키 없음·글자가 잘렸으면 보내지 않고 입력창에만 둔다.
   const voice = useVoiceInput({
     conversationId,
     onText: (text, truncated) => {
       const el = input.current;
-      setValue((cur) => {
-        const at = Math.min(sel.current?.start ?? cur.length, cur.length);
-        const end = Math.min(Math.max(sel.current?.end ?? cur.length, at), cur.length);
-        const before = cur.slice(0, at);
-        const after = cur.slice(end);
-        const sep = before && !/\s$/.test(before) ? " " : "";
-        return `${before}${sep}${text}${after}`;
-      });
-      setVoiceNote(truncated ? "받아쓴 글자가 길어 앞부분만 넣었습니다." : null);
+      const now = latest.current;
+      const cur = now.value;
+      const at = Math.min(sel.current?.start ?? cur.length, cur.length);
+      const end = Math.min(Math.max(sel.current?.end ?? cur.length, at), cur.length);
+      const before = cur.slice(0, at);
+      const sep = before && !/\s$/.test(before) ? " " : "";
+      const next = `${before}${sep}${text}${cur.slice(end)}`;
+      const send = now.autoSend && !truncated && !now.streaming && !now.needsKey && !!next.trim();
+      if (send) {
+        onSend(next.trim());
+        setValue("");
+        sel.current = null;
+        latest.current = { ...now, value: "" };
+        setVoiceNote(null);
+        return;
+      }
+      setValue(next);
+      latest.current = { ...now, value: next };
+      setVoiceNote(
+        truncated
+          ? "받아쓴 글자가 길어 앞부분만 넣었습니다. 확인한 뒤 보내세요."
+          : now.autoSend && now.streaming
+            ? "응답을 받는 중이라 입력창에 넣었습니다. 끝나면 보내기를 누르세요."
+            : null,
+      );
       el?.focus();
     },
   });
