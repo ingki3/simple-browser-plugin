@@ -64,8 +64,13 @@ export function useSyncedDraft(saved: string, resetKey: string = "") {
     if (edited.current) setConflict(true);
     else setValue(saved);
   }, [saved, resetKey]);
+  // 저장 값과 같은 글자로 돌아오면(저장해도 저장 값이 바뀌지 않아 돌아오는 알림이 없다) 고치지 않은 칸으로 본다.
   const set = useCallback((v: string) => {
-    edited.current = true;
+    edited.current = v !== base.current;
+    if (!edited.current) {
+      pending.current = [];
+      setConflict(false);
+    }
     setValue(v);
   }, []);
   const commit = useCallback(() => {
@@ -74,6 +79,13 @@ export function useSyncedDraft(saved: string, resetKey: string = "") {
     setConflict(false);
   }, []);
   const expect = useCallback((v: string) => {
+    if (v === base.current) {
+      // 저장될 값이 이미 저장 값이다: 기다릴 알림이 없다.
+      pending.current = [];
+      edited.current = false;
+      setConflict(false);
+      return;
+    }
     if (pending.current.at(-1) !== v) pending.current.push(v);
     if (pending.current.length > 50) pending.current = pending.current.slice(-50);
     setConflict(false);
