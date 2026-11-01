@@ -112,7 +112,7 @@ export function TelegramField() {
           )}
           <label className="check-row">
             <input type="checkbox" checked={st.askApproval} disabled={busy} onChange={(e) => void request({ kind: "telegram_set_ask", on: e.target.checked })} />
-            <span>승인이 필요한 이동·클릭은 텔레그램 버튼으로 묻기(대상·주소를 텔레그램으로 보냄, 끄면 원격에서는 하지 않음)</span>
+            <span>승인이 필요한 일은 텔레그램 버튼으로 묻기 — 요청마다 처음 한 번 맡길지 묻고, 맡기면 그 요청은 결제·삭제까지 묻지 않고 실행(요청·할 일·주소를 텔레그램으로 보냄, 끄면 원격에서는 하지 않음)</span>
           </label>
           <label className="check-row">
             <input type="checkbox" checked={st.notifyRepeat} disabled={busy} onChange={(e) => void request({ kind: "telegram_set_notify", on: e.target.checked })} />

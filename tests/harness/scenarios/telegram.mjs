@@ -1,6 +1,6 @@
 // 텔레그램 연동(#139): 서비스 워커의 fetch로 api.telegram.org를 흉내 낸다(받을 업데이트·보낸 메시지를 전역에 둔다).
-// 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 auto 판정이되
-// 승인 카드가 필요한 동작(결제)은 패널 카드 없이 거절하고 도구 없이 마무리, 반복 작업 알림은 켰을 때 제목만.
+// 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 '처음에 승인 받고
+// 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만.
 import { expect } from "../lib.mjs";
 
 const TOKEN = "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -118,6 +118,35 @@ async function connect(h) {
   });
 }
 
+// 시험 서버 주소(localhost·IP)는 요청 글의 사이트로 인정하지 않으므로, 원격 대화의 새 작업 탭을 시험 페이지로 연다.
+async function startTabAt(h, url) {
+  await h.sw.evaluate((url) => {
+    const realCreate = chrome.tabs.create.bind(chrome.tabs);
+    // 다 읽힌 뒤 돌려준다 — 실제 새 탭 화면처럼 시작 주소를 바로 읽을 수 있게(느린 CI에서 빈 주소로 읽히던 경합).
+    chrome.tabs.create = async (p) => {
+      if (p?.url !== "chrome://newtab/") return realCreate(p);
+      const tab = await realCreate({ ...p, url });
+      for (let i = 0; i < 50; i++) {
+        const t = await chrome.tabs.get(tab.id);
+        if (t.url === url && !t.pendingUrl && t.status === "complete") return t;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return tab;
+    };
+  }, url);
+}
+
+// 지난 요청의 작업 탭을 옮긴다(사용자가 옮긴 것처럼) — 같은 대화의 다음 요청이 그 탭을 새 탭 화면으로 되돌려 쓰지 않고
+// 새 작업 탭(startTabAt의 시험 페이지)을 열게.
+async function moveWorkTabs(h) {
+  await h.sw.evaluate(async (base) => {
+    for (const t of await chrome.tabs.query({})) if (t.url?.startsWith(base)) await chrome.tabs.update(t.id, { url: `${base}/?moved=${t.id}` });
+  }, h.base2);
+  await h.panel.waitForTimeout(500);
+}
+
+const tabTitles = (h) => h.sw.evaluate(async () => (await chrome.tabs.query({})).map((t) => t.title).join("|"));
+
 async function waitSent(h, n, ms = 15_000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
@@ -150,43 +179,103 @@ export default [
     },
   },
   {
-    name: "원격 요청은 전역이 '처음에 승인'이어도 auto 판정(일반 클릭 자동), 결제는 카드 없이 거절 후 마무리",
+    name: "원격 요청은 전역이 auto여도 '처음에 승인 받고 끝까지 실행': confirm_task를 텔레그램으로 한 번 묻고, 맡기면 결제까지 묻지 않음, 다음 요청은 다시 묻는다",
     pages2: {
       "/": `<title>shop</title><button onclick="document.title='결제됨'">결제하기</button><button onclick="document.title='적용됨'">적용</button>`,
     },
     async run(h) {
-      await h.settings({ runMode: "task" });
+      await h.settings({ runMode: "auto" });
       await connect(h);
-      // 시험 서버 주소(localhost·IP)는 요청 글의 사이트로 인정하지 않으므로, 원격 대화의 새 작업 탭을 시험 페이지로 연다.
-      await h.sw.evaluate((url) => {
-        const realCreate = chrome.tabs.create.bind(chrome.tabs);
-        // 다 읽힌 뒤 돌려준다 — 실제 새 탭 화면처럼 시작 주소를 바로 읽을 수 있게(느린 CI에서 빈 주소로 읽히던 경합).
-        chrome.tabs.create = async (p) => {
-          if (p?.url !== "chrome://newtab/") return realCreate(p);
-          const tab = await realCreate({ ...p, url });
-          for (let i = 0; i < 50; i++) {
-            const t = await chrome.tabs.get(tab.id);
-            if (t.url === url && !t.pendingUrl && t.status === "complete") return t;
-            await new Promise((r) => setTimeout(r, 100));
-          }
-          return tab;
-        };
-        globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "적용" }, { tool: "find_clickables", args: {} }, { click: "결제하기" }, { text: "여기까지" }];
+      await startTabAt(h, `${h.base2}/`);
+      await h.sw.evaluate(() => {
+        globalThis.__steps = [
+          { tool: "confirm_task", args: { summary: "적용을 누른 뒤 결제", risks: ["결제가 진행됩니다"] } },
+          { tool: "find_clickables", args: {} },
+          { click: "적용" },
+          { tool: "find_clickables", args: {} },
+          { click: "결제하기" },
+          { text: "다 했습니다" },
+        ];
         globalThis.__toolLog = [];
-      }, `${h.base2}/`);
+      });
       await deliver(h, "적용 누르고 결제해 줘");
-      // 결제는 승인이 필요해 텔레그램 버튼으로 묻는다(#185) — 거절한다.
       const [q] = await waitAsk(h, 1, 20_000);
-      expect(q?.text.includes("'결제하기'"), `결제 질문(${q?.text})`);
-      await press(h, q.no);
-      const s = await waitReply(h);
-      const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
-      expect(log[1] === "click_element:ok", `일반 클릭은 맡기기 카드 없이 자동(${log.join(", ")})`);
-      expect(log.some((l) => l === "click_element:remote_user_denied"), `결제는 거절(${log.join(", ")})`);
-      expect(s.length === 1 && s[0] === "정리", `도구 없이 마무리한 답만(${JSON.stringify(s)})`);
+      expect(
+        q?.text.startsWith("승인이 필요합니다: 작업 맡기기") && q.text.includes("요청: 적용 누르고 결제해 줘") && q.text.includes("할 일: 적용을 누른 뒤 결제") && q.text.includes("- 결제가 진행됩니다"),
+        `맡기기 질문(${q?.text})`,
+      );
+      await h.panel.waitForTimeout(300);
+      expect((await toolLog(h)).length === 0, "승인 전에는 실행 안 함");
+      await press(h, q.yes);
+      const r = await waitReply(h);
+      const log = await toolLog(h);
+      expect(r[0] === "다 했습니다", `최종 답(${JSON.stringify(r)})`);
+      expect(log.join(",") === "confirm_task:ok,find_clickables:ok,click_element:ok,find_clickables:ok,click_element:ok", `묻지 않고 끝까지(${log.join(", ")})`);
+      expect((await asks(h)).length === 1, "질문은 한 번");
       expect((await h.panel.locator(".tool-pending").count()) === 0, "패널에 카드 없음");
-      const titles = await h.sw.evaluate(async () => (await chrome.tabs.query({})).map((t) => t.title).join("|"));
-      expect(titles.includes("적용됨") && !titles.includes("결제됨"), `적용은 눌리고 결제는 눌리지 않음(${titles})`);
+      expect((await tabTitles(h)).includes("결제됨"), "결제까지 눌림");
+
+      // 같은 대화의 다음 요청: 맡긴 작업은 그 요청까지만 — 맡기지 않고 부른 첫 동작으로 다시 묻는다. 거절하면 하지 않는다.
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "적용" }, { text: "안 함" }];
+        globalThis.__toolLog = [];
+      });
+      await moveWorkTabs(h);
+      await deliver(h, "적용 다시 눌러 줘");
+      const all = await waitAsk(h, 2);
+      const q2 = all[1];
+      expect(q2?.text.includes("작업 맡기기") && q2.text.includes("첫 동작: 클릭") && q2.text.includes("'적용'") && !q2.text.includes("할 일:"), `다시 묻기(${q2?.text})`);
+      await press(h, q2.no);
+      const r2 = await waitReply(h);
+      const log2 = await toolLog(h);
+      // (첫 기록은 앞 요청의 마지막 도구 결과다 — 모의 모델이 요청마다 마지막 결과를 남긴다.)
+      expect(log2.at(-1) === "click_element:remote_user_denied" && !(await tabTitles(h)).includes("적용됨"), `거절(${log2.join(",")})`);
+      expect(r2.length === 1 && r2[0] === "정리", `도구 없이 마무리(${JSON.stringify(r2)})`);
+    },
+  },
+  {
+    name: "원격 task: confirm_task를 거절하면 하지 않고, 맡긴 뒤 묻기를 껐다 켜면 맡긴 작업이 풀려 다시 묻는다",
+    pages2: { "/": `<title>shop</title><button onclick="document.title='적용됨'">적용</button>` },
+    async run(h) {
+      await connect(h);
+      await startTabAt(h, `${h.base2}/`);
+      await h.sw.evaluate(() => {
+        globalThis.__steps = [{ tool: "confirm_task", args: { summary: "적용 누르기", risks: [] } }, { text: "안 함" }];
+        globalThis.__toolLog = [];
+      });
+      await deliver(h, "적용 눌러 줘");
+      const [q] = await waitAsk(h);
+      expect(q?.text.includes("이 작업의 위험: 모델이 따로 적지 않음"), `위험 없음 문구(${q?.text})`);
+      await press(h, q.no);
+      const r = await waitReply(h);
+      expect((await toolLog(h)).join(",") === "confirm_task:remote_user_denied" && r[0] === "정리", `거절(${(await toolLog(h)).join(",")} / ${JSON.stringify(r)})`);
+
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__steps = [
+          { tool: "confirm_task", args: { summary: "적용 누르기", risks: [] } },
+          { tool: "find_clickables", args: {}, delayMs: 1500 },
+          { click: "적용" },
+          { text: "안 함" },
+        ];
+        globalThis.__toolLog = [];
+      });
+      await moveWorkTabs(h);
+      await deliver(h, "적용 눌러 줘");
+      const a = await waitAsk(h, 2);
+      await press(h, a[1].yes);
+      // 맡긴 직후(다음 모델 응답을 기다리는 사이) 묻기를 껐다 켠다.
+      await h.panel.waitForTimeout(300);
+      expect((await ask(h, { kind: "telegram_set_ask", on: false })).ok, "끔");
+      expect((await ask(h, { kind: "telegram_set_ask", on: true })).ok, "켬");
+      const b = await waitAsk(h, 3);
+      expect(b[2]?.text.includes("첫 동작: 클릭") && b[2].text.includes("'적용'"), `다시 묻기(${b[2]?.text})`);
+      await press(h, b[2].no);
+      await waitReply(h);
+      const log = await toolLog(h);
+      expect(log.includes("click_element:remote_user_denied") && !log.includes("click_element:ok"), `되살아나지 않음(${log.join(",")})`);
+      expect(!(await tabTitles(h)).includes("적용됨"), "누르지 않음");
     },
   },
   {
@@ -194,22 +283,11 @@ export default [
     pages2: { "/": `<title>shop</title><p>상품</p>` },
     async run(h) {
       await connect(h);
-      await h.sw.evaluate((url) => {
-        const realCreate = chrome.tabs.create.bind(chrome.tabs);
-        // 다 읽힌 뒤 돌려준다 — 실제 새 탭 화면처럼 시작 주소를 바로 읽을 수 있게(느린 CI에서 빈 주소로 읽히던 경합).
-        chrome.tabs.create = async (p) => {
-          if (p?.url !== "chrome://newtab/") return realCreate(p);
-          const tab = await realCreate({ ...p, url });
-          for (let i = 0; i < 50; i++) {
-            const t = await chrome.tabs.get(tab.id);
-            if (t.url === url && !t.pendingUrl && t.status === "complete") return t;
-            await new Promise((r) => setTimeout(r, 100));
-          }
-          return tab;
-        };
+      await startTabAt(h, `${h.base2}/?q=1`);
+      await h.sw.evaluate(() => {
         globalThis.__steps = [{ tool: "remember_page", args: {} }, { text: "못 함" }];
         globalThis.__toolLog = [];
-      }, `${h.base2}/?q=1`);
+      });
       await deliver(h, "이 페이지 기억해줘");
       await waitSent(h, 1, 20_000);
       const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
@@ -218,7 +296,7 @@ export default [
     },
   },
   {
-    name: "원격 안내에 요청 글에 적은 사이트를 알린다(없으면 주소를 함께 보내 달라고 답하게)",
+    name: "원격 안내: 물을 수 있으면 작업 맡기기 안내, 묻기를 끄면 요청 글에 적은 사이트를 알린다(없으면 주소를 함께 보내 달라고 답하게)",
     async run(h) {
       await connect(h);
       // 이번 요청의 원격 안내(원격 요청 표시가 있는 마지막 사용자 메시지)를 읽는다.
@@ -233,10 +311,24 @@ export default [
         globalThis.__modelReqs = [];
         globalThis.__steps = [{ text: "정리" }];
       });
-      await deliver(h, "news.naver.com 경제 뉴스 정리해줘");
+      await deliver(h, "오늘 경제 뉴스 정리해줘");
       await waitSent(h, 1);
       let note = await lastUser();
-      expect(note.includes("https://news.naver.com") && note.includes("승인 없이 이동할 수 있다"), `적은 사이트 안내(${note.slice(0, 400)})`);
+      expect(note.includes("처음에 승인 받고 끝까지 실행") && note.includes("confirm_task") && note.includes("알맞은 사이트를 골라"), `맡기기 안내(${note.slice(0, 400)})`);
+      const taskNote = await h.sw.evaluate(() =>
+        globalThis.__modelReqs.flatMap((r) => r.body?.messages ?? []).some((m) => m.role === "user" && String(m.content).startsWith("실행 방식: 처음에 승인 받고 끝까지 실행")),
+      );
+      expect(taskNote, "요청마다 붙는 실행 방식 안내");
+      expect((await ask(h, { kind: "telegram_set_ask", on: false })).ok, "묻기 끔");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__modelReqs = [];
+        globalThis.__steps = [{ text: "정리" }];
+      });
+      await deliver(h, "news.naver.com 경제 뉴스 정리해줘");
+      await waitSent(h, 1);
+      note = await lastUser();
+      expect(note.includes("https://news.naver.com") && note.includes("승인 없이 이동할 수 있다") && !note.includes("confirm_task"), `적은 사이트 안내(${note.slice(0, 400)})`);
       await h.sw.evaluate(() => {
         globalThis.__tg.sent = [];
         globalThis.__modelReqs = [];
@@ -245,8 +337,7 @@ export default [
       await deliver(h, "오늘 경제 뉴스 정리해줘");
       await waitSent(h, 1);
       note = await lastUser();
-      // 텔레그램은 승인을 버튼으로 물을 수 있어(#185) 주소가 없어도 사이트를 골라 가라고 안내한다.
-      expect(note.includes("사이트 주소가 없다") && note.includes("승인을 묻는다") && !note.includes("승인 없이 이동할 수 있다"), `주소 없음 안내(${note.slice(0, 400)})`);
+      expect(note.includes("사이트 주소가 없어 다른 사이트로는 이동할 수 없다"), `주소 없음 안내(${note.slice(0, 400)})`);
     },
   },
   {
@@ -260,7 +351,8 @@ export default [
       }, `${h.base}/news`);
       await deliver(h, "오늘 경제 뉴스 정리해줘");
       const [a] = await waitAsk(h);
-      expect(a && a.text.includes(`주소: ${h.base}/news`) && a.text.includes("승인이 필요합니다"), `질문(${a?.text})`);
+      // confirm_task 없이 부른 이동: 작업 맡기기 질문에 첫 동작(주소)을 보인다.
+      expect(a && a.text.includes("승인이 필요합니다: 작업 맡기기") && a.text.includes(`첫 동작: 페이지 이동\n주소: ${h.base}/news`), `질문(${a?.text})`);
       // 다른 채팅·다른 사람·모양이 틀린 데이터·지난 id는 승인으로 보지 않는다.
       await press(h, a.yes, { chat: 9999 });
       await press(h, a.yes, { from: 4242 });
@@ -368,7 +460,7 @@ export default [
     },
   },
   {
-    name: "원격 승인(#185): 클릭 질문에는 모델용 글만, 표제가 잘린 대상은 묻지 않는다",
+    name: "원격 승인(#185): 맡기지 않고 부른 클릭의 질문에는 모델용 글만, 표제가 잘린 대상은 묻지 않고 맡기라고 돌려준다 — 맡기면 그 대상도 누른다",
     pages2: {
       "/": `<title>shop</title><ul>
         <li><h3>상품 A</h3><span contenteditable>내가 쓴 비밀 메모</span><button onclick="document.title='결제됨'">결제하기</button></li>
@@ -381,22 +473,11 @@ export default [
     },
     async run(h) {
       await connect(h);
-      await h.sw.evaluate((url) => {
-        const realCreate = chrome.tabs.create.bind(chrome.tabs);
-        // 다 읽힌 뒤 돌려준다 — 실제 새 탭 화면처럼 시작 주소를 바로 읽을 수 있게(느린 CI에서 빈 주소로 읽히던 경합).
-        chrome.tabs.create = async (p) => {
-          if (p?.url !== "chrome://newtab/") return realCreate(p);
-          const tab = await realCreate({ ...p, url });
-          for (let i = 0; i < 50; i++) {
-            const t = await chrome.tabs.get(tab.id);
-            if (t.url === url && !t.pendingUrl && t.status === "complete") return t;
-            await new Promise((r) => setTimeout(r, 100));
-          }
-          return tab;
-        };
+      await startTabAt(h, `${h.base2}/`);
+      await h.sw.evaluate(() => {
         globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "결제하기" }, { text: "끝" }];
         globalThis.__toolLog = [];
-      }, `${h.base2}/`);
+      });
       await deliver(h, "상품 A 결제해 줘");
       const [a] = await waitAsk(h);
       expect(a && a.text.includes("'결제하기'") && a.text.includes(`페이지: ${h.base2}`), `클릭 질문(${a?.text})`);
@@ -414,7 +495,7 @@ export default [
       await deliver(h, "결제 진행 눌러 줘");
       await waitReply(h);
       const log = await toolLog(h);
-      expect((await asks(h)).length === 0 && log.includes("click_element:remote_needs_approval"), `잘린 표제는 묻지 않음(${log.join(",")})`);
+      expect((await asks(h)).length === 0 && log.includes("click_element:remote_task_not_confirmed"), `잘린 표제는 묻지 않음(${log.join(",")})`);
 
       // 공백이 길어 순회 한도에서 멈춘 행(뒤쪽 금액이 빠짐)도 잘린 것으로 본다.
       await deliver(h, "/new");
@@ -427,7 +508,7 @@ export default [
       await deliver(h, "결제 확정 눌러 줘");
       await waitReply(h);
       const log2 = await toolLog(h);
-      expect((await asks(h)).length === 0 && log2.includes("click_element:remote_needs_approval"), `순회가 멈춘 행은 묻지 않음(${log2.join(",")})`);
+      expect((await asks(h)).length === 0 && log2.includes("click_element:remote_task_not_confirmed"), `순회가 멈춘 행은 묻지 않음(${log2.join(",")})`);
 
       // 앞쪽 공백만으로 한도에 닿아 행 문맥이 비어도 잘린 것으로 본다.
       await deliver(h, "/new");
@@ -440,7 +521,7 @@ export default [
       await deliver(h, "최종 결제 눌러 줘");
       await waitReply(h);
       const log3 = await toolLog(h);
-      expect((await asks(h)).length === 0 && log3.includes("click_element:remote_needs_approval"), `비어 있는 잘린 문맥도 묻지 않음(${log3.join(",")})`);
+      expect((await asks(h)).length === 0 && log3.includes("click_element:remote_task_not_confirmed"), `비어 있는 잘린 문맥도 묻지 않음(${log3.join(",")})`);
 
       // 행 밖 표제(aria-labelledby)가 잘린 채 비어도 잘린 것으로 본다.
       await deliver(h, "/new");
@@ -453,7 +534,31 @@ export default [
       await deliver(h, "바로 구매 눌러 줘");
       await waitReply(h);
       const log4 = await toolLog(h);
-      expect((await asks(h)).length === 0 && log4.includes("click_element:remote_needs_approval"), `잘린 빈 표제도 묻지 않음(${log4.join(",")})`);
+      expect((await asks(h)).length === 0 && log4.includes("click_element:remote_task_not_confirmed"), `잘린 빈 표제도 묻지 않음(${log4.join(",")})`);
+
+      // 맡기면(원래 문제: 원격 질문을 만들 수 없는 대상) 더 묻지 않고 누른다. 질문·모델 요청에 편집 영역 글자는 없다.
+      await deliver(h, "/new");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.sent = [];
+        globalThis.__tg.asks = [];
+        globalThis.__modelReqs = [];
+        globalThis.__steps = [
+          { tool: "confirm_task", args: { summary: "결제 진행 누르기", risks: ["결제"] } },
+          { tool: "find_clickables", args: {} },
+          { click: "결제 진행" },
+          { text: "눌렀습니다" },
+        ];
+        globalThis.__toolLog = [];
+      });
+      await deliver(h, "결제 진행 눌러 줘");
+      const [t] = await waitAsk(h);
+      await press(h, t.yes);
+      const done = await waitReply(h);
+      const log5 = await toolLog(h);
+      expect(done[0] === "눌렀습니다" && log5.includes("click_element:ok") && (await asks(h)).length === 1, `맡긴 뒤 누름(${log5.join(",")} / ${JSON.stringify(done)})`);
+      expect((await tabTitles(h)).includes("눌림2"), "잘린 표제 대상이 눌림");
+      const leaked = await h.sw.evaluate(() => JSON.stringify(globalThis.__modelReqs).includes("비밀 메모") || JSON.stringify(globalThis.__tg.asks).includes("비밀 메모"));
+      expect(!leaked, "편집 영역 글자는 모델·텔레그램으로 가지 않음");
     },
   },
   {
