@@ -75,7 +75,15 @@ export function VoiceInputField({ settings, stored, onPatch }: Props) {
           {modelField.conflict && (
             <span className="field-help error-text voice-model-conflict">
               다른 곳에서 모델이 바뀌었습니다. 이 칸을 다시 고치면 이 칸의 모델로 저장합니다.{" "}
-              <button type="button" className="link-btn" onClick={modelField.reset}>
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  // 아직 보내지 않은 이 칸의 저장도 저장된 값으로 덮는다(되돌린 초안이 나중에 저장되지 않게).
+                  modelField.reset();
+                  onPatch({ voiceInput: { models: { [provider]: stored.voiceInput.models[provider] ?? "" } } });
+                }}
+              >
                 저장된 모델로 되돌리기
               </button>
             </span>

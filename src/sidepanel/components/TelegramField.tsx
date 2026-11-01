@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
+import { useLatestGate } from "../hooks/syncHelpers";
 
 interface Status {
   hasToken: boolean;
@@ -68,8 +68,19 @@ export function TelegramField() {
   useEffect(() => {
     void request({ kind: "telegram_status" });
   }, [request]);
-  // 다른 화면에서 연결·끊기·설정을 바꾸면(설정 탭을 오래 열어 두어도) 다시 읽는다.
-  useStorageKeys(["telegram"], () => void request({ kind: "telegram_status" }));
+  // 다른 화면에서 연결·끊기·설정을 바꾸면(설정 탭을 오래 열어 두어도) 다시 읽는다. 받기 기록(offset·failures·recent)만 바뀐 것은
+  // 보지 않는다 — 상태 조회가 받기를 다시 시도해 실패 기록이 또 바뀌는 순환을 만들지 않게.
+  useEffect(() => {
+    const fields = ["token", "botName", "chatId", "chatLabel", "connectedAt", "epoch", "notifyRepeat", "askApproval", "status", "pairing"];
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== "local" || !("telegram" in changes)) return;
+      const o = (changes.telegram.oldValue ?? {}) as Record<string, unknown>;
+      const n = (changes.telegram.newValue ?? {}) as Record<string, unknown>;
+      if (fields.some((f) => JSON.stringify(o[f]) !== JSON.stringify(n[f]))) void request({ kind: "telegram_status" });
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
+  }, [request]);
 
   // 확인 코드를 기다리는 동안에는 연결됐는지 몇 초마다 다시 본다.
   useEffect(() => {
