@@ -1,5 +1,7 @@
 import { FieldHelp } from "./FieldHelp";
 import { useEffect, useState } from "react";
+import { ACTION_LOG_KEY, READ_RECIPES_KEY } from "@/lib/messages";
+import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
 
 interface Props {
   enabled: boolean;
@@ -13,15 +15,18 @@ export function ActionLogField({ enabled, onToggle }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   // 지우기·개수 조회가 실패하면 알린다(#130).
+  const gate = useLatestGate();
   const request = async (kind: "action_log_count" | "action_log_clear") => {
+    const latest = gate();
     setError(null);
     try {
       const res = (await chrome.runtime.sendMessage({ kind })) as
         | { ok: boolean; data?: { log: number; recipes: number }; error?: string }
         | undefined;
-      if (res?.ok && res.data) setCount(res.data);
-      else throw new Error(res?.error ?? "응답이 없습니다.");
+      if (!res?.ok || !res.data) throw new Error(res?.error ?? "응답이 없습니다.");
+      if (latest()) setCount(res.data);
     } catch (err) {
+      if (!latest() && kind === "action_log_count") return;
       const why = err instanceof Error ? err.message : String(err);
       setError(kind === "action_log_clear" ? `기록을 지우지 못했습니다(${why}).` : `기록 개수를 읽지 못했습니다(${why}).`);
     }
@@ -30,6 +35,8 @@ export function ActionLogField({ enabled, onToggle }: Props) {
   useEffect(() => {
     void request("action_log_count");
   }, []);
+  // 기록이 쌓이거나 다른 화면에서 지우면 개수를 다시 읽는다(설정 탭을 오래 열어 두어도, #127).
+  useStorageKeys([ACTION_LOG_KEY, READ_RECIPES_KEY], () => void request("action_log_count"));
 
   const clear = async () => {
     setBusy(true);

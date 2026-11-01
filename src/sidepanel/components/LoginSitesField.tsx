@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { LoginSiteOp } from "@/lib/settingsOps";
+import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
 import { hostManifest, KEEPASSXC_HOST } from "@/lib/keepassxc";
 import type { LoginSite } from "@/lib/loginPolicy";
 import { FieldHelp } from "./FieldHelp";
@@ -62,21 +63,34 @@ export function LoginSitesField({ sites }: Props) {
   const guide = platformGuide();
   const manifest = hostManifest(chrome.runtime.id, guide.proxy);
 
+  // 마지막 요청의 응답만 화면에 쓴다(#127).
+  const gate = useLatestGate();
   const run = async (label: string, fn: () => Promise<Status>) => {
+    const latest = gate();
     setBusy(label);
     setError(null);
     try {
-      setStatus(await fn());
+      const next = await fn();
+      if (latest()) setStatus(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (latest() || label !== "status") setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      setBusy((b) => (b === label ? null : b));
     }
   };
 
   useEffect(() => {
     void run("status", () => ask("keepassxc_status"));
+    // 다른 화면에서 연결·잊기를 하거나 선택 권한이 바뀌면 다시 읽는다(설정 탭을 오래 열어 두어도).
+    const onPerm = () => void run("status", () => ask("keepassxc_status"));
+    // (이 버전의 타입 정의에는 removeListener가 빠져 있어 일반 이벤트로 본다.)
+    const events = [chrome.permissions.onAdded, chrome.permissions.onRemoved] as unknown as chrome.events.Event<() => void>[];
+    for (const e of events) e.addListener(onPerm);
+    return () => {
+      for (const e of events) e.removeListener(onPerm);
+    };
   }, []);
+  useStorageKeys(["keepassxcAssociation"], () => void run("status", () => ask("keepassxc_status")));
 
   const grant = () =>
     run("grant", async () => {

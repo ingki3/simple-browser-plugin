@@ -40,13 +40,17 @@ export async function addRule(input: { origin?: unknown; path?: unknown; label?:
 // 고치기·켜기·끄기. 내용이나 켜짐이 바뀌면 버전을 올린다(이미 떠 있는 칩은 실행 때 거절되고 다시 읽는다).
 export async function updateRule(
   id: string,
-  patch: { origin?: unknown; path?: unknown; label?: unknown; request?: unknown; enabled?: unknown },
+  patch: { origin?: unknown; path?: unknown; label?: unknown; request?: unknown; enabled?: unknown; expectVersion?: unknown },
 ): Promise<SuggestionRule[]> {
   const content = patch.origin !== undefined || patch.path !== undefined || patch.label !== undefined || patch.request !== undefined;
   return enqueue(async () => {
     const list = await load();
     const hit = list.find((r) => r.id === id);
     if (!hit) throw new Error("제안을 찾을 수 없습니다.");
+    // 고치기 화면이 열린 동안 다른 곳에서 그 규칙을 바꿨으면 받지 않는다(옛 초안이 최신 내용을 덮지 않게, #127).
+    if (typeof patch.expectVersion === "number" && patch.expectVersion !== hit.version) {
+      throw new Error("이 제안이 다른 곳에서 바뀌었습니다. 취소하고 다시 고쳐 주세요.");
+    }
     if (content) {
       const n = normalizeRuleInput({
         origin: patch.origin ?? hit.origin,

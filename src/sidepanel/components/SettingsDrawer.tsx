@@ -2,6 +2,8 @@ import { McpField } from "./McpField";
 import { TelegramField } from "./TelegramField";
 import { RepeatTasksField } from "./RepeatTasksField";
 import { useEffect, useRef, useState } from "react";
+import { useLatestGate, useStorageKeys, useSyncedDraft } from "../hooks/syncHelpers";
+import { GOOGLE_AUTH_VERSION_KEY } from "@/lib/googleAuthKey";
 import { ActionLogField } from "./ActionLogField";
 import { RunModeField } from "./RunModeField";
 import { RememberPagesField } from "./RememberPagesField";
@@ -127,7 +129,10 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [savedAt, setSavedAt] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
   const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
-  const [keyDraft, setKeyDraft] = useState(savedKey);
+  // 키 칸은 저장 값과 편집 초안을 나눈다(#127): 고치지 않은 칸은 다른 곳에서 저장한 키를 따라가고, 고치는 중이면 초안을 두고 알린다.
+  // 제공자를 바꾸거나 서랍을 열면 그 제공자의 저장된 키로 새로 시작한다.
+  const keyField = useSyncedDraft(savedKey, `${draft.provider}:${open ? 1 : 0}`);
+  const keyDraft = keyField.value;
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
   const [googleBusy, setGoogleBusy] = useState<"connect" | "disconnect" | null>(null);
   const [googleError, setGoogleError] = useState<string | null>(null);
@@ -150,12 +155,6 @@ export function SettingsDrawer({ open, onClose }: Props) {
   useEffect(() => {
     if (loaded) setDraft(mergeSettingsPatch(mergeSettingsPatch(settings, inflight.current ?? {}), dirty.current));
   }, [loaded, settings, open, syncTick]);
-  // 제공자를 바꾸거나 서랍을 열 때만 키 칸을 그 제공자의 저장된 키로(저장 알림이 입력 중인 키를 되돌리지 않게).
-  const savedKeyRef = useRef(savedKey);
-  savedKeyRef.current = savedKey;
-  useEffect(() => {
-    setKeyDraft(savedKeyRef.current);
-  }, [draft.provider, open, loaded]);
 
   // "저장됨"은 잠깐만 보인다.
   useEffect(() => {
@@ -213,8 +212,10 @@ export function SettingsDrawer({ open, onClose }: Props) {
       // 닫히는 중이라 결과를 보일 수 없다. 실패하면 다음에 열 때 저장된 값이 보인다(옛 변경을 다시 넣지 않는다).
       void savePatch(patch.maxToolHops !== undefined ? { ...patch, maxToolHops: clampHops(patch.maxToolHops) } : patch).catch(() => {});
     };
+    // 숨겨지기만 한 화면(탭 전환·패널 숨김)은 살아 있으니 일반 저장으로 보내 저장 중 상태·오류를 그대로 추적한다(#127 — 돌아오면
+    // 실패가 보이게). 문서가 사라지는 pagehide만 결과를 볼 수 없는 최선 노력 저장이다.
     const onHide = () => {
-      if (document.visibilityState === "hidden") now();
+      if (document.visibilityState === "hidden") void flush();
     };
     window.addEventListener("pagehide", now);
     document.addEventListener("visibilitychange", onHide);
@@ -249,16 +250,21 @@ export function SettingsDrawer({ open, onClose }: Props) {
     setCheck(null);
   }, [draft.provider, savedKey, checkedModel]);
 
-  const saveKey = () =>
+  const saveKey = () => {
+    keyField.commit();
     update(direct ? { apiKeys: { [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
+  };
 
+  // 연결 상태는 chrome.identity에만 있다: 열 때, 화면이 다시 보일 때, 다른 화면이 연결·해제했을 때 다시 읽고, 늦게 온 옛 응답은 버린다(#127).
+  const googleGate = useLatestGate();
   const refreshGoogleStatus = async () => {
+    const latest = googleGate();
     try {
       const res = (await chrome.runtime.sendMessage({ kind: "google_status" })) as {
         ok: boolean;
         data?: GoogleStatus;
       };
-      if (res?.ok && res.data) setGoogleStatus(res.data);
+      if (res?.ok && res.data && latest()) setGoogleStatus(res.data);
     } catch {
       /* ignore */
     }
@@ -267,6 +273,16 @@ export function SettingsDrawer({ open, onClose }: Props) {
   useEffect(() => {
     if (open) refreshGoogleStatus();
   }, [open]);
+  useStorageKeys([GOOGLE_AUTH_VERSION_KEY], () => {
+    if (open) void refreshGoogleStatus();
+  });
+  useEffect(() => {
+    const onVisible = () => {
+      if (open && document.visibilityState === "visible") void refreshGoogleStatus();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  });
 
   const connectGoogle = async () => {
     setGoogleBusy("connect");
@@ -407,7 +423,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 <input
                   type={showKey ? "text" : "password"}
                   value={keyDraft}
-                  onChange={(e) => setKeyDraft(e.target.value)}
+                  onChange={(e) => keyField.set(e.target.value)}
                   placeholder={direct ? direct.keyPlaceholder : "sk-or-v1-..."}
                   autoComplete="off"
                   spellCheck={false}
@@ -419,6 +435,14 @@ export function SettingsDrawer({ open, onClose }: Props) {
                   저장
                 </button>
               </div>
+              {keyField.conflict && (
+                <span className="field-help error-text key-conflict">
+                  다른 곳에서 키가 바뀌었습니다. 저장하면 이 칸의 키로 덮어씁니다.{" "}
+                  <button type="button" className="link-btn" onClick={keyField.reset}>
+                    저장된 키로 되돌리기
+                  </button>
+                </span>
+              )}
               <FieldHelp summary={keyDraft.trim() !== savedKey ? "바꾼 키는 저장을 눌러야 적용됩니다." : direct ? direct.keyHelp : "openrouter.ai/keys에서 발급합니다."}>
                 키는 이 브라우저(chrome.storage.local)에만 평문으로 저장되고, 그 제공자를 부를 때만 씁니다.
               </FieldHelp>
@@ -502,7 +526,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
             <QuickThinkingField enabled={draft.quickThinking} onToggle={(quickThinking) => update({ quickThinking })} />
             <ManualSitesField sites={settings.manualSites} currentTabButton />
             <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
-            <VoiceInputField settings={draft} onPatch={update} />
+            <VoiceInputField settings={draft} stored={settings} onPatch={update} />
           </details>
 
           <details className="settings-group">
