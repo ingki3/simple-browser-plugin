@@ -3,9 +3,10 @@ import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/me
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
 import { applySettingsPatch, invalidateSettingsCache } from "./storage";
-import { deletePages, draftLink, listPages, rememberCurrentPage, savePage, updateLink } from "./savedPagesStore";
+import { deletePages, draftLink, listPages, rememberCurrentPage, rememberedFor, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
 import { handleHistoryPickPort, HISTORY_PICK_PORT } from "./historyPickStore";
+import { VOICE_PORT, handleVoicePort } from "./voice";
 import { addRule, checkSuggestionRun, deleteRule, listRules, updateRule } from "./pageSuggestStore";
 import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
@@ -54,6 +55,12 @@ chrome.runtime.onConnect.addListener((port) => {
   // 방문 기록에서 기억할 페이지 찾기(#175): 이 확장의 화면(설정)에서 연 연결만.
   if (port.name === HISTORY_PICK_PORT) {
     if (port.sender?.id === chrome.runtime.id && port.sender.url?.startsWith(chrome.runtime.getURL(""))) handleHistoryPickPort(port);
+    else port.disconnect();
+    return;
+  }
+  // 음성 입력(#184): 패널에서 연 연결만.
+  if (port.name === VOICE_PORT) {
+    if (port.sender?.id === chrome.runtime.id && port.sender.url?.startsWith(chrome.runtime.getURL(""))) handleVoicePort(port);
     else port.disconnect();
     return;
   }
@@ -252,8 +259,10 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
         : m.kind === "remember_current_page"
           ? rememberCurrentPage(p.windowId, { tabId: p.tabId, url: p.url })
           : m.kind === "current_tab_info"
-            ? // 패널 버튼 표시용(실행 때 다시 확인한다). 시크릿 창·활성 탭 없음이면 null.
-              panelTarget(p.windowId).catch(() => null)
+            ? // 패널 버튼 표시용(실행 때 다시 확인한다). 시크릿 창·활성 탭 없음이면 null. remembered: 이미 기억한 페이지(#191).
+              panelTarget(p.windowId)
+                .then(async (t) => ({ ...t, remembered: t.web ? await rememberedFor(t.url) : null }))
+                .catch(() => null)
             : m.kind === "saved_link_draft"
               ? draftLink(String(p.offerId ?? ""))
               : m.kind === "saved_link_update"

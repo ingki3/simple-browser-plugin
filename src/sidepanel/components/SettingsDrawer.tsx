@@ -52,10 +52,13 @@ import {
   MAX_SYSTEM_PROMPT_LENGTH,
   MIN_MAX_TOOL_HOPS,
   type Settings,
+  type SettingsPatch,
 } from "@/lib/messages";
 import { useSettings } from "../hooks/useSettings";
 import { FieldHelp } from "./FieldHelp";
 import { mergeSettingsPatch } from "@/lib/settings";
+import { mergeVoicePatch } from "@/lib/voice";
+import { VoiceInputField } from "./VoiceInputField";
 
 const SAVE_DELAY_MS = 600;
 const CUSTOM_MODEL = "__custom__";
@@ -77,13 +80,14 @@ const TRANSLATION_LANGS: ReadonlyArray<readonly [string, string]> = [
   ["pt", "포르투갈어"],
 ];
 
-// 두 patch를 합친다(제공자별 키·모델은 한 단계 더).
-function mergePatch(a: Partial<Settings>, b: Partial<Settings>): Partial<Settings> {
+// 두 patch를 합친다(제공자별 키·모델, 음성 입력의 하위 필드는 한 단계 더).
+function mergePatch(a: SettingsPatch, b: SettingsPatch): SettingsPatch {
   return {
     ...a,
     ...b,
     ...(a.apiKeys || b.apiKeys ? { apiKeys: { ...a.apiKeys, ...b.apiKeys } } : {}),
     ...(a.providerModels || b.providerModels ? { providerModels: { ...a.providerModels, ...b.providerModels } } : {}),
+    ...(a.voiceInput || b.voiceInput ? { voiceInput: mergeVoicePatch(a.voiceInput, b.voiceInput) } : {}),
   };
 }
 import { KO } from "../i18n/ko";
@@ -114,8 +118,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
   // API 키만 "저장" 버튼으로 확정한다(keyDraft).
   // 저장 상태: dirty(아직 보내지 않은 변경)와 inflight(저장 중인 변경). 저장은 한 번에 하나씩만 보낸다 — 실패한 옛 변경이
   // 나중 변경을 되돌리거나, 늦게 온 저장 알림이 최신 입력을 덮지 않게.
-  const dirty = useRef<Partial<Settings>>({});
-  const inflight = useRef<Partial<Settings> | null>(null);
+  const dirty = useRef<SettingsPatch>({});
+  const inflight = useRef<SettingsPatch | null>(null);
   const timer = useRef(0);
   const saving = useRef<Promise<boolean> | null>(null);
   // 저장이 끝날 때마다 화면을 저장소의 확정 값(범위로 고친 값 포함)으로 다시 맞춘다.
@@ -192,7 +196,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
     return saving.current;
   };
   // patch를 반영하고 저장한다. delay가 있으면 그동안 다음 변경을 모아 한 번에 저장한다.
-  const update = (patch: Partial<Settings>, delay = 0) => {
+  const update = (patch: SettingsPatch, delay = 0) => {
     setDraft((cur) => mergeSettingsPatch(cur, patch));
     dirty.current = mergePatch(dirty.current, patch);
     window.clearTimeout(timer.current);
@@ -498,6 +502,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
             <QuickThinkingField enabled={draft.quickThinking} onToggle={(quickThinking) => update({ quickThinking })} />
             <ManualSitesField sites={draft.manualSites} onChange={(manualSites) => update({ manualSites })} currentTabButton />
             <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
+            <VoiceInputField settings={draft} onPatch={update} />
           </details>
 
           <details className="settings-group">

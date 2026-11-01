@@ -47,6 +47,8 @@ export interface SavedLink {
 
 // 사용자 결정(#86): 저장 링크는 최대 20개, 넘으면 가장 오랫동안 쓰지 않은 링크를 지운다. 후보도 전부(최대 20개) 준다.
 export const MAX_LINKS = 20;
+// chrome.storage.local의 저장 링크 키(백그라운드가 쓰고, 패널은 바뀜만 듣는다 — #191).
+export const SAVED_PAGES_KEY = "savedPages";
 export const MAX_NAME = 80;
 export const MAX_PURPOSE = 200;
 export const MAX_SLOT_KEY = 30;
@@ -206,6 +208,105 @@ export function evictionPreview(list: readonly SavedLink[], template: LinkTempla
   const key = templateText(template);
   if (list.some((l) => templateText(l.template) === key)) return null;
   return list.length >= MAX_LINKS ? leastRecentlyUsed(list) : null;
+}
+
+// 이미 기억한 페이지인지(#191): 주소가 저장 링크로 만들 수 있는 주소인지(fillLink가 만드는 모양) 구조로만 본다. 출처+경로·해시가 같고,
+// 고정 값은 주소에 적힌 그대로 있고, 남은 쿼리 값은 같은 키의 자리에 하나씩 맞는다. 같은 이름의 자리는 같은 값이어야 하고, 선택 자리는
+// 그 이름의 쿼리 값이 모두 빠졌을 때만 생략으로 본다. 템플릿에 없는 쿼리 값(저장 때 뺀 값일 수 있음)이 있으면 맞지 않는다고 본다 —
+// 판정이 어려우면 "기억하지 않음"(버튼이 보임) 쪽으로 둔다. 표시·안내에만 쓰고 승인·자동 실행에는 쓰지 않는다.
+const MATCH_PARAMS_MAX = 30;
+// 배정 탐색의 전체 단계 상한(서비스 워커에서 동기로 돈다). 넘으면 맞지 않는다고 본다(버튼이 보이는 쪽).
+const MATCH_STEPS_MAX = 5000;
+
+export function matchesTemplate(url: string, link: Pick<SavedLink, "template" | "slots">): boolean {
+  const parts = splitUrl(url);
+  const t = link.template;
+  if (!parts || parts.base !== t.base || parts.hash !== t.hash) return false;
+  if (parts.params.length > MATCH_PARAMS_MAX) return false;
+  const rest = [...parts.params];
+  for (const p of t.params) {
+    if (p.slot !== undefined) continue;
+    const i = rest.findIndex((u) => u.rawKey === p.key && (p.bare ? u.bare : !u.bare && u.rawValue === (p.value ?? "")));
+    if (i < 0) return false;
+    rest.splice(i, 1);
+  }
+  const slotParams = t.params.filter((p) => p.slot !== undefined);
+  const optional = new Set(link.slots.filter((s) => s.optional).map((s) => s.key));
+  const optionalNames = [...new Set(slotParams.map((p) => p.slot as string).filter((n) => optional.has(n)))];
+  // 마지막 확인: 배정한 값으로 fillLink가 실제로 만드는 주소의 쿼리 값(적힌 그대로)이 지금 주소와 같아야 한다(순서 무시).
+  // 해독에 실패한 값·다른 인코딩(+, 소문자 %xx) 등 다시 인코딩하면 달라지는 값은 여기서 걸러진다.
+  const want = queryMultiset(parts.params);
+  const reproduces = (values: Map<string, string>): boolean => {
+    try {
+      const made = splitUrl(fillLink(link as SavedLink, Object.fromEntries(values)));
+      return !!made && made.base === parts.base && made.hash === parts.hash && sameMultiset(queryMultiset(made.params), want);
+    } catch {
+      return false;
+    }
+  };
+  const budget = { steps: MATCH_STEPS_MAX };
+  for (let mask = 0; mask < 1 << optionalNames.length; mask++) {
+    const omitted = new Set(optionalNames.filter((_, i) => mask & (1 << i)));
+    const used = slotParams.filter((p) => !omitted.has(p.slot as string));
+    if (used.length === rest.length && assignSlots(used, rest, 0, new Set(), new Map(), budget, reproduces)) return true;
+    if (budget.steps <= 0) return false;
+  }
+  return false;
+}
+
+// 자리 쿼리 값(템플릿 순서)마다 같은 키의 남은 주소 값을 하나씩 배정한다(되돌아가며). fillLink는 자리 값을 비우지 않고(앞뒤 공백 제거)
+// 이름=값으로 쓰므로, 이름만 있거나 빈 값은 자리 값이 될 수 없다. 같은 이름의 자리는 같은 값(읽은 글자)이어야 한다.
+// 같은 키·같은 값의 주소 값은 어느 것을 골라도 결과가 같으므로 한 단계에서 한 번만 시도한다(중복 쿼리의 순열 폭증 방지).
+function assignSlots(
+  slots: TemplateParam[],
+  values: UrlParam[],
+  i: number,
+  taken: Set<number>,
+  byName: Map<string, string>,
+  budget: { steps: number },
+  done: (values: Map<string, string>) => boolean,
+): boolean {
+  if (i === slots.length) return done(byName);
+  if (--budget.steps <= 0) return false;
+  const p = slots[i];
+  const name = p.slot as string;
+  const tried = new Set<string>();
+  for (let j = 0; j < values.length; j++) {
+    const u = values[j];
+    // fillLink가 넣을 수 있는 값만(비지 않음·앞뒤 공백 없음·MAX_SLOT_VALUE자 이하).
+    if (taken.has(j) || u.rawKey !== p.key || u.bare || !u.value.trim() || u.value !== u.value.trim() || u.value.length > MAX_SLOT_VALUE) continue;
+    if (tried.has(u.value)) continue;
+    tried.add(u.value);
+    const prev = byName.get(name);
+    if (prev !== undefined && prev !== u.value) continue;
+    taken.add(j);
+    if (prev === undefined) byName.set(name, u.value);
+    if (assignSlots(slots, values, i + 1, taken, byName, budget, done)) return true;
+    if (budget.steps <= 0) return false;
+    taken.delete(j);
+    if (prev === undefined) byName.delete(name);
+  }
+  return false;
+}
+
+function queryMultiset(params: readonly UrlParam[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of params) {
+    const k = p.bare ? p.rawKey : `${p.rawKey}=${p.rawValue}`;
+    m.set(k, (m.get(k) ?? 0) + 1);
+  }
+  return m;
+}
+
+function sameMultiset(a: Map<string, number>, b: Map<string, number>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, n] of a) if (b.get(k) !== n) return false;
+  return true;
+}
+
+// 주소가 들어맞는 첫 저장 링크(없으면 null).
+export function rememberedLinkFor(url: string, list: readonly SavedLink[]): SavedLink | null {
+  return list.find((l) => matchesTemplate(url, l)) ?? null;
 }
 
 // 지난 저장 항목의 고정 id(옮길 때 다시 읽어도 같게).

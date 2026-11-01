@@ -22,6 +22,38 @@ const LONG = `<title>긴</title><main><ul>${Array.from({ length: 12 }, (_, i) =>
 const BIG = `<title>큰</title><nav>${Array.from({ length: 3100 }, (_, i) => `<a href="/n/${i}">링크${i}</a>`).join(" ")}</nav><main><ul>${Array.from({ length: 3 }, (_, i) => product(i)).join("")}</ul><p id=out></p></main>`;
 const OPTIONS = `<title>옵션</title><main><button aria-haspopup=listbox aria-expanded=true aria-controls=lb>색상</button><ul role=listbox id=lb>${["빨강", "파랑", "검정"].map((c) => `<li role=option>${c}</li>`).join("")}</ul><p id=out></p></main>`;
 
+
+// #164: 자기 상자가 없는(display:contents) 항목. 항목마다 400px 높이 블록이라 위쪽 몇 개만 화면 안.
+const CONTENTS = `<title>컨텐츠</title><main><ul>${Array.from({ length: 12 }, (_, i) => `<li style="display:contents"><a href="/d/${i}" style="display:block;height:400px">상품${i}</a><span>${5000 + i}원</span></li>`).join("")}</ul><p id=out></p></main>`;
+// 숨긴 자식(opacity:0 감싼 링크·visibility:hidden 글자)만 화면 위쪽에 있고 보이는 링크는 화면 밖.
+const HIDDEN_KIDS = `<title>숨김</title><main><ul>${Array.from({ length: 3 }, (_, i) => `<li style="display:contents"><div style="opacity:0;position:absolute;top:${10 + i * 20}px"><a href="/h/${i}">숨은상품${i}</a></div><span style="visibility:hidden;position:absolute;top:${100 + i * 20}px">숨김글${i}</span><a href="/v/${i}" style="display:block;margin-top:3000px">상품${i}</a></li>`).join("")}</ul><p id=out></p></main>`;
+// 직접 글자만 화면 안(링크는 화면 밖).
+const DIRECT_TEXT = `<title>직접</title><main><ul>${Array.from({ length: 3 }, (_, i) => `<li style="display:contents">직접글자${i} <a href="/t/${i}" style="display:block;margin-top:3000px">상품${i}</a></li>`).join("")}</ul><p id=out></p></main>`;
+// 긴 주소: data: 3,000자대, 긴 사용자 정의 scheme, 같은 출처 2,500자대 https(누를 수 있음).
+const LONG_HREF = `<title>긴주소</title><main><ul>
+  <li><a href="data:text/plain,${"x".repeat(3000)}">긴데이터</a><span>1원</span></li>
+  <li><a href="${"a".repeat(20000)}:x">이상한</a><span>2원</span></li>
+  <li><a id=go href="/go?q=${"y".repeat(2500)}">긴이동</a><span>3원</span></li>
+  <li><a href="/short">짧은</a><span>4원</span></li>
+</ul><p id=out></p></main>`;
+// 첫 항목 예산: 주소가 정확히 2,000자인 대상 8개 + 긴 이름(항목 12개). 주소는 출처에 맞춰 스크립트로 만든다.
+const BUDGET = `<title>예산</title><main><ul id=u></ul><p id=out></p></main><script>
+  const u = document.getElementById("u");
+  for (let i = 0; i < 12; i++) {
+    const li = document.createElement("li");
+    for (let k = 0; k < 8; k++) {
+      const a = document.createElement("a");
+      const head = location.origin + "/b" + i + "-" + k + "?q=";
+      a.href = head + "z".repeat(2000 - head.length);
+      a.textContent = "대상" + i + "-" + k + " " + "이름".repeat(90);
+      li.append(a);
+    }
+    u.append(li);
+  }
+</script>`;
+
+// 같은 출처 iframe 안의 display:contents 항목(제목 span만 화면 안, 링크는 화면 밖).
+const IFRAME_CONTENTS = `<title>프레임</title><main><iframe style="width:600px;height:300px" srcdoc='<ul>${Array.from({ length: 3 }, (_, i) => `<li style="display:contents"><span>제목${i}</span><a href="/f/${i}" style="display:block;margin-top:3000px">상품${i}</a></li>`).join("")}</ul>'></iframe><p id=out></p></main>`;
 const clear = (h) => h.sw.evaluate(() => { globalThis.__modelReqs = []; });
 const modelReqText = (h) => h.sw.evaluate(() => JSON.stringify(globalThis.__modelReqs ?? []));
 
@@ -230,6 +262,104 @@ export default [
     async run(h) {
       const res = okResult(await h.turn([items(), { text: "끝" }], { path: "/sh" }), "find_clickables");
       expect(res.items.length === 4 && res.items[2].text.includes("3002원"), `섀도 항목(${JSON.stringify(res).slice(0, 300)})`);
+    },
+  },
+  {
+    name: "#164 display:contents 항목: 화면 위쪽 항목만 onlyViewport로 찾고 inViewport가 맞다",
+    pages: { "/dc": CONTENTS },
+    async run(h) {
+      const all = okResult(await h.turn([items({ limit: 60 }), { text: "끝" }], { path: "/dc" }), "find_clickables");
+      expect(all.items.length === 12, `항목 12(${all.items.length})`);
+      expect(all.items[0].inViewport === true && all.items[11].inViewport === false, `첫 항목만 화면 안(${all.items.map((x) => x.inViewport).join(",")})`);
+      const vis = okResult(await h.turn([items({ onlyViewport: true }), { text: "끝" }], { path: "/dc" }), "find_clickables");
+      expect(vis.items.length > 0 && vis.items.length < 12 && vis.items[0].text.includes("5000원"), `화면 안만(${vis.items.length})`);
+    },
+  },
+  {
+    name: "#164 display:contents 항목: 숨긴 자식만 화면 안이면 화면 밖, 직접 글자가 화면 안이면 화면 안",
+    pages: { "/hk": HIDDEN_KIDS, "/dt": DIRECT_TEXT },
+    async run(h) {
+      const hk = okResult(await h.turn([items({ limit: 60 }), { text: "끝" }], { path: "/hk" }), "find_clickables");
+      const prods = hk.items.filter((x) => x.targets.some((t) => t.text.startsWith("상품")));
+      expect(prods.length === 3 && prods.every((x) => x.inViewport === false), `숨긴 자식은 세지 않음(${JSON.stringify(hk.items.map((x) => [x.text, x.inViewport]))})`);
+      const hv = okResult(await h.turn([items({ onlyViewport: true }), { text: "끝" }], { path: "/hk" }), "find_clickables");
+      expect(hv.items.length === 0, `onlyViewport 0(${hv.items.length})`);
+      const dt = okResult(await h.turn([items({ onlyViewport: true }), { text: "끝" }], { path: "/dt" }), "find_clickables");
+      expect(dt.items.length >= 1 && dt.items[0].text.includes("직접글자0"), `직접 글자 항목(${JSON.stringify(dt.items.map((x) => x.text))})`);
+    },
+  },
+  {
+    name: "#164 긴 주소: list·items 모두 href를 비우고 hrefTooLong(길이·짧은 scheme만)과 안내, 그 대상은 id로 누른다",
+    pages: { "/lh": LONG_HREF, "/go": "<title>도착</title><p>도착</p>" },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([{ tool: "find_clickables", args: {} }, { click: "긴이동" }, { text: "끝" }], { path: "/lh" });
+      const res = lastTool(r, "find_clickables").result;
+      const list = res.items;
+      const by = (t) => list.find((x) => x.text === t);
+      expect(by("긴데이터")?.href === "" && by("긴데이터").hrefTooLong?.scheme === "data:" && by("긴데이터").hrefTooLong.length > 3000, `data(${JSON.stringify(by("긴데이터")?.hrefTooLong)})`);
+      expect(by("이상한")?.href === "" && by("이상한").hrefTooLong && !("scheme" in by("이상한").hrefTooLong), `긴 scheme 생략(${JSON.stringify(by("이상한")?.hrefTooLong)})`);
+      expect(by("짧은")?.href.endsWith("/short") && !by("짧은").hrefTooLong, "짧은 주소는 그대로");
+      expect(String(res.note ?? "").includes("주소가 너무 긴") && res.note.includes("3개"), `안내(${res.note})`);
+      expect(JSON.stringify(res).length < 4000, `결과가 작다(${JSON.stringify(res).length})`);
+      okResult(r, "click_element");
+      expect(r.url.includes("/go?q=yyy"), `원래 주소로 이동(${r.url.slice(0, 80)})`);
+      const it = okResult(await h.turn([items(), { text: "끝" }], { path: "/lh" }), "find_clickables");
+      const ts = it.items.flatMap((x) => x.targets);
+      expect(ts.filter((t) => t.hrefTooLong).length === 3 && ts.every((t) => t.href.length <= 2000), `items도(${JSON.stringify(ts.map((t) => t.hrefTooLong ?? t.href.length))})`);
+      expect(String(it.note ?? "").includes("주소가 너무 긴"), `items 안내(${it.note})`);
+    },
+  },
+  {
+    name: "#164 첫 항목이 예산을 넘으면 대상을 줄이고 moreTargets에 더하며, 다음 항목은 누적 예산으로",
+    pages: { "/bg": BUDGET },
+    async run(h) {
+      const res = okResult(await h.turn([items({ limit: 60 }), { text: "끝" }], { path: "/bg" }), "find_clickables");
+      const first = res.items[0];
+      expect(first && first.targets.length >= 1 && first.targets.length < 8, `첫 항목 대상 축소(${first?.targets.length})`);
+      expect(first.moreTargets === 8 - first.targets.length, `moreTargets(${first.moreTargets})`);
+      expect(first.targets.every((t) => t.href.length === 2000 && !t.hrefTooLong), "정확히 2,000자는 그대로");
+      const size = (it) => it.text.length + it.targets.reduce((n, t) => n + t.text.length + t.href.length + t.role.length, 0);
+      expect(size(first) <= 16000, `첫 항목 예산 안(${size(first)})`);
+      expect(res.items.length === 1 && res.omittedItems === 11, `다음 항목은 누적 예산으로 뺌(${res.items.length}/${res.omittedItems})`);
+    },
+  },
+  {
+    name: "#164 긴 주소 대상: 찾은 뒤·카드가 뜬 뒤 같은 길이의 다른 주소로 바뀌면 누르지 않는다",
+    pages: { "/lh": LONG_HREF, "/go": "<title>도착</title><p>도착</p>" },
+    async run(h) {
+      const swap = () =>
+        h.tab.evaluate(() => {
+          const a = document.getElementById("go");
+          a.href = a.getAttribute("href").replace(/y/g, "w");
+        });
+      await h.settings({ runMode: "auto" });
+      const turn = h.turn([{ tool: "find_clickables", args: {} }, { click: "긴이동", delayMs: 600 }, { text: "끝" }], { path: "/lh" });
+      for (let i = 0; i < 50 && !(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).some((t) => t.name === "find_clickables"))); i++) await h.tab.waitForTimeout(100);
+      await swap();
+      let r = await turn;
+      let c = lastTool(r, "click_element");
+      expect(c && c.error && !r.url.includes("/go"), `찾은 뒤 바뀜(${JSON.stringify(c?.error)})`);
+      await h.settings({ runMode: "ask" });
+      r = await h.turn([{ tool: "find_clickables", args: {} }, { click: "긴이동" }, { text: "끝" }], {
+        path: "/lh",
+        onCard: async (card) => {
+          await swap();
+          await card.locator(".btn-approve").click();
+        },
+      });
+      c = lastTool(r, "click_element");
+      expect(c && c.error && !r.url.includes("/go"), `카드 뒤 바뀜(${JSON.stringify(c?.error)})`);
+    },
+  },
+  {
+    name: "#164 같은 출처 iframe 안의 display:contents 항목도 자식 상자로 화면 판정",
+    pages: { "/if": IFRAME_CONTENTS },
+    async run(h) {
+      await h.tab.waitForTimeout(300);
+      const res = okResult(await h.turn([items({ onlyViewport: true }), { text: "끝" }], { path: "/if" }), "find_clickables");
+      // 첫 항목의 제목만 화면 안(뒤 항목은 앞 링크의 margin 아래). instanceof로 판정하면 0개였다.
+      expect(res.items.length === 1 && res.items[0].text.includes("제목0") && res.items[0].inViewport, `iframe 항목(${JSON.stringify(res.items.map((x) => [x.text, x.inViewport]))})`);
     },
   },
 ];

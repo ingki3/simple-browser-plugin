@@ -1614,3 +1614,46 @@ body,
   flex-direction: column;
   gap: 2px;
 }
+
+/* 음성 입력(#184) */
+.composer-btn.mic {
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 0 10px;
+  font-size: 16px;
+}
+
+.composer-btn.mic.live {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+
+.voice-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.voice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error);
+  animation: voice-blink 1s infinite;
+}
+
+@keyframes voice-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.voice-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--error);
+}

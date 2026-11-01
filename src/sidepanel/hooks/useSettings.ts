@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { SETTINGS_KEY, type Settings } from "@/lib/messages";
+import { SETTINGS_KEY, type Settings, type SettingsPatch } from "@/lib/messages";
 import { DEFAULT_SETTINGS, normalizeSettings, settingsForStorage } from "@/lib/settings";
 
 export function useSettings() {
@@ -32,7 +32,7 @@ export function useSettings() {
   }, []);
 
   // 바꾼 필드만 최신 설정에 합쳐 저장한다(#99). 합치기·쓰기는 백그라운드가 차례로 해 여러 패널의 저장이 겹쳐도 서로 덮지 않는다.
-  const savePatch = useCallback(async (patch: Partial<Settings>) => {
+  const savePatch = useCallback(async (patch: SettingsPatch) => {
     const res = (await chrome.runtime.sendMessage({ kind: "settings_patch", patch })) as { ok?: boolean; error?: string } | undefined;
     if (!res?.ok) throw new Error(res?.error ?? "설정을 저장하지 못했습니다.");
   }, []);

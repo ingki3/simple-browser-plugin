@@ -45,8 +45,8 @@ export default defineConfig({
     target: "es2022",
     sourcemap: true,
     rollupOptions: {
-      // manifest에 적지 않는 페이지. read_document가 chrome.offscreen으로 연다.
-      input: { offscreen: "src/offscreen/index.html" },
+      // manifest에 적지 않는 페이지. offscreen: read_document가 chrome.offscreen으로 연다. mic: 음성 입력의 마이크 권한 받기(#184).
+      input: { offscreen: "src/offscreen/index.html", mic: "src/mic/index.html" },
     },
   },
   // offscreen 문서의 변환 Worker가 모듈 import를 쓴다.
