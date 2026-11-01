@@ -2,6 +2,7 @@ import type { ClickableElement, FindClickablesResponse, ListItem, PageRegion } f
 import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
+import { resultHref, resultRole } from "@/lib/clickResult";
 import { getAccessibleRoots, isTag } from "./docs";
 import { modelName, modelNameInfo } from "./modelText";
 import {
@@ -486,11 +487,11 @@ export function findClickablesCounted(args: FindClickablesArgs): FindClickablesR
   if (args.mode === "items") return scanTargets(() => collectItems(args));
   return scanTargets(() => {
     const r = collectClickables(args);
-    return { mode: "list" as const, items: r.items, unfiltered: r.unfiltered, unrelatedChoices: r.unrelated };
+    return { mode: "list" as const, items: r.items, unfiltered: r.unfiltered, unrelatedChoices: r.unrelated, longHrefs: r.longHrefs };
   });
 }
 
-function collectClickables(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number; unrelated: number } {
+function collectClickables(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number; unrelated: number; longHrefs: number } {
   const limit = Math.min(args.limit ?? 50, 200);
   const terms = queryTerms(args.query);
   // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
@@ -542,17 +543,21 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
   }
 
   const labels = listLabels(found.map(({ c }) => c.relation));
+  let longHrefs = 0;
   const items = found.map(({ c }) => {
     const id = registerTarget(CLICK_KIND, c.el, c.relation);
     const listFor = labels.get(relationTrigger(c.relation) as HTMLElement);
     const info = registeredInfo(id);
     const cut = info?.modelContext ? clickContextInfo(c.el).cut : false;
+    // 결과에 싣는 주소·역할만 길이를 정한다(#164). 등록 정보의 원래 주소는 그대로(승인·클릭 확인).
+    const shownHref = resultHref(c.href);
+    if (shownHref.hrefTooLong) longHrefs += 1;
     return {
       id,
       text: c.text,
-      href: c.href,
+      ...shownHref,
       tag: c.tag,
-      role: c.role,
+      role: resultRole(c.role),
       region: c.region,
       inViewport: c.inViewport,
       ...(info?.modelContext ? { context: info.modelContext } : {}),
@@ -561,7 +566,7 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
       ...(listFor ? { listFor } : {}),
     };
   });
-  return { items, unfiltered, unrelated };
+  return { items, unfiltered, unrelated, longHrefs };
 }
 
 // 선택지마다 어느 칸(트리거)의 목록인지 모델에 보일 라벨(#자동완성): 트리거의 이름(modelName — 입력값 제외 #43). 같은 이름이
@@ -621,6 +626,76 @@ function listItemOf(el: HTMLElement, cache: Map<ParentNode, Map<string, number>>
   return best;
 }
 
+// 합성 트리의 부모: 배치된 노드는 그 slot, shadow root 바로 아래는 host.
+function composedParent(n: Node): Element | null {
+  const slot = (n as Element | Text).assignedSlot;
+  if (slot) return slot;
+  if (n.parentElement) return n.parentElement;
+  const root = n.getRootNode();
+  return root instanceof ShadowRoot ? root.host : null;
+}
+
+// start부터 stop(포함)까지 합성 트리 조상에 숨김(display:none·visibility:hidden·opacity:0·aria-hidden)이 없는지.
+function unhiddenUpTo(start: Element, stop: Element): boolean {
+  for (let cur: Element | null = start; cur; cur = composedParent(cur)) {
+    const st = cur.ownerDocument.defaultView?.getComputedStyle(cur);
+    if (st && (st.display === "none" || st.visibility === "hidden" || st.opacity === "0")) return false;
+    if (cur.getAttribute("aria-hidden") === "true") return false;
+    if (cur === stop) return true;
+  }
+  return true;
+}
+
+function rectsInViewport(rects: DOMRectList, win: Window): boolean {
+  const vw = win.innerWidth || win.document.documentElement.clientWidth;
+  const vh = win.innerHeight || win.document.documentElement.clientHeight;
+  for (const r of rects) if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < vh && r.left < vw) return true;
+  return false;
+}
+
+const CONTENTS_DEPTH_MAX = 4;
+const CONTENTS_NODES_MAX = 300;
+
+// 자기 상자가 없는 노드(display:contents 항목·slot)의 합성 트리 자식 중 화면 안에 보이는 것이 있는지(#164). 상자가 있는 자식 요소는
+// 클릭 후보와 같은 표시 규칙(shownToUser)과 항목까지의 조상 숨김을 보고, 글자 노드는 글자 사각형으로 본다. slot은 한 단계씩 따라간다.
+function contentsInViewport(node: Element, item: Element, depth: number, budget: { n: number }): boolean {
+  const win = item.ownerDocument.defaultView ?? window;
+  const kids: Node[] = node.shadowRoot
+    ? [...node.shadowRoot.childNodes]
+    : node instanceof HTMLSlotElement
+      ? (() => {
+          const assigned = node.assignedNodes();
+          return assigned.length ? assigned : [...node.childNodes];
+        })()
+      : [...node.childNodes];
+  for (const kid of kids) {
+    if (++budget.n > CONTENTS_NODES_MAX) return false;
+    if (kid.nodeType === Node.TEXT_NODE) {
+      if (!(kid.textContent ?? "").trim()) continue;
+      const parent = composedParent(kid);
+      if (!parent || !unhiddenUpTo(parent, item)) continue;
+      const range = item.ownerDocument.createRange();
+      range.selectNodeContents(kid);
+      if (rectsInViewport(range.getClientRects(), win)) return true;
+      continue;
+    }
+    if (!(kid instanceof Element)) continue;
+    if (kid.getClientRects().length > 0) {
+      if (kid instanceof HTMLElement && shownToUser(kid) && unhiddenUpTo(kid, item) && rectInViewport(kid)) return true;
+      continue;
+    }
+    if (depth < CONTENTS_DEPTH_MAX && contentsInViewport(kid, item, depth + 1, budget)) return true;
+  }
+  return false;
+}
+
+// 목록 항목이 화면 안인지. 자기 상자가 없으면(display:contents) 자식으로 보고, 못 찾으면 항목 안 대상(숨긴 조상이 없는 것)으로 본다.
+function itemInViewport(item: Element, cands: Candidate[]): boolean {
+  if (item.getClientRects().length > 0) return rectInViewport(item as HTMLElement);
+  if (contentsInViewport(item, item, 0, { n: 0 })) return true;
+  return cands.some((c) => c.inViewport && unhiddenUpTo(c.el, item));
+}
+
 function collectItems(args: FindClickablesArgs): FindClickablesResponse {
   const terms = queryTerms(args.query);
   const limit = Math.min(args.limit ?? 20, 60);
@@ -672,16 +747,25 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
     }
   }
   // (iii) 항목 단위 글자·필터·점수.
-  const built: Array<{ item: Element; text: string; cut: boolean; cands: Candidate[]; score: number; order: number; excludes: Set<Element> }> = [];
+  const built: Array<{
+    item: Element;
+    text: string;
+    cut: boolean;
+    cands: Candidate[];
+    score: number;
+    order: number;
+    excludes: Set<Element>;
+    inViewport: boolean;
+  }> = [];
   let order = 0;
   for (const [item, list] of groups) {
     const excludes = excludesOf.get(item) ?? new Set<Element>();
     const { text, cut } = itemText(item, excludes);
-    built.push({ item, text, cut, cands: list, score: 0, order: order++, excludes });
+    built.push({ item, text, cut, cands: list, score: 0, order: order++, excludes, inViewport: itemInViewport(item, list) });
   }
   const unfiltered = built.length;
   const kept = built.filter((b) => {
-    if (args.onlyViewport && !rectInViewport(b.item as HTMLElement)) return false;
+    if (args.onlyViewport && !b.inViewport) return false;
     if (!terms.length) return true;
     const best = Math.max(0, ...b.cands.map((c) => clickMatchScore(terms, c.text, c.href)));
     b.score = termHits(terms, b.text) + best;
@@ -691,32 +775,49 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
   // (iv) 제한·예산. (v) 남은 항목의 대상만 id 발급(선택지 관계 전달, 항목 결합).
   const items: ListItem[] = [];
   let used = 0;
+  let longHrefs = 0;
   const labels = listLabels(cands.map((c) => c.relation));
   for (const b of kept) {
     if (items.length >= limit) break;
     const ordered = terms.length
       ? [...b.cands].sort((x, y) => clickMatchScore(terms, y.text, y.href) - clickMatchScore(terms, x.text, x.href))
       : b.cands;
-    const shown = ordered.slice(0, ITEM_TARGETS_MAX);
-    const size = b.text.length + shown.reduce((n, c) => n + c.text.length + c.href.length, 0);
+    // 결과에 싣는 주소·역할(#164 — 긴 주소는 비우고 길이만). 예산은 실제로 싣는 길이로 센다.
+    const shaped = ordered.slice(0, ITEM_TARGETS_MAX).map((c) => ({ c, ...resultHref(c.href), role: resultRole(c.role) }));
+    const sizeOf = (t: (typeof shaped)[number]) => t.c.text.length + t.href.length + t.role.length + (t.hrefTooLong ? 40 : 0);
+    let shown = shaped;
+    let size = b.text.length + shown.reduce((n, t) => n + sizeOf(t), 0);
     if (items.length && used + size > ITEM_CHAR_BUDGET) break;
+    // 첫 항목도 예산을 넘지 않게: 앞에서부터 예산 안까지만 싣는다(최소 1개). 뺀 대상은 moreTargets에 더한다.
+    if (!items.length && size > ITEM_CHAR_BUDGET) {
+      let n = b.text.length;
+      const fit: typeof shaped = [];
+      for (const t of shaped) {
+        if (fit.length && n + sizeOf(t) > ITEM_CHAR_BUDGET) break;
+        fit.push(t);
+        n += sizeOf(t);
+      }
+      shown = fit;
+      size = n;
+    }
     used += size;
+    longHrefs += shown.filter((t) => t.hrefTooLong).length;
     const binding: ItemBinding = { ref: new WeakRef(b.item), excludes: [...b.excludes].map((e) => new WeakRef(e)), text: b.text };
     items.push({
       text: b.text,
       ...(b.cut ? { textTruncated: true } : {}),
       region: detectRegion(b.item),
-      inViewport: rectInViewport(b.item as HTMLElement),
-      targets: shown.map((c) => {
+      inViewport: b.inViewport,
+      targets: shown.map(({ c, href, hrefTooLong, role }) => {
         const id = registerTarget(CLICK_KIND, c.el, c.relation, binding);
         const states = registeredInfo(id)?.states;
         const listFor = labels.get(relationTrigger(c.relation) as HTMLElement);
-        return { id, text: c.text, href: c.href, tag: c.tag, role: c.role, ...(states ? { states } : {}), ...(listFor ? { listFor } : {}) };
+        return { id, text: c.text, href, ...(hrefTooLong ? { hrefTooLong } : {}), tag: c.tag, role, ...(states ? { states } : {}), ...(listFor ? { listFor } : {}) };
       }),
-      ...(b.cands.length > ITEM_TARGETS_MAX ? { moreTargets: b.cands.length - ITEM_TARGETS_MAX } : {}),
+      ...(b.cands.length > shown.length ? { moreTargets: b.cands.length - shown.length } : {}),
     });
   }
-  return { mode: "items", items, unfiltered, outside, omittedItems: kept.length - items.length, scanLimited, unrelatedChoices: unrelated };
+  return { mode: "items", items, unfiltered, outside, omittedItems: kept.length - items.length, scanLimited, unrelatedChoices: unrelated, longHrefs };
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.

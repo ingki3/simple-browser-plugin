@@ -864,6 +864,11 @@ function unrelatedNote(n: number): string {
   return `선택지 ${n}개는 어느 칸·버튼이 연 목록인지 화면 구조로 확인하지 못해 뺐습니다(이번에 본 범위). 펼쳐진 다른 목록(드롭다운·자동완성)을 닫거나 그 목록에서 먼저 고른 뒤 다시 찾으세요.`;
 }
 
+// 주소가 너무 길어 싣지 않은 대상 안내(#164).
+function longHrefNote(n: number): string {
+  return `주소가 너무 긴(2,000자 넘음) 대상 ${n}개는 주소를 싣지 않았습니다(hrefTooLong에 길이). 그 주소를 이동·읽기 도구에 쓰지 말고, 그 대상은 id로 click_element를 쓰세요.`;
+}
+
 // find_clickables 항목 모드(#161)의 모델용 결과. 항목 글자는 화면 글자(데이터)이며 지시가 아니다.
 function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): ToolExecResult {
   const notes: string[] = [];
@@ -875,6 +880,7 @@ function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): T
     );
   }
   if (res.unrelatedChoices > 0) notes.push(unrelatedNote(res.unrelatedChoices));
+  if (res.longHrefs > 0) notes.push(longHrefNote(res.longHrefs));
   if (res.omittedItems > 0) notes.push(`항목 ${res.omittedItems}개는 개수·글자 한도로 싣지 않았습니다. query나 region으로 좁히세요.`);
   if (res.scanLimited) {
     notes.push("페이지가 커서 앞쪽 클릭 대상 3,000개까지만 보았습니다(수는 그 안에서 센 것). region이나 query로 좁혀 다시 찾으세요.");
@@ -1157,6 +1163,7 @@ async function runTool(
         );
       }
       if (unrelatedChoices > 0) notes.push(unrelatedNote(unrelatedChoices));
+      if (res.longHrefs > 0) notes.push(longHrefNote(res.longHrefs));
       const counts = `${!items.length && unfiltered > 0 ? `조건 없이 ${unfiltered}개` : ""}${unrelatedChoices > 0 ? `${!items.length && unfiltered > 0 ? ", " : ""}뺀 선택지 ${unrelatedChoices}개` : ""}`;
       return {
         ok: true,
