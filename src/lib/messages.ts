@@ -1,3 +1,4 @@
+import type { HrefTooLong } from "./clickResult";
 import type { ProviderId } from "./providers/types";
 import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
@@ -79,7 +80,9 @@ export type PageRegion = "main" | "article" | "nav" | "aside" | "header" | "foot
 export interface ClickableElement {
   id: string;
   text: string;
+  // 링크 주소. 2,000자를 넘으면 비우고 hrefTooLong에 길이·scheme을 싣는다(#164 — 그 대상은 id로 click_element).
   href: string;
+  hrefTooLong?: HrefTooLong;
   tag: string;
   role: string;
   region: PageRegion;
@@ -101,15 +104,24 @@ export interface ListItem {
   textTruncated?: boolean;
   region: PageRegion;
   inViewport: boolean;
-  targets: Array<{ id: string; text: string; href: string; tag: string; role: string; states?: Record<string, string>; listFor?: string }>;
-  // 8개를 넘어 싣지 않은 대상 수.
+  targets: Array<{ id: string; text: string; href: string; hrefTooLong?: HrefTooLong; tag: string; role: string; states?: Record<string, string>; listFor?: string }>;
+  // 싣지 않은 대상 수(8개 상한 또는 첫 항목의 글자 예산).
   moreTargets?: number;
 }
 
 // content의 find_clickables 응답(모드별). 모델용 결과는 dispatcher가 만든다.
 export type FindClickablesResponse =
-  | { mode: "list"; items: ClickableElement[]; unfiltered: number; unrelatedChoices: number }
-  | { mode: "items"; items: ListItem[]; unfiltered: number; outside: number; omittedItems: number; scanLimited: boolean; unrelatedChoices: number };
+  | { mode: "list"; items: ClickableElement[]; unfiltered: number; unrelatedChoices: number; longHrefs: number }
+  | {
+      mode: "items";
+      items: ListItem[];
+      unfiltered: number;
+      outside: number;
+      omittedItems: number;
+      scanLimited: boolean;
+      unrelatedChoices: number;
+      longHrefs: number;
+    };
 
 export interface LandmarkSnapshot {
   region: PageRegion;
