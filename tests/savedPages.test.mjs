@@ -257,3 +257,74 @@ test("fillLink: 선택 자리 이름이 상속 속성과 같아도 값이 없으
   const l = { ...priceLink(), template, slots: slots.map((key) => ({ key, hint: "", ...(key === "constructor" ? { optional: true } : {}) })) };
   assert.equal(fillLink(l, { 상품명: "a" }), "https://shop.example/search?q=a&sort=low");
 });
+
+// #191: 이미 기억한 페이지 판정(템플릿에 들어맞는지).
+import { matchesTemplate, rememberedLinkFor } from "../src/lib/savedPages.ts";
+
+const tpl = (url, choices, optional = []) => {
+  const { template, slots } = makeTemplate(url, choices);
+  return { template, slots: slots.map((key) => ({ key, hint: "", ...(optional.includes(key) ? { optional: true } : {}) })) };
+};
+
+test("matchesTemplate: 고정 값은 그대로, 자리 값은 무엇이든(비지 않음), 순서 무시", () => {
+  const l = tpl("https://s.example/search?q=abc&sort=rel#top", [{ mode: "slot", slot: "검색어" }, { mode: "keep" }]);
+  assert.equal(matchesTemplate("https://s.example/search?q=abc&sort=rel#top", l), true);
+  assert.equal(matchesTemplate("https://s.example/search?q=%EB%A7%A5&sort=rel#top", l), true);
+  assert.equal(matchesTemplate("https://s.example/search?sort=rel&q=x#top", l), true);
+  assert.equal(matchesTemplate("https://s.example/search?q=x&sort=price#top", l), false, "고정 값 다름");
+  assert.equal(matchesTemplate("https://s.example/search?q=&sort=rel#top", l), false, "필수 자리 빈 값");
+  assert.equal(matchesTemplate("https://s.example/search?q&sort=rel#top", l), false, "이름만 있는 값은 자리 값 아님");
+  assert.equal(matchesTemplate("https://s.example/search?q=x&sort=rel", l), false, "해시 다름");
+  assert.equal(matchesTemplate("http://s.example/search?q=x&sort=rel#top", l), false, "출처 다름");
+  assert.equal(matchesTemplate("https://s.example/other?q=x&sort=rel#top", l), false, "경로 다름");
+  assert.equal(matchesTemplate("https://s.example/search?q=x&sort=rel&page=2#top", l), false, "템플릿에 없는 값");
+  assert.equal(matchesTemplate("https://s.example/search?sort=rel#top", l), false, "필수 자리 없음");
+  assert.equal(matchesTemplate("not a url", l), false);
+});
+
+test("matchesTemplate: 퍼센트 인코딩은 적힌 그대로 비교, bare 고정 값", () => {
+  const l = tpl("https://s.example/p?cat=%ED%95%9C&flag", [{ mode: "keep" }, { mode: "keep" }]);
+  assert.equal(matchesTemplate("https://s.example/p?flag&cat=%ED%95%9C", l), true);
+  assert.equal(matchesTemplate("https://s.example/p?cat=%ed%95%9c&flag", l), false, "인코딩 대소문자가 다르면 다른 주소");
+  assert.equal(matchesTemplate("https://s.example/p?cat=%ED%95%9C&flag=", l), false, "bare와 빈 값은 다름");
+});
+
+test("matchesTemplate: 선택 자리는 그 이름의 값이 모두 빠졌을 때만 생략", () => {
+  const l = tpl("https://s.example/s?q=a&min=1", [{ mode: "slot", slot: "검색어" }, { mode: "slot", slot: "최저" }], ["최저"]);
+  assert.equal(matchesTemplate("https://s.example/s?q=x", l), true);
+  assert.equal(matchesTemplate("https://s.example/s?q=x&min=5", l), true);
+  const two = tpl("https://s.example/s?a=1&b=1", [{ mode: "slot", slot: "값" }, { mode: "slot", slot: "값" }], ["값"]);
+  assert.equal(matchesTemplate("https://s.example/s?a=x", two), false, "같은 이름의 쿼리 값 하나만 빠짐");
+  assert.equal(matchesTemplate("https://s.example/s", two), true);
+});
+
+test("matchesTemplate: 같은 이름의 자리는 같은 값이어야 한다", () => {
+  const l = tpl("https://s.example/s?a=1&b=1", [{ mode: "slot", slot: "검색어" }, { mode: "slot", slot: "검색어" }]);
+  assert.equal(matchesTemplate("https://s.example/s?a=x&b=x", l), true);
+  assert.equal(matchesTemplate("https://s.example/s?a=x&b=y", l), false);
+});
+
+test("matchesTemplate: 같은 키의 필수·선택 자리는 순서와 관계없이 필수에 먼저 맞는다", () => {
+  for (const order of [["opt", "req"], ["req", "opt"]]) {
+    const l = tpl("https://s.example/s?q=1&q=2", order.map((slot) => ({ mode: "slot", slot })), ["opt"]);
+    assert.equal(matchesTemplate("https://s.example/s?q=x", l), true, order.join(","));
+    assert.equal(matchesTemplate("https://s.example/s?q=x&q=y", l), true, order.join(","));
+    assert.equal(matchesTemplate("https://s.example/s", l), false, order.join(","));
+  }
+  const mixed = tpl("https://s.example/s?q=fixed&q=v", [{ mode: "keep" }, { mode: "slot", slot: "검색어" }]);
+  assert.equal(matchesTemplate("https://s.example/s?q=v2&q=fixed", mixed), true);
+  assert.equal(matchesTemplate("https://s.example/s?q=v2&q=v3", mixed), false);
+});
+
+test("matchesTemplate: 뺀(drop) 값이 붙은 주소는 기억하지 않은 것으로 본다", () => {
+  const l = tpl("https://s.example/s?q=a&utm=z", [{ mode: "slot", slot: "검색어" }, { mode: "drop" }]);
+  assert.equal(matchesTemplate("https://s.example/s?q=x", l), true);
+  assert.equal(matchesTemplate("https://s.example/s?q=x&utm=z", l), false);
+});
+
+test("rememberedLinkFor: 들어맞는 첫 링크", () => {
+  const a = { ...link(), id: "a" };
+  assert.equal(rememberedLinkFor("https://search.shopping.naver.com/search/all?query=x&sort=rel#top", [a])?.id, "a");
+  assert.equal(rememberedLinkFor("https://search.shopping.naver.com/search/all?query=x#top", [a]), null);
+  assert.equal(rememberedLinkFor("https://x.example/", []), null);
+});

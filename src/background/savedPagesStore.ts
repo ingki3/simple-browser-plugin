@@ -11,6 +11,8 @@ import {
   normalizePurpose,
   parseLinkDraft,
   parseSaved,
+  rememberedLinkFor,
+  SAVED_PAGES_KEY,
   type LinkDraft,
   splitUrl,
   fixedPartsUrl,
@@ -32,7 +34,7 @@ import { INJECT_READY_DELAYS_MS, injectContentScriptInDocument, isMissingReceive
 // "이 페이지 기억하기"(#30)와 링크 템플릿(#86). 저장은 사용자가 패널에서 이름·용도·자리를 확인하고 누를 때만 한다.
 // 저장 링크 후보는 대화 기록에 남기지 않는 임시 데이터 메시지로 매 모델 요청 직전에 새로 만든다(지우기·끄기가 다음 요청부터 반영).
 
-export const SAVED_PAGES_KEY = "savedPages";
+export { SAVED_PAGES_KEY };
 const MAX_OFFERS = 10;
 const DRAFT_TIMEOUT_MS = 30_000;
 
@@ -262,13 +264,29 @@ function trimOffers(): void {
   }
 }
 
+export interface RememberedLink {
+  id: string;
+  name: string;
+}
+
+// 주소가 들어맞는 저장 링크(#191, 패널 버튼 표시·누름 안내용). 페이지 기억하기가 꺼져 있거나 읽지 못하면 null.
+export async function rememberedFor(url: string): Promise<RememberedLink | null> {
+  try {
+    if (!(await getSettings()).rememberPages) return null;
+    const link = rememberedLinkFor(url, await load());
+    return link ? { id: link.id, name: link.name } : null;
+  } catch {
+    return null;
+  }
+}
+
 // 패널의 "이 페이지 기억" 버튼(#174): 패널 창의 활성 탭으로 저장 카드를 만든다. shown은 패널이 버튼을 보일 때의 탭·주소로,
 // 지금 탭이 그것과 다르면 만들지 않는다. 문서를 먼저 고정하고(확인 못 하면 거절) 그 문서·주소로 화면 글자까지 읽는다.
 // 대화 밖 동작이라 사용자 요청·답은 보내지 않는다(초안에는 탭 제목·주소·화면 글자만 — #43).
 export async function rememberCurrentPage(
   windowId: unknown,
   shown: { tabId?: unknown; url?: unknown },
-): Promise<{ offer: PageOffer } | { refused: string }> {
+): Promise<{ offer: PageOffer } | { refused: string } | { already: RememberedLink }> {
   let target;
   try {
     target = await panelTarget(windowId);
@@ -276,6 +294,10 @@ export async function rememberCurrentPage(
     return { refused: err instanceof Error ? err.message : String(err) };
   }
   if (target.tabId !== shown.tabId || target.url !== shown.url) return { refused: "페이지가 바뀌었습니다. 지금 페이지를 확인한 뒤 다시 누르세요." };
+  // 이미 기억한 페이지면(#191) 카드를 만들지 않고 알린다. 꺼짐 검사를 먼저 해 기존 거절 문구가 그대로 나오게 한다.
+  if (!(await getSettings()).rememberPages) return { refused: BUTTON_REFUSAL_TEXT.disabled };
+  const already = await rememberedFor(target.url);
+  if (already) return { already };
   const expectDoc = await topDocumentId(target.tabId);
   const res = await makeOfferResult(target.tabId, null, { query: "", answer: "" }, expectDoc, target.url).catch(() => ({ reason: "tab_gone" as const }));
   if ("reason" in res) return { refused: BUTTON_REFUSAL_TEXT[res.reason] };

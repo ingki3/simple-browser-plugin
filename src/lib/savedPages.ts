@@ -47,6 +47,8 @@ export interface SavedLink {
 
 // 사용자 결정(#86): 저장 링크는 최대 20개, 넘으면 가장 오랫동안 쓰지 않은 링크를 지운다. 후보도 전부(최대 20개) 준다.
 export const MAX_LINKS = 20;
+// chrome.storage.local의 저장 링크 키(백그라운드가 쓰고, 패널은 바뀜만 듣는다 — #191).
+export const SAVED_PAGES_KEY = "savedPages";
 export const MAX_NAME = 80;
 export const MAX_PURPOSE = 200;
 export const MAX_SLOT_KEY = 30;
@@ -206,6 +208,60 @@ export function evictionPreview(list: readonly SavedLink[], template: LinkTempla
   const key = templateText(template);
   if (list.some((l) => templateText(l.template) === key)) return null;
   return list.length >= MAX_LINKS ? leastRecentlyUsed(list) : null;
+}
+
+// 이미 기억한 페이지인지(#191): 주소가 저장 링크로 만들 수 있는 주소인지(fillLink가 만드는 모양) 구조로만 본다. 출처+경로·해시가 같고,
+// 고정 값은 주소에 적힌 그대로 있고, 남은 쿼리 값은 같은 키의 자리에 하나씩 맞는다. 같은 이름의 자리는 같은 값이어야 하고, 선택 자리는
+// 그 이름의 쿼리 값이 모두 빠졌을 때만 생략으로 본다. 템플릿에 없는 쿼리 값(저장 때 뺀 값일 수 있음)이 있으면 맞지 않는다고 본다 —
+// 판정이 어려우면 "기억하지 않음"(버튼이 보임) 쪽으로 둔다. 표시·안내에만 쓰고 승인·자동 실행에는 쓰지 않는다.
+const MATCH_PARAMS_MAX = 30;
+
+export function matchesTemplate(url: string, link: Pick<SavedLink, "template" | "slots">): boolean {
+  const parts = splitUrl(url);
+  const t = link.template;
+  if (!parts || parts.base !== t.base || parts.hash !== t.hash) return false;
+  if (parts.params.length > MATCH_PARAMS_MAX) return false;
+  const rest = [...parts.params];
+  for (const p of t.params) {
+    if (p.slot !== undefined) continue;
+    const i = rest.findIndex((u) => u.rawKey === p.key && (p.bare ? u.bare : !u.bare && u.rawValue === (p.value ?? "")));
+    if (i < 0) return false;
+    rest.splice(i, 1);
+  }
+  const slotParams = t.params.filter((p) => p.slot !== undefined);
+  const optional = new Set(link.slots.filter((s) => s.optional).map((s) => s.key));
+  const optionalNames = [...new Set(slotParams.map((p) => p.slot as string).filter((n) => optional.has(n)))];
+  for (let mask = 0; mask < 1 << optionalNames.length; mask++) {
+    const omitted = new Set(optionalNames.filter((_, i) => mask & (1 << i)));
+    const used = slotParams.filter((p) => !omitted.has(p.slot as string));
+    if (used.length === rest.length && assignSlots(used, rest, 0, new Set(), new Map())) return true;
+  }
+  return false;
+}
+
+// 자리 쿼리 값(템플릿 순서)마다 같은 키의 남은 주소 값을 하나씩 배정한다(되돌아가며). fillLink는 자리 값을 비우지 않고(앞뒤 공백 제거)
+// 이름=값으로 쓰므로, 이름만 있거나 빈 값은 자리 값이 될 수 없다. 같은 이름의 자리는 같은 값(읽은 글자)이어야 한다.
+function assignSlots(slots: TemplateParam[], values: UrlParam[], i: number, taken: Set<number>, byName: Map<string, string>): boolean {
+  if (i === slots.length) return true;
+  const p = slots[i];
+  const name = p.slot as string;
+  for (let j = 0; j < values.length; j++) {
+    const u = values[j];
+    if (taken.has(j) || u.rawKey !== p.key || u.bare || !u.value.trim() || u.value !== u.value.trim()) continue;
+    const prev = byName.get(name);
+    if (prev !== undefined && prev !== u.value) continue;
+    taken.add(j);
+    if (prev === undefined) byName.set(name, u.value);
+    if (assignSlots(slots, values, i + 1, taken, byName)) return true;
+    taken.delete(j);
+    if (prev === undefined) byName.delete(name);
+  }
+  return false;
+}
+
+// 주소가 들어맞는 첫 저장 링크(없으면 null).
+export function rememberedLinkFor(url: string, list: readonly SavedLink[]): SavedLink | null {
+  return list.find((l) => matchesTemplate(url, l)) ?? null;
 }
 
 // 지난 저장 항목의 고정 id(옮길 때 다시 읽어도 같게).
