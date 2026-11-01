@@ -34,7 +34,7 @@ const HANDOFF_POPUP_SETTLE_MS = 800;
 const HANDOFF_POPUP_LEAD_MS = 200;
 import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
-import { loginSiteFor, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
+import { loginSiteFor, newGrantId, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
 import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "./signIn";
 import { allSecrets, containsSecret, maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "./loginSecrets";
 import { detachSession, InputSession } from "./trustedInput";
@@ -2127,7 +2127,7 @@ export class ChatAgent {
         await applySettingsUpdate((cur) => ({
           loginSites: [
             ...cur.loginSites.filter((s) => s.origin !== rememberOrigin),
-            { origin: rememberOrigin, uuid, entryName: entry.name || "(제목 없는 항목)", totp: false },
+            { origin: rememberOrigin, uuid, entryName: entry.name || "(제목 없는 항목)", totp: false, grantId: newGrantId() },
           ].slice(-MAX_LOGIN_SITES),
         })).catch((err) => debugLog("login:remember_failed", err instanceof Error ? err.message : String(err), "warn"));
         debugLog("login:site_approved", rememberOrigin);

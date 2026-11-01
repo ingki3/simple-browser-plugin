@@ -94,4 +94,68 @@ export default [
       );
     },
   },
+  {
+    name: "직접 조작할 사이트는 항목 하나씩 저장한다(#127): 두 서랍에서 따로 넣어도 둘 다 남고, 뺀 사이트는 다른 서랍의 추가로 되살아나지 않는다",
+    async run(h) {
+      await h.settings({ manualSites: [] });
+      const other = await h.ctx.newPage();
+      await other.goto(`chrome-extension://${h.extId}/src/sidepanel/index.html`);
+      await other.waitForTimeout(500);
+      await openDrawer(h);
+      await other.locator("button.icon-btn[title]", { hasText: "⚙" }).click();
+      await other.waitForTimeout(300);
+      const field = (p) => p.locator(".field", { hasText: "직접 조작할 사이트" });
+      const addSite = async (p, site) => {
+        await field(p).locator("input[type=text]").fill(site);
+        await field(p).locator("button", { hasText: "추가" }).click();
+        await p.waitForTimeout(400);
+      };
+      for (const p of [h.panel, other]) await p.locator("details.settings-group summary", { hasText: "동작" }).click();
+      await addSite(h.panel, "a.example");
+      await addSite(other, "b.example");
+      let st = await stored(h);
+      expect(JSON.stringify(st.manualSites) === JSON.stringify(["https://a.example", "https://b.example"]), `둘 다(${JSON.stringify(st.manualSites)})`);
+      await field(h.panel).locator(".key-row", { hasText: "https://a.example" }).locator("button", { hasText: "빼기" }).click();
+      await h.panel.waitForTimeout(300);
+      await addSite(other, "c.example");
+      st = await stored(h);
+      await other.close();
+      expect(JSON.stringify(st.manualSites) === JSON.stringify(["https://b.example", "https://c.example"]), `뺀 사이트가 되살아나지 않음(${JSON.stringify(st.manualSites)})`);
+      // 화면 밖(content script 등)에서 보낸 것처럼 잘못된 값은 받지 않는다.
+      const bad = await h.panel.evaluate(() => chrome.runtime.sendMessage({ kind: "manual_site_op", op: { op: "add", site: "https://x.example/path" } }));
+      expect(bad?.ok === false && (await stored(h)).manualSites.length === 2, `잘못된 값 거절(${JSON.stringify(bad)})`);
+    },
+  },
+  {
+    name: "자동 로그인 목록(#127): 옛 항목에 승인 식별자를 한 번 채우고, 보던 승인과 다르면(다시 승인) 옛 화면의 변경을 받지 않는다",
+    async run(h) {
+      const O = h.base;
+      const UUID = "0123456789abcdef0123456789abcdef";
+      await h.settings({ loginSites: [{ origin: O, uuid: UUID, entryName: "Harness", totp: false }] });
+      await h.sw.evaluate(() => globalThis.__sbpSettings.migrateLoginGrantIds());
+      const first = (await stored(h)).loginSites[0].grantId;
+      expect(/^[A-Za-z0-9_-]{22}$/.test(first ?? ""), `채움(${first})`);
+      await h.sw.evaluate(() => globalThis.__sbpSettings.migrateLoginGrantIds());
+      expect((await stored(h)).loginSites[0].grantId === first, "다시 불러도 그대로");
+      await openDrawer(h);
+      await h.panel.locator("details.settings-group summary", { hasText: "자동 로그인" }).click();
+      const row = h.panel.locator(".key-row", { hasText: O });
+      // 저장된 값을 따라가는 칸이라 저장이 끝난 뒤에 바뀐다(check()는 바로 바뀌기를 기대한다).
+      await row.locator("input[type=checkbox]").click();
+      await h.panel.waitForTimeout(400);
+      expect((await stored(h)).loginSites[0].totp === true, "코드 켜기");
+      // 다른 곳에서 지웠다가 같은 항목으로 다시 승인(새 식별자, 코드 꺼짐) — 옛 식별자로 온 변경은 거절된다.
+      await h.settings({ loginSites: [{ origin: O, uuid: UUID, entryName: "Harness", totp: false, grantId: "BBBBBBBBBBBBBBBBBBBBBB" }] });
+      const late = await h.panel.evaluate(
+        ({ O, first }) => chrome.runtime.sendMessage({ kind: "login_site_op", op: { op: "set_totp", origin: O, grantId: first, totp: true } }),
+        { O, first },
+      );
+      const st = (await stored(h)).loginSites;
+      expect(late?.ok === false && st.length === 1 && st[0].totp === false, `옛 변경 거절(${JSON.stringify({ late, st })})`);
+      await h.panel.waitForTimeout(300);
+      await row.locator("button", { hasText: "빼기" }).click();
+      await h.panel.waitForTimeout(400);
+      expect((await stored(h)).loginSites.length === 0, "지금 승인으로 빼기");
+    },
+  },
 ];

@@ -1,5 +1,14 @@
 import { FLAGS_KEY, SETTINGS_KEY, type Flags, type Settings, type SettingsPatch } from "@/lib/messages";
 import { mergeSettingsPatch, normalizeSettings, settingsForStorage } from "@/lib/settings";
+import { newGrantId } from "@/lib/loginPolicy";
+import { makeGenCache } from "@/lib/genCache";
+import {
+  applyLoginSiteOp as applyLoginSiteOpTo,
+  applyManualSiteOp as applyManualSiteOpTo,
+  withGrantIds,
+  type LoginSiteOp,
+  type ManualSiteOp,
+} from "@/lib/settingsOps";
 
 export { DEFAULT_SETTINGS } from "@/lib/settings";
 
@@ -28,30 +37,62 @@ export function applySettingsPatch(patch: SettingsPatch): Promise<void> {
 export function applySettingsUpdate(fn: (cur: Settings) => SettingsPatch): Promise<void> {
   const run = patchQueue.then(async () => {
     const cur = await readSettings();
-    await writeSettings(mergeSettingsPatch(cur, fn(cur)));
+    const patch = fn(cur);
+    // 바꿀 것이 없으면 쓰지 않는다(저장소 변경 알림·캐시 무효화를 일으키지 않게).
+    if (!Object.keys(patch).length) return;
+    await writeSettings(mergeSettingsPatch(cur, patch));
     invalidateSettingsCache();
   });
   patchQueue = run.catch(() => {});
   return run;
 }
 
-let cache: Settings | null = null;
+// 설정 캐시. 읽는 사이 저장·변경 알림으로 무효화되면 옛 조회 결과를 넣지 않고 다시 읽는다(옛 제공자·모델·키로 요청하지 않게,
+// #127 리뷰에서 찾은 경합 — src/lib/genCache.ts).
+const cache = makeGenCache(readSettings);
 
-export async function getSettings(): Promise<Settings> {
-  if (cache) return cache;
-  cache = await readSettings();
-  return cache;
+export function getSettings(): Promise<Settings> {
+  return cache.get();
 }
 
 export function invalidateSettingsCache(): void {
-  cache = null;
+  cache.invalidate();
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && SETTINGS_KEY in changes) {
-    cache = null;
-  }
+  if (area === "local" && SETTINGS_KEY in changes) invalidateSettingsCache();
 });
+
+// 직접 조작할 사이트·자동 로그인 목록의 항목 하나를 바꾼다(#127). 저장 직렬화 안에서 그때의 저장 목록에 적용한다.
+export async function applyManualSiteOp(op: ManualSiteOp): Promise<void> {
+  const out = { error: "" };
+  await applySettingsUpdate((cur) => {
+    const r = applyManualSiteOpTo(cur.manualSites, op);
+    if (r.ok) return { manualSites: r.list };
+    out.error = r.error;
+    return {};
+  });
+  if (out.error) throw new Error(out.error);
+}
+
+export async function applyLoginSiteOp(op: LoginSiteOp): Promise<void> {
+  const out = { error: "" };
+  await applySettingsUpdate((cur) => {
+    const r = applyLoginSiteOpTo(cur.loginSites, op);
+    if (r.ok) return { loginSites: r.list };
+    out.error = r.error;
+    return {};
+  });
+  if (out.error) throw new Error(out.error);
+}
+
+// grantId가 없는 옛 자동 로그인 항목에 한 번 채워 저장한다(백그라운드 시작 때). 저장 직렬화 안이라 그 뒤의 항목 변경은 채운 값과 비교한다.
+export function migrateLoginGrantIds(): Promise<void> {
+  return applySettingsUpdate((cur) => {
+    const next = withGrantIds(cur.loginSites, newGrantId);
+    return next ? { loginSites: next } : {};
+  });
+}
 
 export async function readFlags(): Promise<Flags> {
   const obj = await chrome.storage.local.get(FLAGS_KEY);
