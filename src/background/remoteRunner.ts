@@ -1,5 +1,5 @@
 // 원격 채널(텔레그램 #139, MCP #140)이 함께 쓰는 실행부: 채널별 대화 객체, 한 번에 요청 하나(실행 슬롯), 작업 탭, 중단, 결과.
-// 받기·보내기·연결 상태는 채널 모듈이 맡는다. 원격 대화의 정책(승인이 필요한 동작은 하지 않음)은 ChatAgent의 channel이 정한다.
+// 받기·보내기·연결 상태는 채널 모듈이 맡는다. 원격 대화의 정책(실행 방식·원격 승인)은 ChatAgent의 channel이 정한다.
 import { SETTINGS_KEY, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import type { RemoteApprover } from "@/lib/remoteApproval";
@@ -66,6 +66,11 @@ export class RemoteRunner {
     this.stop();
     this.session?.agent.abort();
     this.session = null;
+  }
+
+  // 이 대화에서 맡긴 작업을 거둔다(텔레그램으로 묻기를 끄면 — 다시 켜도 새로 묻게). 묻는 중인 맡기기 질문은 채널이 거둔다.
+  withdrawTask(): void {
+    this.session?.agent.revokeTask();
   }
 
   // 요청 하나의 슬롯을 잡는다. 이미 실행 중이면 null(부르는 쪽이 바쁘다고 답한다).

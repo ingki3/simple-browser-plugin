@@ -2,7 +2,7 @@ import { SENSITIVE_TOOLS, type BgToPanel, type RunMode, type Settings, type Tool
 import { MissingKeyError, friendlyError } from "@/lib/friendlyError";
 import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { describePopup, popupWhere } from "@/lib/actionTarget";
-import { remoteHopQuestion, remoteRefusal, remoteToolQuestion, type RemoteApprover, type RemoteAskResult, type RemoteQuestion } from "@/lib/remoteApproval";
+import { remoteActionLines, remoteHopQuestion, remoteRefusal, remoteTaskQuestion, remoteToolQuestion, type RemoteApprover, type RemoteAskResult, type RemoteQuestion } from "@/lib/remoteApproval";
 import type { ModelId } from "@/lib/models";
 import { isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
@@ -338,8 +338,13 @@ const REMOTE_STOP_NOTE =
   "승인이 필요한 동작이라 원격 요청에서 하지 않았다. 도구를 더 부르지 말고, 지금까지 알아낸 것과 사용자가 패널에서 직접 요청해야 할 일을 짧게 답하라.";
 // namedSites: 이번 요청 글에 사용자가 적은 사이트(userNamedSites). 그 사이트 안의 이동은 승인 없이 되므로(#54) 모델이 미리 포기하지 않게 알린다.
 // canAsk: 이번 요청에서 승인이 필요한 이동·클릭을 원격 채널로 사용자에게 물을 수 있는지(#185 — 텔레그램 승인 버튼 등).
+// 텔레그램에서 물을 수 있으면 실행 방식이 task라(effectiveRunMode) 작업 맡기기 안내를 쓴다(맡기면 이동도 덮이므로 요청 글 사이트 안내는 넣지 않음).
+const REMOTE_TASK_NOTE =
+  "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다. 실행 방식은 '처음에 승인 받고 끝까지 실행'이다. 페이지 이동·클릭·입력 같은 승인이 필요한 첫 동작 전에 confirm_task(할 일, 이 작업의 위험)를 부르면 사용자에게 텔레그램 버튼으로 한 번 묻고, 맡기면 이 요청이 끝날 때까지 묻지 않고 실행된다 — 미리 포기하지 말고 맡긴 뒤 끝까지 진행하라. 사이트 주소가 없어도 알맞은 사이트를 골라 navigate_to_url로 가라. 자동 로그인·저장한 링크 열기·반복 작업 등록·페이지 기억은 원격에서 할 수 없다. 거절·무응답이면 하지 않는다. 답은 짧은 평문으로.";
 const remoteTurnNote = (channel: AgentChannel, namedSites: readonly string[], canAsk: boolean) =>
-  (channel === "mcp" ? "이 요청은 사용자의 다른 AI 도구(MCP)에서 왔다(원격 요청). 답은 그 도구로 간다." : "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다.") +
+  channel === "telegram" && canAsk
+    ? REMOTE_TASK_NOTE
+    : (channel === "mcp" ? "이 요청은 사용자의 다른 AI 도구(MCP)에서 왔다(원격 요청). 답은 그 도구로 간다." : "이 요청은 사용자의 텔레그램에서 왔다(원격 요청). 답은 텔레그램으로 간다.") +
   (canAsk
     ? " 승인이 필요한 동작 중 이동(navigate_to_url)과 클릭은 사용자에게 원격으로 승인을 묻는다 — 승인하면 실행되고, 거절·무응답이면 하지 않는다. 미리 포기하지 말고 필요한 도구를 불러라. 그 밖의 승인이 필요한 동작(입력·저장·로그인 등)은 원격에서 할 수 없고 거절된다 — 그럴 땐 패널에서 요청하라고 답하라. 답은 짧은 평문으로."
     : " 승인 카드가 필요한 동작(결제·삭제·개인정보 입력·요청 글에 없는 사이트로 이동·저장·로그인 등)은 할 수 없고 거절된다. 관측과 자동 실행 범위 안의 동작만 하고, 승인이 필요하면 패널에서 요청하라고 답하라. 답은 짧은 평문으로.") +
@@ -488,16 +493,23 @@ export class ChatAgent {
     return this.channel !== "panel";
   }
 
-  // 원격 대화는 전역 설정과 관계없이 auto 판정 규칙(카드가 필요한 것은 거절된다).
+  // 원격 대화는 전역 설정과 관계없다. 텔레그램에서 이번 요청의 승인을 버튼으로 물을 수 있으면 '처음에 승인 받고 끝까지 실행'
+  // (요청마다 한 번 맡길지 묻는다), 그 밖(MCP, 묻기 꺼짐·연결 끊김)은 auto 판정 규칙(카드가 필요한 것은 원격으로 묻거나 거절).
+  // 호출마다 다시 계산하므로 요청 중에 묻기를 끄면 다음 호출부터 auto가 되고 맡긴 작업이 풀린다.
   private effectiveRunMode(stored: RunMode): RunMode {
-    return this.remote ? "auto" : stored;
+    if (!this.remote) return stored;
+    return this.remoteTaskMode() ? "task" : "auto";
+  }
+
+  private remoteTaskMode(): boolean {
+    return this.channel === "telegram" && !!this.turnApprover?.canAsk();
   }
 
   // 설정이 바뀌었을 때(저장소 변경). 이 대화가 쓰던 제공자·키·모델과 달라지면 이 대화가 연 페이지 번역(남은 배치·동적
   // 재번역)을 멈춘다 — 한 번역이 두 제공자에 걸치지 않게(#108 후속, #99). 대화 기록은 다음 요청에서 새로 시작한다.
   onSettingsChanged(next: Settings): void {
     // 다른 실행 방식으로 바꾸는 즉시 맡긴 작업과 열린 맡기기 카드를 거둔다(다시 task로 돌아와도 새로 묻는다, #123).
-    if (next.runMode !== "task") this.withdrawTask();
+    if (this.effectiveRunMode(next.runMode) !== "task") this.withdrawTask();
     if (this.apiKey === null) return;
     const now = activeModel(next);
     if (now.provider !== this.provider || now.apiKey !== this.apiKey || now.model !== this.model) this.stopTranslations();
@@ -1010,6 +1022,8 @@ export class ChatAgent {
     this.cancelInFlight();
     const turn = ++this.currentTurn;
     this.turnApprover = this.remote ? (opts.approver ?? null) : null;
+    // 원격 대화의 작업 맡기기는 요청 하나 동안만(사용자가 진행을 보고 있지 않으므로 같은 대화의 다음 요청은 다시 묻는다).
+    if (this.remote) this.withdrawTask();
     beginKeepalive();
     const endTurn = timeSpan("turn");
     const prevTurnTab = this.turnTab;
@@ -1594,12 +1608,29 @@ export class ChatAgent {
       if (handed.kind !== "cancelled") return handed;
       return this.cancelCall(call, signInToken);
     }
+    // 원격 질문에 보일 이 호출(모델에 보낸 글·고정 문구로만, #185).
+    const remoteInput = {
+      toolName,
+      url: toolName === "navigate_to_url" ? String(preview.details ?? "") : undefined,
+      target: preview.remoteTarget,
+      linkHrefs: preview.linkHrefs,
+      pageUrl,
+      guarded,
+      block: decision.block,
+      chatGrantReason: decision.chatGrant.reason,
+    };
     if (decision.mode === "task") {
       if (!this.taskApproved) {
         // 모델이 confirm_task로 맡기지 않고 승인이 필요한 동작을 불렀다: 이 동작을 할 일로 보여 한 번 묻는다.
-        const asked = await this.askTask(call, `첫 동작: ${preview.summary}`, []);
-        if (asked === null) return STALE;
-        if (!asked) return this.cancelCall(call, signInToken);
+        // 원격은 카드 글(원문 대상 글자가 섞일 수 있음) 대신 원격 질문 재료로 만든 줄만 보이고, 만들 수 없으면 묻지 않고 거절한다.
+        const firstAction = this.remote ? remoteActionLines(remoteInput) : null;
+        if (this.remote && !firstAction) return this.remoteNeedsTask(call, signInToken);
+        const asked = await this.askTask(call, this.remote ? "" : `첫 동작: ${preview.summary}`, [], firstAction);
+        if (asked === null) {
+          discardSignIn(signInToken);
+          return STALE;
+        }
+        if (!asked.approved) return this.cancelCall(call, signInToken, asked.remote);
       }
       debugLog("tool:task_run", toolName);
       // 고르는 카드(링크 읽기·저장)는 미리보기가 정한 기본 선택(모델이 넘긴 후보 중 경고가 없는 것)으로 실행한다.
@@ -1632,17 +1663,7 @@ export class ChatAgent {
     }
     // 원격 대화: 카드 대신 원격 채널로 묻는다(#185). 질문은 모델에 보낸 글·고정 문구로만 만들고, 만들 수 없으면 거절.
     if (this.remote) {
-      const question = remoteToolQuestion({
-        toolName,
-        url: toolName === "navigate_to_url" ? String(preview.details ?? "") : undefined,
-        target: preview.remoteTarget,
-        linkHrefs: preview.linkHrefs,
-        pageUrl,
-        guarded,
-        block: decision.block,
-        chatGrantReason: decision.chatGrant.reason,
-      });
-      const r = await this.remoteAsk(turn, question);
+      const r = await this.remoteAsk(turn, remoteToolQuestion(remoteInput));
       if (typeof r !== "string") {
         discardSignIn(signInToken);
         return STALE;
@@ -1729,10 +1750,34 @@ export class ChatAgent {
 
   // 작업 맡기기 카드(#123): 사용자가 보낸 요청 글(원문)과 할 일·위험을 보이고 한 번 묻는다. 맡기면 이 대화가 끝날 때까지
   // 승인 카드를 띄우지 않는다(손 넘기기·로그인 항목·탭 고르기는 그대로). null: 이 요청이 끝났다.
-  private async askTask(call: ToolCallContext, plan: string, risks: string[]): Promise<boolean | null> {
+  // 원격(텔레그램)은 카드 대신 원격 질문으로 묻는다(firstAction: 맡기지 않고 부른 첫 동작의 원격 질문 줄). remote: 승인하지 않은 원격 결과.
+  private async askTask(
+    call: ToolCallContext,
+    plan: string,
+    risks: string[],
+    firstAction: { title: string; lines: string[] } | null = null,
+  ): Promise<{ approved: boolean; remote?: Exclude<RemoteAskResult, "approved" | "aborted"> } | null> {
     const { turn, callId, toolName, parsedArgs } = call;
     const epoch = this.taskEpoch;
     debugLog("tool:awaiting_task", toolName);
+    if (this.remote) {
+      const r = await this.remoteAsk(turn, remoteTaskQuestion({ request: this.turnRequest, plan, risks, firstAction }));
+      if (typeof r !== "string") return null;
+      if (r !== "approved") {
+        debugLog("tool:task_result", r);
+        return { approved: false, remote: r };
+      }
+      const runMode = this.effectiveRunMode((await getSettings()).runMode);
+      if (this.isStale(turn)) return null;
+      // 묻는 사이 묻기를 껐거나 맡긴 작업을 거뒀으면(다시 켰어도) 그 승인은 쓰지 않는다.
+      if (epoch !== this.taskEpoch || runMode !== "task") {
+        debugLog("tool:task_result", "withdrawn");
+        return { approved: false };
+      }
+      debugLog("tool:task_result", "approved");
+      this.setTaskApproved(true);
+      return { approved: true };
+    }
     this.send({
       kind: "tool_pending",
       callId,
@@ -1756,7 +1801,7 @@ export class ChatAgent {
     }
     debugLog("tool:task_result", approved ? "approved" : "cancelled");
     if (approved) this.setTaskApproved(true);
-    return approved;
+    return { approved };
   }
 
   // confirm_task(#123): 실행 방식이 task이고 아직 맡기지 않았으면 작업 맡기기 카드로 묻는다. false: 이 요청이 끝났다.
@@ -1775,10 +1820,10 @@ export class ChatAgent {
       summary = "이미 맡긴 작업";
       note = "이 대화에서 이미 작업을 맡겼습니다. 승인 카드 없이 진행하세요.";
     } else {
-      const approved = await this.askTask(call, args.summary, args.risks);
-      if (approved === null) return false;
-      if (!approved) {
-        this.cancelCall(call, null);
+      const asked = await this.askTask(call, args.summary, args.risks);
+      if (asked === null) return false;
+      if (!asked.approved) {
+        this.cancelCall(call, null, asked.remote);
         return true;
       }
       summary = "작업을 맡김 · 이 대화에서는 묻지 않고 실행";
@@ -2102,6 +2147,30 @@ export class ChatAgent {
       }
     }
     return { kind: "approved", execArgs };
+  }
+
+  // 원격 task에서 모델이 맡기지 않고 부른 동작을 원격 질문으로 보일 수 없을 때(그 밖의 도구·잘린 대상 등): 실행하지 않고, 먼저
+  // confirm_task로 맡기라고 돌려준다(턴을 마무리하지 않음 — 모델이 맡긴 뒤 다시 부르게).
+  private remoteNeedsTask(call: ToolCallContext, signInToken: string | null): typeof DONE {
+    const { turnTab, callId, toolName, argsKey } = call;
+    discardSignIn(signInToken);
+    discardTabChoices(callId);
+    discardLinkCall(callId);
+    discardDownloadCall(callId);
+    const summary = "작업을 맡기기 전이라 하지 않음";
+    debugLog("remote:task_needed", toolName);
+    this.send({ kind: "tool_result", callId, toolName, ok: false, summary });
+    this.history.push({
+      role: "tool",
+      tool_call_id: callId,
+      name: toolName,
+      content: this.toolContent(turnTab, {
+        error: "remote_task_not_confirmed",
+        note: "아직 작업을 맡지 않아 실행하지 않았다. 먼저 confirm_task(할 일 요약, 이 작업의 위험)를 불러 사용자에게 맡길지 묻고, 맡기면 이 동작을 다시 불러라.",
+      }),
+    });
+    call.record(toolName, argsKey, false, "remote_task_not_confirmed", summary);
+    return DONE;
   }
 
   // 사용자가 취소한 호출(카드 취소·손 넘기기 취소)의 결과를 남기고 준비한 것을 버린다.

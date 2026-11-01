@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { REMOTE_URL_MAX, remoteHopQuestion, remoteRefusal, remoteToolQuestion } from "../src/lib/remoteApproval.ts";
+import { REMOTE_QUESTION_MAX, REMOTE_TASK_REQUEST_MAX, REMOTE_URL_MAX, remoteActionLines, remoteHopQuestion, remoteRefusal, remoteTaskQuestion, remoteToolQuestion } from "../src/lib/remoteApproval.ts";
 import { sameBase } from "../src/lib/actionTarget.ts";
 import { askCallbackData, newAskId, parseAskCallback } from "../src/lib/telegram.ts";
 
@@ -68,6 +68,35 @@ test("클릭: 체크 상태·대리 라벨·묻는 이유를 보인다(외부 �
   assert.match(q.text, /외부 문서 내용을 읽은 대화라 자동 실행하지 않음/);
   const b = remoteToolQuestion({ ...base, block: "결제 신호", toolName: "click_element", target: target(), linkHrefs: [], pageUrl: "https://shop.example/" });
   assert.match(b.text, /자동 실행 예외: 결제 신호/);
+});
+
+test("작업 맡기기: 요청·할 일·위험·효과를 보이고, 요청만 500자에서 자르며 넘치면 묻지 않는다", () => {
+  const q = remoteTaskQuestion({ request: " SRT 수서→부산 예매해줘 ", plan: "SRT에서 11월 3일 표를 조회하고 예매", risks: ["결제", " "] });
+  assert.ok(q);
+  const lines = q.text.split("\n");
+  assert.equal(lines[0], "승인이 필요합니다: 작업 맡기기");
+  assert.equal(lines[1], "요청: SRT 수서→부산 예매해줘");
+  assert.equal(lines[2], "할 일: SRT에서 11월 3일 표를 조회하고 예매");
+  assert.deepEqual(lines.slice(3, 5), ["이 작업의 위험:", "- 결제"]);
+  assert.match(q.text, /이 요청이 끝날 때까지 .*묻지 않고 실행합니다\(결제·삭제·다른 사이트로 이동도 묻지 않습니다\)/);
+  assert.match(remoteTaskQuestion({ request: "a", plan: "b", risks: [] }).text, /이 작업의 위험: 모델이 따로 적지 않음/);
+  const long = remoteTaskQuestion({ request: "가".repeat(REMOTE_TASK_REQUEST_MAX + 50), plan: "b", risks: [] });
+  assert.ok(long.text.includes(`요청: ${"가".repeat(REMOTE_TASK_REQUEST_MAX)}…\n`));
+  // 할 일·위험은 자르지 않는다.
+  assert.equal(remoteTaskQuestion({ request: "a", plan: "x".repeat(REMOTE_QUESTION_MAX), risks: [] }), null);
+});
+
+test("작업 맡기기: 맡기지 않고 부른 첫 동작은 원격 질문 줄로만(원문 대상 글자 없음), 만들 수 없으면 null", () => {
+  const input = { ...base, toolName: "click_element", target: target(), linkHrefs: [], pageUrl: "https://shop.example/" };
+  const first = remoteActionLines(input);
+  assert.equal(first.title, "클릭");
+  const q = remoteTaskQuestion({ request: "구매해 줘", plan: "", risks: [], firstAction: first });
+  assert.match(q.text, /첫 동작: 클릭\n페이지: https:\/\/shop\.example\n대상: .*'구매하기'/);
+  assert.doesNotMatch(q.text, /할 일:|원문|비밀값|메모/);
+  assert.equal(remoteActionLines({ ...input, target: target({ modelNameClipped: true }) }), null);
+  assert.equal(remoteActionLines({ ...base, toolName: "fill_form_fields" }), null);
+  const nav = remoteActionLines({ ...base, toolName: "navigate_to_url", url: "https://etk.srail.kr/main.do" });
+  assert.deepEqual(nav.lines, ["주소: https://etk.srail.kr/main.do", "사이트: https://etk.srail.kr"]);
 });
 
 test("그 밖의 도구는 원격으로 묻지 않는다", () => {

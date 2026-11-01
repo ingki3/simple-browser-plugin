@@ -54,20 +54,14 @@ function checkedLine(t: TargetInfo): string | null {
   return `지금 상태: ${c === "true" ? "체크됨" : c === "mixed" ? "일부 체크" : "체크 안 됨"} (누르면 바뀝니다)`;
 }
 
-// 도구 호출의 원격 질문. 허용하는 도구는 이동·클릭뿐이다(그 밖은 이번 범위에서 묻지 않고 거절).
-export function remoteToolQuestion(input: RemoteToolInput): RemoteQuestion | null {
-  const why = reasonLines(input);
+// 이동·클릭 한 번을 원격 질문에 보일 줄(제목·내용). 승인 효과·묻는 이유는 넣지 않는다(질문마다 다르다).
+// 허용하는 도구는 이동·클릭뿐이고, 만들 수 없으면 null(그 밖의 도구, 잘린 대상, 다른 목적지가 섞인 클릭, 긴 주소).
+export function remoteActionLines(input: RemoteToolInput): { title: string; lines: string[]; origin: string } | null {
   if (input.toolName === "navigate_to_url") {
     const url = input.url ?? "";
     const origin = httpOrigin(url);
     if (!origin || url.length > REMOTE_URL_MAX) return null;
-    return finish([
-      "승인이 필요합니다: 페이지 이동",
-      `주소: ${url}`,
-      `사이트: ${origin}`,
-      ...why,
-      `승인하면 이 대화에서 ${origin}와 같은 사이트 안의 일반 이동·클릭·입력도 자동 실행 범위에 들어갑니다(결제·삭제·개인정보 등은 계속 묻습니다).`,
-    ]);
+    return { title: "페이지 이동", lines: [`주소: ${url}`, `사이트: ${origin}`], origin };
   }
   if (input.toolName === "click_element") {
     const t = input.target;
@@ -79,15 +73,56 @@ export function remoteToolQuestion(input: RemoteToolInput): RemoteQuestion | nul
     const hrefs = [...new Set((input.linkHrefs ?? []).filter(Boolean))];
     if (hrefs.some((h) => h !== t.href)) return null;
     if (t.href && t.href.length > REMOTE_URL_MAX) return null;
-    const lines = ["승인이 필요합니다: 클릭", `페이지: ${pageOrigin}`, `대상: ${roleLabel(t)} '${t.modelName}'`, `위치: ${placeLine(t)}`];
+    const lines = [`페이지: ${pageOrigin}`, `대상: ${roleLabel(t)} '${t.modelName}'`, `위치: ${placeLine(t)}`];
     if (t.modelContext && t.modelContext !== t.modelName) lines.push(`행 내용: '${t.modelContext}'`);
     if (t.href) lines.push(`주소: ${t.href}`);
     const checked = checkedLine(t);
     if (checked) lines.push(checked);
     if (t.proxy) lines.push("⚠ 화면에 보이지 않는 체크·선택 칸을 대신 보여 주는 라벨입니다. 누르면 그 칸이 바뀝니다.");
-    return finish([...lines, ...why]);
+    return { title: "클릭", lines, origin: pageOrigin };
   }
   return null;
+}
+
+// 도구 호출의 원격 질문. 허용하는 도구는 이동·클릭뿐이다(그 밖은 이번 범위에서 묻지 않고 거절).
+export function remoteToolQuestion(input: RemoteToolInput): RemoteQuestion | null {
+  const action = remoteActionLines(input);
+  if (!action) return null;
+  const why = reasonLines(input);
+  if (input.toolName === "navigate_to_url") {
+    return finish([
+      `승인이 필요합니다: ${action.title}`,
+      ...action.lines,
+      ...why,
+      `승인하면 이 대화에서 ${action.origin}와 같은 사이트 안의 일반 이동·클릭·입력도 자동 실행 범위에 들어갑니다(결제·삭제·개인정보 등은 계속 묻습니다).`,
+    ]);
+  }
+  return finish([`승인이 필요합니다: ${action.title}`, ...action.lines, ...why]);
+}
+
+export const REMOTE_TASK_REQUEST_MAX = 500;
+
+// 작업 맡기기의 원격 질문(텔레그램 — 실행 방식 '처음에 승인 받고 끝까지 실행'). request: 사용자가 그 채팅으로 보낸 요청 글,
+// plan·risks: 모델이 confirm_task로 넘긴 글(모델 출력). firstAction: 모델이 confirm_task 없이 승인이 필요한 동작을 불렀을 때
+// 그 동작(remoteActionLines). 할 일·위험은 자르지 않는다(무엇을 맡기는지가 잘리면 안 된다) — 넘치면 null.
+export function remoteTaskQuestion(input: {
+  request: string;
+  plan: string;
+  risks: readonly string[];
+  firstAction?: { title: string; lines: string[] } | null;
+}): RemoteQuestion | null {
+  const req = input.request.trim();
+  const request = req.length > REMOTE_TASK_REQUEST_MAX ? `${req.slice(0, REMOTE_TASK_REQUEST_MAX)}…` : req;
+  const lines = ["승인이 필요합니다: 작업 맡기기", `요청: ${request}`];
+  if (input.plan.trim()) lines.push(`할 일: ${input.plan.trim()}`);
+  const risks = input.risks.map((r) => r.trim()).filter(Boolean);
+  lines.push(risks.length ? "이 작업의 위험:" : "이 작업의 위험: 모델이 따로 적지 않음");
+  for (const r of risks) lines.push(`- ${r}`);
+  if (input.firstAction) lines.push(`첫 동작: ${input.firstAction.title}`, ...input.firstAction.lines);
+  lines.push(
+    "승인하면 이 요청이 끝날 때까지 이동·클릭·입력·저장을 묻지 않고 실행합니다(결제·삭제·다른 사이트로 이동도 묻지 않습니다). 자동 로그인·저장한 링크 열기·반복 작업 등록은 원격에서 하지 않습니다. 멈추려면 /stop.",
+  );
+  return finish(lines);
 }
 
 // 도구 호출 순환 한도의 원격 질문. 결과 글(recent — 제목·주소가 섞임)은 넣지 않고 수치와 도구별 횟수만.
