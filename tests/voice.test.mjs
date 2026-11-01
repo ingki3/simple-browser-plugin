@@ -33,6 +33,9 @@ test("normalizeVoiceInput: 기본 꺼짐, anthropic·알 수 없는 값은 off, 
   assert.equal(v.language, "en");
   assert.equal(normalizeVoiceInput({ language: "kor" }).language, "ko");
   assert.equal(normalizeVoiceInput({ language: "" }).language, "");
+  assert.equal(normalizeVoiceInput({}).autoSend, true, "바로 보내기 기본 켜짐");
+  assert.equal(normalizeVoiceInput({ autoSend: false }).autoSend, false);
+  assert.equal(normalizeVoiceInput({ autoSend: "no" }).autoSend, true);
   assert.equal(normalizeVoiceModel("a".repeat(101)), null);
   assert.equal(normalizeVoiceModel("openai/gpt-4o-transcribe"), "openai/gpt-4o-transcribe");
   assert.equal(normalizeVoiceModel("models/x?key=1"), null);
@@ -48,6 +51,9 @@ test("mergeVoiceInput: 바꾼 하위 필드만, 모델은 제공자별로, 빈 �
   assert.deepEqual(mergeVoicePatch({ models: { openai: "a" } }, { models: { gemini: "b" }, language: "en" }), { models: { openai: "a", gemini: "b" }, language: "en" });
   assert.deepEqual(mergeVoicePatch(undefined, { provider: "off" }), { provider: "off" });
   assert.deepEqual(mergeVoiceInput(base, { models: "x" }), base, "모양이 틀린 models는 무시");
+  assert.equal(mergeVoiceInput(base, { autoSend: false }).autoSend, false);
+  assert.equal(mergeVoiceInput({ ...base, autoSend: false }, { language: "en" }).autoSend, false, "다른 하위 필드는 autoSend를 바꾸지 않음");
+  assert.equal(mergeVoiceInput(base, { autoSend: "x" }).autoSend, base.autoSend);
   assert.deepEqual(mergeVoiceInput(base, "x"), base);
 });
 
