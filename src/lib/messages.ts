@@ -5,6 +5,7 @@ import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
 import type { ReadHint } from "./readRecipe";
 import type { LoginSite } from "./loginPolicy";
+import type { LoginSiteOp, ManualSiteOp } from "./settingsOps";
 
 export type ToolName =
   | "describe_page"
@@ -419,6 +420,8 @@ export type RuntimeMsg =
   | { kind: "settings_updated" }
   // 바꾼 필드만 최신 설정에 합쳐 저장(#99). 백그라운드가 차례로 처리해 겹친 저장이 서로 덮지 않는다.
   | { kind: "settings_patch"; patch: SettingsPatch }
+  | { kind: "manual_site_op"; op: ManualSiteOp }
+  | { kind: "login_site_op"; op: LoginSiteOp }
   // 설정 화면의 동작 기록 개수 보기·지우기. 쓰기를 백그라운드 한곳으로 모은다.
   | { kind: "action_log_count" }
   | { kind: "action_log_clear" }

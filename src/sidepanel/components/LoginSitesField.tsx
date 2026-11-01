@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import type { LoginSiteOp } from "@/lib/settingsOps";
 import { hostManifest, KEEPASSXC_HOST } from "@/lib/keepassxc";
 import type { LoginSite } from "@/lib/loginPolicy";
 import { FieldHelp } from "./FieldHelp";
 
 interface Props {
+  // 저장된 목록(useSettings가 따라감). 빼기·코드 변경은 항목 하나씩, 보던 승인의 grantId와 함께 보낸다(#127).
   sites: LoginSite[];
-  onChange: (sites: LoginSite[]) => void;
 }
 
 type Status =
@@ -41,10 +42,23 @@ async function ask(kind: "keepassxc_status" | "keepassxc_associate" | "keepassxc
 
 // 자동 로그인(docs/design/login-automation.md): KeePassXC 연결과 자동 로그인을 승인한 사이트(출처 → 항목) 목록.
 // 사이트는 sign_in 승인 카드의 "앞으로 자동 로그인"으로만 더한다(항목을 그 자리에서 고르므로). 여기서는 빼기와 일회용 코드 켜기만.
-export function LoginSitesField({ sites, onChange }: Props) {
+export function LoginSitesField({ sites }: Props) {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [siteBusy, setSiteBusy] = useState(false);
+  const sendOp = async (op: LoginSiteOp) => {
+    setSiteBusy(true);
+    setError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({ kind: "login_site_op", op })) as { ok?: boolean; error?: string } | undefined;
+      if (!res?.ok) throw new Error(res?.error ?? "응답이 없습니다.");
+    } catch (err) {
+      setError(`자동 로그인 목록을 바꾸지 못했습니다(${err instanceof Error ? err.message : String(err)}).`);
+    } finally {
+      setSiteBusy(false);
+    }
+  };
   const guide = platformGuide();
   const manifest = hostManifest(chrome.runtime.id, guide.proxy);
 
@@ -135,11 +149,18 @@ export function LoginSitesField({ sites, onChange }: Props) {
                 <input
                   type="checkbox"
                   checked={s.totp}
-                  onChange={(e) => onChange(sites.map((x) => (x.origin === s.origin ? { ...x, totp: e.target.checked } : x)))}
+                  disabled={!s.grantId || siteBusy}
+                  onChange={(e) => void sendOp({ op: "set_totp", origin: s.origin, grantId: s.grantId, totp: e.target.checked })}
                 />
                 <span>코드</span>
               </label>
-              <button type="button" className="ghost-btn" onClick={() => onChange(sites.filter((x) => x.origin !== s.origin))}>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={!s.grantId || siteBusy}
+                title={s.grantId ? undefined : "준비 중입니다. 잠시 뒤 다시 누르세요."}
+                onClick={() => void sendOp({ op: "remove", origin: s.origin, grantId: s.grantId })}
+              >
                 빼기
               </button>
             </li>

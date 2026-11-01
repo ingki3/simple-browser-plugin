@@ -500,7 +500,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
             <summary>동작</summary>
             <RunModeField mode={draft.runMode} onChange={(runMode) => update({ runMode })} />
             <QuickThinkingField enabled={draft.quickThinking} onToggle={(quickThinking) => update({ quickThinking })} />
-            <ManualSitesField sites={draft.manualSites} onChange={(manualSites) => update({ manualSites })} currentTabButton />
+            <ManualSitesField sites={settings.manualSites} currentTabButton />
             <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
             <VoiceInputField settings={draft} onPatch={update} />
           </details>
@@ -520,7 +520,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
           <details className="settings-group">
             <summary>자동 로그인 (선택 · KeePassXC 필요)</summary>
-            <LoginSitesField sites={draft.loginSites} onChange={(loginSites) => update({ loginSites })} />
+            <LoginSitesField sites={settings.loginSites} />
           </details>
 
           <details className="settings-group">

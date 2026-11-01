@@ -266,7 +266,8 @@ test("승인 사이트 정리: 정확한 출처·uuid만, 중복 없음", () => 
     { origin: "http://b.example", uuid: ok.uuid },
     { origin: "https://c.example", uuid: "nope" },
   ]);
-  assert.deepEqual(out, [{ ...ok, uuid: ok.uuid.toLowerCase() }]);
+  // 승인 식별자가 없는 옛 값은 비워 둔다(백그라운드가 시작할 때 채운다, #127).
+  assert.deepEqual(out, [{ ...ok, uuid: ok.uuid.toLowerCase(), grantId: "" }]);
   assert.deepEqual(normalizeSettings({}).loginSites, []);
   assert.equal(normalizeSettings({ loginSites: [ok] }).loginSites.length, 1);
 });
