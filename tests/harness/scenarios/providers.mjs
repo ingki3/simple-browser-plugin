@@ -25,7 +25,7 @@ export default [
       await h.turn([{ text: "끝" }], { maxWaitMs: 1500 });
       const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
       expect(reqs.length === 0, `요청 없음(${reqs.length})`);
-      expect((await h.panel.locator(".drawer").count()) === 1, "설정 서랍이 열려야 한다");
+      expect(await h.waitOptions("model"), "설정 페이지(모델·연결)가 열려야 한다");
       expect((await h.panel.locator(".welcome").innerText()).includes("API 키가 필요합니다"), "첫 화면 키 안내");
     },
   },

@@ -61,7 +61,7 @@ Chrome의 확장 권한은 설치할 때 한꺼번에 알립니다. 각 권한�
 ## 텔레그램 연동(선택)
 
 1. 텔레그램에서 @BotFather에게 `/newbot`을 보내 봇을 만들고 토큰을 받습니다.
-2. 패널 설정 → 텔레그램 연동에 토큰을 넣고 저장합니다.
+2. 설정(패널의 ⚙ — 새 탭으로 열림) → 모델·연결 → 텔레그램 연동에 토큰을 넣고 저장합니다.
 3. "연결하기"를 누르면 여섯 자리 코드가 나옵니다. 텔레그램에서 만든 봇과의 대화에 그 코드를 보냅니다.
 4. 연결되면 봇에게 할 일을 보내세요. 브라우저가 켜져 있어야 하고, 받는 데 최대 1분쯤 걸립니다.
 
@@ -71,7 +71,7 @@ Chrome의 확장 권한은 설치할 때 한꺼번에 알립니다. 각 권한�
 
 다른 AI 도구가 이 도우미에게 브라우저 일을 시키고 답을 받게 합니다. [Node.js](https://nodejs.org/) 22 이상이 필요합니다.
 
-1. 패널 설정 → MCP 연동에서 "MCP 연동 켜기"를 누르고 "비밀 보기"로 비밀을 확인합니다.
+1. 설정(패널의 ⚙) → 모델·연결 → MCP 연동에서 "MCP 연동 켜기"를 누르고 "비밀 보기"로 비밀을 확인합니다.
 2. 받은 ZIP을 푼 폴더(직접 빌드했다면 저장소)의 `mcp/sbp-mcp.mjs`가 다리 프로그램입니다. AI 도구에 등록합니다. 설정 화면에 비밀이 채워진 예시가 있습니다.
    - Claude Code: `claude mcp add simple-browser -e SBP_SECRET=<비밀> -- node "<폴더>/mcp/sbp-mcp.mjs"`
    - Claude Desktop: `claude_desktop_config.json`의 `mcpServers`에 `command`(node의 절대 경로, 예: `/usr/local/bin/node`), `args`(다리 파일 경로), `env.SBP_SECRET`을 넣습니다. 경로에 빈칸이 있으면 그대로 따옴표 안에 둡니다.
@@ -90,7 +90,7 @@ Google 시트·문서·드라이브 도구는 **기본 사용에 필요 없는 �
 2. [Google Cloud 콘솔](https://console.cloud.google.com/apis/library)에서 Sheets·Docs·Drive API를 켜고, "OAuth 동의 화면"을 구성해 자기 이메일을 테스트 사용자로 등록합니다.
 3. "사용자 인증 정보" → "OAuth 클라이언트 ID"를 만듭니다. 애플리케이션 유형은 "Chrome 확장 프로그램", Application ID는 1의 확장 ID입니다.
 4. `GOOGLE_OAUTH_CLIENT_ID=<클라이언트 ID> npm run build`로 다시 빌드하고 확장을 새로고침합니다.
-5. 설정 → 연결에서 Google에 연결합니다.
+5. 설정 → 모델·연결 → Google 연결에서 Google에 연결합니다.
 
 확장 ID는 불러온 폴더 경로에 따라 정해지므로, 폴더를 옮기면 3부터 다시 해야 합니다.
 

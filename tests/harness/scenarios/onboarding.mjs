@@ -16,7 +16,7 @@ export default [
       await h.panel.fill("textarea.composer-input", "요약해 줘");
       await h.panel.click("button.composer-btn.primary");
       await h.panel.waitForTimeout(300);
-      expect((await h.panel.locator(".drawer").count()) === 1, "설정 서랍이 열려야 한다");
+      expect(await h.waitOptions("model"), "설정 페이지(모델·연결)가 열려야 한다");
       expect((await h.panel.inputValue("textarea.composer-input")) === "요약해 줘", "쓴 글은 남아야 한다");
       expect((await modelReqCount(h)) === 0, "모델에 보내면 안 된다");
     },
@@ -38,10 +38,11 @@ export default [
     async run(h) {
       await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
       await h.panel.locator("button.icon-btn[title]", { hasText: "⚙" }).click();
-      await h.panel.waitForTimeout(300);
-      await h.panel.getByRole("button", { name: "연결 확인" }).click();
-      await h.panel.waitForTimeout(1000);
-      expect(await h.panel.getByText("✓ 연결됨").count(), "연결됨이 보여야 한다");
+      const opt = await h.waitOptions();
+      expect(opt, "설정 페이지");
+      await opt.getByRole("button", { name: "연결 확인" }).click();
+      await opt.waitForTimeout(1000);
+      expect(await opt.getByText("✓ 연결됨").count(), "연결됨이 보여야 한다");
       const req = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1));
       expect(req.url.includes("api.anthropic.com") && req.body.max_tokens <= 64, `짧은 요청(${JSON.stringify(req.body)})`);
     },

@@ -51,3 +51,18 @@ export function handoffResultText(tool: "click_element" | "fill_form_fields", ou
         : `사용자가 직접 ${what} 마쳤다고 알렸습니다`;
   return `${how}(이 사이트는 사용자가 '직접 조작할 사이트'로 정해 도우미가 대신 ${what} 하지 않습니다). 결과는 페이지를 다시 관측해 확인하세요.`;
 }
+
+// 설정 페이지(#127)의 "열린 탭에서 고르기": 열린 탭의 주소에서 사이트(출처) 후보를 만든다. 웹 주소가 아닌 탭·이미 넣은 사이트·
+// 중복은 빼고, 사이트마다 처음 만난 탭의 제목(60자)을 함께 보인다(사용자 화면 표시용 — 모델로 보내지 않음).
+export function tabSiteChoices(
+  tabs: ReadonlyArray<{ url?: string; title?: string }>,
+  existing: readonly string[],
+): { site: string; title: string }[] {
+  const out: { site: string; title: string }[] = [];
+  for (const t of tabs) {
+    const site = manualSiteOf(t.url);
+    if (!site || existing.includes(site) || out.some((c) => c.site === site)) continue;
+    out.push({ site, title: (t.title ?? "").trim().slice(0, 60) });
+  }
+  return out;
+}

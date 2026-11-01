@@ -1,47 +1,33 @@
-// 설정 화면을 여러 개·오래 열어 두어도 최신 값을 따라가는지(#127 2단계): 저장 값과 편집 초안을 나눈 칸(키·음성 모델·MCP 포트),
+// 설정 페이지(탭)를 여러 개·오래 열어 두어도 최신 값을 따라가는지(#127 2단계): 저장 값과 편집 초안을 나눈 칸(키·음성 모델·MCP 포트),
 // 백그라운드에서 읽어 오는 목록(저장 링크·동작 기록·페이지 제안)의 다시 읽기와 늦은 옛 변경 거절.
 import { expect } from "../lib.mjs";
 
 const stored = (h) => h.sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings);
 
-async function openDrawer(p) {
-  await p.bringToFront();
-  await p.locator("button.icon-btn[title]", { hasText: "⚙" }).click();
-  await p.waitForTimeout(300);
-}
-
-async function otherPanel(h) {
-  const other = await h.ctx.newPage();
-  await other.goto(`chrome-extension://${h.extId}/src/sidepanel/index.html`);
-  await other.waitForTimeout(500);
-  return other;
-}
-
-const group = (p, name) => p.locator("details.settings-group summary", { hasText: name }).click();
 
 export default [
   {
     name: "API 키 칸: 고치지 않은 칸은 다른 서랍이 저장한 키를 따라가고, 고치는 중인 칸은 초안을 두고 알린다",
     async run(h) {
-      const other = await otherPanel(h);
-      await openDrawer(h.panel);
-      await openDrawer(other);
+      const a = await h.openOptions("model");
+      const other = await h.openOptions("model");
       const key = (p) => p.locator(".key-row input[autocomplete=off]");
       const save = (p) => p.locator(".key-row button.primary", { hasText: "저장" }).first().click();
-      await key(h.panel).fill("sk-or-A");
-      await save(h.panel);
-      await h.panel.waitForTimeout(500);
+      await key(a).fill("sk-or-A");
+      await save(a);
+      await a.waitForTimeout(500);
       expect((await key(other).inputValue()) === "sk-or-A", `고치지 않은 칸은 따라감(${await key(other).inputValue()})`);
       // B가 고치는 중에 A가 다시 저장한다.
       await key(other).fill("sk-or-B-draft");
-      await key(h.panel).fill("sk-or-A2");
-      await save(h.panel);
+      await key(a).fill("sk-or-A2");
+      await save(a);
       await other.waitForTimeout(500);
       expect((await key(other).inputValue()) === "sk-or-B-draft", "고치는 중인 초안은 그대로");
       expect((await other.locator(".key-conflict").count()) === 1, "다른 곳에서 바뀌었다는 안내");
       await other.locator(".key-conflict button", { hasText: "되돌리기" }).click();
       expect((await key(other).inputValue()) === "sk-or-A2" && (await other.locator(".key-conflict").count()) === 0, "되돌리기");
       expect((await stored(h)).openRouterApiKey === "sk-or-A2", "저장 값");
+      await a.close();
       await other.close();
     },
   },
@@ -49,21 +35,20 @@ export default [
     name: "음성 입력 모델 칸: 다른 서랍이 바꾼 모델을 따라가고, 내가 입력한 글자는 저장이 돌아와도 그대로",
     async run(h) {
       await h.settings({ voiceInput: { provider: "openai", models: {}, language: "ko", autoSend: true } });
-      const other = await otherPanel(h);
-      await openDrawer(h.panel);
-      await openDrawer(other);
-      for (const p of [h.panel, other]) await group(p, "동작");
+      const a = await h.openOptions("behavior");
+      const other = await h.openOptions("behavior");
       const model = (p) => p.locator("input[aria-label='음성 입력 모델']");
-      await model(h.panel).fill("whisper-1");
-      await h.panel.waitForTimeout(1200);
+      await model(a).fill("whisper-1");
+      await a.waitForTimeout(1200);
       expect((await stored(h)).voiceInput.models.openai === "whisper-1", "저장");
-      expect((await model(h.panel).inputValue()) === "whisper-1", "내 칸은 그대로");
+      expect((await model(a).inputValue()) === "whisper-1", "내 칸은 그대로");
       expect((await model(other).inputValue()) === "whisper-1", `다른 서랍이 따라감(${await model(other).inputValue()})`);
       // 잘못된 글자는 저장 값이 비지만(기본 모델) 입력 중인 글자를 지우지 않는다.
-      await model(h.panel).fill("bad model");
-      await h.panel.waitForTimeout(1200);
-      expect((await model(h.panel).inputValue()) === "bad model" && !(await stored(h)).voiceInput.models.openai, "입력 중인 글자 유지");
-      expect((await h.panel.locator(".voice-model-conflict").count()) === 0, "내 저장은 충돌이 아님");
+      await model(a).fill("bad model");
+      await a.waitForTimeout(1200);
+      expect((await model(a).inputValue()) === "bad model" && !(await stored(h)).voiceInput.models.openai, "입력 중인 글자 유지");
+      expect((await a.locator(".voice-model-conflict").count()) === 0, "내 저장은 충돌이 아님");
+      await a.close();
       await other.close();
     },
   },
@@ -71,17 +56,20 @@ export default [
     name: "MCP 포트 칸: 상태를 다시 읽어도 고치는 중인 포트를 덮지 않는다",
     async run(h) {
       await h.panel.evaluate(() => chrome.runtime.sendMessage({ kind: "mcp_set", enabled: true }));
-      await openDrawer(h.panel);
-      await group(h.panel, "MCP");
-      const port = h.panel.locator("input[aria-label='포트']");
+      const opt = await h.openOptions("model");
+      // 다른 묶음으로 옮겨 가도(마운트 유지) 초안이 남는다.
+      const port = opt.locator("input[aria-label='포트']");
       await port.fill("48000");
+      await opt.locator(".settings-nav a", { hasText: "고급" }).click();
       // 다른 화면이 묻기 설정을 바꾸면 이 화면이 상태를 다시 읽는다.
       await h.sw.evaluate(async () => {
         const cur = (await chrome.storage.local.get("mcp")).mcp;
         await chrome.storage.local.set({ mcp: { ...cur, askApproval: !cur.askApproval } });
       });
-      await h.panel.waitForTimeout(600);
+      await opt.waitForTimeout(600);
+      await opt.locator(".settings-nav a", { hasText: "모델·연결" }).click();
       expect((await port.inputValue()) === "48000", `초안 유지(${await port.inputValue()})`);
+      await opt.close();
       await h.panel.evaluate(() => chrome.runtime.sendMessage({ kind: "mcp_set", enabled: false }));
     },
   },
@@ -97,25 +85,25 @@ export default [
           actionLog: [],
         });
       }, h.base);
-      await openDrawer(h.panel);
-      await group(h.panel, "기억·기록");
-      const names = () => h.panel.locator(".saved-name").allInnerTexts();
+      const opt = await h.openOptions("records");
+      const names = () => opt.locator(".saved-name").allInnerTexts();
       expect((await names()).length === 2, `처음 두 개(${JSON.stringify(await names())})`);
       await h.sw.evaluate(async () => {
         const cur = (await chrome.storage.local.get("savedPages")).savedPages;
         await chrome.storage.local.set({ savedPages: cur.filter((p) => p.id !== "s1") });
       });
-      await h.panel.waitForTimeout(500);
+      await opt.waitForTimeout(500);
       const after = await names();
       expect(after.length === 1 && after[0].includes("주문 조회"), `지운 링크가 빠짐(${JSON.stringify(after)})`);
-      const clearBtn = h.panel.locator(".field", { hasText: "동작 기록" }).locator("button", { hasText: "기록 지우기" });
+      const clearBtn = opt.locator(".field", { hasText: "동작 기록" }).locator("button", { hasText: "기록 지우기" });
       expect(await clearBtn.isDisabled(), "기록 0건이면 지우기 꺼짐");
       await h.sw.evaluate(async () => {
         await chrome.storage.local.set({ actionLog: [{ at: Date.now(), tool: "click_element", origin: "https://a.example", path: "/", ok: true }] });
       });
-      await h.panel.waitForTimeout(500);
-      const text = await h.panel.locator(".field", { hasText: "동작 기록" }).innerText();
+      await opt.waitForTimeout(500);
+      const text = await opt.locator(".field", { hasText: "동작 기록" }).innerText();
       expect(!(await clearBtn.isDisabled()), `기록이 생기면 지우기 켜짐(${text.slice(0, 80)})`);
+      await opt.close();
     },
   },
   {
@@ -126,21 +114,21 @@ export default [
           pageSuggestions: [{ id: "r1", origin: base, path: "/article/*", label: "번역해 드릴까요?", request: "번역해줘", enabled: true, version: 1, createdAt: 1 }],
         });
       }, h.base);
-      await openDrawer(h.panel);
-      await group(h.panel, "기억·기록");
-      const field = h.panel.locator(".page-suggestions");
+      const opt = await h.openOptions("records");
+      const field = opt.locator(".page-suggestions");
       await field.locator("button", { hasText: "고치기" }).click();
       await field.locator(".suggestion-label-input").fill("옛 초안");
       // 다른 화면에서 같은 규칙을 고친다.
       const r = await h.panel.evaluate(() => chrome.runtime.sendMessage({ kind: "page_suggest_update", id: "r1", label: "다른 곳에서 고침" }));
       expect(r?.ok, "다른 곳 저장");
-      await h.panel.waitForTimeout(400);
+      await opt.waitForTimeout(400);
       expect((await field.locator(".suggestion-conflict").count()) === 1, "바뀌었다는 안내");
       await field.locator("button", { hasText: "저장" }).click();
-      await h.panel.waitForTimeout(400);
+      await opt.waitForTimeout(400);
       const rules = await h.sw.evaluate(async () => (await chrome.storage.local.get("pageSuggestions")).pageSuggestions);
       expect(rules[0].label === "다른 곳에서 고침", `옛 초안은 저장되지 않음(${rules[0].label})`);
       expect((await field.innerText()).includes("다른 곳에서 바뀌었습니다"), "거절 이유");
+      await opt.close();
     },
   },
 ];

@@ -11,6 +11,7 @@
                                                     ├── ReAct stream loop (reasoning_details 보존)
                                                     ├── Tool dispatcher (zod 인자 검증)
                                                     └── webNavigation 통합 (settle 대기)
+[설정 페이지(옵션 탭) React UI] ⇄ runtime.sendMessage·storage ⇄ [Background]   (#127, 패널과 같은 저장소 값을 storage.onChanged로 따라감)
 ```
 
 ## 주요 구성

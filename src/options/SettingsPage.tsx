@@ -1,20 +1,20 @@
-import { McpField } from "./McpField";
-import { TelegramField } from "./TelegramField";
-import { RepeatTasksField } from "./RepeatTasksField";
+import { McpField } from "../sidepanel/components/McpField";
+import { TelegramField } from "../sidepanel/components/TelegramField";
+import { RepeatTasksField } from "../sidepanel/components/RepeatTasksField";
 import { useEffect, useRef, useState } from "react";
-import { useLatestGate, useStorageKeys, useSyncedDraft } from "../hooks/syncHelpers";
+import { SETTINGS_SECTIONS, SETTINGS_SECTION_LABELS, settingsSectionOf, type SettingsSection } from "@/lib/settingsSections";
+import { useLatestGate, useStorageKeys, useSyncedDraft } from "../sidepanel/hooks/syncHelpers";
 import { GOOGLE_AUTH_VERSION_KEY } from "@/lib/googleAuthKey";
-import { ActionLogField } from "./ActionLogField";
-import { RunModeField } from "./RunModeField";
-import { RememberPagesField } from "./RememberPagesField";
-import { HistoryPickField } from "./HistoryPickField";
-import { PageSuggestionsField } from "./PageSuggestionsField";
-import { TrustedInputField } from "./TrustedInputField";
-import { ManualSitesField } from "./ManualSitesField";
-import { LoginSitesField } from "./LoginSitesField";
-import { ShowThinkingField } from "./ShowThinkingField";
-import { QuickThinkingField } from "./QuickThinkingField";
-import { CsvMaxCharsField } from "./CsvMaxCharsField";
+import { ActionLogField } from "../sidepanel/components/ActionLogField";
+import { RunModeField } from "../sidepanel/components/RunModeField";
+import { RememberPagesField } from "../sidepanel/components/RememberPagesField";
+import { PageSuggestionsField } from "../sidepanel/components/PageSuggestionsField";
+import { TrustedInputField } from "../sidepanel/components/TrustedInputField";
+import { ManualSitesField } from "../sidepanel/components/ManualSitesField";
+import { LoginSitesField } from "../sidepanel/components/LoginSitesField";
+import { ShowThinkingField } from "../sidepanel/components/ShowThinkingField";
+import { QuickThinkingField } from "../sidepanel/components/QuickThinkingField";
+import { CsvMaxCharsField } from "../sidepanel/components/CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { OPENAI_DEFAULT_MODEL, OPENAI_MODEL_SUGGESTIONS } from "@/lib/providers/openai";
@@ -56,11 +56,11 @@ import {
   type Settings,
   type SettingsPatch,
 } from "@/lib/messages";
-import { useSettings } from "../hooks/useSettings";
-import { FieldHelp } from "./FieldHelp";
+import { useSettings } from "../sidepanel/hooks/useSettings";
+import { FieldHelp } from "../sidepanel/components/FieldHelp";
 import { mergeSettingsPatch } from "@/lib/settings";
 import { mergeVoicePatch } from "@/lib/voice";
-import { VoiceInputField } from "./VoiceInputField";
+import { VoiceInputField } from "../sidepanel/components/VoiceInputField";
 
 const SAVE_DELAY_MS = 600;
 const CUSTOM_MODEL = "__custom__";
@@ -92,12 +92,8 @@ function mergePatch(a: SettingsPatch, b: SettingsPatch): SettingsPatch {
     ...(a.voiceInput || b.voiceInput ? { voiceInput: mergeVoicePatch(a.voiceInput, b.voiceInput) } : {}),
   };
 }
-import { KO } from "../i18n/ko";
+import { KO } from "../sidepanel/i18n/ko";
 
-interface Props {
-  open: boolean;
-  onClose: () => void;
-}
 
 const clampHops = (n: number) =>
   Math.min(
@@ -111,7 +107,15 @@ interface GoogleStatus {
   clientId: string;
 }
 
-export function SettingsDrawer({ open, onClose }: Props) {
+// 설정 페이지(#127): 전체 설정은 브라우저 탭의 이 페이지에서 한다(패널에는 실행 방식 선택 등 빠른 설정만). 왼쪽 메뉴의 묶음을
+// 주소 해시로 고르고, 다섯 묶음을 모두 마운트한 채 고른 것만 보인다(묶음을 바꿔도 편집 중인 초안이 사라지지 않게).
+export function SettingsPage() {
+  const [section, setSection] = useState<SettingsSection>(() => settingsSectionOf(location.hash));
+  useEffect(() => {
+    const onHash = () => setSection(settingsSectionOf(location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const { settings, loaded, savePatch } = useSettings();
   const [draft, setDraft] = useState(settings);
   const direct = draft.provider === "openrouter" ? null : DIRECT_PROVIDERS[draft.provider];
@@ -130,8 +134,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
   // 키 칸은 저장 값과 편집 초안을 나눈다(#127): 고치지 않은 칸은 다른 곳에서 저장한 키를 따라가고, 고치는 중이면 초안을 두고 알린다.
-  // 제공자를 바꾸거나 서랍을 열면 그 제공자의 저장된 키로 새로 시작한다.
-  const keyField = useSyncedDraft(savedKey, `${draft.provider}:${open ? 1 : 0}`);
+  // 제공자를 바꾸면 그 제공자의 저장된 키로 새로 시작한다.
+  const keyField = useSyncedDraft(savedKey, draft.provider);
   const keyDraft = keyField.value;
   const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
   const [googleBusy, setGoogleBusy] = useState<"connect" | "disconnect" | null>(null);
@@ -151,10 +155,10 @@ export function SettingsDrawer({ open, onClose }: Props) {
   // 연결 확인(#129): 저장한 키·모델로 짧은 요청 한 번.
   const [check, setCheck] = useState<{ state: "busy" | "ok" | "error"; text: string } | null>(null);
 
-  // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 이 서랍의 저장 중인 변경과 아직 보내지 않은 변경을 그 위에 둔다.
+  // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 이 화면의 저장 중인 변경과 아직 보내지 않은 변경을 그 위에 둔다.
   useEffect(() => {
     if (loaded) setDraft(mergeSettingsPatch(mergeSettingsPatch(settings, inflight.current ?? {}), dirty.current));
-  }, [loaded, settings, open, syncTick]);
+  }, [loaded, settings, syncTick]);
 
   // "저장됨"은 잠깐만 보인다.
   useEffect(() => {
@@ -271,14 +275,14 @@ export function SettingsDrawer({ open, onClose }: Props) {
   };
 
   useEffect(() => {
-    if (open) refreshGoogleStatus();
-  }, [open]);
+    void refreshGoogleStatus();
+  }, []);
   useStorageKeys([GOOGLE_AUTH_VERSION_KEY], () => {
-    if (open) void refreshGoogleStatus();
+    void refreshGoogleStatus();
   });
   useEffect(() => {
     const onVisible = () => {
-      if (open && document.visibilityState === "visible") void refreshGoogleStatus();
+      if (document.visibilityState === "visible") void refreshGoogleStatus();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -317,7 +321,7 @@ export function SettingsDrawer({ open, onClose }: Props) {
     setDiagBusy(true);
     setGoogleError(null);
     const panelSide: Record<string, unknown> = {
-      panelChromeIdentity: typeof chrome.identity !== "undefined",
+      pageChromeIdentity: typeof chrome.identity !== "undefined",
       panelRedirectUrl:
         typeof chrome.identity !== "undefined"
           ? (() => {
@@ -327,8 +331,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 return `error: ${e instanceof Error ? e.message : String(e)}`;
               }
             })()
-          : "(panel에서도 chrome.identity 없음)",
-      panelChromeRuntimeId: chrome.runtime?.id ?? "(none)",
+          : "(설정 페이지에서도 chrome.identity 없음)",
+      pageChromeRuntimeId: chrome.runtime?.id ?? "(none)",
     };
     let bg: unknown = "(no response)";
     let bgError: string | null = null;
@@ -373,37 +377,32 @@ export function SettingsDrawer({ open, onClose }: Props) {
     }
   };
 
-  if (!open) return null;
-
-  // noop — hoisted above
-
-  const handleClose = async () => {
-    await flush();
-    onClose();
-  };
-
   return (
-    <div className="drawer-overlay" onClick={() => void handleClose()}>
-      <div className="drawer" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-header">
-          <h2>{KO.settingsTitle}</h2>
-          <span className="drawer-saved" aria-live="polite">
-            {saveError ? `저장하지 못함: ${saveError}` : savedAt ? "저장됨" : ""}
-          </span>
-          <button type="button" className="ghost-btn" onClick={() => void handleClose()}>
-            닫기
-          </button>
+    <div className="settings-page">
+      <header className="settings-header">
+        <h1>{KO.settingsTitle}</h1>
+        <span className="settings-saved" aria-live="polite">
+          {saveError ? `저장하지 못함: ${saveError}` : savedAt ? "저장됨" : ""}
+        </span>
+      </header>
+      {googleError && (
+        <div className="drawer-alert">
+          <strong>Google 연결 실패</strong>
+          <div>{googleError}</div>
         </div>
-        {googleError && (
-          <div className="drawer-alert">
-            <strong>Google 연결 실패</strong>
-            <div>{googleError}</div>
-          </div>
-        )}
-        <div className="drawer-body">
-          <p className="drawer-note">바꾸면 바로 저장됩니다. API 키만 저장 버튼을 누르세요.</p>
-          <details className="settings-group" open>
-            <summary>시작하기</summary>
+      )}
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="설정 묶음">
+          {SETTINGS_SECTIONS.map((id) => (
+            <a key={id} href={`#${id}`} className={id === section ? "active" : ""} aria-current={id === section ? "page" : undefined}>
+              {SETTINGS_SECTION_LABELS[id]}
+            </a>
+          ))}
+        </nav>
+        <main className="settings-body">
+          <p className="settings-note">바꾸면 바로 저장됩니다. API 키만 저장 버튼을 누르세요. 열린 사이드 패널과 진행 중인 대화에도 바로 반영됩니다.</p>
+          <section className="settings-section" data-section="model" hidden={section !== "model"}>
+            <h2>모델·연결</h2>
             <label className="field">
               <span className="field-label">모델 제공자</span>
               <select value={draft.provider} onChange={(e) => update({ provider: e.target.value as Settings["provider"] })}>
@@ -518,47 +517,11 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 </>
               )}
             </label>
-          </details>
-
-          <details className="settings-group">
-            <summary>동작</summary>
-            <RunModeField mode={draft.runMode} onChange={(runMode) => update({ runMode })} />
-            <QuickThinkingField enabled={draft.quickThinking} onToggle={(quickThinking) => update({ quickThinking })} />
-            <ManualSitesField sites={settings.manualSites} currentTabButton />
-            <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
-            <VoiceInputField settings={draft} stored={settings} onPatch={update} />
-          </details>
-
-          <details className="settings-group">
-            <summary>반복 작업</summary>
-            <RepeatTasksField />
-          </details>
-
-          <details className="settings-group">
-            <summary>기억·기록</summary>
-            <RememberPagesField enabled={draft.rememberPages} onToggle={(rememberPages) => update({ rememberPages })} />
-            {draft.rememberPages && <HistoryPickField beforeStart={flush} onOpened={() => void handleClose()} />}
-            <PageSuggestionsField enabled={draft.pageSuggestions} onToggle={(pageSuggestions) => update({ pageSuggestions })} />
-            <ActionLogField enabled={draft.actionLogEnabled} onToggle={(actionLogEnabled) => update({ actionLogEnabled })} />
-          </details>
-
-          <details className="settings-group">
-            <summary>자동 로그인 (선택 · KeePassXC 필요)</summary>
-            <LoginSitesField sites={settings.loginSites} />
-          </details>
-
-          <details className="settings-group">
-            <summary>텔레그램 연동 (선택)</summary>
+            <h3 className="settings-sub">텔레그램 연동 (선택)</h3>
             <TelegramField />
-          </details>
-
-          <details className="settings-group">
-            <summary>MCP 연동 (선택)</summary>
+            <h3 className="settings-sub">MCP 연동 (선택)</h3>
             <McpField />
-          </details>
-
-          <details className="settings-group">
-            <summary>Google 연결 (선택 · 직접 빌드 필요)</summary>
+            <h3 className="settings-sub">Google 연결 (선택 · 직접 빌드 필요)</h3>
             <div className="field">
               <span className="field-label">Google Workspace (Sheets / Docs / Drive)</span>
               <div className="google-status-row">
@@ -638,10 +601,33 @@ export function SettingsDrawer({ open, onClose }: Props) {
                 </div>
               )}
             </div>
-          </details>
-
-          <details className="settings-group">
-            <summary>고급</summary>
+          </section>
+          <section className="settings-section" data-section="behavior" hidden={section !== "behavior"}>
+            <h2>동작</h2>
+            <RunModeField mode={draft.runMode} onChange={(runMode) => update({ runMode })} />
+            <QuickThinkingField enabled={draft.quickThinking} onToggle={(quickThinking) => update({ quickThinking })} />
+            <TrustedInputField enabled={draft.trustedInput} onToggle={(trustedInput) => update({ trustedInput })} />
+            <VoiceInputField settings={draft} stored={settings} onPatch={update} />
+            <h3 className="settings-sub">반복 작업</h3>
+            <RepeatTasksField />
+          </section>
+          <section className="settings-section" data-section="sites" hidden={section !== "sites"}>
+            <h2>사이트</h2>
+            <ManualSitesField sites={settings.manualSites} />
+            <h3 className="settings-sub">자동 로그인 (선택 · KeePassXC 필요)</h3>
+            <LoginSitesField sites={settings.loginSites} />
+          </section>
+          <section className="settings-section" data-section="records" hidden={section !== "records"}>
+            <h2>기록</h2>
+            <RememberPagesField enabled={draft.rememberPages} onToggle={(rememberPages) => update({ rememberPages })} />
+            {draft.rememberPages && (
+              <span className="field-help history-pick-hint">방문 기록에서 기억할 페이지 찾기는 사이드 패널 위쪽의 🕘에서 합니다(추천을 대화의 저장 카드로 띄우기 때문).</span>
+            )}
+            <PageSuggestionsField enabled={draft.pageSuggestions} onToggle={(pageSuggestions) => update({ pageSuggestions })} />
+            <ActionLogField enabled={draft.actionLogEnabled} onToggle={(actionLogEnabled) => update({ actionLogEnabled })} />
+          </section>
+          <section className="settings-section" data-section="advanced" hidden={section !== "advanced"}>
+            <h2>고급</h2>
             <label className="field">
               <span className="field-label">{KO.systemPromptLabel}</span>
               <textarea
@@ -710,8 +696,8 @@ export function SettingsDrawer({ open, onClose }: Props) {
 
             <CsvMaxCharsField value={draft.csvMaxChars} onChange={(csvMaxChars) => update({ csvMaxChars }, SAVE_DELAY_MS)} />
             <ShowThinkingField enabled={draft.showThinking} onToggle={(showThinking) => update({ showThinking })} />
-          </details>
-        </div>
+          </section>
+        </main>
       </div>
     </div>
   );
