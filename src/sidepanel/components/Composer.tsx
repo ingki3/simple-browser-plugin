@@ -15,6 +15,12 @@ export function Composer({ onSend, onAbort, needsKey, onOpenSettings }: Props) {
   const streaming = useChatStore((s) => s.streaming);
   const conversationId = useChatStore((s) => s.conversationId);
   const input = useRef<HTMLTextAreaElement>(null);
+  // 입력창의 마지막 선택 위치(🎤를 누르면 포커스가 버튼으로 가므로 미리 기억한다). null이면 끝에 넣는다.
+  const sel = useRef<{ start: number; end: number } | null>(null);
+  const keepSel = () => {
+    const el = input.current;
+    if (el) sel.current = { start: el.selectionStart, end: el.selectionEnd };
+  };
   const [voiceNote, setVoiceNote] = useState<string | null>(null);
   // 음성 입력(#184): 받아쓴 글자는 입력창의 커서 자리에 끼워 넣기만 한다(기존 글자 보존, 자동으로 보내지 않음).
   const voice = useVoiceInput({
@@ -22,8 +28,8 @@ export function Composer({ onSend, onAbort, needsKey, onOpenSettings }: Props) {
     onText: (text, truncated) => {
       const el = input.current;
       setValue((cur) => {
-        const at = el && document.activeElement === el ? el.selectionStart : cur.length;
-        const end = el && document.activeElement === el ? el.selectionEnd : cur.length;
+        const at = Math.min(sel.current?.start ?? cur.length, cur.length);
+        const end = Math.min(Math.max(sel.current?.end ?? cur.length, at), cur.length);
         const before = cur.slice(0, at);
         const after = cur.slice(end);
         const sep = before && !/\s$/.test(before) ? " " : "";
@@ -107,6 +113,8 @@ export function Composer({ onSend, onAbort, needsKey, onOpenSettings }: Props) {
         </button>
         <textarea
           ref={input}
+          onSelect={keepSel}
+          onBlur={keepSel}
           className="composer-input"
           placeholder={KO.composerPlaceholder}
           value={value}

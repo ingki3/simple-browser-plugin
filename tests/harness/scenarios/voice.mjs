@@ -195,4 +195,18 @@ export default [
       expect(w.provider === "off", `Claude는 저장되지 않음(${w.provider})`);
     },
   },
+  {
+    name: "음성 입력(#184): 🎤를 누르기 전 커서 자리에 넣는다(버튼으로 포커스가 옮겨도)",
+    async run(h) {
+      await h.settings(OPENAI);
+      await h.panel.waitForTimeout(300);
+      await input(h).fill("앞뒤");
+      await input(h).evaluate((el) => {
+        el.focus();
+        el.setSelectionRange(1, 1);
+      });
+      await speak(h);
+      expect(await waitFor(h, async () => (await input(h).inputValue()) === "앞 음성 글자뒤"), `커서 자리(${await input(h).inputValue()})`);
+    },
+  },
 ];

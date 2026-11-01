@@ -39,6 +39,8 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
   const [state, setState] = useState<VoiceState>({ phase: "idle" });
   const gen = useRef(0);
   const live = useRef<Live | null>(null);
+  // begin을 보낸 뒤 녹음이 시작되기 전(권한 대기 등)의 작업. 그 사이 백그라운드가 멈추면(설정 변경) 세대를 올려 시작하지 않게.
+  const pending = useRef<{ gen: number; jobId: string } | null>(null);
   const port = useRef<chrome.runtime.Port | null>(null);
   // jobId별 begin 응답을 기다리는 곳.
   const waiters = useRef(new Map<string, (m: PortMsg) => void>());
@@ -62,6 +64,14 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
       if (w) {
         waiters.current.delete(m.jobId);
         w(m);
+        return;
+      }
+      // 녹음을 시작하기 전(권한 대기 중) 설정이 바뀌어 백그라운드가 멈춘 경우: 시작하지 않게 세대를 올린다.
+      const pend = pending.current;
+      if (m.kind === "error" && pend && pend.jobId === m.jobId && !live.current) {
+        pending.current = null;
+        gen.current += 1;
+        setState({ phase: "error", message: m.message });
         return;
       }
       // 녹음 중 설정이 바뀌어 백그라운드가 멈춘 경우 등: 지금 작업이면 녹음을 버리고 알린다.
@@ -112,6 +122,12 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
     const rec = l.recorder;
     if (!rec || rec.state === "inactive") {
       release(l);
+      // 이미 멈춘 녹음기(장치 분리 등)를 보내려 했으면 작업을 정리하고 알린다(버튼이 막힌 채 남지 않게).
+      if (intent === "send" && live.current === l) {
+        live.current = null;
+        post({ kind: "cancel", jobId: l.jobId });
+        setState({ phase: "error", message: "녹음이 멈췄습니다. 마이크 연결을 확인하고 다시 눌러 주세요." });
+      }
       return;
     }
     rec.onstop = () => {
@@ -157,6 +173,9 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
   // 진행 중인 것을 모두 버린다(새 대화·취소·닫힘).
   const cancel = useCallback(() => {
     gen.current += 1;
+    const pend = pending.current;
+    pending.current = null;
+    if (pend) post({ kind: "cancel", jobId: pend.jobId });
     const l = live.current;
     live.current = null;
     if (l) {
@@ -172,11 +191,13 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
     const mine = ++gen.current;
     const jobId = crypto.randomUUID();
     setState({ phase: "starting" });
+    pending.current = { gen: mine, jobId };
     const ready = await ask({ kind: "begin", jobId });
     if (gen.current !== mine) {
       post({ kind: "cancel", jobId });
       return;
     }
+    if (pending.current?.jobId === jobId && ready.kind !== "ready") pending.current = null;
     if (ready.kind !== "ready") {
       setState({ phase: "error", message: "message" in ready ? ready.message : "음성 입력을 시작하지 못했습니다.", settings: ready.kind === "refused" });
       return;
@@ -190,7 +211,8 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
       setState({ phase: "error", message: await micErrorText(err) });
       return;
     }
-    // 권한 요청을 기다리는 사이 취소·새 대화가 됐으면 늦게 받은 트랙을 바로 멈춘다.
+    // 권한 요청을 기다리는 사이 취소·새 대화·설정 변경이 됐으면 늦게 받은 트랙을 바로 멈춘다.
+    if (pending.current?.jobId === jobId) pending.current = null;
     if (gen.current !== mine) {
       for (const t of stream.getTracks()) t.stop();
       post({ kind: "cancel", jobId });
@@ -204,6 +226,18 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
       rec.ondataavailable = (e) => {
         if (gen.current === mine && e.data.size) l.chunks.push(e.data);
       };
+      // 누르지 않았는데 멈춤(마이크 분리·트랙 종료)·오류: 녹음을 버리고 상태를 정리한다. 멈춤을 누르면 stopRecording이 onstop을 바꾼다.
+      const unexpected = () => {
+        if (l.stopping) return;
+        l.stopping = true;
+        release(l);
+        if (live.current !== l) return;
+        live.current = null;
+        post({ kind: "cancel", jobId });
+        if (gen.current === mine) setState({ phase: "error", message: "녹음이 멈췄습니다. 마이크 연결을 확인하고 다시 눌러 주세요." });
+      };
+      rec.onstop = unexpected;
+      rec.onerror = unexpected;
       rec.start(250);
       // 무음 감지(음량 수치만): 말소리가 한 번 들린 뒤 2초 조용하면 멈춘다.
       const ctx = new AudioContext();
