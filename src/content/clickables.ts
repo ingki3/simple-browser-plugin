@@ -631,8 +631,9 @@ function composedParent(n: Node): Element | null {
   const slot = (n as Element | Text).assignedSlot;
   if (slot) return slot;
   if (n.parentElement) return n.parentElement;
+  // 같은 출처 iframe의 노드는 다른 realm이라 instanceof를 쓰지 않는다(nodeType으로 본다).
   const root = n.getRootNode();
-  return root instanceof ShadowRoot ? root.host : null;
+  return root.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? ((root as ShadowRoot).host ?? null) : null;
 }
 
 // start부터 stop(포함)까지 합성 트리 조상에 숨김(display:none·visibility:hidden·opacity:0·aria-hidden)이 없는지.
@@ -662,9 +663,9 @@ function contentsInViewport(node: Element, item: Element, depth: number, budget:
   const win = item.ownerDocument.defaultView ?? window;
   const kids: Node[] = node.shadowRoot
     ? [...node.shadowRoot.childNodes]
-    : node instanceof HTMLSlotElement
+    : isTag(node, "slot")
       ? (() => {
-          const assigned = node.assignedNodes();
+          const assigned = (node as HTMLSlotElement).assignedNodes();
           return assigned.length ? assigned : [...node.childNodes];
         })()
       : [...node.childNodes];
@@ -679,12 +680,13 @@ function contentsInViewport(node: Element, item: Element, depth: number, budget:
       if (rectsInViewport(range.getClientRects(), win)) return true;
       continue;
     }
-    if (!(kid instanceof Element)) continue;
-    if (kid.getClientRects().length > 0) {
-      if (kid instanceof HTMLElement && shownToUser(kid) && unhiddenUpTo(kid, item) && rectInViewport(kid)) return true;
+    if (kid.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = kid as HTMLElement;
+    if (el.getClientRects().length > 0) {
+      if (shownToUser(el) && unhiddenUpTo(el, item) && rectInViewport(el)) return true;
       continue;
     }
-    if (depth < CONTENTS_DEPTH_MAX && contentsInViewport(kid, item, depth + 1, budget)) return true;
+    if (depth < CONTENTS_DEPTH_MAX && contentsInViewport(el, item, depth + 1, budget)) return true;
   }
   return false;
 }

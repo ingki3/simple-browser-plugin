@@ -52,6 +52,8 @@ const BUDGET = `<title>예산</title><main><ul id=u></ul><p id=out></p></main><s
   }
 </script>`;
 
+// 같은 출처 iframe 안의 display:contents 항목(제목 span만 화면 안, 링크는 화면 밖).
+const IFRAME_CONTENTS = `<title>프레임</title><main><iframe style="width:600px;height:300px" srcdoc='<ul>${Array.from({ length: 3 }, (_, i) => `<li style="display:contents"><span>제목${i}</span><a href="/f/${i}" style="display:block;margin-top:3000px">상품${i}</a></li>`).join("")}</ul>'></iframe><p id=out></p></main>`;
 const clear = (h) => h.sw.evaluate(() => { globalThis.__modelReqs = []; });
 const modelReqText = (h) => h.sw.evaluate(() => JSON.stringify(globalThis.__modelReqs ?? []));
 
@@ -348,6 +350,16 @@ export default [
       });
       c = lastTool(r, "click_element");
       expect(c && c.error && !r.url.includes("/go"), `카드 뒤 바뀜(${JSON.stringify(c?.error)})`);
+    },
+  },
+  {
+    name: "#164 같은 출처 iframe 안의 display:contents 항목도 자식 상자로 화면 판정",
+    pages: { "/if": IFRAME_CONTENTS },
+    async run(h) {
+      await h.tab.waitForTimeout(300);
+      const res = okResult(await h.turn([items({ onlyViewport: true }), { text: "끝" }], { path: "/if" }), "find_clickables");
+      // 첫 항목의 제목만 화면 안(뒤 항목은 앞 링크의 margin 아래). instanceof로 판정하면 0개였다.
+      expect(res.items.length === 1 && res.items[0].text.includes("제목0") && res.items[0].inViewport, `iframe 항목(${JSON.stringify(res.items.map((x) => [x.text, x.inViewport]))})`);
     },
   },
 ];
