@@ -287,12 +287,12 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
     }
-    const p = msg as { id?: unknown; origin?: unknown; path?: unknown; label?: unknown; request?: unknown; enabled?: unknown };
+    const p = msg as { id?: unknown; origin?: unknown; path?: unknown; label?: unknown; request?: unknown; enabled?: unknown; expectVersion?: unknown };
     const job =
       m.kind === "page_suggest_add"
         ? addRule(p)
         : m.kind === "page_suggest_update"
-          ? updateRule(String(p.id ?? ""), { origin: p.origin, path: p.path, label: p.label, request: p.request, enabled: p.enabled })
+          ? updateRule(String(p.id ?? ""), { origin: p.origin, path: p.path, label: p.label, request: p.request, enabled: p.enabled, expectVersion: p.expectVersion })
           : m.kind === "page_suggest_delete"
             ? deleteRule(String(p.id ?? ""))
             : listRules();

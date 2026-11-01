@@ -1,6 +1,7 @@
 import { FieldHelp } from "./FieldHelp";
 import { useEffect, useState } from "react";
-import { MAX_LINKS, MAX_PURPOSE, templateText, type SavedLink } from "@/lib/savedPages";
+import { MAX_LINKS, MAX_PURPOSE, SAVED_PAGES_KEY, templateText, type SavedLink } from "@/lib/savedPages";
+import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
 
 interface Props {
   enabled: boolean;
@@ -13,6 +14,7 @@ export function RememberPagesField({ enabled, onToggle }: Props) {
   // 고치는 중인 링크(id)와 고친 이름·용도.
   const [editing, setEditing] = useState<{ id: string; name: string; purpose: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const gate = useLatestGate();
 
   const request = async (
     msg:
@@ -20,14 +22,15 @@ export function RememberPagesField({ enabled, onToggle }: Props) {
       | { kind: "saved_pages_delete"; id: string | null }
       | { kind: "saved_link_update"; id: string; name: string; purpose: string },
   ) => {
-    // 고치기·지우기·목록 읽기가 실패하면 알린다(#130).
+    // 고치기·지우기·목록 읽기가 실패하면 알린다(#130). 늦게 온 옛 응답은 화면에 쓰지 않는다(#127).
+    const latest = gate();
     setError(null);
     try {
       const res = (await chrome.runtime.sendMessage(msg)) as { ok: boolean; data?: SavedLink[]; error?: string } | undefined;
-      if (res?.ok && res.data) setPages(res.data);
-      else if (res?.ok) setPages([]);
-      else throw new Error(res?.error ?? "응답이 없습니다.");
+      if (!res?.ok) throw new Error(res?.error ?? "응답이 없습니다.");
+      if (latest()) setPages(res.data ?? []);
     } catch (err) {
+      if (!latest() && msg.kind === "saved_pages_list") return;
       const why = err instanceof Error ? err.message : String(err);
       const what = msg.kind === "saved_pages_delete" ? "지우지" : msg.kind === "saved_link_update" ? "고치지" : "목록을 읽지";
       setError(`저장 링크를 ${what} 못했습니다(${why}).`);
@@ -37,6 +40,12 @@ export function RememberPagesField({ enabled, onToggle }: Props) {
   useEffect(() => {
     void request({ kind: "saved_pages_list" });
   }, []);
+  // 다른 화면(패널의 저장 카드·다른 설정 탭)에서 저장·고치기·지우기를 하면 다시 읽는다.
+  useStorageKeys([SAVED_PAGES_KEY], () => void request({ kind: "saved_pages_list" }));
+  // 고치는 중인 링크가 사라졌으면 편집을 닫는다.
+  useEffect(() => {
+    if (editing && pages && !pages.some((p) => p.id === editing.id)) setEditing(null);
+  }, [pages, editing]);
 
   return (
     <div className="field">

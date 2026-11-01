@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
 
 interface Status {
   hasToken: boolean;
@@ -39,25 +40,36 @@ export function TelegramField() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const request = useCallback(async (msg: Req) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = (await chrome.runtime.sendMessage(msg)) as { ok: boolean; data?: Status; error?: string } | undefined;
-      if (!res?.ok || !res.data) throw new Error(res?.error ?? "응답이 없습니다.");
-      setSt(res.data);
-      return true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+  // 마지막 요청의 응답만 화면에 쓴다(#127). 상태 다시 읽기는 버튼을 막지 않는다.
+  const gate = useLatestGate();
+  const request = useCallback(
+    async (msg: Req) => {
+      const latest = gate();
+      const quiet = msg.kind === "telegram_status";
+      if (!quiet) {
+        setBusy(true);
+        setError(null);
+      }
+      try {
+        const res = (await chrome.runtime.sendMessage(msg)) as { ok: boolean; data?: Status; error?: string } | undefined;
+        if (!res?.ok || !res.data) throw new Error(res?.error ?? "응답이 없습니다.");
+        if (latest()) setSt(res.data);
+        return true;
+      } catch (err) {
+        if (latest() || !quiet) setError(err instanceof Error ? err.message : String(err));
+        return false;
+      } finally {
+        if (!quiet) setBusy(false);
+      }
+    },
+    [gate],
+  );
 
   useEffect(() => {
     void request({ kind: "telegram_status" });
   }, [request]);
+  // 다른 화면에서 연결·끊기·설정을 바꾸면(설정 탭을 오래 열어 두어도) 다시 읽는다.
+  useStorageKeys(["telegram"], () => void request({ kind: "telegram_status" }));
 
   // 확인 코드를 기다리는 동안에는 연결됐는지 몇 초마다 다시 본다.
   useEffect(() => {
