@@ -79,6 +79,29 @@ export async function startHarness() {
   await tab.goto(base + "/");
   await installMockModel(sw);
   const panel = await ctx.newPage();
+  // 설정 페이지(옵션 탭, #127). openOptions는 새 탭으로 연다. optionsPages는 지금 열린 설정 탭들(패널의 ⚙가 연 것 포함).
+  const optionsUrl = `chrome-extension://${extId}/src/options/index.html`;
+  const optionsPages = () => ctx.pages().filter((p) => p.url().startsWith(optionsUrl));
+  // 패널이 연 설정 탭을 기다린다(section이 있으면 그 묶음 해시까지). 없으면 null.
+  async function waitOptions(section, ms = 5000) {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      const p = optionsPages().find((x) => !section || x.url().endsWith(`#${section}`));
+      if (p) {
+        await p.waitForLoadState().catch(() => {});
+        await p.waitForTimeout(300);
+        return p;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return null;
+  }
+  async function openOptions(section = "model") {
+    const p = await ctx.newPage();
+    await p.goto(`${optionsUrl}#${section}`);
+    await p.waitForTimeout(400);
+    return p;
+  }
 
   // 예전 이름 autoApprove(true/false)는 실행 방식(runMode auto/ask, #123)으로 바꿔 쓴다.
   async function settings(patch) {
@@ -111,6 +134,7 @@ export async function startHarness() {
       globalThis.__voiceStatus = 0;
     });
     logs.length = 0;
+    for (const p of optionsPages()) await p.close().catch(() => {});
     await panel.goto(`chrome-extension://${extId}/src/sidepanel/index.html`);
     await panel.waitForTimeout(500);
     await tab.bringToFront();
@@ -189,7 +213,7 @@ export async function startHarness() {
     };
   }
 
-  return { base, base2, pages, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, installKeePassXC, userDataDir };
+  return { base, base2, pages, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, installKeePassXC, userDataDir, optionsUrl, optionsPages, openOptions, waitOptions };
 }
 
 // 모의 모델: 단계마다 직전 도구 결과를 보고 다음 호출을 만든다. 도구 결과(모델에 간 그대로)는 __toolLog에 남긴다.

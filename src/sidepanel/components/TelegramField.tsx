@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLatestGate } from "../hooks/syncHelpers";
 
 interface Status {
   hasToken: boolean;
@@ -39,24 +40,46 @@ export function TelegramField() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const request = useCallback(async (msg: Req) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = (await chrome.runtime.sendMessage(msg)) as { ok: boolean; data?: Status; error?: string } | undefined;
-      if (!res?.ok || !res.data) throw new Error(res?.error ?? "응답이 없습니다.");
-      setSt(res.data);
-      return true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+  // 마지막 요청의 응답만 화면에 쓴다(#127). 상태 다시 읽기는 버튼을 막지 않는다.
+  const gate = useLatestGate();
+  const request = useCallback(
+    async (msg: Req) => {
+      const latest = gate();
+      const quiet = msg.kind === "telegram_status";
+      if (!quiet) {
+        setBusy(true);
+        setError(null);
+      }
+      try {
+        const res = (await chrome.runtime.sendMessage(msg)) as { ok: boolean; data?: Status; error?: string } | undefined;
+        if (!res?.ok || !res.data) throw new Error(res?.error ?? "응답이 없습니다.");
+        if (latest()) setSt(res.data);
+        return true;
+      } catch (err) {
+        if (latest() || !quiet) setError(err instanceof Error ? err.message : String(err));
+        return false;
+      } finally {
+        if (!quiet) setBusy(false);
+      }
+    },
+    [gate],
+  );
 
   useEffect(() => {
     void request({ kind: "telegram_status" });
+  }, [request]);
+  // 다른 화면에서 연결·끊기·설정을 바꾸면(설정 탭을 오래 열어 두어도) 다시 읽는다. 받기 기록(offset·failures·recent)만 바뀐 것은
+  // 보지 않는다 — 상태 조회가 받기를 다시 시도해 실패 기록이 또 바뀌는 순환을 만들지 않게.
+  useEffect(() => {
+    const fields = ["token", "botName", "chatId", "chatLabel", "connectedAt", "epoch", "notifyRepeat", "askApproval", "status", "pairing"];
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== "local" || !("telegram" in changes)) return;
+      const o = (changes.telegram.oldValue ?? {}) as Record<string, unknown>;
+      const n = (changes.telegram.newValue ?? {}) as Record<string, unknown>;
+      if (fields.some((f) => JSON.stringify(o[f]) !== JSON.stringify(n[f]))) void request({ kind: "telegram_status" });
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
   }, [request]);
 
   // 확인 코드를 기다리는 동안에는 연결됐는지 몇 초마다 다시 본다.

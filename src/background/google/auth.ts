@@ -1,3 +1,4 @@
+import { GOOGLE_AUTH_VERSION_KEY } from "@/lib/googleAuthKey";
 import { debugLog } from "../debug";
 
 function getManifestClientId(): string {
@@ -61,10 +62,19 @@ function callRemoveCachedAuthToken(token: string): Promise<void> {
   });
 }
 
+// 연결·해제를 다른 설정 화면에 알린다(#127 — 연결 상태는 chrome.identity에만 있어 저장소 알림이 없다). 값은 바뀐 시각.
+function bumpAuthVersion(): void {
+  void chrome.storage.local.set({ [GOOGLE_AUTH_VERSION_KEY]: Date.now() }).catch(() => {});
+}
+
 export async function connectGoogle(): Promise<{ ok: true }> {
   requireOauthConfigured();
   debugLog("google:auth:start", "interactive");
-  await callGetAuthToken(true);
+  try {
+    await callGetAuthToken(true);
+  } finally {
+    bumpAuthVersion();
+  }
   debugLog("google:auth:ok");
   return { ok: true };
 }
@@ -83,6 +93,14 @@ export async function getGoogleToken(): Promise<string> {
 
 export async function clearGoogleToken(): Promise<void> {
   if (typeof chrome.identity === "undefined") return;
+  try {
+    await clearGoogleTokenInner();
+  } finally {
+    bumpAuthVersion();
+  }
+}
+
+async function clearGoogleTokenInner(): Promise<void> {
   try {
     const token = await callGetAuthToken(false);
     await callRemoveCachedAuthToken(token);

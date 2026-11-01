@@ -594,25 +594,6 @@ body,
   gap: 14px;
 }
 
-.drawer-footer {
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-}
-
-.drawer-footer .primary {
-  background: var(--primary);
-  color: var(--primary-fg);
-  border: none;
-  border-radius: 6px;
-  padding: 7px 16px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
 .saved-indicator {
   color: var(--fg-muted);
   font-size: 12px;
@@ -632,12 +613,6 @@ body,
 
 .field-help {
   font-size: 11px;
-  color: var(--fg-muted);
-}
-
-.drawer-note {
-  margin: 0;
-  font-size: 12px;
   color: var(--fg-muted);
 }
 
@@ -1263,36 +1238,17 @@ body,
   gap: 4px;
 }
 
-/* 설정 묶음(#99): 접히는 묶음, 저장됨 표시, 설명의 "자세히" */
-.settings-group {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0 12px;
-}
-.settings-group > summary {
-  cursor: pointer;
-  padding: 10px 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg);
-}
-.settings-group[open] {
-  padding-bottom: 12px;
-}
-.settings-group[open] > summary {
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 10px;
-}
-.settings-group > .field + .field,
-.settings-group > label.field + .field,
-.settings-group > .field + label.field {
+/* 설정 페이지(#127)의 묶음 안 칸 간격, 설명의 "자세히" */
+.settings-section > .field + .field,
+.settings-section > label.field + .field,
+.settings-section > .field + label.field,
+.settings-section > .field + .settings-sub,
+.settings-section > label.field + .settings-sub {
   margin-top: 12px;
 }
-.drawer-saved {
-  margin-left: auto;
-  margin-right: 8px;
-  font-size: 12px;
-  color: var(--fg-muted);
+.settings-section > .settings-sub + .field,
+.settings-section > .settings-sub + label.field {
+  margin-top: 0;
 }
 .field-more {
   display: inline;

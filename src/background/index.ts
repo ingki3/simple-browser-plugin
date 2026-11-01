@@ -2,7 +2,9 @@ import { keepassxcAssociate, keepassxcForget, keepassxcStatus } from "./keepassx
 import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
-import { applySettingsPatch, invalidateSettingsCache } from "./storage";
+import { applyLoginSiteOp, applyManualSiteOp, applySettingsPatch, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
+import { parseLoginSiteOp, parseManualSiteOp } from "@/lib/settingsOps";
+import { openSettings } from "./settingsTab";
 import { deletePages, draftLink, listPages, rememberCurrentPage, rememberedFor, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
 import { handleHistoryPickPort, HISTORY_PICK_PORT } from "./historyPickStore";
@@ -36,6 +38,10 @@ import {
 chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
 
 pruneActionLog();
+// 옛 자동 로그인 항목에 승인 식별자(grantId)를 한 번 채운다(#127 — 설정 화면의 빼기·코드 변경이 그 값과 비교한다).
+migrateLoginGrantIds().catch((err) => console.warn("[login grantId]", err));
+// 하네스용: 워커를 다시 시작하지 않고 이전을 다시 부른다(이미 채운 값은 바꾸지 않는다).
+(globalThis as { __sbpSettings?: unknown }).__sbpSettings = { migrateLoginGrantIds };
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
@@ -282,12 +288,12 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
     }
-    const p = msg as { id?: unknown; origin?: unknown; path?: unknown; label?: unknown; request?: unknown; enabled?: unknown };
+    const p = msg as { id?: unknown; origin?: unknown; path?: unknown; label?: unknown; request?: unknown; enabled?: unknown; expectVersion?: unknown };
     const job =
       m.kind === "page_suggest_add"
         ? addRule(p)
         : m.kind === "page_suggest_update"
-          ? updateRule(String(p.id ?? ""), { origin: p.origin, path: p.path, label: p.label, request: p.request, enabled: p.enabled })
+          ? updateRule(String(p.id ?? ""), { origin: p.origin, path: p.path, label: p.label, request: p.request, enabled: p.enabled, expectVersion: p.expectVersion })
           : m.kind === "page_suggest_delete"
             ? deleteRule(String(p.id ?? ""))
             : listRules();
@@ -309,6 +315,42 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       return false;
     }
     applySettingsPatch(patch as Partial<Settings>)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 직접 조작할 사이트·자동 로그인 목록의 항목 하나 바꾸기(#127). 이 확장의 화면에서만 받고, 값은 여기서 다시 검사한다.
+  if (m.kind === "manual_site_op" || m.kind === "login_site_op") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const raw = (msg as { op?: unknown }).op;
+    const job =
+      m.kind === "manual_site_op"
+        ? (() => {
+            const op = parseManualSiteOp(raw);
+            return op ? applyManualSiteOp(op) : Promise.reject(new Error("잘못된 사이트"));
+          })()
+        : (() => {
+            const op = parseLoginSiteOp(raw);
+            return op ? applyLoginSiteOp(op) : Promise.reject(new Error("잘못된 자동 로그인 항목"));
+          })();
+    job
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // 설정 페이지 열기(#127). 이 확장의 화면(패널)에서만 받는다.
+  if (m.kind === "open_settings") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    const p = msg as { section?: unknown; windowId?: unknown };
+    openSettings(p.section, p.windowId)
       .then(() => sendResponse({ ok: true }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
     return true;

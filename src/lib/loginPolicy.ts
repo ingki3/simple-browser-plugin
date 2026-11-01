@@ -25,6 +25,21 @@ export interface LoginSite {
   entryName: string;
   // 일회용 코드(TOTP)도 자동으로 넣을지. 기본 꺼짐(2단계 인증을 약하게 하므로 따로 고른다).
   totp: boolean;
+  // 승인할 때마다 새로 만드는 내부 식별자(#127). 설정 화면의 빼기·코드 변경은 사용자가 보던 승인의 grantId를 담고, 지금 승인과
+  // 다르면(지웠다 다시 승인 — 같은 항목이어도) 적용하지 않는다. 비어 있으면 아직 만들지 않은 옛 저장 값(백그라운드가 시작할 때 채운다).
+  // 화면·모델로 보이지 않는다.
+  grantId: string;
+}
+
+export const GRANT_ID_RE = /^[A-Za-z0-9_-]{22}$/;
+
+// 새 grantId(무작위 16바이트, base64url 22자).
+export function newGrantId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 // https 출처만(개발용 http://localhost·127.0.0.1은 허용). 경로가 붙은 주소는 받지 않는다.
@@ -57,6 +72,7 @@ export function normalizeLoginSites(raw: unknown): LoginSite[] {
       uuid: r.uuid.toLowerCase(),
       entryName: typeof r.entryName === "string" ? r.entryName.slice(0, 120) : "",
       totp: r.totp === true,
+      grantId: typeof r.grantId === "string" && GRANT_ID_RE.test(r.grantId) ? r.grantId : "",
     });
     if (out.length >= MAX_LOGIN_SITES) break;
   }
