@@ -7,6 +7,7 @@ import {
   VOICE_LANGUAGES,
   VOICE_MODEL_MAX,
   isVoiceProvider,
+  voiceModelOf,
   type VoiceChoice,
   type VoiceProvider,
 } from "@/lib/voice";
@@ -61,6 +62,8 @@ export function VoiceInputField({ settings, onPatch }: Props) {
               aria-label="음성 입력 모델"
             />
           </label>
+          {/* 입력란은 저장 전 글자일 수 있어 실제로 쓰는 모델(저장된 값, 잘못된 글자면 기본값)을 따로 보인다. */}
+          <span className="field-help">지금 쓰는 모델: {voiceModelOf(v, provider)}</span>
           <label className="field-sub">
             <span className="field-help">언어</span>
             <select value={v.language} onChange={(e) => onPatch({ voiceInput: { language: e.target.value } })} aria-label="음성 입력 언어">

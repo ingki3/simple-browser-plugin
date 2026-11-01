@@ -86,6 +86,12 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
     });
     p.onDisconnect.addListener(() => {
       port.current = null;
+      // 권한 대기 중(녹음 전)이면 백그라운드 작업이 사라졌으니 시작하지 않게 한다.
+      if (pending.current && !live.current) {
+        pending.current = null;
+        gen.current += 1;
+        setState({ phase: "error", message: "백그라운드와 연결이 끊겼습니다. 다시 눌러 주세요." });
+      }
       for (const w of waiters.current.values()) w({ kind: "error", jobId: "", message: "백그라운드와 연결이 끊겼습니다. 다시 눌러 주세요." });
       waiters.current.clear();
       const l = live.current;
@@ -208,7 +214,9 @@ export function useVoiceInput(opts: { conversationId: string; onText: (text: str
     } catch (err) {
       if (gen.current !== mine) return;
       post({ kind: "cancel", jobId });
-      setState({ phase: "error", message: await micErrorText(err) });
+      const text = await micErrorText(err);
+      // 안내를 만드는 사이(권한 조회·탭 열기) 취소·새 녹음이 됐으면 그 상태를 덮지 않는다.
+      if (gen.current === mine) setState({ phase: "error", message: text });
       return;
     }
     // 권한 요청을 기다리는 사이 취소·새 대화·설정 변경이 됐으면 늦게 받은 트랙을 바로 멈춘다.
