@@ -7,7 +7,7 @@
 ```
 [Side Panel React UI] ⇄ long-lived port ⇄ [Background Service Worker] ⇄ tabs.sendMessage ⇄ [Content Script]
                                                     │
-                                                    ├── OpenRouter Chat Completions API
+                                                    ├── 모델 제공자 어댑터 (OpenRouter·OpenAI·Gemini·Anthropic)
                                                     ├── ReAct stream loop (reasoning_details 보존)
                                                     ├── Tool dispatcher (zod 인자 검증)
                                                     └── webNavigation 통합 (settle 대기)
@@ -16,7 +16,7 @@
 
 ## 주요 구성
 
-- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation`, `identity`, `offscreen`, `webRequest`, `debugger`(실제 입력 클릭, 설정에서 켤 때만 사용) 권한 + `host_permissions: ["<all_urls>"]`
+- **Manifest V3** — `sidePanel`, `storage`, `scripting`, `activeTab`, `downloads`, `tabs`, `alarms`, `webNavigation`, `identity`, `offscreen`, `webRequest`, `debugger`(실제 입력 클릭, 설정에서 켤 때만 사용) 권한 + 선택 권한 `nativeMessaging`(KeePassXC 자동 로그인)·`history`(방문 기록에서 찾기) + `host_permissions: ["<all_urls>"]`
 - **모델 제공자 어댑터** (#97) — 에이전트 루프·번역·저장 링크 초안·키 확인은 `src/lib/providers`의 공통 인터페이스(`openStream`·`complete`)만 씀. 대화 기록·스트림 조각의 내부 기준은 OpenAI 호환 형식이고, 생각 강도는 의도(`agent`·`agent_low`·`off`)로 넘겨 어댑터가 제공자 설정으로 바꿈. OpenRouter·OpenAI·Gemini·Anthropic 어댑터(Anthropic은 Messages API와 내부 형식을 서로 바꿈). 제공자가 도구 호출에 붙여 돌려받아야 하는 값(`extra_content`)은 그 제공자 어댑터만 보냄
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
@@ -35,4 +35,4 @@
 
 ## 스택
 
-Vite · TypeScript · React 18 · zustand · zod · OpenRouter API · `@crxjs/vite-plugin` · docling.rs-wasm · pdf.js · kordoc
+Vite · TypeScript · React 18 · zustand · zod · OpenRouter·OpenAI·Gemini·Anthropic API · `@crxjs/vite-plugin` · docling.rs-wasm · pdf.js · kordoc
