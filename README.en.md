@@ -28,10 +28,20 @@ The permission table in the [Korean install guide](docs/install.md#권한) expla
    - [OpenAI](https://platform.openai.com/api-keys)
    - [Google AI Studio](https://aistudio.google.com/apikey)
    - [Anthropic Console](https://console.anthropic.com/settings/keys)
-2. In the panel, click **설정 열기** (Open settings).
-3. Pick the provider under **모델 제공자**, paste the key, and press **저장** (Save).
+2. In the panel, click **설정 열기** (Open settings) or ⚙ at the top. Settings open in a new browser tab, and changes apply to the open panel right away.
+3. Under **모델·연결** (Model & connections), pick the provider under **모델 제공자**, paste the key, and press **저장** (Save).
 4. Press **연결 확인** (Check connection). It sends one tiny request.
 5. Open any web page and send "Summarize this page in three lines."
+
+## Optional features
+
+All are set up in settings. Step-by-step instructions are in the [Korean install guide](docs/install.md).
+
+- **Telegram** (모델·연결 → 텔레그램): send tasks from your phone to a bot paired with your own chat. For actions that need approval, it asks once per request with [승인][거절] (Approve/Reject) buttons.
+- **MCP** (모델·연결 → MCP): let Claude Code, Claude Desktop, or another MCP client give the browser tasks through the bundled bridge `mcp/sbp-mcp.mjs` (Node.js 22+).
+- **Voice input** (동작 → 음성 입력): press 🎤 and speak. Pick a speech model first.
+- **Auto sign-in** (사이트 → KeePassXC): signs in with accounts stored in [KeePassXC](https://keepassxc.org/). Needs a one-time native messaging setup.
+- **Google Sheets, Docs, Drive**: requires your own build with an OAuth client ID.
 
 ## Cost
 
