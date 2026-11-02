@@ -93,7 +93,7 @@ export function TelegramField() {
     <div className="field">
       <span className="field-label">텔레그램 봇</span>
       <span className="field-help">
-        텔레그램으로 할 일을 보내면 브라우저의 새 탭에서 처리하고 최종 답만 텔레그램으로 보냅니다. 이동은 요청에 적은 사이트 안에서만 하고, 결제·삭제·개인정보 입력·로그인·저장처럼 승인이 필요한 동작은 하지 않습니다. 브라우저가 켜져 있어야 하며 받는 데 최대 1분쯤 걸립니다. 답은 텔레그램(제3자 서비스)을 거칩니다.
+        텔레그램으로 할 일을 보내면 브라우저의 새 탭에서 처리하고 최종 답만 텔레그램으로 보냅니다. 승인이 필요한 일은 아래 "텔레그램 버튼으로 묻기"가 켜져 있을 때만 요청마다 한 번 묻고 진행하며, 끄면 원격에서는 하지 않습니다. 브라우저가 켜져 있어야 하며 받는 데 최대 1분쯤 걸립니다. 답은 텔레그램(제3자 서비스)을 거칩니다.
       </span>
       {error && <span className="field-help error-text">{error}</span>}
       {st?.status === "stopped_auth" && <span className="field-help error-text">텔레그램이 토큰을 받지 않아 멈췄습니다. 토큰을 다시 저장하세요.</span>}

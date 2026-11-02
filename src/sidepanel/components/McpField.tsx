@@ -94,7 +94,7 @@ export function McpField() {
     <div className="field">
       <span className="field-label">MCP (다른 AI 도구에서 시키기)</span>
       <span className="field-help">
-        Claude Code·Claude Desktop 같은 AI 도구가 이 도우미에게 브라우저 일을 시키고 최종 답을 받습니다. 처리 방식은 텔레그램과 같습니다(새 탭에서, 승인이 필요한 동작은 하지 않음). 함께 들어 있는 다리 프로그램(mcp/sbp-mcp.mjs, Node 22 이상 필요)을 그 AI 도구에 등록해야 합니다. 답은 그 AI 도구로 가고, 그 도구가 자기 AI 서비스로 보낼 수 있습니다.
+        Claude Code·Claude Desktop 같은 AI 도구가 이 도우미에게 브라우저 일을 시키고 최종 답을 받습니다. 새 탭에서 처리하고, 승인이 필요한 동작은 아래 "MCP 클라이언트에 묻기"를 켰을 때만 이동·클릭을 그 AI 도구에 묻습니다(끄면 하지 않음). 함께 들어 있는 다리 프로그램(mcp/sbp-mcp.mjs, Node 22 이상 필요)을 그 AI 도구에 등록해야 합니다. 답은 그 AI 도구로 가고, 그 도구가 자기 AI 서비스로 보낼 수 있습니다.
       </span>
       {error && <span className="field-help error-text">{error}</span>}
       <label className="check-row">
