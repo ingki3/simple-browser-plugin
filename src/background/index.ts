@@ -492,7 +492,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
 
   if (m.kind === "google_connect") {
     debugLog("google:connect:received");
-    if (typeof chrome.identity === "undefined") {
+    // 클라이언트 ID 없이 빌드하면 identity 권한도 없다(정상) — 그때는 connectGoogle이 "직접 빌드 필요"를 알린다.
+    const hasClientId = !!(chrome.runtime.getManifest() as { oauth2?: { client_id?: string } }).oauth2?.client_id;
+    if (hasClientId && typeof chrome.identity === "undefined") {
       const msg =
         "chrome.identity API를 사용할 수 없습니다. 확장에 'identity' 권한이 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 '삭제' 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.";
       debugLog("google:connect:no_identity", msg, "error");

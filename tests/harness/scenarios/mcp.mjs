@@ -183,6 +183,23 @@ export default [
     },
   },
   {
+    name: "설정의 다리 안내: 릴리스 ZIP에서 받는 링크와 mcp/sbp-mcp.mjs 등록 명령(웹 스토어판에는 다리가 없음)",
+    async run(h) {
+      await ask(h, { kind: "mcp_set", enabled: true });
+      try {
+        const opt = await h.openOptions("model");
+        const link = opt.locator("a.mcp-release-link");
+        await link.waitFor({ timeout: 5000 });
+        expect((await link.getAttribute("href"))?.endsWith("/releases/latest"), "최신 릴리스 링크");
+        expect((await link.getAttribute("target")) === "_blank", "새 탭으로");
+        const cmds = await opt.locator("pre.tool-card-details").allInnerTexts();
+        expect(cmds.some((t) => t.includes("claude mcp add") && t.includes("/mcp/sbp-mcp.mjs")), `등록 명령(${cmds.join(" | ").slice(0, 300)})`);
+      } finally {
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
     name: "다리의 tools/call을 확장이 가져가 처리하고 최종 답을 돌려준다, 비밀이 다르면 가져가지 않는다",
     async run(h) {
       const on = await ask(h, { kind: "mcp_set", enabled: true });

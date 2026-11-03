@@ -116,13 +116,14 @@ body,
   gap: 8px;
 }
 
+/* 가운데 정렬은 .welcome의 margin: auto로 한다. justify-content: center는 내용이 패널보다 길면 위쪽이 스크롤로도 닿지 않게 잘린다. */
 .message-list.empty {
   align-items: center;
-  justify-content: center;
 }
 
 /* 빈 대화 화면(#129): 키 안내 또는 첫 작업 */
 .welcome {
+  margin: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -136,6 +137,10 @@ body,
   margin: 0;
   color: var(--fg-muted);
   line-height: 1.5;
+}
+
+.welcome p.welcome-privacy {
+  font-size: 12px;
 }
 
 .welcome-title {

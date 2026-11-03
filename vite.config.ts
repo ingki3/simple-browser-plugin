@@ -43,7 +43,8 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    sourcemap: true,
+    // 릴리스는 SBP_SOURCEMAP=off로 맵 없이 빌드한다(웹 스토어 ZIP·web_accessible_resources에 .map이 남지 않게).
+    sourcemap: process.env.SBP_SOURCEMAP !== "off",
     rollupOptions: {
       // manifest에 적지 않는 페이지. offscreen: read_document가 chrome.offscreen으로 연다. mic: 음성 입력의 마이크 권한 받기(#184).
       input: { offscreen: "src/offscreen/index.html", mic: "src/mic/index.html" },

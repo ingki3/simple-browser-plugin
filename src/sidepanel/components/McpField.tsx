@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLatestGate, useSyncedDraft } from "../hooks/syncHelpers";
+import { LATEST_RELEASE_URL } from "@/lib/projectLinks";
 
 interface Status {
   enabled: boolean;
@@ -94,7 +95,11 @@ export function McpField() {
     <div className="field">
       <span className="field-label">MCP (다른 AI 도구에서 시키기)</span>
       <span className="field-help">
-        Claude Code·Claude Desktop 같은 AI 도구가 이 도우미에게 브라우저 일을 시키고 최종 답을 받습니다. 새 탭에서 처리하고, 승인이 필요한 동작은 아래 "MCP 클라이언트에 묻기"를 켰을 때만 이동·클릭을 그 AI 도구에 묻습니다(끄면 하지 않음). 함께 들어 있는 다리 프로그램(mcp/sbp-mcp.mjs, Node 22 이상 필요)을 그 AI 도구에 등록해야 합니다. 답은 그 AI 도구로 가고, 그 도구가 자기 AI 서비스로 보낼 수 있습니다.
+        Claude Code·Claude Desktop 같은 AI 도구가 이 도우미에게 브라우저 일을 시키고 최종 답을 받습니다. 새 탭에서 처리하고, 승인이 필요한 동작은 아래 "MCP 클라이언트에 묻기"를 켰을 때만 이동·클릭을 그 AI 도구에 묻습니다(끄면 하지 않음). 다리 프로그램(mcp/sbp-mcp.mjs, Node 22 이상 필요)을 그 AI 도구에 등록해야 합니다. 다리는 GitHub 릴리스의 설치용 ZIP에 들어 있습니다 — 웹 스토어로 설치했어도{" "}
+        <a className="mcp-release-link" href={LATEST_RELEASE_URL} target="_blank" rel="noopener noreferrer">
+          최신 릴리스
+        </a>
+        에서 ZIP을 받아 풀고 mcp 폴더의 파일을 씁니다. 답은 그 AI 도구로 가고, 그 도구가 자기 AI 서비스로 보낼 수 있습니다.
       </span>
       {error && <span className="field-help error-text">{error}</span>}
       <label className="check-row">

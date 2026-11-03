@@ -1,7 +1,8 @@
 name: Release
 
 # main에 vX.X.XX 태그를 push하면 빌드해서 설치용 ZIP을 GitHub 릴리스에 첨부한다.
-# 받는 사람은 ZIP을 풀고 chrome://extensions → "압축해제된 확장 프로그램 로드"로 그 폴더를 고른다(빌드 불필요).
+# - simple-browser-plugin-vX.zip: 압축해제 설치용(폴더 + LICENSE + mcp/ 다리). chrome://extensions → "압축해제된 확장 프로그램 로드".
+# - simple-browser-plugin-vX-webstore.zip: 크롬 웹 스토어 업로드용(manifest.json이 ZIP 최상위, 다리 없음). docs/webstore.md
 on:
   push:
     tags: ["v*"]
@@ -29,8 +30,13 @@ jobs:
           fi
       - name: 단위 테스트
         run: npm test
+      # 소스 맵 없이 빌드한다(받는 사람에게 필요 없고, web_accessible_resources에도 남지 않게).
       - name: 빌드
+        env:
+          SBP_SOURCEMAP: "off"
         run: npm run build
+      - name: manifest 검사
+        run: node scripts/checkManifest.mjs dist --no-maps --version "${GITHUB_REF_NAME#v}"
       - name: ZIP 만들기
         run: |
           name="simple-browser-plugin-$GITHUB_REF_NAME"
@@ -43,12 +49,24 @@ jobs:
           # 소스 맵은 받는 사람에게 필요 없어 뺀다.
           (cd out && zip -qr "$name.zip" "$name" -x "*.map")
           echo "ZIP=out/$name.zip" >> "$GITHUB_ENV"
+          # 웹 스토어용: dist 내용을 ZIP 최상위에(manifest.json이 루트), LICENSE만 더한다.
+          store="out/$name-webstore.zip"
+          (cd dist && zip -qr "../$store" . -x "*.map")
+          zip -qj "$store" LICENSE
+          echo "STORE_ZIP=$store" >> "$GITHUB_ENV"
+      - name: 웹 스토어 ZIP 검사
+        run: |
+          check="$(mktemp -d)"
+          unzip -q "$STORE_ZIP" -d "$check"
+          test -f "$check/manifest.json" || { echo "웹 스토어 ZIP 최상위에 manifest.json이 없습니다." >&2; exit 1; }
+          test ! -e "$check/mcp" || { echo "웹 스토어 ZIP에 mcp/가 들어 있습니다." >&2; exit 1; }
+          node scripts/checkManifest.mjs "$check" --no-maps --version "${GITHUB_REF_NAME#v}"
       - name: 릴리스에 첨부
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" "$STORE_ZIP" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "$ZIP" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+            gh release create "$GITHUB_REF_NAME" "$ZIP" "$STORE_ZIP" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
           fi

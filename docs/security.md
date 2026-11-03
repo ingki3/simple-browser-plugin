@@ -1,6 +1,6 @@
 # 보안·개인정보 상세
 
-사용자용 요약은 [README](../README.md#개인정보와-안전)에 있습니다. 이 문서는 무엇을 어디로 보내고 어떻게 보호하는지의 구현 규칙입니다.
+사용자용 요약은 [README](../README.md#개인정보와-안전), 공개 방침은 [개인정보처리방침](privacy.md)(웹 스토어 등록 URL)에 있습니다. 보내는 범위를 바꾸면 세 곳과 첫 화면 안내(`KO.welcomePrivacy`)를 함께 고친다. 이 문서는 무엇을 어디로 보내고 어떻게 보호하는지의 구현 규칙입니다.
 
 - **모델 제공자** (#97) — 설정에서 OpenRouter(기본), OpenAI(ChatGPT API 키), Google Gemini(AI Studio API 키, OpenAI 호환 엔드포인트 — 도구 호출의 thought_signature를 다음 요청에 돌려줌, PDF 첨부는 받지 않아 PDF 탭에서는 `read_document`로 읽게 함), Anthropic Claude(Claude API 키, Messages API로 변환 — 생각은 4.6 이후·5 계열은 adaptive+effort, 그 앞은 budget, temperature는 보내지 않음. 생각 블록과 서명을 다음 요청에 돌려주고, 응답 블록은 받은 순서 그대로 돌려주고, 응답이 앞 문맥까지 서명하므로 사용자 요청 직후 요청에 붙이는 현재 시각·저장 링크 후보 안내도 그 대화 기록에 남김(도구 결과 바로 뒤에는 붙이지 않음 — 빈 응답 방지)(보낸 후보를 지우거나 끄면 그 대화는 멈추고 다음 요청을 새 대화로). JSON 응답은 지침으로 받음)를 고름. 대화·페이지 글자·도구 결과·저장 링크 초안·번역할 글자는 고른 제공자 한 곳으로만 보냄(OpenRouter는 다시 각 모델 회사로 전달). 제공자나 모델을 바꾸면 대화 기록을 새로 시작하고 그 대화가 연 페이지 번역도 멈춤
 - API 키(OpenRouter·OpenAI·Gemini·Anthropic)는 `chrome.storage.local`에 평문 저장 (그 제공자 호출에만 사용; v1 트레이드오프)
