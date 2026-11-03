@@ -443,7 +443,9 @@ export function SettingsPage() {
                 </span>
               )}
               <FieldHelp summary={keyDraft.trim() !== savedKey ? "바꾼 키는 저장을 눌러야 적용됩니다." : direct ? direct.keyHelp : "openrouter.ai/keys에서 발급합니다."}>
-                키는 이 브라우저(chrome.storage.local)에만 평문으로 저장되고, 그 제공자를 부를 때만 씁니다.
+                키는 이 브라우저(chrome.storage.local)에만 평문으로 저장되고, 그 제공자를 부를 때만 씁니다. 요청하면(등록한 반복 작업은
+                확인할 때마다) 대화, 지금 탭의 주소·제목, 페이지 내용(보이지 않는 글자가 포함될 수 있음), 필요한 파일을 이 제공자로
+                보냅니다(OpenRouter는 고른 모델의 회사로 다시 전달).
               </FieldHelp>
               <div className="provider-links">
                 <a href={PROVIDER_LINKS[draft.provider].keyUrl} target="_blank" rel="noopener noreferrer">키 발급</a>

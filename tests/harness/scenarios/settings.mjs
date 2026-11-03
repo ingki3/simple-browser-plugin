@@ -232,4 +232,23 @@ export default [
       await opt.close();
     },
   },
+  {
+    name: "Google 연동 없는 빌드: identity 권한 없이도 상태·진단·연결이 응답하고 '직접 빌드 필요'를 알린다",
+    async run(h) {
+      const perms = await h.sw.evaluate(() => chrome.runtime.getManifest().permissions ?? []);
+      expect(!perms.includes("identity") && !perms.includes("activeTab"), `권한(${perms.join(",")})`);
+      expect(await h.sw.evaluate(() => typeof chrome.identity === "undefined"), "identity API가 없어야 한다");
+      const opt = await h.openOptions("model");
+      const send = (m) => opt.evaluate(async (msg) => chrome.runtime.sendMessage(msg), m);
+      const status = await send({ kind: "google_status" });
+      expect(status?.ok && status.data.configured === false && status.data.connected === false, `상태(${JSON.stringify(status)})`);
+      const diag = await send({ kind: "google_diag" });
+      expect(diag && typeof diag.ok === "boolean", `진단 응답(${JSON.stringify(diag)?.slice(0, 200)})`);
+      const conn = await send({ kind: "google_connect" });
+      expect(conn?.ok === false && conn.error.includes("직접 빌드한 확장"), `연결은 직접 빌드 필요로 거절(${JSON.stringify(conn)})`);
+      await opt.waitForTimeout(300);
+      expect(await opt.getByText("● 직접 빌드 필요").count(), "상태 표시");
+      expect(await opt.getByRole("button", { name: "Google 연결" }).isDisabled(), "연결 버튼 비활성");
+    },
+  },
 ];

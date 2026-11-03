@@ -51,8 +51,12 @@ Set a spending limit at your provider. Your key is stored unencrypted in this br
 
 ## Safety
 
-- **Where data goes**: chat and page text go only to the provider you chose. There is no project server.
-- **What is not sent**: values you typed into form fields are not sent in the results of the find, click, and fill tools.
+- **Where data goes**: chat and page content go only to the provider you chose (OpenRouter forwards to the chosen model's company). There is no project server.
+  If you turn on Telegram or MCP, answers and approval questions for those requests also go there.
+- **What is sent**: the current tab's full URL and title with every request, and page text when reading, summarizing, or translating. Page text can include hidden text and text in editable areas.
+  Registered repeat tasks read their target page at the set interval even when the panel is closed.
+- **What is not sent**: values you typed into form fields are not sent in the results of the find, click, and fill tools. Auto sign-in credentials are never sent to the AI provider.
+- Full details: [Privacy Policy](docs/privacy.md#english).
 - **Run mode** (실행 방식, below the input box) decides when the assistant asks before acting:
   - **모든 동작에 승인 후 실행** (default): asks before every navigation, click, input, or save.
   - **페이지 이동·클릭·입력을 묻지 않고 실행**: acts directly, but still asks for payments, personal-data submission, deletion, and leaving the site.

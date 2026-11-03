@@ -16,7 +16,7 @@ export function isGoogleConfigured(): boolean {
 function requireOauthConfigured(): void {
   if (!getManifestClientId()) {
     throw new Error(
-      "Google OAuth 클라이언트 ID가 manifest에 설정되지 않았습니다. manifest.config.ts 의 GOOGLE_OAUTH_CLIENT_ID 에 값을 넣고(또는 환경변수로 주입하고) 다시 빌드·재설치해 주세요. 타입은 'Chrome 확장 프로그램'으로 만들어야 합니다.",
+      "Google 연동은 직접 빌드한 확장에서만 쓸 수 있습니다(이 빌드에는 OAuth 클라이언트 ID가 없습니다). 설치 안내(docs/install.md)의 \"Google 연동\"대로 GOOGLE_OAUTH_CLIENT_ID를 넣어 다시 빌드해 주세요. 클라이언트 유형은 'Chrome 확장 프로그램'입니다.",
     );
   }
   if (typeof chrome.identity === "undefined") {
