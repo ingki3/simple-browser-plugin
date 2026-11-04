@@ -240,6 +240,16 @@ function usageScenarios() {
         expect(turns.length === 1 && turns[0].includes("호출 1 · 입력 1,200"), `턴 줄(${turns.join(" | ")})`);
       },
     },
+    {
+      name: "사용량(#126): 연결 단계에서 거절된 호출(HTTP 429)도 사용량 없는 호출로 센다",
+      async run(h) {
+        await h.sw.evaluate((u) => (globalThis.__usage = u), USAGE);
+        await h.turn([{ httpStatus: 429 }]);
+        const { calls, turns } = await usageLines(h);
+        expect(calls.length === 1 && calls[0].includes("사용량 없음") && calls[0].includes("· 오류"), `호출 줄(${calls.join(" | ")})`);
+        expect(turns.length === 1 && turns[0].includes("호출 1(사용량 없음 1)"), `턴 줄(${turns.join(" | ")})`);
+      },
+    },
   ];
   // 모듈의 기본 내보내기 배열에 덧붙인다.
   scenarios.push(...list);

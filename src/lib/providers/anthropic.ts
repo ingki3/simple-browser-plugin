@@ -228,8 +228,9 @@ export function anthropicStreamConverter(): (event: Record<string, unknown>) => 
   return (ev) => {
     const index = typeof ev.index === "number" ? ev.index : -1;
     if (ev.type === "message_start") {
+      // 입력 사용량을 바로 넘긴다(응답 도중 끊겨도 받은 만큼 남게). 뒤 message_delta의 값이 덮는다.
       takeUsage((ev.message as { usage?: unknown } | undefined)?.usage);
-      return [];
+      return usageChunk();
     }
     if (ev.type === "content_block_start") {
       const cb = (ev.content_block ?? {}) as { type?: string; id?: string; name?: string; data?: string };

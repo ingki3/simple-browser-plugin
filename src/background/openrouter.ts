@@ -1283,6 +1283,8 @@ export class ChatAgent {
         controller.signal,
       );
     } catch (err) {
+      // 연결 단계에서 실패한 호출도 한 번으로 센다(사용량은 모름).
+      this.recordUsage(turn, null, Date.now() - openedAt, this.isStale(turn) ? "중단" : "오류");
       if (connectTimedOut) {
         throw new Error(
           `${providerAdapter(this.provider).label} 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,

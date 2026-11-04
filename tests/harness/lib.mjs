@@ -382,6 +382,8 @@ async function installMockModel(sw) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
         out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       } else if (step) out = step;
+      // httpStatus: 요청을 HTTP 오류로 거절한다(연결 단계 실패).
+      if (step?.httpStatus) return new Response(JSON.stringify({ error: { message: "거절" } }), { status: step.httpStatus, headers: { "content-type": "application/json" } });
       // streamError: 글자·사용량을 보낸 뒤 스트림 오류 조각으로 끝난다(#126 — 끊긴 호출의 사용량).
       if (step?.streamError && !anthropic) {
         const parts = [{ choices: [{ delta: { content: "부분" } }] }, ...(globalThis.__usage ? [{ choices: [], usage: globalThis.__usage }] : []), { error: { message: "중간 오류" } }];
