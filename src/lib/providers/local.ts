@@ -120,8 +120,10 @@ export function localPayload(req: ChatRequest, stream: boolean, drop: ReadonlySe
     model: req.model,
     // 호환 서버는 파일 조각(PDF)을 받지 않을 수 있다 — Gemini와 같게 안내 글자로 바꾼다(PDF는 read_document로).
     messages: withoutFileParts(openAiMessages(req.messages)),
-    ...(req.tools ? { tools: req.tools } : {}),
-    ...(req.toolChoice ? { tool_choice: req.toolChoice } : {}),
+    // 도구 없이 답만 받는 마무리 요청(toolChoice "none")은 도구 목록을 보내지 않는다 — tool_choice를 모르는 서버(Ollama)에서도
+    // 모델이 도구를 고를 수 없게(#193 리뷰). 기록의 도구 호출·결과는 그대로 보낸다.
+    ...(req.tools && req.toolChoice !== "none" ? { tools: req.tools } : {}),
+    ...(req.toolChoice && req.toolChoice !== "none" ? { tool_choice: req.toolChoice } : {}),
     max_tokens: req.maxTokens,
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(req.responseFormat && !drop.has("response_format") ? { response_format: req.responseFormat } : {}),
@@ -147,6 +149,7 @@ async function send(auth: ProviderAuth, req: ChatRequest, stream: boolean, signa
   const drop = new Set(dropped.get(memo) ?? []);
   const headers: Record<string, string> = auth.apiKey ? { Authorization: `Bearer ${auth.apiKey}` } : {};
   const attempt = (d: ReadonlySet<OptionalField>) => chatRequest(url, headers, localPayload(req, stream, d), signal, LOCAL_LABEL, { redirect: "error" });
+  const toolsSent = !!req.tools && req.toolChoice !== "none";
   try {
     try {
       return { response: await attempt(drop), base: ep.base };
@@ -162,7 +165,7 @@ async function send(auth: ProviderAuth, req: ChatRequest, stream: boolean, signa
       return { response, base: ep.base };
     }
   } catch (err) {
-    throw localError(err, auth, ep.base, !!req.tools);
+    throw localError(err, auth, ep.base, toolsSent);
   }
 }
 

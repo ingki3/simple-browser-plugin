@@ -45,6 +45,9 @@ test("localPayload: max_tokens, 선택 필드(stream_options·response_format)�
   assert.deepEqual(b.response_format, { type: "json_object" });
   for (const k of ["parallel_tool_calls", "reasoning_effort", "reasoning", "max_completion_tokens"]) assert.ok(!(k in b), k);
   assert.ok(!JSON.stringify(b).includes("base64"), "파일 조각은 안내 글자로");
+  // 마무리 요청(toolChoice none)은 도구 목록·tool_choice를 보내지 않는다(tool_choice를 모르는 서버에서도 도구를 못 고르게).
+  const wrap = localPayload({ model: "m", messages: msgs, tools, toolChoice: "none", maxTokens: 1, reasoning: "agent_low" }, true);
+  assert.ok(!("tools" in wrap) && !("tool_choice" in wrap));
   const d = localPayload({ model: "m", messages: msgs, maxTokens: 1, reasoning: "off", responseFormat: { type: "json_object" } }, true, new Set(["stream_options", "response_format"]));
   assert.ok(!("stream_options" in d) && !("response_format" in d) && d.stream === true);
 });
