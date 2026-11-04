@@ -102,6 +102,8 @@ export interface ToolPreview {
   details?: unknown;
   // 직접 조작할 사이트의 손 넘기기 카드에 보일 내용(입력할 칸과 값 전체). 없으면 details.
   handoffDetails?: string;
+  // 승인 카드의 "전체 보기"(#132): details가 자른 요약일 때 자르지 않은 글. 표시만(판정에 쓰지 않음).
+  fullDetails?: string;
   // 자동 실행을 켰을 때도 승인을 받아야 하는 이유(결제·개인정보 제출). 없으면 null. 대상을 보지 않는 도구는 비워 둔다.
   autoBlock?: string | null;
   // 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않고 늘 카드로 묻는 이유
@@ -268,6 +270,9 @@ export async function buildToolPreview(
         }`,
         ...(destructiveFill
           ? { details: `${fillCardInfo.details}\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` }
+          : {}),
+        ...(fillCardInfo.fullDetails
+          ? { fullDetails: `${fillCardInfo.fullDetails}${destructiveFill ? `\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` : ""}` }
           : {}),
         autoBlock: autoApproveBlock("fill_form_fields", infos, fillValues),
         ...personalUrlFields("fill_form_fields", infos, fillValues),

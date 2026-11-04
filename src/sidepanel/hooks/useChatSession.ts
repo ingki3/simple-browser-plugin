@@ -75,6 +75,7 @@ export function useChatSession() {
             args: msg.args,
             previewSummary: msg.previewSummary,
             previewDetails: msg.previewDetails,
+            ...(typeof msg.previewFullDetails === "string" ? { previewFullDetails: msg.previewFullDetails } : {}),
             linkGrantOffer: msg.linkGrantOffer === true,
             chatGrantOffer: msg.chatGrantOffer === true,
             personalUrlOffer: msg.personalUrlOffer === true,

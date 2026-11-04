@@ -298,6 +298,8 @@ export type BgToPanel =
       args: unknown;
       previewSummary: string;
       previewDetails?: unknown;
+      // previewDetails가 자른 요약이면 자르지 않은 글(#132 "전체 보기", 표시만).
+      previewFullDetails?: string;
       // 일반 링크 클릭 카드면 true: "이번 요청 동안 링크 이동은 묻지 않기"를 함께 보여 준다(grantableLink).
       linkGrantOffer?: boolean;
       // 이번 대화 허락 대상 도구(src/lib/chatGrant.ts)이고 허락으로 덮을 수 있는 호출이면 true:

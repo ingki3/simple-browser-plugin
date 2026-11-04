@@ -133,6 +133,7 @@ export async function startHarness() {
       globalThis.__voiceDelayMs = 0;
       globalThis.__voiceStatus = 0;
       globalThis.__usage = undefined;
+      globalThis.__checkReply = undefined;
     });
     logs.length = 0;
     for (const p of optionsPages()) await p.close().catch(() => {});
@@ -277,6 +278,13 @@ async function installMockModel(sw) {
       if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com|api\.anthropic\.com/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
       (globalThis.__modelReqs ??= []).push({ url: String(url), body, headers: init.headers });
+      // __checkReply(#132): 설정의 연결 확인 요청에 줄 응답 { status, body, delayMs, networkError }.
+      if (globalThis.__checkReply && JSON.stringify(body.messages ?? []).includes("Reply with the single word OK.")) {
+        const c = globalThis.__checkReply;
+        if (c.delayMs) await new Promise((r) => setTimeout(r, c.delayMs));
+        if (c.networkError) throw new TypeError("Failed to fetch");
+        return new Response(JSON.stringify(c.body), { status: c.status ?? 200, headers: { "content-type": "application/json" } });
+      }
       const anthropic = String(url).includes("api.anthropic.com");
       // Anthropic: 응답은 Messages 형식, 스트림은 content_block 이벤트(아래 anthropicSse).
       if (anthropic && !body.stream) {

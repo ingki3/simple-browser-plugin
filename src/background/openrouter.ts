@@ -2092,6 +2092,8 @@ export class ChatAgent {
     const { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall } = call;
     const { autoMode, block, linkOffer, urlOffer, pageSite, chatGrant } = decision;
     const personalUrlKeys = preview.personalUrlKeys ?? [];
+    const withUrlOffer = (details: unknown) =>
+      `${typeof details === "string" && details ? `${details}\n` : ""}개인정보 모양이 걸린 주소:\n${(preview.personalUrls ?? []).map((u) => `- ${u}`).join("\n")}`;
     if (autoMode) debugLog("tool:auto_blocked", `${toolName} · ${block}`);
     if (chatGrant.reason) debugLog("tool:chat_grant_blocked", `${toolName} · ${chatGrant.reason}`);
     debugLog("tool:awaiting_approval", `${toolName}`);
@@ -2108,9 +2110,9 @@ export class ChatAgent {
           : autoMode
             ? `${preview.summary} (자동 실행 예외: ${block})`
             : preview.summary,
-      previewDetails: urlOffer
-        ? `${typeof preview.details === "string" && preview.details ? `${preview.details}\n` : ""}개인정보 모양이 걸린 주소:\n${(preview.personalUrls ?? []).map((u) => `- ${u}`).join("\n")}`
-        : preview.details,
+      previewDetails: urlOffer ? withUrlOffer(preview.details) : preview.details,
+      // 전체 보기(#132)에도 개인정보 주소 목록을 같은 글로 붙인다(펼쳐도 무엇을 허용하는지 보이게).
+      ...(preview.fullDetails ? { previewFullDetails: urlOffer ? withUrlOffer(preview.fullDetails) : preview.fullDetails } : {}),
       ...(linkOffer ? { linkGrantOffer: true } : {}),
       ...(urlOffer ? { personalUrlOffer: true } : {}),
       ...(loginOffer ? { loginSiteOffer: loginOffer } : {}),

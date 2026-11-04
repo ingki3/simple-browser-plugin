@@ -42,3 +42,20 @@ test("fetch 연결 실패(TypeError)는 연결 안내", () => {
   assert.match(f.message, /연결하지 못했습니다/);
   assert.equal(f.detail, "Failed to fetch");
 });
+
+import { scrubSecret } from "../src/lib/friendlyError.ts";
+
+test("연결 확인(#132): 400·422는 도구가 아니라 모델 이름을 확인하라고, 원문은 detail로", () => {
+  const err = Object.assign(new Error("model `x` not found"), { name: "ProviderHttpError", status: 400 });
+  const f = friendlyError(err, { check: true });
+  assert.match(f.message, /모델 이름이 맞는지/);
+  assert.equal(f.detail, "model `x` not found");
+  assert.match(friendlyError(err).message, /도구 호출을 지원하는지/);
+  // 연결 실패(TypeError)는 연결 확인에서도 같은 안내.
+  assert.match(friendlyError(new TypeError("Failed to fetch"), { check: true }).message, /연결하지 못했습니다/);
+});
+
+test("scrubSecret(#132): 키가 여러 번 나와도 모두 가린다, 빈 키는 그대로", () => {
+  assert.equal(scrubSecret("bad key sk-abc, again sk-abc!", "sk-abc"), "bad key [키], again [키]!");
+  assert.equal(scrubSecret("abc", ""), "abc");
+});
