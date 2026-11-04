@@ -8,6 +8,7 @@ import {
 } from "@/lib/translationProtocol";
 import { isUsableTranslation } from "@/lib/translationSegments";
 import { debugLog } from "./debug";
+import { getSettings } from "./storage";
 import { beginTargetGuard, TargetChangedError } from "./modelTarget";
 
 const TRANSLATION_CACHE_MAX = 5000;
@@ -32,6 +33,26 @@ interface TranslationSession {
 const sessions = new Map<string, TranslationSession>();
 const MAX_SESSIONS = 50;
 
+// 서비스 워커가 다시 떠도 동적 재번역이 이어지게 세션 id → 대상의 해시를 chrome.storage.session(메모리, 확장만 읽음)에 둔다.
+// 키·주소는 저장하지 않고 해시만 — 되살릴 때 지금 설정의 대상 해시와 같아야 그 대상으로 이어 간다(바뀌었으면 끝냄).
+const PERSIST_KEY = "translationSessions";
+
+async function targetHash(active: Pick<ActiveModel, "provider" | "apiKey" | "model" | "baseUrl">): Promise<string> {
+  const bytes = new TextEncoder().encode(targetKey(active));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+let persistQueue: Promise<unknown> = Promise.resolve();
+function persist(fn: (m: Record<string, string>) => Record<string, string>): Promise<void> {
+  const run = persistQueue.then(async () => {
+    const cur = ((await chrome.storage.session.get(PERSIST_KEY))[PERSIST_KEY] ?? {}) as Record<string, string>;
+    await chrome.storage.session.set({ [PERSIST_KEY]: fn({ ...cur }) });
+  });
+  persistQueue = run.catch(() => {});
+  return run;
+}
+
 export function beginTranslationSession(active: ActiveModel): string {
   const id = crypto.randomUUID();
   sessions.set(id, { active, key: targetKey(active), controllers: new Set() });
@@ -40,14 +61,48 @@ export function beginTranslationSession(active: ActiveModel): string {
     if (oldest === undefined) break;
     endTranslationSession(oldest);
   }
+  void targetHash(active)
+    .then((h) =>
+      persist((m) => {
+        m[id] = h;
+        const ids = Object.keys(m);
+        for (const old of ids.slice(0, Math.max(0, ids.length - MAX_SESSIONS))) delete m[old];
+        return m;
+      }),
+    )
+    .catch(() => {});
   return id;
 }
 
 export function endTranslationSession(id: string): void {
   const s = sessions.get(id);
-  if (!s) return;
   sessions.delete(id);
-  for (const c of s.controllers) c.abort();
+  if (s) for (const c of s.controllers) c.abort();
+  void persist((m) => {
+    delete m[id];
+    return m;
+  }).catch(() => {});
+}
+
+// 메모리에 없는 세션(서비스 워커가 다시 뜸)을 되살린다: 저장한 해시가 지금 설정의 대상과 같을 때만.
+async function restoreSession(id: string): Promise<TranslationSession | null> {
+  if (!id) return null;
+  const got = (await chrome.storage.session.get(PERSIST_KEY).catch(() => ({}))) as Record<string, unknown>;
+  const saved = (got[PERSIST_KEY] ?? {}) as Record<string, string>;
+  const hash = saved[id];
+  if (!hash) return null;
+  const active = activeModel(await getSettings());
+  if (!active.ready || (await targetHash(active)) !== hash) {
+    endTranslationSession(id);
+    return null;
+  }
+  // 기다리는 사이 다른 배치가 먼저 되살렸으면 그것을 쓴다.
+  const again = sessions.get(id);
+  if (again) return again;
+  const session = { active, key: targetKey(active), controllers: new Set<AbortController>() };
+  sessions.set(id, session);
+  debugLog("translate:session_restored", id.slice(0, 8));
+  return session;
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -67,7 +122,7 @@ function cacheTranslation(key: string, value: string): void {
 }
 
 export async function translateBatch(texts: string[], targetLang: string, sessionId: string): Promise<string[]> {
-  const session = sessions.get(sessionId);
+  const session = sessions.get(sessionId) ?? (await restoreSession(sessionId));
   if (!session) throw new Error(TRANSLATION_SESSION_ENDED);
   const active = session.active;
   const { provider, model } = active;

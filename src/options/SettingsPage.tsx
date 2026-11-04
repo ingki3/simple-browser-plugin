@@ -264,9 +264,13 @@ export function SettingsPage() {
   const loadLocalModels = async () => {
     const seq = ++modelsSeq.current;
     setLocalModels({ state: "busy", ids: [], text: "불러오는 중…" });
-    // 입력이 멈추기를 기다리는 주소 변경도 먼저 저장해, 화면에 보이는 주소로 묻는다.
-    await flush();
+    // 입력이 멈추기를 기다리는 주소 변경도 먼저 저장해, 화면에 보이는 주소로 묻는다. 저장이 실패하면 묻지 않는다(옛 값으로 묻지 않게).
+    const saved = await flush();
     if (seq !== modelsSeq.current) return;
+    if (!saved) {
+      setLocalModels({ state: "error", ids: [], text: "설정을 저장하지 못해 목록을 불러오지 않았습니다. 다시 시도해 주세요." });
+      return;
+    }
     try {
       const res = (await chrome.runtime.sendMessage({ kind: "local_models" })) as { ok: boolean; data?: string[]; error?: string } | undefined;
       if (seq !== modelsSeq.current) return;
