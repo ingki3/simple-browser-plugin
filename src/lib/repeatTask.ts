@@ -242,6 +242,13 @@ function firstJsonObject(text: string): unknown {
   return null;
 }
 
+// 확인 요청의 버튼 목록에 보일 역할(#145). 명시적 role이 없으면 요소 종류(tag)로 채운다 — 클릭 후보는 a[href]·area[href](링크)와
+// button·input[type=button|submit](버튼)뿐이다(find_clickables BASE_SELECTOR). checkbox·radio는 role에 칸 종류가 이미 들어 있다.
+export function snapshotRole(tag: string, role: string): string {
+  if (role) return role;
+  return tag === "a" || tag === "area" ? "link" : "button";
+}
+
 export interface RepeatSnapshot {
   title: string;
   url: string;

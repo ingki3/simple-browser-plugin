@@ -24,6 +24,7 @@ import { remoteErrorText } from "@/lib/telegram";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { debugLog } from "./debug";
+import { finishJob, recoverJob } from "@/lib/mcpJobState";
 
 const STORE_KEY = "mcp";
 const ALARM = "mcp-poll";
@@ -221,11 +222,13 @@ async function postResult(conn: Conn, jobId: string, outcome: "ok" | "error" | "
   return false;
 }
 
-// 최종 결과: 먼저 저장해 두고(서비스 워커가 내려가도 다시 보낼 수 있게) 보낸 뒤 지운다.
+// 최종 결과를 보내고, 다리가 받으면 지운다. 결과는 부르는 쪽이 이미 저장해 두었다(작업 기록을 지우는 저장과 같은 한 번 — #145,
+// lib/mcpJobState.ts). 서비스 워커가 내려가도 다시 뜨면 저장된 결과를 다시 보낸다.
 let delivering = false;
+// 이 서비스 워커가 맡고 있는 작업(실행 중이거나, 실행을 마치고 결과를 저장하기 전). 다시 뜬 뒤의 남은 기록으로 오인하지 않는다.
+const owned = new Set<string>();
 async function deliver(conn: Conn, p: McpPending): Promise<void> {
   if (conn.gen !== connGen) return;
-  await update((cur) => ({ ...cur, pending: p }));
   if (delivering) return;
   delivering = true;
   try {
@@ -343,10 +346,15 @@ async function handleNext(conn: Conn, n: McpNext): Promise<void> {
     else void postAsk(conn, { op: "ack", jobId: a.jobId, askId: a.askId }, cleanupSignal());
   }
   // 서비스 워커가 다시 뜨기 전에 실행 중이던 작업: 다시 실행하지 않고 중단으로 보고한다.
-  if (st.job && st.job.bridgeId === n.bridgeId && current?.jobId !== st.job.jobId) {
-    const jobId = st.job.jobId;
-    conn.s = await update((cur) => ({ ...cur, job: null }));
-    void deliver(conn, { bridgeId: n.bridgeId, jobId, outcome: "error", text: "브라우저가 다시 시작되어 요청이 중단되었습니다. 다시 요청하세요." });
+  // 기록을 지우는 것과 중단 결과를 남기는 것은 한 번의 저장으로(lib/mcpJobState.ts).
+  if (recoverJob(st, n.bridgeId, owned)) {
+    let interrupted: McpPending | null = null;
+    conn.s = await update((cur) => {
+      const r = recoverJob(cur, n.bridgeId, owned);
+      interrupted = r?.pending ?? null;
+      return r ?? cur;
+    });
+    if (interrupted) void deliver(conn, interrupted);
   } else if (st.pending && st.pending.bridgeId === n.bridgeId && !delivering) {
     // 보내지 못한 결과를 다시 보낸다.
     void deliver(conn, st.pending);
@@ -383,30 +391,47 @@ function startJob(conn: Conn, bridgeId: string, job: NonNullable<McpNext["job"]>
     }
     const running = runner.run(job.request, undefined, approverFor(conn, job));
     if (!running) return;
-    current = { jobId: job.jobId, deadline: job.deadline };
-    void postResult(conn, job.jobId, "accepted", "");
-    debugLog("mcp:request", `${job.request.length}자`);
-    running.start();
-    const end = await running.end;
-    if (current?.jobId === job.jobId) current = null;
-    await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));
-    if (conn.gen !== connGen) return;
-    if (end.status === "stopped") {
-      void postResult(conn, job.jobId, "cancelled", "");
-      return;
+    owned.add(job.jobId);
+    try {
+      await runJob(conn, bridgeId, job, running);
+    } finally {
+      owned.delete(job.jobId);
     }
-    let p: McpPending;
-    if (end.status === "failed") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(undefined) };
-    else if (end.result.outcome === "error") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(end.result.action) };
-    else {
-      try {
-        p = { bridgeId, jobId: job.jobId, outcome: "ok", text: (await maskStringForModel(end.result.finalText || "끝났습니다(답할 내용이 없습니다).")).text };
-      } catch {
-        p = { bridgeId, jobId: job.jobId, outcome: "error", text: "결과를 안전하게 보내지 못했습니다. 브라우저 패널에서 확인하세요." };
-      }
-    }
-    await deliver(conn, p);
   })();
+}
+
+// 맡은 작업을 실행하고 결과를 저장·전달한다(startJob이 owned로 감싼다).
+async function runJob(conn: Conn, bridgeId: string, job: NonNullable<McpNext["job"]>, running: NonNullable<ReturnType<typeof runner.run>>): Promise<void> {
+  current = { jobId: job.jobId, deadline: job.deadline };
+  void postResult(conn, job.jobId, "accepted", "");
+  debugLog("mcp:request", `${job.request.length}자`);
+  running.start();
+  const end = await running.end;
+  if (current?.jobId === job.jobId) current = null;
+  // 연결이 바뀌었거나(그 결과는 새 연결로 보내지 않는다) 취소했으면 기록만 지운다.
+  if (conn.gen !== connGen || end.status === "stopped") {
+    await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));
+    if (conn.gen === connGen) void postResult(conn, job.jobId, "cancelled", "");
+    return;
+  }
+  // 결과를 만드는 동안(가림)에도 작업 기록을 남겨 둔다 — 이 서비스 워커가 맡고 있으므로(owned) 중단으로 보고하지 않는다.
+  let p: McpPending;
+  if (end.status === "failed") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(undefined) };
+  else if (end.result.outcome === "error") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(end.result.action) };
+  else {
+    try {
+      p = { bridgeId, jobId: job.jobId, outcome: "ok", text: (await maskStringForModel(end.result.finalText || "끝났습니다(답할 내용이 없습니다).")).text };
+    } catch {
+      p = { bridgeId, jobId: job.jobId, outcome: "error", text: "결과를 안전하게 보내지 못했습니다. 브라우저 패널에서 확인하세요." };
+    }
+  }
+  // 결과를 만드는 사이 연결이 바뀌었으면 기록만 지운다. 아니면 기록 지우기와 결과 남기기를 한 번에 저장한 뒤 보낸다.
+  if (conn.gen !== connGen) {
+    await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));
+    return;
+  }
+  await update((cur) => finishJob(cur, job.jobId, p));
+  await deliver(conn, p);
 }
 
 // ---- 승인 질문(#185) ----

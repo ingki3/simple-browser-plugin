@@ -73,6 +73,77 @@ const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.
 
 export default [
   {
+    name: "작업 기록(#145): 결과 전송이 실패하면 저장해 두고 다음 폴링에서 다시 보낸다",
+    async run(h) {
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ delayMs: 2000, text: "늦은 답" }];
+        });
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "날씨 알려 줘" } } });
+        // 받았다는 확인을 보낸 뒤, 최종 결과 전송만 세 번(postResult 한 번의 재시도 전부) 실패하게 한다.
+        await h.panel.waitForTimeout(1000);
+        await h.sw.evaluate(() => {
+          const prev = globalThis.fetch;
+          globalThis.__failResults = 3;
+          globalThis.fetch = async (u, init) => {
+            if (String(u).endsWith("/v1/result") && globalThis.__failResults > 0) {
+              globalThis.__failResults--;
+              throw new TypeError("Failed to fetch");
+            }
+            return prev(u, init);
+          };
+        });
+        const res = await bridge.reply(2, 45_000);
+        expect(res?.result?.content?.[0]?.text === "늦은 답", `다시 보낸 최종 답(${JSON.stringify(res)})`);
+        expect((await h.sw.evaluate(() => globalThis.__failResults)) === 0, "실패를 거친 뒤 보냄");
+        const until = Date.now() + 5000;
+        let st = null;
+        while (Date.now() < until) {
+          st = await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp);
+          if (!st.pending && !st.job) break;
+          await h.panel.waitForTimeout(200);
+        }
+        expect(!st.pending && !st.job, `보낸 뒤 기록 정리(${JSON.stringify({ job: st.job, pending: st.pending })})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "작업 기록(#145): 다시 뜬 뒤 남은 작업 기록은 중단 결과로 바꿔 보내고 정리한다",
+    async run(h) {
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        // 다리는 할 일이 없으면 첫 폴링을 20초까지 붙잡는다 — 그 응답에서 다리 id를 저장한다.
+        let bridgeId = "";
+        const until = Date.now() + 30_000;
+        while (!bridgeId && Date.now() < until) {
+          bridgeId = (await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp?.bridgeId)) ?? "";
+          if (!bridgeId) await h.panel.waitForTimeout(200);
+        }
+        expect(!!bridgeId, "다리 연결");
+        // 서비스 워커가 실행 중에 내려갔다가 다시 뜬 것처럼, 맡지 않은 작업 기록을 저장소에 둔다.
+        await h.sw.evaluate(async (id) => {
+          const s = (await chrome.storage.local.get("mcp")).mcp;
+          await chrome.storage.local.set({ mcp: { ...s, job: { bridgeId: id, jobId: "j-old" } } });
+        }, bridgeId);
+        const end = Date.now() + 30_000;
+        let st = null;
+        while (Date.now() < end) {
+          st = await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp);
+          if (!st.job && !st.pending) break;
+          await h.panel.waitForTimeout(300);
+        }
+        expect(!st.job && !st.pending, `중단 보고 뒤 정리(${JSON.stringify({ job: st.job, pending: st.pending })})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
     name: "승인 질문(#185): 주소 없는 이동은 클라이언트에 elicitation으로 묻고, accept+approve면 이동한다",
     pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
     async run(h) {
