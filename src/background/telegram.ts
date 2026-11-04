@@ -25,6 +25,7 @@ import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { onRepeatTriggered } from "./repeatTasks";
 import { debugLog } from "./debug";
+import { beginKeepalive, endKeepalive } from "./keepalive";
 
 const STORE_KEY = "telegram";
 const ALARM = "telegram-poll";
@@ -348,26 +349,26 @@ async function handleUpdate(s: TelegramState, u: unknown, conn: AbortSignal): Pr
       if (!next) return;
       debugLog("telegram:paired");
       await ensureAlarm();
-      await sendText(next, "간편 브라우저 도우미와 연결되었습니다. 할 일을 보내면 브라우저에서 처리하고 답을 보냅니다. /help로 사용법을 볼 수 있습니다.").catch(() => {});
+      await sendText(next, "간편 브라우저 도우미와 연결되었습니다. 할 일을 보내면 브라우저에서 처리하고 답을 보냅니다. /help로 사용법을 볼 수 있습니다.", conn).catch(() => {});
       return;
     }
     case "command":
       if (staleMessage(a.at, s.connectedAt, now)) return;
-      if (a.command === "help") await sendText(s, HELP).catch(() => {});
-      else if (a.command === "stop") await sendText(s, stopRun() ? "멈췄습니다." : "진행 중인 요청이 없습니다.").catch(() => {});
+      if (a.command === "help") await sendText(s, HELP, conn).catch(() => {});
+      else if (a.command === "stop") await sendText(s, stopRun() ? "멈췄습니다." : "진행 중인 요청이 없습니다.", conn).catch(() => {});
       else {
         stopRun();
         runner.drop();
-        await sendText(s, "새 대화를 시작합니다.").catch(() => {});
+        await sendText(s, "새 대화를 시작합니다.", conn).catch(() => {});
       }
       return;
     case "text":
       if (staleMessage(a.at, s.connectedAt, now)) {
-        await sendText(s, "오래된 요청이라 실행하지 않았습니다. 다시 보내 주세요.").catch(() => {});
+        await sendText(s, "오래된 요청이라 실행하지 않았습니다. 다시 보내 주세요.", conn).catch(() => {});
         return;
       }
       if (runner.busy || sending > 0) {
-        await sendText(s, "앞의 요청을 처리하고 있습니다. /stop으로 멈출 수 있습니다.").catch(() => {});
+        await sendText(s, "앞의 요청을 처리하고 있습니다. /stop으로 멈출 수 있습니다.", conn).catch(() => {});
         return;
       }
       if (conn.aborted) return;
@@ -440,6 +441,8 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
   sendAbort = sendCtl;
   const out = AbortSignal.any([conn, run.signal, sendCtl.signal]);
   sending++;
+  // 답을 보내는 동안(가림·나눠 보내기·429 재시도)에도 서비스 워커를 붙잡아 둔다(#145). 아래 finally에서 놓는다.
+  beginKeepalive();
   void (async () => {
     const at = Date.now();
     let status: TelegramRecent["status"] = "failed";
@@ -477,6 +480,7 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
       runner.stop();
     } finally {
       sending--;
+      endKeepalive();
       if (sendAbort === sendCtl) sendAbort = null;
       await update((st) => ({ ...st, recent: st.recent.map((r) => (r.at === at && r.status === "running" ? { ...r, status } : r)) }), s.epoch).catch(() => {});
     }
