@@ -41,6 +41,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pageSuggestions: true,
   trustedInput: false,
   manualSites: [],
+  remoteSites: [],
   loginSites: [],
   voiceInput: DEFAULT_VOICE_INPUT,
 };
@@ -75,6 +76,7 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     pageSuggestions: r.pageSuggestions !== false,
     trustedInput: r.trustedInput === true,
     manualSites: normalizeManualSites(r.manualSites),
+    remoteSites: normalizeManualSites(r.remoteSites),
     loginSites: normalizeLoginSites(r.loginSites),
     voiceInput: normalizeVoiceInput(r.voiceInput),
   };
@@ -89,6 +91,7 @@ export function settingsForStorage(next: Settings): Settings {
     maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
     csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     manualSites: normalizeManualSites(next.manualSites),
+    remoteSites: normalizeManualSites(next.remoteSites),
     loginSites: normalizeLoginSites(next.loginSites),
     apiKeys: stringFields(next.apiKeys, ["openai", "gemini", "anthropic", "local"]),
     providerModels: stringFields(next.providerModels, ["openai", "gemini", "anthropic"]),

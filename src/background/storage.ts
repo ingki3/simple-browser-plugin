@@ -5,6 +5,8 @@ import { makeGenCache } from "@/lib/genCache";
 import {
   applyLoginSiteOp as applyLoginSiteOpTo,
   applyManualSiteOp as applyManualSiteOpTo,
+  applyRemoteSiteOp as applyRemoteSiteOpTo,
+  type RemoteSiteOp,
   withGrantIds,
   type LoginSiteOp,
   type ManualSiteOp,
@@ -69,6 +71,18 @@ export async function applyManualSiteOp(op: ManualSiteOp): Promise<void> {
   await applySettingsUpdate((cur) => {
     const r = applyManualSiteOpTo(cur.manualSites, op);
     if (r.ok) return { manualSites: r.list };
+    out.error = r.error;
+    return {};
+  });
+  if (out.error) throw new Error(out.error);
+}
+
+// 원격 요청에서 묻지 않을 사이트(#192)의 항목 하나를 바꾼다(직접 조작할 사이트와 같은 방식).
+export async function applyRemoteSiteOp(op: RemoteSiteOp): Promise<void> {
+  const out = { error: "" };
+  await applySettingsUpdate((cur) => {
+    const r = applyRemoteSiteOpTo(cur.remoteSites, op);
+    if (r.ok) return { remoteSites: r.list };
     out.error = r.error;
     return {};
   });

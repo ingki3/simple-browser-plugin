@@ -27,11 +27,18 @@ export function parseLoginSiteOp(raw: unknown): LoginSiteOp | null {
   return null;
 }
 
-export function applyManualSiteOp(list: readonly string[], op: ManualSiteOp): OpResult<string> {
+export function applyManualSiteOp(list: readonly string[], op: ManualSiteOp, label = "직접 조작할 사이트"): OpResult<string> {
   if (op.op === "remove") return { ok: true, list: list.filter((s) => s !== op.site) };
   if (list.includes(op.site)) return { ok: true, list: [...list] };
-  if (list.length >= MAX_MANUAL_SITES) return { ok: false, error: `직접 조작할 사이트는 ${MAX_MANUAL_SITES}개까지입니다.` };
+  if (list.length >= MAX_MANUAL_SITES) return { ok: false, error: `${label}는 ${MAX_MANUAL_SITES}개까지입니다.` };
   return { ok: true, list: [...list, op.site] };
+}
+
+// 원격 요청에서 묻지 않을 사이트(#192): 직접 조작할 사이트와 같은 형식·상한, 항목 단위 변경.
+export type RemoteSiteOp = ManualSiteOp;
+export const parseRemoteSiteOp = parseManualSiteOp;
+export function applyRemoteSiteOp(list: readonly string[], op: RemoteSiteOp): OpResult<string> {
+  return applyManualSiteOp(list, op, "원격 요청에서 묻지 않을 사이트");
 }
 
 // 사용자가 보던 승인(grantId)과 지금 그 출처의 승인이 같을 때만 적용한다. 지웠다 다시 승인했으면(같은 항목이어도 새 grantId)

@@ -27,7 +27,7 @@ import type {
   YoutubeTranscript,
 } from "@/lib/messages";
 import { toolArgsSchemas, type ToolArgs } from "@/lib/schemas";
-import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl } from "@/lib/sanitize";
+import { DEFAULT_DOWNLOAD_FOLDER, normalizeNavigationUrl, sanitizeFilenameSegment } from "@/lib/sanitize";
 import { getSettings } from "../storage";
 import {
   callContentTool,
@@ -121,6 +121,11 @@ export interface ToolPreview {
   clickTarget?: TargetInfo;
   // 원격 승인 질문(#185)에 보일 클릭 대상. 판정에는 쓰지 않는다. 트리거가 있는 선택지 클릭은 비운다(이번 범위에서 원격으로 묻지 않음).
   remoteTarget?: TargetInfo;
+  // 원격 승인 질문 재료(#192, 판정에는 쓰지 않음): 입력 칸과 값, 파일 읽기 주소, 캡처 대상, 선택 카드의 기본 선택.
+  remoteFields?: Array<{ target: TargetInfo; value: string }>;
+  remoteDocument?: { url: string; hasExtension: boolean };
+  remoteCapture?: { where: string; host: string; fullPage: boolean; folder: string };
+  remoteChoices?: { kind: "image" | "file" | "link"; folder?: string; picks: Array<{ url: string; note: string }> };
   // 선택 카드(다른 탭 고르기)의 후보와 최대 선택 수.
   choices?: Array<{ id: string; label: string; sub: string }>;
   choiceLimit?: number;
@@ -265,6 +270,7 @@ export async function buildToolPreview(
       const destructiveFill = destructiveFillBlock(infos, fillValues);
       return {
         ...fillCardInfo,
+        remoteFields: infos.map((info, i) => ({ target: info, value: args.fills[i].value })),
         handoffDetails: `${handoffFillList(infos.map((info, i) => ({ info, value: args.fills[i].value })))}${
           destructiveFill ? `\n⚠ ${destructiveFill}일 수 있습니다. 입력 전에 대상을 확인하세요.` : ""
         }`,
@@ -327,7 +333,8 @@ export async function buildToolPreview(
       const kind = toolName === "download_images" ? "image" : "file";
       const { downloadFolderPrefix } = await getSettings();
       // 빈 값도 실제로 저장할 기본 폴더로 확정한다(카드·허락 판정·실행이 같은 폴더를 보게).
-      const folder = args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER;
+      // 실행과 같은 정리를 한 폴더(#192 — 카드·원격 질문·실행이 같은 폴더를 보게).
+      const folder = sanitizeFilenameSegment(args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER);
       // 지금 페이지에 실제로 있는 이미지·링크인지 확인해 후보를 고정한다. 실행은 사용자가 고른 후보만 받는다.
       const snap = await snapshotDownloads(callId, turnTab, kind, args.urls);
       const limit = DOWNLOAD_LIMITS[kind].maxPick;
@@ -342,6 +349,7 @@ export async function buildToolPreview(
         choices: snap.choices,
         choiceLimit: Math.min(limit, snap.choices.length),
         choiceDefaults: snap.defaults,
+        remoteChoices: { kind, folder, picks: snap.defaults.map((id) => ({ url: snap.urls[id] ?? "", note: "" })) },
         // 첨부 파일은 이번 대화 허락 대상이 아니다(쿠키를 실어 받으므로 늘 카드에서 고른다).
         ...(kind === "image"
           ? { grantBlock: snap.grantBlock, grantScope: downloadScope(folder), grantChoiceIds: snap.requestedIds }
@@ -355,7 +363,7 @@ export async function buildToolPreview(
       // 캡처할 수 없는 탭(내부 페이지·웹 스토어 등)이거나 앞에 보이는 탭이 아니면 카드 없이 이유를 알린다.
       const target = await captureTarget(turnTab);
       const { downloadFolderPrefix } = await getSettings();
-      const folder = args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER;
+      const folder = sanitizeFilenameSegment(args.folderPrefix || downloadFolderPrefix || DEFAULT_DOWNLOAD_FOLDER);
       let host = "";
       try {
         host = new URL(target.url).host;
@@ -373,6 +381,7 @@ export async function buildToolPreview(
         // 폴더를 생략한 호출은 실행 때 설정을 다시 읽지 않고, 카드에 보인 이 폴더에 저장한다. 카드에 보인 대상(탭·주소·
         // 문서)도 이 호출에 고정해, 카드가 열린 사이 다른 페이지로 이동했으면 실행에서 찍지 않는다.
         execArgs: { ...args, folderPrefix: folder, approvedTarget: target },
+        remoteCapture: { where: tabLabel, host, fullPage: !!args.fullPage, folder },
       };
     }
     case "click_element": {
@@ -417,7 +426,7 @@ export async function buildToolPreview(
     }
     case "read_linked_pages": {
       const args = parsedArgs as ToolArgs["read_linked_pages"];
-      const { choices, defaults, rejected, grantBlock } = await snapshotLinks(callId, turnTab, args.urls);
+      const { choices, defaults, rejected, grantBlock, picks } = await snapshotLinks(callId, turnTab, args.urls);
       return {
         summary: `페이지의 링크 ${choices.length}개를 탭 이동 없이(로그인 쿠키 없이) 받아 본문을 읽습니다. 읽을 링크를 고르세요. 읽은 내용은 모델 제공자로 전송됩니다.`,
         ...(rejected.length ? { details: `읽지 않는 주소:\n${rejected.join("\n")}` } : {}),
@@ -426,6 +435,7 @@ export async function buildToolPreview(
         choiceDefaults: defaults,
         grantBlock,
         grantChoiceIds: choices.map((c) => c.id),
+        remoteChoices: { kind: "link", picks: defaults.map((id) => picks[id]).filter((p): p is { url: string; note: string } => !!p) },
       };
     }
     case "read_other_tabs": {
@@ -444,14 +454,17 @@ export async function buildToolPreview(
       const target = checked.target;
       const host = new URL(target.url).host;
       const warning = `URL 전체(쿼리 포함)가 ${host}로 전송됩니다. 모르는 사이트이거나 쿼리에 대화 내용이 들어 있으면 거부하세요.`;
+      const remoteDocument = { url: target.url, hasExtension: !!target.hint };
       if (!target.hint) {
         // 확장자가 없으면 이 주소가 파일인지 미리 알 수 없다. 승인 카드가 주된 방어선이다.
         return {
+          remoteDocument,
           summary: `${host}의 다운로드 링크를 로그인 쿠키와 함께 호출해, 받은 파일을 읽습니다(형식은 받은 뒤 판별).`,
           details: `${target.url}\n\n확장자가 없는 링크라 파일 다운로드가 아닌 다른 동작(로그아웃·삭제·신청 등)을 하는 주소일 수도 있습니다. 페이지에 보이는 첨부 파일 링크가 맞을 때만 허용하세요.\n${warning}`,
         };
       }
       return {
+        remoteDocument,
         summary: `${host}에서 파일 '${truncate(target.filename, 60)}'을(를) 로그인 쿠키와 함께 내려받아 읽습니다.`,
         details: `${target.url}\n\n${warning}`,
       };

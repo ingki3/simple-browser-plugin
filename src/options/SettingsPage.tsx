@@ -719,6 +719,7 @@ export function SettingsPage() {
           <section className="settings-section" data-section="sites" hidden={section !== "sites"}>
             <h2>사이트</h2>
             <ManualSitesField sites={settings.manualSites} />
+            <ManualSitesField sites={settings.remoteSites} kind="remote" />
             <h3 className="settings-sub">자동 로그인 (선택 · KeePassXC 필요)</h3>
             <LoginSitesField sites={settings.loginSites} />
           </section>

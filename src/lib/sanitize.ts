@@ -27,11 +27,20 @@ export function normalizeNavigationUrl(raw: string): string {
 // 설정에도 호출에도 저장 폴더가 없을 때 쓰는 폴더.
 export const DEFAULT_DOWNLOAD_FOLDER = "downloads";
 
+// 반복해도 같은 값이 되게(고정점까지) 정리한다(#192 — 미리보기에서 정한 폴더를 실행이 다시 정리해도 바뀌지 않게).
+// 예: " .reports"는 한 번 정리하면 ".reports"였지만 이제 바로 "reports".
 export function sanitizeFilenameSegment(raw: string): string {
-  return raw
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
-    .replace(/\.\.+/g, "_")
-    .replace(/^\.+/, "")
-    .slice(0, 80)
-    .trim() || "file";
+  let cur = raw;
+  for (let i = 0; i < 5; i++) {
+    const next =
+      cur
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
+        .replace(/\.\.+/g, "_")
+        .replace(/^\.+/, "")
+        .slice(0, 80)
+        .trim() || "file";
+    if (next === cur) return next;
+    cur = next;
+  }
+  return cur;
 }

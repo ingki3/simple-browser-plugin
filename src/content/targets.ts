@@ -33,6 +33,8 @@ export interface TargetKind {
   modelName(el: HTMLElement): string;
   // 클릭 대상: modelName이 어느 단계에서든 한도에서 잘렸는지(modelNameClipped, #185).
   modelNameCut?(el: HTMLElement): boolean;
+  // 잘림 표시(modelNameClipped·modelContextClipped)를 기술에 남길지(클릭은 detail로, 입력 칸은 이것으로 — #192 원격 입력 질문은 잘린 칸을 묻지 않는다).
+  clipFlags?: boolean;
   fieldType(el: HTMLElement): string;
   sensitive(el: HTMLElement): TargetInfo["sensitive"];
   // 자동 실행 예외 판정용 표시(대상 확인 때만 계산, 비교에는 쓰지 않음).
@@ -418,7 +420,7 @@ function baseInfo(
     const ctx = modelContextInfoOf(row?.row ?? null, { substitute: substitute?.model });
     if (ctx.text) detail.modelContext = ctx.text;
     // 클릭 대상: 어느 단계에서든 한도에서 잘렸는지(원격 승인 질문은 잘린 대상을 묻지 않는다, #185).
-    if (kind.detail && ctx.cut) detail.modelContextClipped = true;
+    if ((kind.detail || kind.clipFlags) && ctx.cut) detail.modelContextClipped = true;
   }
   // 행에 숨긴 select의 대리 콤보박스가 있으면 그 글자를 기록한다(#88 — 입력 도중 비교에서 이번 호출이 쓴 것만 되돌린다).
   const pairs = row ? proxyPairsIn(row.row) : [];

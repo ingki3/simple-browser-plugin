@@ -16,7 +16,7 @@ import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedCon
 import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { clickRiskOf } from "./clickables";
-import { inProtectedArea, modelName, optionHidden, selectProxyOf, subtreeTextInfo } from "./modelText";
+import { inProtectedArea, modelName, modelNameInfo, optionHidden, selectProxyOf, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
   expandedTriggers,
@@ -90,6 +90,14 @@ function fieldModelName(el: HTMLElement): string {
   if (name) return name;
   const label = proxied(el) ? proxyLabel(el) : null;
   return label ? modelName(label, 200) : "";
+}
+
+// fieldModelName이 한도(200자)에서 잘렸는지(구조 플래그 — 글자 없음, #192).
+function fieldModelNameCut(el: HTMLElement): boolean {
+  const own = modelNameInfo(el);
+  if (own.text) return own.cut;
+  const label = proxied(el) ? proxyLabel(el) : null;
+  return label ? modelNameInfo(label, 200).cut : false;
 }
 
 // label 안에 든 입력 요소의 글자(select의 선택지 등)는 빼고 label 자신의 글자만 읽는다.
@@ -1021,8 +1029,10 @@ const FIELD_KIND: TargetKind = {
   requireVisible: false,
   name: (el) => (isFieldElement(el) ? resolveLabel(el).replace(/\s+/g, " ").slice(0, 200) : ""),
   modelName: fieldModelName,
+  modelNameCut: fieldModelNameCut,
   // 모델용 행 문맥(라벨 없는 행 체크박스를 보낸 사람·제목 같은 행 글자로 구분, #56).
   rowContext: true,
+  clipFlags: true,
   // 칸을 대신 보여 주는 label의 표시 이름(aria-labelledby·aria-label·화면 글자·title 순, 입력값·편집·숨은 글자 제외).
   proxyLabelName: (el) => {
     const label = proxied(el) ? proxyLabel(el) : null;

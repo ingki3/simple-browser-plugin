@@ -242,6 +242,20 @@ test("sameApprovedInFlight: 원문 행 글자가 그대로면 모델용 행 문�
   assert.equal(sameApprovedInFlight({ ...field, list: { index: 2, count: 5, semantic: true } }, { ...field, list: { index: 3, count: 5, semantic: true } }), false);
 });
 
+test("잘림 표시(#192): 실행 전 비교는 잘림만 달라도 다른 대상, 입력 도중은 덧붙음으로 생긴 잘림(false→true)만 허용", () => {
+  const field = { ...rowBox, tag: "input", fieldType: "text", proxy: undefined, context: "행 원문", modelContext: "행" };
+  // 표제가 80→81자가 되어 모델용 문맥은 같고 잘림만 바뀜 → 실행 전 비교는 다름.
+  assert.equal(sameApproved({ ...field, modelContextClipped: true }, field), false);
+  assert.equal(sameApproved({ ...field, modelNameClipped: true }, field), false);
+  // 입력 도중: 글자가 덧붙어(onlyAdded) 한도를 넘게 된 것은 같은 대상.
+  assert.equal(sameApprovedInFlight({ ...field, modelContext: "행 안내 글", modelContextClipped: true }, field), true);
+  // 잘렸던 것이 풀리거나(true→false) 이름 잘림이 바뀌면 다른 대상.
+  assert.equal(sameApprovedInFlight({ ...field }, { ...field, modelContextClipped: true }), false);
+  assert.equal(sameApprovedInFlight({ ...field, modelNameClipped: true }, field), false);
+  // 원문이 바뀌면서 잘린 것은 거부.
+  assert.equal(sameApprovedInFlight({ ...field, context: "다른 원문", modelContext: "행 안내", modelContextClipped: true }, field), false);
+});
+
 test("parseCheckedRequest: 참·거짓 외의 값은 지정 오류", () => {
   assert.equal(parseCheckedRequest("true"), true);
   assert.equal(parseCheckedRequest(" 체크 "), true);
