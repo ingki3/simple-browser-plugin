@@ -375,7 +375,8 @@ export type BgToContent =
   | { kind: "handoff_status"; token: string }
   | { kind: "handoff_end"; token: string }
   | { kind: "translate_batch"; texts: string[]; targetLang: string }
-  | { kind: "translate_stop" }
+  // session이 있으면 그 번역 세션일 때만 멈춘다(#193 — 같은 탭에서 새로 시작한 번역을 앞 번역의 늦은 정리가 멈추지 않게).
+  | { kind: "translate_stop"; session?: string }
   // 승인 카드용: id들이 find_* 때와 같은 요소인지 확인하고 이 호출의 승인 대상으로 남긴다.
   // prefix는 기대하는 대상 종류("c" 클릭, "f" 입력 칸).
   | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f"; values?: string[] }

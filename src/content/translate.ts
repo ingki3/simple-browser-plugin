@@ -330,7 +330,9 @@ let activeTargetLang: string | null = null;
 // stopTranslation()마다 증가. 진행 중인 배치는 시작 시점의 값과 비교해 멈춘다.
 let generation = 0;
 
-export function stopTranslation(): void {
+// session을 주면 지금 번역이 그 세션일 때만 멈춘다(늦게 온 앞 번역의 정리 무시, #193).
+export function stopTranslation(session?: string): void {
+  if (session !== undefined && session !== activeSession) return;
   generation += 1;
   activeSession = "";
   for (const obs of observers) obs.disconnect();

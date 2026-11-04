@@ -2445,7 +2445,8 @@ export class ChatAgent {
         endTranslationSession(translationSession);
         for (const tabId of translationTabs) {
           if (this.translationSessions.get(tabId) === translationSession) this.translationSessions.delete(tabId);
-          chrome.tabs.sendMessage(tabId, { kind: "translate_stop" }).catch(() => {});
+          // 그 탭이 이미 새 번역을 시작했으면 그 번역은 멈추지 않는다(세션이 같을 때만).
+          chrome.tabs.sendMessage(tabId, { kind: "translate_stop", session: translationSession }).catch(() => {});
         }
       }
       if (this.isStale(turn)) return false;
