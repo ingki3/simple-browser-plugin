@@ -349,7 +349,17 @@ export async function buildToolPreview(
         choices: snap.choices,
         choiceLimit: Math.min(limit, snap.choices.length),
         choiceDefaults: snap.defaults,
-        remoteChoices: { kind, folder, picks: snap.defaults.map((id) => ({ url: snap.urls[id] ?? "", note: "" })) },
+        // 원격 질문(#192): 주소와 구조 경고만(페이지 글자는 넣지 않음). 확장자 없는 파일 링크는 read_document처럼 경고한다.
+        remoteChoices: {
+          kind,
+          folder,
+          picks: snap.defaults.map((id) => {
+            const url = snap.urls[id] ?? "";
+            const checked = kind === "file" ? checkFileUrl(url) : null;
+            const noExt = !!checked && checked.ok && !checked.target.hint;
+            return { url, note: noExt ? "⚠ 확장자가 없는 링크 — 파일이 아닌 다른 동작(삭제·신청 등)일 수 있음" : "" };
+          }),
+        },
         // 첨부 파일은 이번 대화 허락 대상이 아니다(쿠키를 실어 받으므로 늘 카드에서 고른다).
         ...(kind === "image"
           ? { grantBlock: snap.grantBlock, grantScope: downloadScope(folder), grantChoiceIds: snap.requestedIds }

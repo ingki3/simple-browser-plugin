@@ -550,7 +550,9 @@ function closeAskMessage(p: PendingAsk): void {
 // 상태는 저장소를 읽어 확인한다(연결 끊기·토큰 바꾸기를 놓치지 않게).
 async function delegateReady(): Promise<TelegramState | null> {
   await recovered;
-  const s = await load();
+  // 저장 큐를 거쳐 읽는다 — 연결 끊기·토큰 바꾸기는 새 연결 신호를 만든 같은 순간에 저장을 큐에 넣으므로, 그 뒤에 읽으면
+  // 옛 토큰·채팅이 아니라 바뀐 상태를 본다(#192 리뷰).
+  const s = await serial(() => load());
   if (!askEnabled || !s.token || s.chatId === null) return null;
   if (runner.busy || sending > 0 || pendingAsk) return null;
   return s;

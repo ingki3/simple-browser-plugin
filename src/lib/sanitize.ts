@@ -31,7 +31,8 @@ export const DEFAULT_DOWNLOAD_FOLDER = "downloads";
 // 예: " .reports"는 한 번 정리하면 ".reports"였지만 이제 바로 "reports".
 export function sanitizeFilenameSegment(raw: string): string {
   let cur = raw;
-  for (let i = 0; i < 5; i++) {
+  // 바뀌면 길이가 줄어드는 정리라 몇 번 안에 멈춘다(상한은 안전장치).
+  for (let i = 0; i < 200; i++) {
     const next =
       cur
         .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")

@@ -141,7 +141,7 @@ test("텔레그램 버튼 데이터: 만들기·풀기, 모양이 틀리면 null
 import { sanitizeFilenameSegment } from "../src/lib/sanitize.ts";
 
 test("sanitizeFilenameSegment(#192): 반복해도 같은 값(미리보기 폴더 = 실행 폴더)", () => {
-  for (const raw of [" .reports", "보고서/원본", "..a..b", "  ", "x".repeat(100) + " ", ".", "a: b?"]) {
+  for (const raw of [" .reports", "보고서/원본", "..a..b", "  ", "x".repeat(100) + " ", ".", "a: b?", ". ".repeat(12) + "reports", " .".repeat(40) + "x"]) {
     const once = sanitizeFilenameSegment(raw);
     assert.equal(sanitizeFilenameSegment(once), once, JSON.stringify(raw));
   }
