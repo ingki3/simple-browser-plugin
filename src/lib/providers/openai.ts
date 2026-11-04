@@ -58,7 +58,8 @@ export function openAiPayload(req: ChatRequest, stream: boolean): Record<string,
         ? { temperature: req.temperature }
         : {}),
     ...(req.responseFormat ? { response_format: req.responseFormat } : {}),
-    ...(stream ? { stream: true } : {}),
+    // 스트림 마지막 조각에 토큰 사용량을 받는다(#126).
+    ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
   };
 }
 

@@ -57,6 +57,7 @@ import {
 import { commitReads } from "./readRecipes";
 import { isGoogleConfigured } from "./google/auth";
 import { youtubeVideoId } from "@/lib/youtubeUrl";
+import { addUsage, emptyUsageTotal, formatTurnUsage, formatUsage, usageFromChunk, type ModelUsage, type UsageTotal } from "@/lib/usage";
 import {
   canonicalJson,
   clickObservedChange,
@@ -402,6 +403,10 @@ export class ChatAgent {
   // 턴마다 증가. 중단되거나 새 턴에 밀린 루프는 자기 번호가 현재 값과 달라지므로
   // 늦게 끝난 도구 결과를 대화 기록에 쓰지 않고 빠진다.
   private currentTurn = 0;
+  // 토큰 사용량(#126): 턴마다의 합계(턴 번호 → 합계, 그 턴이 끝날 때 남기고 지움)와 대화 누계. 누계는 기록을 비울 때 새 객체로
+  // 바꾼다 — 끝나지 않은 옛 턴은 시작할 때 붙잡은 옛 누계에 더한다.
+  private turnUsage = new Map<number, { total: UsageTotal; conversation: UsageTotal | null; start: number }>();
+  private conversationUsage: UsageTotal = emptyUsageTotal();
   private activeRequest: AbortController | null = null;
   // 백그라운드에서 직접 네트워크를 쓰는 도구(read_document)를 중단 시 함께 끊는다.
   private activeTool: AbortController | null = null;
@@ -649,6 +654,7 @@ export class ChatAgent {
 
   reset(): void {
     this.history = [];
+    this.conversationUsage = emptyUsageTotal();
     this.lastAttachedPdfUrl = null;
     this.committedCandidates = null;
     this.forceNewConversation = false;
@@ -739,6 +745,7 @@ export class ChatAgent {
       this.customSystemPrompt = settings.systemPrompt;
       this.conversationQuick = settings.quickThinking;
       this.history = [];
+      this.conversationUsage = emptyUsageTotal();
       // 첨부한 PDF는 지운 기록에 있었다. 새 기록(새 제공자)에는 다시 첨부해야 한다.
       this.lastAttachedPdfUrl = null;
       this.committedCandidates = null;
@@ -1025,7 +1032,15 @@ export class ChatAgent {
     // 원격 대화의 작업 맡기기는 요청 하나 동안만(사용자가 진행을 보고 있지 않으므로 같은 대화의 다음 요청은 다시 묻는다).
     if (this.remote) this.withdrawTask();
     beginKeepalive();
-    const endTurn = timeSpan("turn");
+    const endSpan = timeSpan("turn");
+    // 이 턴의 사용량 합계(#126)는 턴이 끝날 때 한 번 남긴다(그 사이 새 턴이 시작해도 이 턴의 것은 이 턴이 남긴다).
+    this.turnUsage.set(turn, { total: emptyUsageTotal(), conversation: null, start: Date.now() });
+    const endTurn = (extra?: string) => {
+      const u = this.turnUsage.get(turn);
+      this.turnUsage.delete(turn);
+      if (u && u.total.calls > 0) debugLog("turn:usage", formatTurnUsage(u.total, Date.now() - u.start, u.conversation ?? this.conversationUsage));
+      endSpan(extra);
+    };
     const prevTurnTab = this.turnTab;
     this.turnTab = opts.tabId !== undefined ? await turnTabOf(opts.tabId) : await captureTurnTab();
     clearOfferedHints(this.turnTab);
@@ -1151,6 +1166,16 @@ export class ChatAgent {
     }
   }
 
+  // 모델 호출 한 번의 사용량을 타임라인에 남기고 그 턴의 합계·대화 누계에 더한다(#126). 끝난 턴(합계를 이미 남김)이면 줄만 남긴다.
+  private recordUsage(turn: number, usage: ModelUsage | null, ms: number, ended?: "중단" | "오류"): void {
+    debugLog("model:usage", `${formatUsage(usage, ms)}${ended ? ` · ${ended}` : ""}`);
+    const t = this.turnUsage.get(turn);
+    if (!t) return;
+    t.conversation ??= this.conversationUsage;
+    addUsage(t.total, usage);
+    addUsage(t.conversation, usage);
+  }
+
   // 모델에 한 번 묻고 스트림을 끝까지 읽는다. 중단·새 턴에 밀렸으면 null.
   // wrapUpNote가 있으면 도구 없이 답만 받는 마무리 요청이다(한도에서 그만두기·헛돌기 감지, #55).
   private async requestModel(
@@ -1164,6 +1189,9 @@ export class ChatAgent {
     const INACTIVITY_MS = 60_000;
     const controller = new AbortController();
     this.activeRequest = controller;
+    // 이 호출의 걸린 시간·사용량(#126). 요청을 연 뒤 끝날 때(정상·오류·중단) 한 번 남긴다.
+    let openedAt = 0;
+    let usage: ModelUsage | null = null;
     let connectTimedOut = false;
     const connectTimer = setTimeout(() => {
       connectTimedOut = true;
@@ -1236,6 +1264,7 @@ export class ChatAgent {
     }
     let stream: ChatStream;
     try {
+      openedAt = Date.now();
       stream = await providerAdapter(this.provider).openStream(
         apiKey,
         {
@@ -1278,6 +1307,8 @@ export class ChatAgent {
       await stream.read(
         (chunk) => {
           chunkCount += 1;
+          // 사용량은 마지막에 받은 값(누적)을 쓴다.
+          if (chunk.usage) usage = usageFromChunk(chunk.usage) ?? usage;
           const choice = chunk.choices?.[0];
           const delta = choice?.delta;
           if (typeof delta?.content === "string" && delta.content) {
@@ -1328,11 +1359,14 @@ export class ChatAgent {
       );
     } catch (err) {
       controller.abort();
+      // 끊기기 전에 받은 사용량도 남긴다(요금은 이미 나갔다).
+      this.recordUsage(turn, usage, Date.now() - openedAt, this.isStale(turn) ? "중단" : "오류");
       if (this.isStale(turn)) return null;
       throw err;
     } finally {
       if (this.activeRequest === controller) this.activeRequest = null;
     }
+    this.recordUsage(turn, usage, Date.now() - openedAt);
     const functionCalls = [...functionCallParts.entries()]
       .sort(([a], [b]) => a - b)
       .map(([, call]) => ({

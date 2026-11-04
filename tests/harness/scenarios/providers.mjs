@@ -1,7 +1,7 @@
 // 모델 제공자(#97): 고른 제공자의 엔드포인트·키·요청 형식으로 보낸다.
 import { expect, okResult } from "../lib.mjs";
 
-export default [
+const scenarios = [
   {
     name: "OpenAI 제공자: api.openai.com으로, OpenAI 형식(max_completion_tokens·reasoning_effort, 기록의 OpenRouter 필드 제거)",
     async run(h) {
@@ -150,3 +150,99 @@ export default [
     },
   },
 ];
+
+// 토큰 사용량(#126): 디버그 타임라인의 model:usage(호출마다)·turn:usage(턴 합계와 대화 누계) 줄.
+const USAGE = { prompt_tokens: 1200, completion_tokens: 34, prompt_tokens_details: { cached_tokens: 1000 }, completion_tokens_details: { reasoning_tokens: 5 } };
+async function usageLines(h, n = 1, ms = 3000) {
+  const until = Date.now() + ms;
+  let lines = [];
+  while (Date.now() < until) {
+    lines = h.logs.filter((l) => l.includes("[SBP turn:usage]"));
+    if (lines.length >= n) break;
+    await h.panel.waitForTimeout(100);
+  }
+  return { calls: h.logs.filter((l) => l.includes("[SBP model:usage]")), turns: lines };
+}
+usageScenarios();
+function usageScenarios() {
+  const list = [
+    {
+      name: "사용량(#126): OpenAI는 include_usage를 요청하고, 호출마다 입력·캐시·출력·생각, 턴 합계를 남긴다",
+      async run(h) {
+        await h.settings({ provider: "openai", apiKeys: { openai: "sk-test-openai" }, providerModels: { openai: "gpt-5-mini" } });
+        await h.sw.evaluate((u) => (globalThis.__usage = u), USAGE);
+        await h.turn([{ tool: "describe_page", args: {} }, { text: "끝" }]);
+        const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+        expect(reqs.every((q) => q.body.stream_options?.include_usage === true), "stream_options.include_usage");
+        const { calls, turns } = await usageLines(h);
+        expect(calls.length === 2 && calls.every((l) => l.includes("입력 1,200(캐시 읽기 1,000) · 출력 34(생각 5)")), `호출 줄(${calls.join(" | ")})`);
+        expect(turns.length === 1 && turns[0].includes("호출 2 · 입력 2,400(캐시 읽기 2,000) · 출력 68(생각 10)") && turns[0].includes("대화 누계 입력 2,400 · 출력 68"), `턴 줄(${turns.join(" | ")})`);
+      },
+    },
+    {
+      name: "사용량(#126): Claude는 message_start·message_delta의 사용량을 읽는다(캐시 읽기 포함)",
+      async run(h) {
+        await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
+        await h.sw.evaluate((u) => (globalThis.__usage = u), USAGE);
+        await h.turn([{ tool: "describe_page", args: {} }, { text: "끝" }]);
+        const { calls, turns } = await usageLines(h);
+        expect(calls.length === 2 && calls.every((l) => l.includes("입력 1,200(캐시 읽기 1,000) · 출력 34 ·")), `호출 줄(${calls.join(" | ")})`);
+        expect(turns.length === 1 && turns[0].includes("호출 2 · 입력 2,400"), `턴 줄(${turns.join(" | ")})`);
+      },
+    },
+    {
+      name: "사용량(#126): 제공자가 사용량을 주지 않으면 '사용량 없음'(추정하지 않음)",
+      async run(h) {
+        await h.turn([{ text: "끝" }]);
+        const { calls, turns } = await usageLines(h);
+        expect(calls.length === 1 && calls[0].includes("사용량 없음"), `호출 줄(${calls.join(" | ")})`);
+        expect(turns.length === 1 && turns[0].includes("호출 1(사용량 없음 1) · 입력 0"), `턴 줄(${turns.join(" | ")})`);
+      },
+    },
+    {
+      name: "사용량(#126): 생각 재시도·마무리 요청도 호출로 세고, 대화 누계는 이어지다 새 대화(모델 변경)에서 비운다",
+      async run(h) {
+        await h.sw.evaluate((u) => (globalThis.__usage = u), USAGE);
+        // 생각만 하다 한도에 걸린 빈 응답 → 다시 시도 → 답(호출 2).
+        await h.turn([{ lengthEmpty: true }, { text: "끝" }], { path: "/p" });
+        let { turns } = await usageLines(h);
+        expect(turns.length === 1 && turns[0].includes("호출 2 ·") && turns[0].includes("대화 누계 입력 2,400"), `재시도 턴(${turns.join(" | ")})`);
+        // 같은 대화의 다음 턴: 누계가 이어진다.
+        await h.turn([{ text: "둘째" }], { noReload: true, text: "둘째 요청" });
+        ({ turns } = await usageLines(h, 2));
+        expect(turns.length === 2 && turns[1].includes("호출 1 ·") && turns[1].includes("대화 누계 입력 3,600"), `둘째 턴(${turns.join(" | ")})`);
+        // 모델을 바꾸면 새 대화: 누계를 새로 센다.
+        await h.settings({ model: "google/gemini-3.6-flash" });
+        await h.turn([{ text: "셋째" }], { noReload: true, text: "셋째 요청" });
+        ({ turns } = await usageLines(h, 3));
+        expect(turns.length === 3 && turns[2].includes("대화 누계 입력 1,200 ·"), `새 대화(${turns.join(" | ")})`);
+      },
+    },
+    {
+      name: "사용량(#126): 헛돌기로 멈춘 뒤의 마무리 요청(도구 없음)도 호출로 센다",
+      async run(h) {
+        await h.sw.evaluate((u) => (globalThis.__usage = u), USAGE);
+        const same = { tool: "describe_page", args: {} };
+        await h.turn([same, same, same, same, same, same, { text: "끝" }]);
+        const reqs = await h.sw.evaluate(() => globalThis.__modelReqs);
+        const { calls, turns } = await usageLines(h);
+        expect(reqs.at(-1)?.body.tool_choice === "none", `마무리 요청(${reqs.length})`);
+        expect(calls.length === reqs.length && turns[0]?.includes(`호출 ${reqs.length} ·`), `요청 ${reqs.length}개 = 호출 줄 ${calls.length}개(${turns.join(" | ")})`);
+      },
+    },
+    {
+      name: "사용량(#126): 사용량을 받은 뒤 스트림이 오류로 끊겨도 그 호출과 턴 합계를 남긴다",
+      async run(h) {
+        await h.sw.evaluate((u) => (globalThis.__usage = u), USAGE);
+        await h.turn([{ streamError: true }]);
+        const { calls, turns } = await usageLines(h);
+        expect(calls.length === 1 && calls[0].includes("입력 1,200") && calls[0].includes("· 오류"), `호출 줄(${calls.join(" | ")})`);
+        expect(turns.length === 1 && turns[0].includes("호출 1 · 입력 1,200"), `턴 줄(${turns.join(" | ")})`);
+      },
+    },
+  ];
+  // 모듈의 기본 내보내기 배열에 덧붙인다.
+  scenarios.push(...list);
+}
+
+export default scenarios;
