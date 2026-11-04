@@ -6,7 +6,7 @@ import { expect } from "../lib.mjs";
 const TOKEN = "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const CHAT = 7001;
 
-async function installTelegram(h) {
+export async function installTelegram(h) {
   await h.sw.evaluate(() => {
     globalThis.__tg = { updates: [], sent: [], calls: [], nextId: 1 };
     const prev = globalThis.fetch;
@@ -64,7 +64,7 @@ async function installTelegram(h) {
 }
 
 // 업데이트 하나를 넣고 받기를 부른다.
-async function deliver(h, text, { chat = CHAT, from = chat, ageS = 0 } = {}) {
+export async function deliver(h, text, { chat = CHAT, from = chat, ageS = 0 } = {}) {
   await h.sw.evaluate(
     async ({ text, chat, from, ageS }) => {
       const id = globalThis.__tg.nextId++;
@@ -76,7 +76,7 @@ async function deliver(h, text, { chat = CHAT, from = chat, ageS = 0 } = {}) {
 }
 
 // 버튼 누르기(callback_query). chat·from을 바꿔 다른 채팅·다른 사람의 누름을 흉내 낸다.
-async function press(h, data, { chat = CHAT, from = chat, poll = true } = {}) {
+export async function press(h, data, { chat = CHAT, from = chat, poll = true } = {}) {
   await h.sw.evaluate(
     async ({ data, chat, from, poll }) => {
       const id = globalThis.__tg.nextId++;
@@ -87,9 +87,9 @@ async function press(h, data, { chat = CHAT, from = chat, poll = true } = {}) {
   );
 }
 
-const asks = (h) => h.sw.evaluate(() => (globalThis.__tg.asks ?? []).map((b) => ({ text: b.text, yes: b.reply_markup.inline_keyboard[0][0].callback_data, no: b.reply_markup.inline_keyboard[0][1].callback_data })));
+export const asks = (h) => h.sw.evaluate(() => (globalThis.__tg.asks ?? []).map((b) => ({ text: b.text, yes: b.reply_markup.inline_keyboard[0][0].callback_data, no: b.reply_markup.inline_keyboard[0][1].callback_data })));
 
-async function waitAsk(h, n = 1, ms = 15_000) {
+export async function waitAsk(h, n = 1, ms = 15_000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     const a = await asks(h);
@@ -100,7 +100,7 @@ async function waitAsk(h, n = 1, ms = 15_000) {
 }
 
 // 텔레그램으로 보낸 글 중 승인 질문이 아닌 것(최종 답·안내).
-const replies = (h) => h.sw.evaluate(() => globalThis.__tg.sent.filter((m) => !m.reply_markup).map((m) => m.text));
+export const replies = (h) => h.sw.evaluate(() => globalThis.__tg.sent.filter((m) => !m.reply_markup).map((m) => m.text));
 
 async function waitReply(h, n = 1, ms = 20_000) {
   const until = Date.now() + ms;
@@ -117,7 +117,7 @@ const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.
 const sent = (h) => h.sw.evaluate(() => globalThis.__tg.sent.map((m) => m.text));
 const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
 
-async function connect(h) {
+export async function connect(h) {
   await installTelegram(h);
   const saved = await ask(h, { kind: "telegram_save_token", token: TOKEN });
   expect(saved.ok && saved.data.botName === "@test_bot" && !("token" in saved.data), `토큰 저장(${JSON.stringify(saved)})`);

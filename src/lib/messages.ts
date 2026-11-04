@@ -467,6 +467,9 @@ export interface Settings {
   trustedInput: boolean;
   // 직접 조작할 사이트(출처 목록, 0.2.2). 이 사이트에서는 클릭·입력을 대신하지 않고 대상을 표시해 사용자가 직접 한다.
   manualSites: string[];
+  // 원격 요청에서 묻지 않을 사이트(#192, 출처 목록 — 사용자가 고른 것만). 원격(텔레그램·MCP) 대화에서 이 사이트로의 이동과 사이트 안
+  // 일반 클릭·입력은 원격으로 이동을 승인했을 때와 같은 범위로 자동 실행한다(결제·삭제·개인정보·외부 본문 보호는 그대로). 패널 대화와는 무관.
+  remoteSites: string[];
   // 자동 로그인을 승인한 사이트(정확한 출처 → KeePassXC 항목 묶음, docs/design/login-automation.md). 사용자가 카드나 설정에서
   // 고른 것만 들어간다. 아이디·비밀번호는 두지 않는다.
   loginSites: LoginSite[];

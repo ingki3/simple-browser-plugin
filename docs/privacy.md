@@ -34,9 +34,9 @@ OpenRouter를 고르면 OpenRouter가 고른 모델의 회사로 다시 전달�
 
 ## 2. 선택 기능이 보내는 것 (켤 때만)
 
-- **텔레그램 연동**: 요청·최종 답·승인 질문(요청 글, 할 일, 이동할 주소, 누를 대상의 이름)과 반복 작업 알림이 텔레그램 서버를 거쳐
+- **텔레그램 연동**: 요청·최종 답·승인 질문(요청 글, 할 일, 이동할 주소, 누를 대상의 이름, 입력할 칸과 값(비밀번호는 글자 수만), 읽거나 저장할 파일·링크의 주소, 캡처할 화면)과 반복 작업 알림이 텔레그램 서버를 거쳐
   사용자가 연결한 텔레그램 채팅 하나로 갑니다.
-- **MCP 연동**: 최종 답과 승인 질문이 이 컴퓨터의 다리 프로그램(127.0.0.1, 암호화)을 거쳐 사용자가 등록한 AI 도구로 갑니다.
+- **MCP 연동**: 최종 답과 승인 질문(위 텔레그램과 같은 범위)이 이 컴퓨터의 다리 프로그램(127.0.0.1, 암호화)을 거쳐 사용자가 등록한 AI 도구로 갑니다. "MCP 클라이언트가 묻지 못하면 텔레그램으로 묻기"를 켜면 그 승인 질문과 MCP 요청 글 앞부분(120자)이 텔레그램으로 갑니다.
   그 도구가 자기 AI 서비스로 보낼 수 있습니다.
 - **자동 로그인(KeePassXC)**: 이 컴퓨터의 KeePassXC에서 아이디·비밀번호(켠 사이트는 일회용 코드)를 받아 그 로그인 페이지의 칸에 넣고
   제출합니다. 값은 그 페이지가 제출하는 곳으로 갑니다. 승인한 사이트에서도 다른 출처로 제출하는 양식은 승인 카드로 묻고, 사용자가 승인하면
@@ -113,10 +113,11 @@ own policy: [OpenRouter](https://openrouter.ai/privacy), [OpenAI](https://openai
 
 ## 2. Optional features (only when turned on)
 
-- **Telegram**: requests, final answers, approval questions (request text, planned steps, destination URLs, names of targets to click),
+- **Telegram**: requests, final answers, approval questions (request text, planned steps, destination URLs, names of targets to click, fields and values to fill (only the length for passwords), addresses of files or links to read or save, the screen to capture),
   and repeat-task alerts go through Telegram's servers to the single Telegram chat the user paired.
-- **MCP**: final answers and approval questions go through the local bridge on this computer (127.0.0.1, encrypted) to the AI tool the
-  user registered. That tool may send them to its own AI service.
+- **MCP**: final answers and approval questions (same scope as Telegram above) go through the local bridge on this computer (127.0.0.1, encrypted) to the AI tool the
+  user registered. That tool may send them to its own AI service. If "ask via Telegram when the MCP client cannot ask" is on, those approval
+  questions and the first 120 characters of the MCP request go to Telegram.
 - **Auto sign-in (KeePassXC)**: the extension gets the username and password (and a one-time code, where enabled) from KeePassXC on this
   computer, fills them into that sign-in page, and submits the form. The values go wherever that page submits them. Even on an approved
   site, a form that submits to a different origin needs approval on a card, and runs only if the user approves. These values are never

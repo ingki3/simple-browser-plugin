@@ -2,8 +2,8 @@ import { keepassxcAssociate, keepassxcForget, keepassxcStatus } from "./keepassx
 import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
-import { applyLoginSiteOp, applyManualSiteOp, applySettingsPatch, getSettings, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
-import { parseLoginSiteOp, parseManualSiteOp } from "@/lib/settingsOps";
+import { applyLoginSiteOp, applyManualSiteOp, applyRemoteSiteOp, applySettingsPatch, getSettings, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
+import { parseLoginSiteOp, parseManualSiteOp, parseRemoteSiteOp } from "@/lib/settingsOps";
 import { openSettings } from "./settingsTab";
 import { deletePages, draftLink, listPages, rememberCurrentPage, rememberedFor, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
@@ -318,7 +318,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   }
 
   // 직접 조작할 사이트·자동 로그인 목록의 항목 하나 바꾸기(#127). 이 확장의 화면에서만 받고, 값은 여기서 다시 검사한다.
-  if (m.kind === "manual_site_op" || m.kind === "login_site_op") {
+  if (m.kind === "manual_site_op" || m.kind === "login_site_op" || m.kind === "remote_site_op") {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
@@ -330,6 +330,11 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             const op = parseManualSiteOp(raw);
             return op ? applyManualSiteOp(op) : Promise.reject(new Error("잘못된 사이트"));
           })()
+        : m.kind === "remote_site_op"
+          ? (() => {
+              const op = parseRemoteSiteOp(raw);
+              return op ? applyRemoteSiteOp(op) : Promise.reject(new Error("잘못된 사이트"));
+            })()
         : (() => {
             const op = parseLoginSiteOp(raw);
             return op ? applyLoginSiteOp(op) : Promise.reject(new Error("잘못된 자동 로그인 항목"));
@@ -479,7 +484,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
     }
-    const p = msg as { enabled?: unknown; port?: unknown; askApproval?: unknown };
+    const p = msg as { enabled?: unknown; port?: unknown; askApproval?: unknown; askViaTelegram?: unknown };
     const job: Promise<unknown> =
       m.kind === "mcp_secret"
         ? mcpSecret()
@@ -489,6 +494,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             ? mcpSet({
                 ...(typeof p.enabled === "boolean" ? { enabled: p.enabled } : {}),
                 ...(typeof p.port === "number" ? { port: p.port } : {}),
+                ...(typeof p.askViaTelegram === "boolean" ? { askViaTelegram: p.askViaTelegram } : {}),
                 ...(typeof p.askApproval === "boolean" ? { askApproval: p.askApproval } : {}),
               })
             : mcpStatus();

@@ -149,10 +149,12 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
 // 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게).
 // 문구를 바꿔 보여 주는 것(A 문구를 숨기고 B 문구를 보임)은 다른 대상이다. 승인 카드·실행 직전 비교는 sameApproved.
 // 자동완성 입력 칸의 행에 새로 붙은 팝업 목록은 content 쪽에서 원문 행 글자에서 빼고 넘긴다(src/content/targets.ts pinnedRowOf).
+// 글자가 덧붙어 행 문맥이 한도를 넘게 된 것(잘림 false→true)만 함께 허용한다(#192 — 그 밖의 잘림 변화는 다른 대상).
 export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
   if (now.context !== approved.context) return false;
   if (!onlyAdded(approved.modelContext ?? "", now.modelContext ?? "")) return false;
-  return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
+  const grewClipped = !!now.modelContextClipped && !approved.modelContextClipped;
+  return sameApproved({ ...now, modelContext: approved.modelContext, ...(grewClipped ? { modelContextClipped: approved.modelContextClipped } : {}) }, approved);
 }
 
 // after가 before에 글자를 더하기만 한 것인지: before의 낱말(공백 기준)이 after 안에 같은 순서로 모두 남아 있어야 한다.
@@ -222,7 +224,7 @@ const ROLE_LABELS: Record<string, string> = {
   searchbox: "검색 칸",
 };
 
-const REGION_LABELS: Record<PageRegion, string> = {
+export const REGION_LABELS: Record<PageRegion, string> = {
   main: "본문",
   article: "글",
   nav: "메뉴",

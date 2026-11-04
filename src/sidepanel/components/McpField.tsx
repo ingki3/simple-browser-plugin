@@ -11,11 +11,12 @@ interface Status {
   bridgeVersion: string;
   lastError: string;
   askApproval: boolean;
+  askViaTelegram: boolean;
 }
 
 type Req =
   | { kind: "mcp_status" }
-  | { kind: "mcp_set"; enabled?: boolean; port?: number; askApproval?: boolean }
+  | { kind: "mcp_set"; enabled?: boolean; port?: number; askApproval?: boolean; askViaTelegram?: boolean }
   | { kind: "mcp_regenerate" };
 
 const when = (ms: number) => new Date(ms).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -72,7 +73,7 @@ export function McpField() {
         secretGate();
         setSecret(null);
       }
-      if (o.secret !== n.secret || o.enabled !== n.enabled || o.port !== n.port || o.askApproval !== n.askApproval) void request({ kind: "mcp_status" });
+      if (o.secret !== n.secret || o.enabled !== n.enabled || o.port !== n.port || o.askApproval !== n.askApproval || o.askViaTelegram !== n.askViaTelegram) void request({ kind: "mcp_status" });
     };
     chrome.storage.onChanged.addListener(onChanged);
     return () => {
@@ -118,6 +119,19 @@ export function McpField() {
           </label>
           <span className="field-hint">
             켜면 승인을 MCP 클라이언트 프로그램에 맡깁니다. 클라이언트가 질문 창(elicitation)을 사람에게 보여 주지 않고 자동으로 답하게 만들어져 있으면 사람이 확인하지 않은 채 실행될 수 있습니다. 직접 쓰는 클라이언트(Claude Code·Claude Desktop 등)에서만 켜세요. 클라이언트가 질문 창을 지원하지 않으면 지금처럼 하지 않습니다.
+          </span>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              className="mcp-ask-telegram"
+              checked={st.askViaTelegram}
+              disabled={busy}
+              onChange={(e) => void request({ kind: "mcp_set", askViaTelegram: e.target.checked })}
+            />
+            <span>MCP 클라이언트가 묻지 못하면 텔레그램으로 묻기</span>
+          </label>
+          <span className="field-hint">
+            텔레그램 연동이 연결돼 있고 "텔레그램으로 묻기"가 켜져 있어야 합니다. 질문에는 "[MCP 요청]"과 요청 글 앞부분(120자), 할 동작(대상·주소·입력할 값)이 실려 텔레그램 서버를 거쳐 갑니다. 텔레그램 요청을 처리하는 중이거나 다른 질문이 열려 있으면 묻지 않고 하지 않습니다.
           </span>
           <div className="key-row">
             <input value={port} inputMode="numeric" onChange={(e) => portField.set(e.target.value.replace(/\D/g, ""))} aria-label="포트" />

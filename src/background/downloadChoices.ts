@@ -28,6 +28,8 @@ const chosen = new Map<string, string[]>();
 export interface DownloadChoices {
   choices: Array<{ id: string; label: string; sub: string }>;
   defaults: string[];
+  // 후보 id → 주소(#192 원격 질문은 기본 선택의 주소만 보인다 — 모델이 넘긴 주소와 맞춘 것).
+  urls: Record<string, string>;
   // 모델이 넘긴 주소의 후보 id(이번 대화 허락으로 카드 없이 받을 때 고르는 것).
   requestedIds: string[];
   rejected: string[];
@@ -78,8 +80,10 @@ export async function snapshotDownloads(
   const choices: DownloadChoices["choices"] = [];
   const defaults: string[] = [];
   const requestedIds: string[] = [];
+  const urlOf: Record<string, string> = {};
   for (const c of pick.candidates) {
     const choiceId = crypto.randomUUID();
+    urlOf[choiceId] = c.url;
     list.push({ choiceId, url: c.url, label: c.label });
     choices.push({ id: choiceId, label: c.label, sub: c.sub });
     if (c.defaultOn) defaults.push(choiceId);
@@ -96,7 +100,7 @@ export async function snapshotDownloads(
   }
   // 허락 판정은 모델이 넘긴 주소 전부를 본다(페이지에 없는 주소가 하나라도 섞이면 카드로 묻는다).
   const grantBlock = kind === "image" ? imageSaveGrantBlock(urls, new Set(items.map((i) => i.url))) : null;
-  return { choices, defaults: defaults.slice(0, DOWNLOAD_LIMITS[kind].maxPick), requestedIds, rejected, grantBlock };
+  return { choices, defaults: defaults.slice(0, DOWNLOAD_LIMITS[kind].maxPick), urls: urlOf, requestedIds, rejected, grantBlock };
 }
 
 // 카드에서 고른 id 중 고정한 후보에 있는 것만 남긴다(최대 선택 수까지).

@@ -7,11 +7,27 @@ interface Props {
   // 저장된 목록(useSettings가 따라감). 바꾸기는 항목 하나씩 백그라운드에 보내 그때의 저장 목록에 적용한다(#127 — 옛 목록 전체를
   // 저장해 다른 곳에서 넣은 사이트를 지우지 않게).
   sites: string[];
+  // manual: 직접 조작할 사이트(기본). remote: 원격 요청에서 묻지 않을 사이트(#192 — 같은 형식·같은 방식으로 저장).
+  kind?: "manual" | "remote";
 }
+
+const KINDS = {
+  manual: {
+    label: "직접 조작할 사이트",
+    message: "manual_site_op",
+    placeholder: "예: etk.srail.kr",
+  },
+  remote: {
+    label: "원격 요청에서 묻지 않을 사이트",
+    message: "remote_site_op",
+    placeholder: "예: news.naver.com",
+  },
+} as const;
 
 // 직접 조작할 사이트(0.2.2): 이 사이트에서는 도우미가 클릭·입력을 대신하지 않고, 대상을 화면에 표시해 사용자가 직접 한다.
 // 설정 페이지(탭)에서는 "지금 탭"이 설정 페이지 자신이라, 열린 탭 목록에서 사이트를 고른다(#127).
-export function ManualSitesField({ sites }: Props) {
+export function ManualSitesField({ sites, kind = "manual" }: Props) {
+  const k = KINDS[kind];
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +46,11 @@ export function ManualSitesField({ sites }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const res = (await chrome.runtime.sendMessage({ kind: "manual_site_op", op })) as { ok?: boolean; error?: string } | undefined;
+      const res = (await chrome.runtime.sendMessage({ kind: k.message, op })) as { ok?: boolean; error?: string } | undefined;
       if (!res?.ok) throw new Error(res?.error ?? "응답이 없습니다.");
       return true;
     } catch (err) {
-      setError(`직접 조작할 사이트를 바꾸지 못했습니다(${err instanceof Error ? err.message : String(err)}).`);
+      setError(`${k.label}를 바꾸지 못했습니다(${err instanceof Error ? err.message : String(err)}).`);
       return false;
     } finally {
       setBusy(false);
@@ -48,7 +64,7 @@ export function ManualSitesField({ sites }: Props) {
 
   return (
     <div className="field">
-      <span className="field-label">직접 조작할 사이트</span>
+      <span className="field-label">{k.label}</span>
       {sites.length > 0 && (
         <ul className="site-list">
           {sites.map((s) => (
@@ -87,7 +103,7 @@ export function ManualSitesField({ sites }: Props) {
       <div className="key-row">
         <input
           type="text"
-          placeholder="예: etk.srail.kr"
+          placeholder={k.placeholder}
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
@@ -105,10 +121,19 @@ export function ManualSitesField({ sites }: Props) {
         </button>
       </div>
       {error && <span className="field-error">{error}</span>}
-      <FieldHelp summary="이 사이트에서는 도우미가 누르거나 채우지 않고, 할 일을 표시해 직접 하도록 안내합니다.">
-        이 사이트에서는 도우미가 버튼을 누르거나 칸을 채우지 않고, 할 일을 화면에 표시해 직접 하도록 안내합니다. 표시한 버튼을
-        누르거나 패널에서 "했어요"를 누르면 이어서 진행합니다. 자동 조작을 막는 예매 사이트 등에 쓰세요.
-      </FieldHelp>
+      {kind === "manual" ? (
+        <FieldHelp summary="이 사이트에서는 도우미가 누르거나 채우지 않고, 할 일을 표시해 직접 하도록 안내합니다.">
+          이 사이트에서는 도우미가 버튼을 누르거나 칸을 채우지 않고, 할 일을 화면에 표시해 직접 하도록 안내합니다. 표시한 버튼을
+          누르거나 패널에서 "했어요"를 누르면 이어서 진행합니다. 자동 조작을 막는 예매 사이트 등에 쓰세요.
+        </FieldHelp>
+      ) : (
+        <FieldHelp summary="MCP(와 '텔레그램으로 묻기'를 끈 텔레그램)에서 온 요청이 이 사이트로 이동하거나 사이트 안에서 일반 클릭·입력을 할 때 묻지 않습니다.">
+          원격 요청에서 이 사이트로의 이동과 사이트 안의 일반 클릭·입력은 원격으로 이동을 승인했을 때와 같은 범위로 자동 실행합니다.
+          결제·삭제·개인정보 칸·외부 문서를 읽은 뒤의 동작은 계속 묻거나 하지 않습니다. 목록에서 빼면 다음 동작부터 다시 묻습니다.
+          텔레그램에서 "텔레그램으로 묻기"가 켜져 있으면 요청마다 처음 한 번 작업을 맡길지 묻는 방식이 그대로입니다(맡기면 그 요청이 끝날 때까지 묻지 않음).
+          패널에서 직접 한 요청에는 영향이 없습니다.
+        </FieldHelp>
+      )}
     </div>
   );
 }

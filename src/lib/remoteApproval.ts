@@ -2,7 +2,7 @@
 // 들어갈 수 있어서다. 원격 질문은 모델에 이미 보낸 글(modelName·modelContext)과 코드가 만든 고정 문구로만 만들고,
 // 만들 수 없으면(허용하지 않는 도구, 잘린 대상, 너무 긴 주소) null — 그 호출은 묻지 않고 거절한다.
 import { httpOrigin } from "./url.ts";
-import { placeLine, roleLabel, type TargetInfo } from "./actionTarget.ts";
+import { parseCheckedRequest, placeLine, REGION_LABELS, roleLabel, type TargetInfo } from "./actionTarget.ts";
 
 export const REMOTE_URL_MAX = 1000;
 export const REMOTE_QUESTION_MAX = 2000;
@@ -18,7 +18,22 @@ export interface RemoteQuestion {
 export interface RemoteApprover {
   // 이번 요청에서 물을 수 있는지(설정·연결). 원격 안내 문구를 고르는 데 쓴다.
   canAsk(): boolean;
+  // 이 채널이 질문 앞에 붙일 고정 줄(#192 — MCP 요청을 텔레그램으로 물을 때 "[MCP 요청]"·요청 글 앞부분). 붙인 최종 글로 비밀 값·길이를 검사한다.
+  prefix?: readonly string[];
   ask(q: RemoteQuestion, signal: AbortSignal): Promise<RemoteAskResult>;
+}
+
+// 원격 질문의 입력 칸 하나(#192): 대상은 모델에 보낸 글(modelName·modelContext)로만, 값은 모델이 넘긴 인자.
+export interface RemoteField {
+  target: TargetInfo;
+  value: string;
+}
+
+// 원격 질문의 선택 카드(#192): 원격에서는 고를 수 없어 기본 선택만 묻는다. url은 스냅숏의 주소(모델이 넘긴 주소와 맞춘 것), note는 코드가 만든 경고.
+export interface RemoteChoices {
+  kind: "image" | "file" | "link";
+  folder?: string;
+  picks: Array<{ url: string; note: string }>;
 }
 
 export interface RemoteToolInput {
@@ -29,7 +44,15 @@ export interface RemoteToolInput {
   target?: TargetInfo;
   linkHrefs?: string[];
   pageUrl?: string;
-  // 묻는 이유(패널 카드와 같은 고정 문구).
+  // fill_form_fields(#192): 칸과 넣을 값.
+  fields?: RemoteField[];
+  // read_document(#192): 주소와 확장자가 있는 파일 링크인지.
+  document?: { url: string; hasExtension: boolean };
+  // capture_page(#192): 찍을 곳(코드 문구 — "지금 탭"·"따라가는 팝업 창")과 host, 전체 여부, 저장 폴더(실행과 같은 정리 값).
+  capture?: { where: string; host: string; fullPage: boolean; folder: string };
+  // download_images·download_files·read_linked_pages(#192): 기본 선택.
+  choices?: RemoteChoices;
+  // 묻는 이유. 원문(칸 이름 등)이 섞일 수 있는 글은 질문에 넣지 않고 있는지 여부만 고정 문구로 알린다(#192).
   guarded: boolean;
   block: string | null;
   chatGrantReason: string | null;
@@ -37,10 +60,28 @@ export interface RemoteToolInput {
 
 function reasonLines(input: RemoteToolInput): string[] {
   const out: string[] = [];
-  if (input.chatGrantReason) out.push(`이번 대화 허락 예외: ${input.chatGrantReason}`);
   if (input.guarded) out.push("외부 문서 내용을 읽은 대화라 자동 실행하지 않음");
-  if (input.block) out.push(`자동 실행 예외: ${input.block}`);
+  // 사유 글(autoApproveBlock·이번 대화 허락 예외)에는 페이지 원문 이름이 섞일 수 있어 그대로 보내지 않는다(#192).
+  if (input.block || input.chatGrantReason) out.push("자동 실행 예외가 있어 묻습니다(자세한 이유는 브라우저 패널의 기록에서)");
   return out;
+}
+
+// 입력 질문의 칸 한 줄. 만들 수 없으면 null.
+function fieldLine(f: RemoteField, nameCount: Map<string, number>): string | null {
+  const t = f.target;
+  // 결제 칸은 원격으로 묻지 않는다(값이 그대로 질문에 실린다). 이름이 없거나 잘린 칸, 선택지 트리거가 있는 칸도.
+  if (t.sensitive === "payment" || !t.modelName || t.modelNameClipped || t.modelContextClipped || t.trigger) return null;
+  const toggle = t.fieldType === "checkbox" || t.fieldType === "radio";
+  // 체크·라디오와 이름이 겹치는 칸은 행 문맥이 있어야 어느 칸인지 안다(없으면 묻지 않음).
+  const needRow = toggle || (nameCount.get(t.modelName) ?? 0) > 1;
+  if (needRow && !t.modelContext) return null;
+  const want = toggle ? parseCheckedRequest(f.value) : null;
+  if (toggle && want === null) return null;
+  const shown = t.sensitive === "password" ? `●(${f.value.length}자)` : toggle ? (want ? "☑ 체크" : "☐ 해제") : f.value;
+  const where = [t.fieldType, REGION_LABELS[t.region]].filter(Boolean).join(", ");
+  const row = needRow ? ` — 행: '${t.modelContext}'` : "";
+  const warn = t.hidden ? " ⚠ 화면에 보이지 않는 칸" : t.proxy ? " ⚠ 보이는 라벨로 표시되는 칸" : "";
+  return `• '${t.modelName}'${row} (${where}): ${shown}${warn}`;
 }
 
 function finish(lines: string[]): RemoteQuestion | null {
@@ -57,6 +98,55 @@ function checkedLine(t: TargetInfo): string | null {
 // 이동·클릭 한 번을 원격 질문에 보일 줄(제목·내용). 승인 효과·묻는 이유는 넣지 않는다(질문마다 다르다).
 // 허용하는 도구는 이동·클릭뿐이고, 만들 수 없으면 null(그 밖의 도구, 잘린 대상, 다른 목적지가 섞인 클릭, 긴 주소).
 export function remoteActionLines(input: RemoteToolInput): { title: string; lines: string[]; origin: string } | null {
+  if (input.toolName === "fill_form_fields") {
+    const fields = input.fields ?? [];
+    const pageOrigin = input.pageUrl ? httpOrigin(input.pageUrl) : null;
+    if (!fields.length || !pageOrigin) return null;
+    // 제출·요청 주소(입력값이 실려 다른 곳으로 갈 수 있음)가 있는 칸은 원격으로 묻지 않는다(클릭과 같은 기준).
+    if ((input.linkHrefs ?? []).some(Boolean)) return null;
+    const names = new Map<string, number>();
+    for (const f of fields) names.set(f.target.modelName ?? "", (names.get(f.target.modelName ?? "") ?? 0) + 1);
+    const lines = [`페이지: ${pageOrigin}${fields.some((f) => f.target.inFrame) ? " (프레임 안 칸 포함)" : ""}`, `입력 칸 ${fields.length}개`];
+    for (const f of fields) {
+      const line = fieldLine(f, names);
+      if (!line) return null;
+      lines.push(line);
+    }
+    return { title: "입력", lines, origin: pageOrigin };
+  }
+  if (input.toolName === "read_document") {
+    const d = input.document;
+    const origin = d ? httpOrigin(d.url) : null;
+    if (!d || !origin || d.url.length > REMOTE_URL_MAX) return null;
+    const lines = [`주소: ${d.url}`, `사이트: ${origin}`, "로그인 쿠키와 함께 받아 읽고, 읽은 내용은 모델 제공자로 갑니다."];
+    if (!d.hasExtension) lines.push("⚠ 확장자가 없는 링크라 파일이 아닌 다른 동작(로그아웃·삭제·신청 등)을 하는 주소일 수도 있습니다.");
+    return { title: "파일 읽기", lines, origin };
+  }
+  if (input.toolName === "capture_page") {
+    const c = input.capture;
+    if (!c || !c.host) return null;
+    return {
+      title: "화면 캡처",
+      lines: [
+        `${c.where}(${c.host})의 ${c.fullPage ? "페이지 전체" : "보이는 화면"}를 캡처해 '${c.folder}/' 폴더에 PNG로 저장합니다.`,
+        "화면에 보이는 내용(입력한 값·개인정보 포함)이 이미지에 담깁니다. 이미지는 이 기기에만 저장하고 모델 제공자로 보내지 않습니다.",
+      ],
+      origin: c.host,
+    };
+  }
+  if (input.toolName === "download_images" || input.toolName === "download_files" || input.toolName === "read_linked_pages") {
+    const c = input.choices;
+    if (!c || !c.picks.length || c.picks.some((p) => !httpOrigin(p.url) || p.url.length > REMOTE_URL_MAX)) return null;
+    const head =
+      c.kind === "link"
+        ? ["로그인 쿠키 없이 받아 본문을 읽고, 읽은 내용은 모델 제공자로 갑니다."]
+        : c.kind === "file"
+          ? [`로그인 쿠키와 함께 받아 '${c.folder ?? ""}/' 폴더에 저장합니다.`]
+          : [`로그인 쿠키와 함께 받아(리다이렉트를 따를 수 있음) '${c.folder ?? ""}/' 폴더에 저장합니다.`];
+    const lines = [...head, `원격에서는 고를 수 없어 기본 선택 ${c.picks.length}개만 합니다:`, ...c.picks.map((p) => `- ${p.url}${p.note ? ` (${p.note})` : ""}`)];
+    const title = c.kind === "link" ? "링크 읽기" : c.kind === "file" ? "파일 받기" : "이미지 저장";
+    return { title, lines, origin: httpOrigin(c.picks[0].url) ?? "" };
+  }
   if (input.toolName === "navigate_to_url") {
     const url = input.url ?? "";
     const origin = httpOrigin(url);
@@ -84,7 +174,7 @@ export function remoteActionLines(input: RemoteToolInput): { title: string; line
   return null;
 }
 
-// 도구 호출의 원격 질문. 허용하는 도구는 이동·클릭뿐이다(그 밖은 이번 범위에서 묻지 않고 거절).
+// 도구 호출의 원격 질문(#185 이동·클릭, #192 입력·파일 읽기·캡처·저장·링크 읽기). 그 밖은 묻지 않고 거절.
 export function remoteToolQuestion(input: RemoteToolInput): RemoteQuestion | null {
   const action = remoteActionLines(input);
   if (!action) return null;
@@ -99,6 +189,15 @@ export function remoteToolQuestion(input: RemoteToolInput): RemoteQuestion | nul
   }
   return finish([`승인이 필요합니다: ${action.title}`, ...action.lines, ...why]);
 }
+
+// 채널의 고정 줄(prefix)을 앞에 붙인 최종 질문(#192). 합친 글이 상한을 넘으면 null(묻지 않음 — 자르지 않는다).
+export function withPrefix(q: RemoteQuestion, prefix: readonly string[] | undefined): RemoteQuestion | null {
+  if (!prefix?.length) return q;
+  return finish([...prefix, q.text]);
+}
+
+// 원격 작업 하나에 물을 수 있는 질문 수(MCP 다리의 상한과 같게, #192 — 텔레그램으로 위임해 물을 때도 센다).
+export const REMOTE_ASKS_PER_JOB = 20;
 
 export const REMOTE_TASK_REQUEST_MAX = 500;
 
