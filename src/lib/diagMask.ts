@@ -19,8 +19,13 @@ const FILE_EXT = new Set(
 const SCHEME_CHAR = /[a-zA-Z0-9+.-]/;
 // 호스트(와 :포트, IPv6의 [])에 올 수 있는 글자. 이 밖의 글자(따옴표·괄호 등)에서 호스트가 끝난다.
 const AUTHORITY_CHAR = /[A-Za-z0-9.\-:\[\]%_~]/;
-// 조각 끝의 문장 부호(파일 확장자 판정에서 뺀다).
-const TRAILING = /[)\]}>.,;:!?'"]+$/;
+// 조각 끝의 문장 부호(파일 확장자 판정에서 뺀다). 끝에서부터 한 번 훑는다(정규식 $ 앵커는 자리마다 되짚어 긴 조각에서 느림).
+const TRAILING_CHARS = new Set([...")]}>.,;:!?'\""]);
+function withoutTrailing(token: string): string {
+  let end = token.length;
+  while (end > 0 && TRAILING_CHARS.has(token[end - 1])) end--;
+  return token.slice(0, end);
+}
 
 function maskUrlTail(tail: string): string {
   // tail = scheme://나머지(조각 끝까지)
@@ -47,7 +52,7 @@ function maskUrlTail(tail: string): string {
 }
 
 function fileExt(token: string): string | null {
-  const core = token.replace(TRAILING, "");
+  const core = withoutTrailing(token);
   const dot = core.lastIndexOf(".");
   if (dot <= 0 || dot === core.length - 1) return null;
   const ext = core.slice(dot + 1).toLowerCase();

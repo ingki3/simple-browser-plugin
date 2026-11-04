@@ -52,7 +52,7 @@ test("주소 앞의 이메일도 가리고, 경로 없는 주소 뒤의 선택�
 
 test("긴 파일 이름도 전체를 가리고, 긴 글(주소·이메일 실패 모양)도 빠르다", () => {
   assert.equal(maskDiagnostics(`${"고객_홍길동_" + "가".repeat(130)}.pdf`).text, "[파일].pdf");
-  for (const long of ["a.".repeat(60_000), "가".repeat(60_000), "a@".repeat(30_000)]) {
+  for (const long of ["a.".repeat(60_000), "가".repeat(60_000), "a@".repeat(30_000), `${"!".repeat(60_000)}가`]) {
     const t0 = Date.now();
     maskDiagnostics(long);
     assert.ok(Date.now() - t0 < 300, `${long.slice(0, 4)}… ${Date.now() - t0}ms`);
