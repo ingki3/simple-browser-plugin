@@ -32,7 +32,7 @@ function deps(over = {}) {
 test("runContinue: 정상이면 열고·검증·포커스·넘김, 닫거나 되돌리지 않음", async () => {
   const { d, calls } = deps();
   assert.equal(await runContinue(d), "started");
-  assert.deepEqual(calls, ["open", "verify", "focus", "hand:42"]);
+  assert.deepEqual(calls, ["open", "focus", "verify", "hand:42"]);
 });
 
 test("runContinue: 열기 전 취소 → 탭 없이 되돌림", async () => {
@@ -55,7 +55,7 @@ test("runContinue: 탭을 여는 동안 취소 → 연 탭을 닫고 되돌림, 
   assert.deepEqual(calls, ["open", "close:7", "release"]);
 });
 
-test("runContinue: 포커스를 기다리는 동안 취소 → 넘기기 직전 확인에서 멈추고 탭을 닫음", async () => {
+test("runContinue: 포커스를 기다리는 동안 취소 → 검증·넘기기 없이 탭을 닫음", async () => {
   let cancel = false;
   const { d, calls } = deps({
     cancelled: () => cancel,
@@ -66,7 +66,24 @@ test("runContinue: 포커스를 기다리는 동안 취소 → 넘기기 직전 
     },
   });
   assert.equal(await runContinue(d), "cancelled");
-  assert.deepEqual(calls, ["open", "verify", "focus", "close:42", "release"]);
+  assert.deepEqual(calls, ["open", "focus", "close:42", "release"]);
+});
+
+test("runContinue: 포커스를 기다리는 동안 작업을 지움 → 그 뒤 검증에서 걸려 넘기지 않음", async () => {
+  let deleted = false;
+  const { d, calls } = deps({
+    focus: async () => {
+      calls.push("focus");
+      await new Promise((r) => setTimeout(r, 5));
+      deleted = true;
+    },
+    verify: async () => {
+      calls.push("verify");
+      if (deleted) throw new Error("지워짐");
+    },
+  });
+  await assert.rejects(runContinue(d), /지워짐/);
+  assert.deepEqual(calls, ["open", "focus", "verify", "close:42", "release"]);
 });
 
 test("runContinue: 검증 실패(작업 지움) → 탭을 닫고 되돌린 뒤 오류", async () => {
@@ -77,7 +94,7 @@ test("runContinue: 검증 실패(작업 지움) → 탭을 닫고 되돌린 뒤 
     },
   });
   await assert.rejects(runContinue(d), /지워짐/);
-  assert.deepEqual(calls, ["open", "verify", "close:42", "release"]);
+  assert.deepEqual(calls, ["open", "focus", "verify", "close:42", "release"]);
 });
 
 test("runContinue: 넘기기 실패(포트 전송 실패) → 탭을 닫고 되돌린 뒤 오류", async () => {
@@ -88,7 +105,7 @@ test("runContinue: 넘기기 실패(포트 전송 실패) → 탭을 닫고 되�
     },
   });
   await assert.rejects(runContinue(d), /port closed/);
-  assert.deepEqual(calls, ["open", "verify", "focus", "hand", "close:42", "release"]);
+  assert.deepEqual(calls, ["open", "focus", "verify", "hand", "close:42", "release"]);
 });
 
 const base = { enabled: true, seen: [] };
