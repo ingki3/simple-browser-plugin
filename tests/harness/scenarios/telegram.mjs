@@ -6,7 +6,7 @@ import { expect } from "../lib.mjs";
 const TOKEN = "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const CHAT = 7001;
 
-async function installTelegram(h) {
+export async function installTelegram(h) {
   await h.sw.evaluate(() => {
     globalThis.__tg = { updates: [], sent: [], calls: [], nextId: 1 };
     const prev = globalThis.fetch;
@@ -19,6 +19,21 @@ async function installTelegram(h) {
       const ok = (result) => new Response(JSON.stringify({ ok: true, result }), { headers: { "content-type": "application/json" } });
       if (method === "getMe") return ok({ id: 1, is_bot: true, username: "test_bot" });
       if (method === "sendMessage") {
+        // rateLimitNext(#145): 다음 한 번은 429(retry_after 2초)로 거절한다.
+        if (globalThis.__tg.rateLimitNext) {
+          globalThis.__tg.rateLimitNext = false;
+          globalThis.__tg.limited = (globalThis.__tg.limited ?? 0) + 1;
+          return new Response(JSON.stringify({ ok: false, error_code: 429, parameters: { retry_after: 2 } }), { status: 429, headers: { "content-type": "application/json" } });
+        }
+        // holdReply(#145): 승인 질문이 아닌 글의 응답을 늦춘다(중단 신호를 따른다).
+        if (!body.reply_markup && globalThis.__tg.holdReply) {
+          globalThis.__tg.holding = true;
+          await Promise.race([
+            globalThis.__tg.holdReply,
+            new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })),
+          ]);
+          globalThis.__tg.holding = false;
+        }
         globalThis.__tg.sent.push(body);
         const id = globalThis.__tg.sent.length;
         // 승인 질문(#185): 버튼 데이터를 남기고, holdAsk가 있으면 응답을 늦춘다(버튼이 응답보다 먼저 오는 경우).
@@ -49,7 +64,7 @@ async function installTelegram(h) {
 }
 
 // 업데이트 하나를 넣고 받기를 부른다.
-async function deliver(h, text, { chat = CHAT, from = chat, ageS = 0 } = {}) {
+export async function deliver(h, text, { chat = CHAT, from = chat, ageS = 0 } = {}) {
   await h.sw.evaluate(
     async ({ text, chat, from, ageS }) => {
       const id = globalThis.__tg.nextId++;
@@ -61,7 +76,7 @@ async function deliver(h, text, { chat = CHAT, from = chat, ageS = 0 } = {}) {
 }
 
 // 버튼 누르기(callback_query). chat·from을 바꿔 다른 채팅·다른 사람의 누름을 흉내 낸다.
-async function press(h, data, { chat = CHAT, from = chat, poll = true } = {}) {
+export async function press(h, data, { chat = CHAT, from = chat, poll = true } = {}) {
   await h.sw.evaluate(
     async ({ data, chat, from, poll }) => {
       const id = globalThis.__tg.nextId++;
@@ -72,9 +87,9 @@ async function press(h, data, { chat = CHAT, from = chat, poll = true } = {}) {
   );
 }
 
-const asks = (h) => h.sw.evaluate(() => (globalThis.__tg.asks ?? []).map((b) => ({ text: b.text, yes: b.reply_markup.inline_keyboard[0][0].callback_data, no: b.reply_markup.inline_keyboard[0][1].callback_data })));
+export const asks = (h) => h.sw.evaluate(() => (globalThis.__tg.asks ?? []).map((b) => ({ text: b.text, yes: b.reply_markup.inline_keyboard[0][0].callback_data, no: b.reply_markup.inline_keyboard[0][1].callback_data })));
 
-async function waitAsk(h, n = 1, ms = 15_000) {
+export async function waitAsk(h, n = 1, ms = 15_000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     const a = await asks(h);
@@ -85,7 +100,7 @@ async function waitAsk(h, n = 1, ms = 15_000) {
 }
 
 // 텔레그램으로 보낸 글 중 승인 질문이 아닌 것(최종 답·안내).
-const replies = (h) => h.sw.evaluate(() => globalThis.__tg.sent.filter((m) => !m.reply_markup).map((m) => m.text));
+export const replies = (h) => h.sw.evaluate(() => globalThis.__tg.sent.filter((m) => !m.reply_markup).map((m) => m.text));
 
 async function waitReply(h, n = 1, ms = 20_000) {
   const until = Date.now() + ms;
@@ -102,7 +117,7 @@ const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.
 const sent = (h) => h.sw.evaluate(() => globalThis.__tg.sent.map((m) => m.text));
 const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
 
-async function connect(h) {
+export async function connect(h) {
   await installTelegram(h);
   const saved = await ask(h, { kind: "telegram_save_token", token: TOKEN });
   expect(saved.ok && saved.data.botName === "@test_bot" && !("token" in saved.data), `토큰 저장(${JSON.stringify(saved)})`);
@@ -158,6 +173,61 @@ async function waitSent(h, n, ms = 15_000) {
 }
 
 export default [
+  {
+    name: "명령 응답(#145): 429로 기다리는 중 연결을 끊으면 다시 보내지 않는다",
+    async run(h) {
+      await connect(h);
+      await h.sw.evaluate(() => {
+        globalThis.__tg.rateLimitNext = true;
+      });
+      const pending = deliver(h, "/help");
+      await h.panel.waitForTimeout(500);
+      const off = await ask(h, { kind: "telegram_disconnect" });
+      expect(off.ok, "연결 끊기");
+      await pending;
+      await h.panel.waitForTimeout(2500);
+      const s = await sent(h);
+      expect((await h.sw.evaluate(() => globalThis.__tg.limited)) === 1 && !s.some((t) => t.includes("텔레그램 연동")), `다시 보내지 않음(${JSON.stringify(s)})`);
+    },
+  },
+  {
+    name: "답 보내기(#145): 보내는 동안 서비스 워커를 붙잡고, 끝나면 놓는다 — 열린 설정 화면의 최근 요청도 바뀐다",
+    async run(h) {
+      await connect(h);
+      const opts = await h.openOptions("model");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.holdReply = new Promise((r) => (globalThis.__tg.release = r));
+        globalThis.__steps = [{ text: "붙잡은 답" }];
+      });
+      await deliver(h, "느린 답 요청");
+      const until = Date.now() + 15_000;
+      while (Date.now() < until && !(await h.sw.evaluate(() => globalThis.__tg.holding))) await h.panel.waitForTimeout(200);
+      expect(await h.sw.evaluate(() => globalThis.__tg.holding), "답을 보내는 중");
+      const during = await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")));
+      expect(during, "보내는 동안 keepalive 알람");
+      await h.sw.evaluate(() => {
+        globalThis.__tg.holdReply = null;
+        globalThis.__tg.release();
+      });
+      const r = await waitReply(h, 1);
+      expect(r.includes("붙잡은 답"), `답(${JSON.stringify(r)})`);
+      let after = true;
+      const end = Date.now() + 5000;
+      while (Date.now() < end && after) {
+        after = await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")));
+        if (after) await h.panel.waitForTimeout(200);
+      }
+      expect(!after, "끝나면 keepalive를 놓음");
+      // 오래 열어 둔 설정 화면이 최근 요청(recent)을 다시 읽는다.
+      let shown = "";
+      const seen = Date.now() + 5000;
+      while (Date.now() < seen && !shown.includes("느린 답 요청")) {
+        shown = await opts.locator("body").innerText();
+        if (!shown.includes("느린 답 요청")) await h.panel.waitForTimeout(200);
+      }
+      expect(shown.includes("느린 답 요청"), "설정 화면의 최근 요청");
+    },
+  },
   {
     name: "확인 코드로 연결하고, 요청에는 최종 답만 보낸다(허용 밖 채팅·오래된 메시지는 실행하지 않음)",
     async run(h) {

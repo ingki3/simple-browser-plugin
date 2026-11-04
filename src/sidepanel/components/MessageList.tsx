@@ -17,11 +17,13 @@ interface Props {
   ) => void;
   onCancel: (callId: string) => void;
   needsKey: boolean;
+  // 로컬 서버(#193)를 골랐는데 주소·모델이 없음.
+  needsLocal?: boolean;
   onOpenSettings: () => void;
   onSend: (text: string) => void;
 }
 
-export function MessageList({ onApprove, onCancel, needsKey, onOpenSettings, onSend }: Props) {
+export function MessageList({ onApprove, onCancel, needsKey, needsLocal, onOpenSettings, onSend }: Props) {
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
   const { settings } = useSettings();
@@ -50,7 +52,7 @@ export function MessageList({ onApprove, onCancel, needsKey, onOpenSettings, onS
   if (messages.length === 0 && !streaming) {
     return (
       <div className="message-list empty">
-        <Welcome needsKey={needsKey} onOpenSettings={onOpenSettings} onSend={onSend} />
+        <Welcome needsKey={needsKey} needsLocal={needsLocal} onOpenSettings={onOpenSettings} onSend={onSend} />
       </div>
     );
   }

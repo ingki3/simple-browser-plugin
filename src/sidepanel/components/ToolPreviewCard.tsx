@@ -16,12 +16,14 @@ type Props = Extract<ChatMessage, { type: "tool_pending" }> & {
 };
 
 export function ToolPreviewCard(props: Props) {
-  const { callId, toolName, previewSummary, previewDetails, linkGrantOffer, chatGrantOffer, personalUrlOffer, loginSiteOffer, choices, choiceLimit, choiceDefaults, handoff, task, resolved, onApprove, onCancel } =
+  const { callId, toolName, previewSummary, previewDetails, previewFullDetails, linkGrantOffer, chatGrantOffer, personalUrlOffer, loginSiteOffer, choices, choiceLimit, choiceDefaults, handoff, task, resolved, onApprove, onCancel } =
     props;
   const disabled = resolved !== null;
   // 선택 카드(다른 탭·링크 고르기): choiceDefaults만 체크한 상태에서 시작하고, 고른 id만 승인으로 보낸다.
   const [picked, setPicked] = useState<string[]>(() => (choiceDefaults ?? []).slice(0, choiceLimit ?? choiceDefaults?.length));
   const limit = choiceLimit ?? choices?.length ?? 0;
+  // 전체 보기(#132): 요약을 자른 카드에서 모든 칸·값을 펼친다. 표시만 바꾼다(승인·실행과 무관).
+  const [full, setFull] = useState(false);
   const toggle = (id: string) =>
     setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length >= limit ? cur : [...cur, id]));
 
@@ -36,7 +38,12 @@ export function ToolPreviewCard(props: Props) {
       <div className="tool-card-body">
         <div className="tool-card-summary">{previewSummary}</div>
         {typeof previewDetails === "string" && previewDetails && (
-          <pre className="tool-card-details">{previewDetails}</pre>
+          <pre className="tool-card-details">{full && previewFullDetails ? previewFullDetails : previewDetails}</pre>
+        )}
+        {previewFullDetails && (
+          <button type="button" className="link-btn tool-card-full" aria-expanded={full} onClick={() => setFull((v) => !v)}>
+            {full ? "접기" : "전체 보기"}
+          </button>
         )}
         {choices && (
           <ul className="tool-card-choices">

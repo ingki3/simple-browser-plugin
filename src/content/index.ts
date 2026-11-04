@@ -13,6 +13,7 @@ import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
 import { modelText } from "./modelText";
+import { snapshotRole } from "@/lib/repeatTask";
 import { endHandoff, handoffStatus, showHandoff } from "./handoff";
 import { armFrameGuard, cancelGuard, checkBeforePress, disarm, frameBlocked, guardAlive, guardResult } from "./trustedClick";
 import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
@@ -63,7 +64,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   const msg = raw as BgToContent;
   if (!msg || typeof msg !== "object") return false;
   if (msg.kind === "translate_stop") {
-    stopTranslation();
+    stopTranslation(typeof msg.session === "string" ? msg.session : undefined);
     sendResponse({ ok: true } satisfies ContentResponse);
     return false;
   }
@@ -195,7 +196,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   if (msg.kind === "watch_snapshot") {
     try {
       if (location.href !== msg.expectUrl) throw new Error("탭의 주소가 바뀌었습니다.");
-      const clickables = findClickables({ limit: msg.limit }).map((c) => ({ text: c.text, role: c.role, ...(c.states ? { states: c.states } : {}) }));
+      const clickables = findClickables({ limit: msg.limit }).map((c) => ({ text: c.text, role: snapshotRole(c.tag, c.role), ...(c.states ? { states: c.states } : {}) }));
       sendResponse({
         ok: true,
         data: { title: document.title, text: document.body ? modelText(document.body, msg.max) : "", clickables },

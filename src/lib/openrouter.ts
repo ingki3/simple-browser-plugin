@@ -47,6 +47,13 @@ export interface OpenRouterStreamChunk {
     };
     finish_reason?: string | null;
   }>;
+  // 토큰 사용량(#126, OpenAI 형식 — 보통 choices가 빈 마지막 조각). Anthropic은 어댑터가 이 형식으로 바꾼다. 읽기는 lib/usage.ts.
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
+  } | null;
   error?: { code?: number | string; message?: string; metadata?: unknown };
 }
 
@@ -75,18 +82,21 @@ function errorMessage(body: unknown, status: number, label: string): string {
 }
 
 // OpenAI 호환 Chat Completions 엔드포인트에 JSON 요청을 보낸다(제공자 어댑터 공용, #97). label은 오류 문구의 제공자 이름.
+// redirect "error": 3xx를 따르지 않는다(#193 로컬 서버 — 사용자가 적은 주소 밖으로 대화가 가지 않게).
 export async function chatRequest(
   url: string,
   headers: Record<string, string>,
   payload: Record<string, unknown>,
   signal: AbortSignal | undefined,
   label: string,
+  opts: { redirect?: RequestRedirect } = {},
 ): Promise<Response> {
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(payload),
     signal,
+    ...(opts.redirect ? { redirect: opts.redirect } : {}),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

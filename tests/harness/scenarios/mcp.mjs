@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "../lib.mjs";
+import { asks as tgAsks, connect as tgConnect, deliver as tgDeliver, press as tgPress, replies as tgReplies, waitAsk as tgWaitAsk } from "./telegram.mjs";
 
 const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/sbp-mcp.mjs");
 
@@ -71,7 +72,247 @@ async function askReady(h, { askApproval = true, capabilities = { elicitation: {
 
 const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
 
+const FORM192 = `<title>신청</title>
+<label>이메일 <span aria-hidden="true">HIDDEN_LABEL_TEXT</span><input type="email" name="email" value="PAGE_TYPED_VALUE"></label>
+<div contenteditable="true">PAGE_EDIT_TEXT</div>
+<div id="out"></div>`;
+
 export default [
+  {
+    name: "원격 입력 질문(#192): 개인정보 칸 입력을 elicitation으로 묻고(페이지 출처·모델용 칸 이름·넣을 값, 사유는 고정 문구), 승인하면 입력한다",
+    pages: { "/form192": FORM192 },
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { tool: "find_form_fields", args: {} }, { fill: "이메일", value: "me@example.test" }, { text: "입력했습니다" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/form192`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "신청서에 이메일 넣어 줘" } } });
+        const nav = await bridge.request("elicitation/create", 1);
+        bridge.send({ jsonrpc: "2.0", id: nav.id, result: { action: "accept", content: { approve: true } } });
+        const fill = await bridge.request("elicitation/create", 2);
+        const msg = fill?.params?.message ?? "";
+        expect(msg.includes("승인이 필요합니다: 입력") && msg.includes(`페이지: ${h.base}`) && msg.includes("'이메일'") && msg.includes("me@example.test"), `입력 질문(${msg})`);
+        expect(msg.includes("자동 실행 예외가 있어 묻습니다"), "고정 사유 문구");
+        for (const bad of ["PAGE_TYPED_VALUE", "PAGE_EDIT_TEXT", "HIDDEN_LABEL_TEXT"]) expect(!msg.includes(bad), `질문에 ${bad} 없음`);
+        bridge.send({ jsonrpc: "2.0", id: fill.id, result: { action: "accept", content: { approve: true } } });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result?.content?.[0]?.text === "입력했습니다", `최종 답(${JSON.stringify(res)})`);
+        // 원격 요청은 새 작업 탭에서 일한다 — 그 탭의 칸을 본다.
+        const page = h.ctx.pages().find((p) => p.url() === `${h.base}/form192`);
+        expect(!!page && (await page.locator("input[name=email]").inputValue()) === "me@example.test", "입력됨");
+        const first = await h.sw.evaluate(() => JSON.stringify(globalThis.__modelReqs[0]?.body.messages.filter((m) => m.role === "user")));
+        expect(first.includes("입력(fill_form_fields)") && !first.includes("입력·저장·로그인 등)은 원격에서 할 수 없고"), "모델 안내가 새 범위");
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "원격 허용 사이트(#192): 묻지 못하는 MCP 요청도 허용 사이트로는 이동하고, 같은 요청 안에서 목록에서 빼면 다음 이동은 하지 않는다",
+    pages: { "/a": "<title>A</title><p>a</p>", "/b": "<title>B</title><p>b</p>" },
+    async run(h) {
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        const site = new URL(h.base).origin;
+        const added = await ask(h, { kind: "remote_site_op", op: { op: "add", site } });
+        expect(added?.ok, `추가(${JSON.stringify(added)})`);
+        await h.sw.evaluate(({ a, b }) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url: a } }, { delayMs: 2500, tool: "navigate_to_url", args: { url: b } }, { text: "끝" }];
+          globalThis.__toolLog = [];
+        }, { a: `${h.base}/a`, b: `${h.base}/b` });
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "페이지 a와 b를 봐 줘" } } });
+        // 첫 이동이 끝나면 목록에서 뺀다(다음 모델 응답은 2.5초 뒤).
+        const until = Date.now() + 15_000;
+        while (Date.now() < until && !(await h.sw.evaluate(() => globalThis.__toolLog.some((t) => t.name === "navigate_to_url")))) await h.panel.waitForTimeout(100);
+        await ask(h, { kind: "remote_site_op", op: { op: "remove", site } });
+        const res = await bridge.reply(2, 30_000);
+        expect(!!res?.result, `답(${JSON.stringify(res)})`);
+        const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
+        expect(log[0] === "navigate_to_url:ok", `허용 사이트로 이동(${log.join(",")})`);
+        expect(log[1] && log[1] !== "navigate_to_url:ok", `빼고 난 뒤 이동은 안 함(${log.join(",")})`);
+        expect(!(await bridge.request("elicitation/create", 1, 500)), "묻지 못하는 클라이언트에는 질문 없음");
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "원격 허용 사이트(#192): 허용 사이트에서도 결제 신호가 있는 클릭은 묻지 못하는 MCP 요청에서 하지 않는다",
+    pages: { "/shop192": `<title>상점</title><button onclick="document.getElementById('out').textContent='결제됨'">결제하기</button><div id="out"></div>` },
+    async run(h) {
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      const site = new URL(h.base).origin;
+      try {
+        await ask(h, { kind: "remote_site_op", op: { op: "add", site } });
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { tool: "find_clickables", args: {} }, { click: "결제하기" }, { text: "끝" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/shop192`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "결제 페이지 확인" } } });
+        await bridge.reply(2, 30_000);
+        const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
+        expect(log[0] === "navigate_to_url:ok", `허용 사이트로는 이동(${log.join(",")})`);
+        expect(log.some((l) => l.startsWith("click_element:") && l !== "click_element:ok"), `결제 클릭은 하지 않음(${log.join(",")})`);
+        const page = h.ctx.pages().find((p) => p.url() === `${h.base}/shop192`);
+        expect(!page || (await page.locator("#out").innerText()) === "", "결제 안 됨");
+      } finally {
+        await ask(h, { kind: "remote_site_op", op: { op: "remove", site } });
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "원격 파일 읽기·링크 읽기(#192): 파일 읽기를 거절하면 요청하지 않고, 링크 읽기를 승인하면 기본 선택만 읽는다",
+    pages: {
+      "/docs": `<title>자료</title><a href="/files/a.pdf">a.pdf</a> <a href="/l1">첫 글</a> <a href="/l2">둘째 글</a>`,
+      "/l1": "<title>L1</title><p>첫 번째 글 본문</p>",
+      "/l2": "<title>L2</title><p>두 번째 글 본문</p>",
+    },
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        await h.sw.evaluate(({ docs, file, l1, l2 }) => {
+          globalThis.__steps = [
+            { tool: "navigate_to_url", args: { url: docs } },
+            { tool: "read_document", args: { url: file } },
+            { tool: "read_linked_pages", args: { urls: [l1, l2] } },
+            { text: "읽었습니다" },
+          ];
+          globalThis.__toolLog = [];
+        }, { docs: `${h.base}/docs`, file: `${h.base}/files/a.pdf`, l1: `${h.base}/l1`, l2: `${h.base}/l2` });
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "자료 읽어 줘" } } });
+        const nav = await bridge.request("elicitation/create", 1);
+        bridge.send({ jsonrpc: "2.0", id: nav.id, result: { action: "accept", content: { approve: true } } });
+        const doc = await bridge.request("elicitation/create", 2);
+        expect((doc?.params?.message ?? "").includes("파일 읽기") && doc.params.message.includes("로그인 쿠키와 함께"), `파일 읽기 질문(${doc?.params?.message})`);
+        h.hits.length = 0;
+        bridge.send({ jsonrpc: "2.0", id: doc.id, result: { action: "decline" } });
+        const links = await bridge.request("elicitation/create", 3, 20_000);
+        expect(!h.hits.some((x) => x.includes("/files/a.pdf")), "거절한 파일은 요청 안 함");
+        if (links) {
+          expect(links.params.message.includes("링크 읽기") && links.params.message.includes("기본 선택 2개만"), `링크 질문(${links.params.message})`);
+          bridge.send({ jsonrpc: "2.0", id: links.id, result: { action: "accept", content: { approve: true } } });
+        }
+        await bridge.reply(2, 30_000);
+        const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
+        expect(log.includes("read_document:remote_user_denied"), `파일 읽기 거절(${log.join(",")})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "텔레그램 위임(#192): MCP 클라이언트가 묻지 못하면 텔레그램 버튼으로 묻고(요청 글 앞부분 포함), 질문 중 새 텔레그램 요청은 받지 않으며, 수동 받기 없이 승인이 처리된다",
+    pages: { "/news": "<title>뉴스</title><p>경제</p>" },
+    async run(h) {
+      await tgConnect(h);
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        const on = await ask(h, { kind: "mcp_set", askViaTelegram: true });
+        expect(on?.ok && on.data.askViaTelegram, "위임 켬");
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "다녀왔습니다" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해 줘" } } });
+        const a = await tgWaitAsk(h, 1, 20_000);
+        expect(a.length === 1 && a[0].text.includes("[MCP 요청]") && a[0].text.includes("요청: 오늘 경제 뉴스 정리해 줘") && a[0].text.includes(`${h.base}/news`), `텔레그램 질문(${JSON.stringify(a)})`);
+        expect(!(await bridge.request("elicitation/create", 1, 300)), "클라이언트에는 묻지 않음");
+        // 질문 중 새 텔레그램 요청은 받지 않는다.
+        await tgDeliver(h, "다른 요청");
+        const r = await tgReplies(h);
+        expect(r.some((t) => t.includes("다른 요청(MCP)의 승인 질문을 기다리고")), `바쁨 안내(${JSON.stringify(r)})`);
+        // 수동 받기(poll) 없이 버튼을 넣어도 위임 질문의 받기 루프가 처리한다.
+        await tgPress(h, a[0].yes, { poll: false });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result?.content?.[0]?.text === "다녀왔습니다", `최종 답(${JSON.stringify(res)})`);
+        const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
+        expect(log[0] === "navigate_to_url:ok", `승인 뒤 이동(${log.join(",")})`);
+        void tgAsks;
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", askViaTelegram: false });
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "작업 기록(#145): 결과 전송이 실패하면 저장해 두고 다음 폴링에서 다시 보낸다",
+    async run(h) {
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ delayMs: 2000, text: "늦은 답" }];
+        });
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "날씨 알려 줘" } } });
+        // 받았다는 확인을 보낸 뒤, 최종 결과 전송만 세 번(postResult 한 번의 재시도 전부) 실패하게 한다.
+        await h.panel.waitForTimeout(1000);
+        await h.sw.evaluate(() => {
+          const prev = globalThis.fetch;
+          globalThis.__failResults = 3;
+          globalThis.fetch = async (u, init) => {
+            if (String(u).endsWith("/v1/result") && globalThis.__failResults > 0) {
+              globalThis.__failResults--;
+              throw new TypeError("Failed to fetch");
+            }
+            return prev(u, init);
+          };
+        });
+        const res = await bridge.reply(2, 45_000);
+        expect(res?.result?.content?.[0]?.text === "늦은 답", `다시 보낸 최종 답(${JSON.stringify(res)})`);
+        expect((await h.sw.evaluate(() => globalThis.__failResults)) === 0, "실패를 거친 뒤 보냄");
+        const until = Date.now() + 5000;
+        let st = null;
+        while (Date.now() < until) {
+          st = await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp);
+          if (!st.pending && !st.job) break;
+          await h.panel.waitForTimeout(200);
+        }
+        expect(!st.pending && !st.job, `보낸 뒤 기록 정리(${JSON.stringify({ job: st.job, pending: st.pending })})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "작업 기록(#145): 다시 뜬 뒤 남은 작업 기록은 중단 결과로 바꿔 보내고 정리한다",
+    async run(h) {
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        // 다리는 할 일이 없으면 첫 폴링을 20초까지 붙잡는다 — 그 응답에서 다리 id를 저장한다.
+        let bridgeId = "";
+        const until = Date.now() + 30_000;
+        while (!bridgeId && Date.now() < until) {
+          bridgeId = (await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp?.bridgeId)) ?? "";
+          if (!bridgeId) await h.panel.waitForTimeout(200);
+        }
+        expect(!!bridgeId, "다리 연결");
+        // 서비스 워커가 실행 중에 내려갔다가 다시 뜬 것처럼, 맡지 않은 작업 기록을 저장소에 둔다.
+        await h.sw.evaluate(async (id) => {
+          const s = (await chrome.storage.local.get("mcp")).mcp;
+          await chrome.storage.local.set({ mcp: { ...s, job: { bridgeId: id, jobId: "j-old" } } });
+        }, bridgeId);
+        const end = Date.now() + 30_000;
+        let st = null;
+        while (Date.now() < end) {
+          st = await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp);
+          if (!st.job && !st.pending) break;
+          await h.panel.waitForTimeout(300);
+        }
+        expect(!st.job && !st.pending, `중단 보고 뒤 정리(${JSON.stringify({ job: st.job, pending: st.pending })})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
   {
     name: "승인 질문(#185): 주소 없는 이동은 클라이언트에 elicitation으로 묻고, accept+approve면 이동한다",
     pages: { "/news": `<title>뉴스 페이지</title><p>오늘의 경제</p>` },
@@ -179,6 +420,23 @@ export default [
           bridge.stop();
           await ask(h, { kind: "mcp_set", enabled: false });
         }
+      }
+    },
+  },
+  {
+    name: "설정의 다리 안내: 릴리스 ZIP에서 받는 링크와 mcp/sbp-mcp.mjs 등록 명령(웹 스토어판에는 다리가 없음)",
+    async run(h) {
+      await ask(h, { kind: "mcp_set", enabled: true });
+      try {
+        const opt = await h.openOptions("model");
+        const link = opt.locator("a.mcp-release-link");
+        await link.waitFor({ timeout: 5000 });
+        expect((await link.getAttribute("href"))?.endsWith("/releases/latest"), "최신 릴리스 링크");
+        expect((await link.getAttribute("target")) === "_blank", "새 탭으로");
+        const cmds = await opt.locator("pre.tool-card-details").allInnerTexts();
+        expect(cmds.some((t) => t.includes("claude mcp add") && t.includes("/mcp/sbp-mcp.mjs")), `등록 명령(${cmds.join(" | ").slice(0, 300)})`);
+      } finally {
+        await ask(h, { kind: "mcp_set", enabled: false });
       }
     },
   },

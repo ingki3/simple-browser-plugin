@@ -43,6 +43,9 @@ export function useChatSession() {
         case "assistant_done":
           s.finalizeAssistant();
           return;
+        case "assistant_retract":
+          s.retractStreaming();
+          return;
         case "status":
           s.setStatus(msg.text);
           return;
@@ -75,6 +78,7 @@ export function useChatSession() {
             args: msg.args,
             previewSummary: msg.previewSummary,
             previewDetails: msg.previewDetails,
+            ...(typeof msg.previewFullDetails === "string" ? { previewFullDetails: msg.previewFullDetails } : {}),
             linkGrantOffer: msg.linkGrantOffer === true,
             chatGrantOffer: msg.chatGrantOffer === true,
             personalUrlOffer: msg.personalUrlOffer === true,

@@ -6,6 +6,7 @@ import { isProviderId, type ProviderId } from "./providers/types.ts";
 import { OPENAI_DEFAULT_MODEL } from "./providers/openai.ts";
 import { GEMINI_DEFAULT_MODEL } from "./providers/gemini.ts";
 import { ANTHROPIC_DEFAULT_MODEL } from "./providers/anthropic.ts";
+import { localEndpoint } from "./providers/local.ts";
 import { DEFAULT_MODEL, normalizeModelId } from "./models.ts";
 import {
   DEFAULT_CSV_MAX_CHARS,
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openRouterApiKey: "",
   apiKeys: {},
   providerModels: {},
+  localServer: { baseUrl: "", model: "" },
   model: DEFAULT_MODEL,
   systemPrompt: "",
   translationTargetLang: "ko",
@@ -39,6 +41,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pageSuggestions: true,
   trustedInput: false,
   manualSites: [],
+  remoteSites: [],
   loginSites: [],
   voiceInput: DEFAULT_VOICE_INPUT,
 };
@@ -50,8 +53,9 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
   return {
     provider: isProviderId(r.provider) ? r.provider : DEFAULT_SETTINGS.provider,
     openRouterApiKey: typeof r.openRouterApiKey === "string" ? r.openRouterApiKey : DEFAULT_SETTINGS.openRouterApiKey,
-    apiKeys: stringFields(r.apiKeys, ["openai", "gemini", "anthropic"]),
+    apiKeys: stringFields(r.apiKeys, ["openai", "gemini", "anthropic", "local"]),
     providerModels: stringFields(r.providerModels, ["openai", "gemini", "anthropic"]),
+    localServer: normalizeLocalServer(r.localServer),
     model: normalizeModelId(r.model),
     systemPrompt:
       typeof r.systemPrompt === "string" ? r.systemPrompt.slice(0, MAX_SYSTEM_PROMPT_LENGTH) : DEFAULT_SETTINGS.systemPrompt,
@@ -72,6 +76,7 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
     pageSuggestions: r.pageSuggestions !== false,
     trustedInput: r.trustedInput === true,
     manualSites: normalizeManualSites(r.manualSites),
+    remoteSites: normalizeManualSites(r.remoteSites),
     loginSites: normalizeLoginSites(r.loginSites),
     voiceInput: normalizeVoiceInput(r.voiceInput),
   };
@@ -86,10 +91,21 @@ export function settingsForStorage(next: Settings): Settings {
     maxToolHopsVersion: MAX_TOOL_HOPS_VERSION,
     csvMaxChars: normalizeCsvMaxChars(next.csvMaxChars),
     manualSites: normalizeManualSites(next.manualSites),
+    remoteSites: normalizeManualSites(next.remoteSites),
     loginSites: normalizeLoginSites(next.loginSites),
-    apiKeys: stringFields(next.apiKeys, ["openai", "gemini", "anthropic"]),
+    apiKeys: stringFields(next.apiKeys, ["openai", "gemini", "anthropic", "local"]),
     providerModels: stringFields(next.providerModels, ["openai", "gemini", "anthropic"]),
+    localServer: normalizeLocalServer(next.localServer),
     voiceInput: normalizeVoiceInput(next.voiceInput),
+  };
+}
+
+// 로컬 서버 설정: 문자열만, 길이 한도(주소 500자·모델 200자). 주소는 사용자가 쓴 그대로 둔다(편집 중 지우지 않게 — 쓸 때 검사).
+function normalizeLocalServer(v: unknown): Settings["localServer"] {
+  const r = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  return {
+    baseUrl: typeof r.baseUrl === "string" ? r.baseUrl.slice(0, 500) : "",
+    model: typeof r.model === "string" ? r.model.trim().slice(0, 200) : "",
   };
 }
 
@@ -104,18 +120,37 @@ function stringFields<K extends string>(v: unknown, keys: readonly K[]): Partial
   return out;
 }
 
-// 지금 쓸 제공자·키·모델(#97). 키가 없으면 apiKey는 빈 글자.
-export function activeModel(s: Settings): { provider: ProviderId; apiKey: string; model: string } {
-  if (s.provider === "anthropic") {
-    return { provider: "anthropic", apiKey: s.apiKeys.anthropic ?? "", model: s.providerModels.anthropic || ANTHROPIC_DEFAULT_MODEL };
+// 지금 쓸 제공자·키·모델(#97). 키가 없으면 apiKey는 빈 글자. ready: 요청을 보낼 수 있는지(키가 필요한 제공자는 키, local은 유효한 주소와
+// 모델 — 키는 선택, #193). missing: 준비되지 않은 이유. baseUrl: local만(정규화한 주소, 유효하지 않으면 사용자가 쓴 값).
+export type ActiveModel = {
+  provider: ProviderId;
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+  ready: boolean;
+  missing: "key" | "endpoint" | "model" | null;
+};
+
+function keyed(provider: ProviderId, apiKey: string, model: string): ActiveModel {
+  return { provider, apiKey, model, ready: !!apiKey, missing: apiKey ? null : "key" };
+}
+
+export function activeModel(s: Settings): ActiveModel {
+  if (s.provider === "local") {
+    const ep = localEndpoint(s.localServer.baseUrl);
+    const model = s.localServer.model;
+    const missing = !ep.ok ? "endpoint" : !model ? "model" : null;
+    return { provider: "local", apiKey: s.apiKeys.local ?? "", model, baseUrl: ep.ok ? ep.base : s.localServer.baseUrl, ready: !missing, missing };
   }
-  if (s.provider === "gemini") {
-    return { provider: "gemini", apiKey: s.apiKeys.gemini ?? "", model: s.providerModels.gemini || GEMINI_DEFAULT_MODEL };
-  }
-  if (s.provider === "openai") {
-    return { provider: "openai", apiKey: s.apiKeys.openai ?? "", model: s.providerModels.openai || OPENAI_DEFAULT_MODEL };
-  }
-  return { provider: "openrouter", apiKey: s.openRouterApiKey, model: s.model };
+  if (s.provider === "anthropic") return keyed("anthropic", s.apiKeys.anthropic ?? "", s.providerModels.anthropic || ANTHROPIC_DEFAULT_MODEL);
+  if (s.provider === "gemini") return keyed("gemini", s.apiKeys.gemini ?? "", s.providerModels.gemini || GEMINI_DEFAULT_MODEL);
+  if (s.provider === "openai") return keyed("openai", s.apiKeys.openai ?? "", s.providerModels.openai || OPENAI_DEFAULT_MODEL);
+  return keyed("openrouter", s.openRouterApiKey, s.model);
+}
+
+// 보낼 대상의 식별(#193 — 대화·번역·보조 요청이 이 값이 바뀌면 멈춘다). 키도 포함하므로 저장·로그·content script로 보내지 않는다(비교에만).
+export function targetKey(a: Pick<ActiveModel, "provider" | "apiKey" | "model" | "baseUrl">): string {
+  return JSON.stringify([a.provider, a.apiKey, a.model, a.provider === "local" ? (a.baseUrl ?? "") : ""]);
 }
 
 // 바꾼 필드(patch)를 설정에 합친다(#99). 제공자별 키·모델(apiKeys·providerModels)은 한 단계 더 합쳐, 한 제공자의 값만 바꾼
@@ -127,6 +162,7 @@ export function mergeSettingsPatch(base: Settings, patch: SettingsPatch): Settin
     ...patch,
     apiKeys: { ...base.apiKeys, ...(patch.apiKeys ?? {}) },
     providerModels: { ...base.providerModels, ...(patch.providerModels ?? {}) },
+    localServer: { ...base.localServer, ...(patch.localServer ?? {}) },
     voiceInput: mergeVoiceInput(base.voiceInput, patch.voiceInput),
   };
 }

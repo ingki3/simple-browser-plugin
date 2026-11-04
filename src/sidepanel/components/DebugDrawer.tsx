@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useChatStore } from "../state/chatStore";
 import type { DebugEvent } from "@/lib/messages";
+import { maskDiagnostics, maskSummary } from "@/lib/diagMask";
 
 interface Props {
   open: boolean;
@@ -30,6 +31,12 @@ export function DebugDrawer({ open, onClose }: Props) {
   const clearDebugEvents = useChatStore((s) => s.clearDebugEvents);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [filter, setFilter] = useState("");
+  // 공유 전 미리보기(#132): "진단 복사"를 누른 순간의 목록으로 원문·가린 글을 고정한다(그 뒤 로그가 늘거나 필터가 바뀌어도 확인한 글만 복사).
+  const [preview, setPreview] = useState<{ raw: string; masked: string; summary: string } | null>(null);
+  const [rawCopy, setRawCopy] = useState(false);
+  useEffect(() => {
+    if (!open) setPreview(null);
+  }, [open]);
 
   const filtered = useMemo(() => {
     if (!filter.trim()) return events;
@@ -42,9 +49,18 @@ export function DebugDrawer({ open, onClose }: Props) {
     );
   }, [events, filter]);
 
+  const openPreview = () => {
+    const raw = serialize(filtered);
+    const m = maskDiagnostics(raw);
+    setPreview({ raw, masked: m.text, summary: maskSummary(m.counts) });
+    // 새 미리보기는 늘 가린 글로 시작한다.
+    setRawCopy(false);
+  };
+
   const handleCopy = async () => {
+    if (!preview) return;
     try {
-      await navigator.clipboard.writeText(serialize(filtered));
+      await navigator.clipboard.writeText(rawCopy ? preview.raw : preview.masked);
       setCopyState("copied");
       window.setTimeout(() => setCopyState("idle"), 1500);
     } catch {
@@ -67,8 +83,8 @@ export function DebugDrawer({ open, onClose }: Props) {
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
-            <button type="button" className="ghost-btn" onClick={handleCopy}>
-              {copyState === "copied" ? "복사됨" : copyState === "failed" ? "실패" : "진단 복사"}
+            <button type="button" className="ghost-btn" onClick={openPreview}>
+              진단 복사
             </button>
             <button type="button" className="ghost-btn" onClick={clearDebugEvents}>
               지우기
@@ -79,8 +95,28 @@ export function DebugDrawer({ open, onClose }: Props) {
           </div>
         </div>
         <p className="debug-note">
-          문제를 알릴 때 복사해 붙여 주세요. 방문한 주소와 파일 이름이 들어 있을 수 있으니, 공유하기 전에 확인하세요.
+          문제를 알릴 때 복사해 붙여 주세요. 복사하기 전에 주소의 경로·이메일·파일 이름·긴 값을 가린 글을 먼저 보여 줍니다.
         </p>
+        {preview && (
+          <div className="diag-preview" role="dialog" aria-label="복사할 진단 미리보기">
+            <div className="diag-preview-head">
+              <span>가린 것: {preview.summary}</span>
+              <label className="check-row">
+                <input type="checkbox" checked={rawCopy} onChange={(e) => setRawCopy(e.target.checked)} />
+                <span>원문 그대로 복사(가리지 않음)</span>
+              </label>
+            </div>
+            <pre className="diag-preview-body">{rawCopy ? preview.raw : preview.masked}</pre>
+            <div className="diag-preview-actions">
+              <button type="button" className="primary" onClick={handleCopy}>
+                {copyState === "copied" ? "복사됨" : copyState === "failed" ? "실패" : "복사"}
+              </button>
+              <button type="button" className="ghost-btn" onClick={() => setPreview(null)}>
+                닫기
+              </button>
+            </div>
+          </div>
+        )}
         <div className="drawer-body debug-body">
           {filtered.length === 0 ? (
             <div className="debug-empty">이벤트 없음</div>

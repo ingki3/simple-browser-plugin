@@ -187,6 +187,31 @@ export function anthropicStreamConverter(): (event: Record<string, unknown>) => 
     { type: string; text: string; thinking: string; signature: string; data: string; id: string; name: string; json: string; tool: number; args: boolean }
   >();
   let nextTool = 0;
+  // 토큰 사용량(#126): message_start의 입력(캐시 포함)과 message_delta의 출력(누적 값 — 마지막 것). 받은 것이 있을 때만 조각을 낸다.
+  const usage: { input?: number; read?: number; write?: number; output?: number } = {};
+  const takeUsage = (raw: unknown) => {
+    if (!raw || typeof raw !== "object") return;
+    const u = raw as Record<string, unknown>;
+    const num = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : undefined);
+    usage.input = num(u.input_tokens) ?? usage.input;
+    usage.read = num(u.cache_read_input_tokens) ?? usage.read;
+    usage.write = num(u.cache_creation_input_tokens) ?? usage.write;
+    usage.output = num(u.output_tokens) ?? usage.output;
+  };
+  const usageChunk = (): OpenRouterStreamChunk[] => {
+    if (usage.input === undefined && usage.output === undefined) return [];
+    const read = usage.read ?? 0;
+    const write = usage.write ?? 0;
+    return [
+      {
+        usage: {
+          prompt_tokens: (usage.input ?? 0) + read + write,
+          completion_tokens: usage.output ?? 0,
+          prompt_tokens_details: { cached_tokens: read, cache_write_tokens: write },
+        },
+      },
+    ];
+  };
   const chunk = (delta: Record<string, unknown>, finish?: string): OpenRouterStreamChunk =>
     ({ choices: [{ delta, ...(finish ? { finish_reason: finish } : {}) }] }) as OpenRouterStreamChunk;
   const ordered = (): Block[] => {
@@ -202,6 +227,11 @@ export function anthropicStreamConverter(): (event: Record<string, unknown>) => 
   };
   return (ev) => {
     const index = typeof ev.index === "number" ? ev.index : -1;
+    if (ev.type === "message_start") {
+      // 입력 사용량을 바로 넘긴다(응답 도중 끊겨도 받은 만큼 남게). 뒤 message_delta의 값이 덮는다.
+      takeUsage((ev.message as { usage?: unknown } | undefined)?.usage);
+      return usageChunk();
+    }
     if (ev.type === "content_block_start") {
       const cb = (ev.content_block ?? {}) as { type?: string; id?: string; name?: string; data?: string };
       const state = { type: cb.type ?? "", text: "", thinking: "", signature: "", data: cb.data ?? "", id: cb.id ?? "", name: cb.name ?? "", json: "", tool: -1, args: false };
@@ -239,7 +269,8 @@ export function anthropicStreamConverter(): (event: Record<string, unknown>) => 
     }
     if (ev.type === "message_delta") {
       const reason = ((ev.delta ?? {}) as { stop_reason?: string }).stop_reason;
-      const out: OpenRouterStreamChunk[] = [];
+      takeUsage(ev.usage);
+      const out: OpenRouterStreamChunk[] = [...usageChunk()];
       const content = ordered();
       if (content.length) out.push(chunk({ reasoning_details: [{ type: "anthropic.content", content }] }));
       if (reason) {
@@ -272,7 +303,8 @@ export const anthropicAdapter: ProviderAdapter = {
   label: LABEL,
   supportsFileParts: true,
   signsContext: true,
-  async openStream(apiKey, req, signal) {
+  timeoutScale: 1,
+  async openStream({ apiKey }, req, signal) {
     const response = await chatRequest(ANTHROPIC_MESSAGES_URL, headers(apiKey), anthropicPayload(req, true), signal, LABEL);
     const convert = anthropicStreamConverter();
     return {
@@ -287,7 +319,7 @@ export const anthropicAdapter: ProviderAdapter = {
         ),
     };
   },
-  async complete(apiKey, req, signal) {
+  async complete({ apiKey }, req, signal) {
     const response = await chatRequest(ANTHROPIC_MESSAGES_URL, headers(apiKey), anthropicPayload(req, false), signal, LABEL);
     const res = await chatJson<{ content?: Array<{ type?: string; text?: string }> }>(response, LABEL);
     return (res.content ?? [])

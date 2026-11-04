@@ -24,6 +24,9 @@ import { remoteErrorText } from "@/lib/telegram";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { debugLog } from "./debug";
+import { finishJob, recoverJob } from "@/lib/mcpJobState";
+import { REMOTE_ASKS_PER_JOB } from "@/lib/remoteApproval";
+import { telegramAskDelegated, telegramCanDelegate } from "./telegram";
 
 const STORE_KEY = "mcp";
 const ALARM = "mcp-poll";
@@ -55,6 +58,8 @@ interface McpState {
   lastError: string;
   // 승인이 필요한 이동·클릭을 MCP 클라이언트에 묻기(#185, 기본 끔 — 클라이언트 프로그램에 승인을 맡긴다).
   askApproval: boolean;
+  // MCP 클라이언트가 묻지 못하면(elicitation 미지원·묻기 꺼짐) 텔레그램 버튼으로 묻기(#192, 기본 끔). 텔레그램이 연결돼 있고 "텔레그램으로 묻기"가 켜져 있어야 함.
+  askViaTelegram?: boolean;
   // 실행 중인 작업(서비스 워커가 다시 뜨면 중단으로 보고한다).
   job: McpJob | null;
   pending: McpPending | null;
@@ -95,6 +100,7 @@ export interface McpStatus {
   bridgeVersion: string;
   lastError: string;
   askApproval: boolean;
+  askViaTelegram: boolean;
 }
 
 function statusOf(s: McpState): McpStatus {
@@ -107,6 +113,7 @@ function statusOf(s: McpState): McpStatus {
     bridgeVersion: s.bridgeVersion,
     lastError: s.lastError,
     askApproval: s.askApproval,
+    askViaTelegram: s.askViaTelegram === true,
   };
 }
 
@@ -122,12 +129,25 @@ export async function mcpSecret(): Promise<string> {
   return s.secret;
 }
 
-export async function mcpSet(patch: { enabled?: boolean; port?: number; askApproval?: boolean }): Promise<McpStatus> {
+export async function mcpSet(patch: { enabled?: boolean; port?: number; askApproval?: boolean; askViaTelegram?: boolean }): Promise<McpStatus> {
   await recovered;
+  // 텔레그램으로 묻기(#192)만 바꾸면 연결은 그대로 두고, 끄면 열린 위임 질문을 거둔다.
+  if (patch.askViaTelegram !== undefined && patch.enabled === undefined && patch.port === undefined && patch.askApproval === undefined) {
+    const s = await update((cur) => ({ ...cur, askViaTelegram: patch.askViaTelegram === true }));
+    askViaTelegram = s.askViaTelegram === true;
+    if (!askViaTelegram) for (const c of [...delegateAsks]) c.abort();
+    return statusOf(s);
+  }
   // 승인 묻기만 바꾸면 연결은 그대로 두고, 끄면 기다리는 질문을 거둔다(물을 수 없는 것으로).
   if (patch.askApproval !== undefined && patch.enabled === undefined && patch.port === undefined) {
-    const s = await update((cur) => ({ ...cur, askApproval: patch.askApproval === true }));
+    const s = await update((cur) => ({
+      ...cur,
+      askApproval: patch.askApproval === true,
+      ...(patch.askViaTelegram !== undefined ? { askViaTelegram: patch.askViaTelegram === true } : {}),
+    }));
     askEnabled = s.askApproval;
+    askViaTelegram = s.askViaTelegram === true;
+    if (!askViaTelegram) for (const c of [...delegateAsks]) c.abort();
     if (!askEnabled) for (const w of [...askWaiters.values()]) w.cancel("unavailable");
     return statusOf(s);
   }
@@ -138,9 +158,12 @@ export async function mcpSet(patch: { enabled?: boolean; port?: number; askAppro
     ...(patch.port !== undefined ? { port: patch.port } : {}),
     secret: cur.secret || newSecret(),
     ...(patch.askApproval !== undefined ? { askApproval: patch.askApproval } : {}),
+    ...(patch.askViaTelegram !== undefined ? { askViaTelegram: patch.askViaTelegram === true } : {}),
     lastError: "",
   }));
   askEnabled = s.askApproval;
+  askViaTelegram = s.askViaTelegram === true;
+  if (!askViaTelegram) for (const c of [...delegateAsks]) c.abort();
   restart();
   if (s.enabled) await chrome.alarms.create(ALARM, { periodInMinutes: 1 });
   else await chrome.alarms.clear(ALARM).catch(() => false);
@@ -221,11 +244,13 @@ async function postResult(conn: Conn, jobId: string, outcome: "ok" | "error" | "
   return false;
 }
 
-// 최종 결과: 먼저 저장해 두고(서비스 워커가 내려가도 다시 보낼 수 있게) 보낸 뒤 지운다.
+// 최종 결과를 보내고, 다리가 받으면 지운다. 결과는 부르는 쪽이 이미 저장해 두었다(작업 기록을 지우는 저장과 같은 한 번 — #145,
+// lib/mcpJobState.ts). 서비스 워커가 내려가도 다시 뜨면 저장된 결과를 다시 보낸다.
 let delivering = false;
+// 이 서비스 워커가 맡고 있는 작업(실행 중이거나, 실행을 마치고 결과를 저장하기 전). 다시 뜬 뒤의 남은 기록으로 오인하지 않는다.
+const owned = new Set<string>();
 async function deliver(conn: Conn, p: McpPending): Promise<void> {
   if (conn.gen !== connGen) return;
-  await update((cur) => ({ ...cur, pending: p }));
   if (delivering) return;
   delivering = true;
   try {
@@ -343,10 +368,15 @@ async function handleNext(conn: Conn, n: McpNext): Promise<void> {
     else void postAsk(conn, { op: "ack", jobId: a.jobId, askId: a.askId }, cleanupSignal());
   }
   // 서비스 워커가 다시 뜨기 전에 실행 중이던 작업: 다시 실행하지 않고 중단으로 보고한다.
-  if (st.job && st.job.bridgeId === n.bridgeId && current?.jobId !== st.job.jobId) {
-    const jobId = st.job.jobId;
-    conn.s = await update((cur) => ({ ...cur, job: null }));
-    void deliver(conn, { bridgeId: n.bridgeId, jobId, outcome: "error", text: "브라우저가 다시 시작되어 요청이 중단되었습니다. 다시 요청하세요." });
+  // 기록을 지우는 것과 중단 결과를 남기는 것은 한 번의 저장으로(lib/mcpJobState.ts).
+  if (recoverJob(st, n.bridgeId, owned)) {
+    let interrupted: McpPending | null = null;
+    conn.s = await update((cur) => {
+      const r = recoverJob(cur, n.bridgeId, owned);
+      interrupted = r?.pending ?? null;
+      return r ?? cur;
+    });
+    if (interrupted) void deliver(conn, interrupted);
   } else if (st.pending && st.pending.bridgeId === n.bridgeId && !delivering) {
     // 보내지 못한 결과를 다시 보낸다.
     void deliver(conn, st.pending);
@@ -383,30 +413,47 @@ function startJob(conn: Conn, bridgeId: string, job: NonNullable<McpNext["job"]>
     }
     const running = runner.run(job.request, undefined, approverFor(conn, job));
     if (!running) return;
-    current = { jobId: job.jobId, deadline: job.deadline };
-    void postResult(conn, job.jobId, "accepted", "");
-    debugLog("mcp:request", `${job.request.length}자`);
-    running.start();
-    const end = await running.end;
-    if (current?.jobId === job.jobId) current = null;
-    await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));
-    if (conn.gen !== connGen) return;
-    if (end.status === "stopped") {
-      void postResult(conn, job.jobId, "cancelled", "");
-      return;
+    owned.add(job.jobId);
+    try {
+      await runJob(conn, bridgeId, job, running);
+    } finally {
+      owned.delete(job.jobId);
     }
-    let p: McpPending;
-    if (end.status === "failed") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(undefined) };
-    else if (end.result.outcome === "error") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(end.result.action) };
-    else {
-      try {
-        p = { bridgeId, jobId: job.jobId, outcome: "ok", text: (await maskStringForModel(end.result.finalText || "끝났습니다(답할 내용이 없습니다).")).text };
-      } catch {
-        p = { bridgeId, jobId: job.jobId, outcome: "error", text: "결과를 안전하게 보내지 못했습니다. 브라우저 패널에서 확인하세요." };
-      }
-    }
-    await deliver(conn, p);
   })();
+}
+
+// 맡은 작업을 실행하고 결과를 저장·전달한다(startJob이 owned로 감싼다).
+async function runJob(conn: Conn, bridgeId: string, job: NonNullable<McpNext["job"]>, running: NonNullable<ReturnType<typeof runner.run>>): Promise<void> {
+  current = { jobId: job.jobId, deadline: job.deadline };
+  void postResult(conn, job.jobId, "accepted", "");
+  debugLog("mcp:request", `${job.request.length}자`);
+  running.start();
+  const end = await running.end;
+  if (current?.jobId === job.jobId) current = null;
+  // 연결이 바뀌었거나(그 결과는 새 연결로 보내지 않는다) 취소했으면 기록만 지운다.
+  if (conn.gen !== connGen || end.status === "stopped") {
+    await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));
+    if (conn.gen === connGen) void postResult(conn, job.jobId, "cancelled", "");
+    return;
+  }
+  // 결과를 만드는 동안(가림)에도 작업 기록을 남겨 둔다 — 이 서비스 워커가 맡고 있으므로(owned) 중단으로 보고하지 않는다.
+  let p: McpPending;
+  if (end.status === "failed") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(undefined) };
+  else if (end.result.outcome === "error") p = { bridgeId, jobId: job.jobId, outcome: "error", text: remoteErrorText(end.result.action) };
+  else {
+    try {
+      p = { bridgeId, jobId: job.jobId, outcome: "ok", text: (await maskStringForModel(end.result.finalText || "끝났습니다(답할 내용이 없습니다).")).text };
+    } catch {
+      p = { bridgeId, jobId: job.jobId, outcome: "error", text: "결과를 안전하게 보내지 못했습니다. 브라우저 패널에서 확인하세요." };
+    }
+  }
+  // 결과를 만드는 사이 연결이 바뀌었으면 기록만 지운다. 아니면 기록 지우기와 결과 남기기를 한 번에 저장한 뒤 보낸다.
+  if (conn.gen !== connGen) {
+    await update((cur) => (cur.job?.jobId === job.jobId ? { ...cur, job: null } : cur));
+    return;
+  }
+  await update((cur) => finishJob(cur, job.jobId, p));
+  await deliver(conn, p);
 }
 
 // ---- 승인 질문(#185) ----
@@ -444,11 +491,48 @@ async function postAsk(conn: Conn, body: AskBody, signal: AbortSignal): Promise<
   return null;
 }
 
+// MCP 클라이언트가 물을 수 있으면 elicitation으로, 아니면(설정을 켰을 때) 텔레그램 버튼으로 묻는다(#192).
 function approverFor(conn: Conn, job: NonNullable<McpNext["job"]>): RemoteApprover {
+  const viaClient = () => askEnabled && conn.gen === connGen && bridgeFeatures.includes("ask") && job.canAsk === true;
+  const viaTelegram = () => !viaClient() && askViaTelegram && conn.gen === connGen && telegramCanDelegate();
+  const request = job.request.trim();
   return {
-    canAsk: () => askEnabled && conn.gen === connGen && bridgeFeatures.includes("ask") && job.canAsk === true,
-    ask: (q, signal) => askByBridge(conn, job, q, signal),
+    canAsk: () => viaClient() || viaTelegram(),
+    // 텔레그램으로 물을 때만 무엇의 질문인지 고정 줄을 붙인다(붙인 최종 글로 비밀 값·길이를 검사 — ChatAgent.remoteAsk).
+    get prefix() {
+      return viaClient() ? undefined : ["[MCP 요청]", `요청: ${request.length > DELEGATE_REQUEST_MAX ? `${request.slice(0, DELEGATE_REQUEST_MAX)}…` : request}`];
+    },
+    ask: (q, signal) => (viaClient() ? askByBridge(conn, job, q, signal) : askByTelegramDelegate(conn, job, q, signal)),
   };
+}
+
+const DELEGATE_REQUEST_MAX = 120;
+// 텔레그램으로 위임한 질문(설정을 끄면 거둔다)과 작업별 질문 수(다리의 /ask 상한과 같게, #192).
+const delegateAsks = new Set<AbortController>();
+const delegateCounts = new Map<string, number>();
+let askViaTelegram = false;
+
+async function askByTelegramDelegate(conn: Conn, job: NonNullable<McpNext["job"]>, q: RemoteQuestion, signal: AbortSignal): Promise<RemoteAskResult> {
+  if (signal.aborted) return "aborted";
+  if (!askViaTelegram || conn.gen !== connGen) return "unavailable";
+  const used = delegateCounts.get(job.jobId) ?? 0;
+  if (used >= REMOTE_ASKS_PER_JOB) return "unavailable";
+  delegateCounts.set(job.jobId, used + 1);
+  while (delegateCounts.size > 20) {
+    const oldest = delegateCounts.keys().next().value;
+    if (oldest === undefined) break;
+    delegateCounts.delete(oldest);
+  }
+  // 작업 기한 30초 전까지(MCP elicitation과 같은 상한). 설정 끄기·연결 세대 바뀜·작업 끝이면 거둔다.
+  const until = Math.min(Date.now() + ASK_TTL_MS, job.deadline - 30_000);
+  if (until <= Date.now()) return "unavailable";
+  const ctl = new AbortController();
+  delegateAsks.add(ctl);
+  try {
+    return await telegramAskDelegated(q, AbortSignal.any([signal, ctl.signal, loopAbort.signal]), until);
+  } finally {
+    delegateAsks.delete(ctl);
+  }
 }
 
 async function askByBridge(conn: Conn, job: NonNullable<McpNext["job"]>, q: RemoteQuestion, signal: AbortSignal): Promise<RemoteAskResult> {
@@ -510,6 +594,7 @@ const recovered = (async () => {
   try {
     const s = await load();
     askEnabled = s.askApproval;
+    askViaTelegram = s.askViaTelegram === true;
     if (s.enabled) {
       if (!(await chrome.alarms.get(ALARM))) await chrome.alarms.create(ALARM, { periodInMinutes: 1 });
       void loop();

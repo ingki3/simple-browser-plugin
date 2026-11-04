@@ -79,6 +79,8 @@ export default [
       expect(sent.includes("여름 공연") && sent.includes("예매하기"), "화면 글자와 버튼은 보냄");
       expect(!sent.includes("비밀메모123") && !sent.includes("편집초안456"), "입력값·편집 영역은 보내지 않음");
       expect(sent.includes("disabled"), "버튼 상태");
+      // 명시적 역할이 없는 <button>은 버튼으로 적는다(#145 — 예전에는 [link]).
+      expect(sent.includes("[button] 예매하기"), "버튼 역할");
 
       const id = (await tasks(h))[0].id;
       await h.sw.evaluate(() => {
@@ -114,6 +116,34 @@ export default [
         return got;
       }, { id, name: PORT });
       expect(again?.kind === "error" && again.message.includes("이미"), `두 번째는 거절(${JSON.stringify(again)})`);
+    },
+  },
+  {
+    name: "이어서 진행(#145): 준비하는 사이 패널 연결이 끊기면 연 탭을 닫고 '조건 맞음'으로 되돌린다",
+    pages: { "/watch": WATCH },
+    async run(h) {
+      await register(h, { approve: true });
+      await waitFor(h, (l) => l[0]?.lastCheck, "첫 확인");
+      const id = (await tasks(h))[0].id;
+      await h.sw.evaluate(() => {
+        globalThis.__draft = { verdict: "met", reason: "열렸습니다" };
+        globalThis.__modelReqs = [];
+      });
+      await h.panel.evaluate(async (id) => chrome.runtime.sendMessage({ kind: "repeat_run_now", id }), id);
+      await waitFor(h, (l) => l[0].status === "triggered", "조건 맞음");
+      const before = (await h.ctx.pages()).length;
+      // 요청을 보내자마자 연결을 끊는다(패널 닫힘). 탭을 열기 전이든 연 뒤든 결과는 같아야 한다.
+      await h.panel.evaluate(async ({ id, name }) => {
+        const port = chrome.runtime.connect({ name });
+        port.postMessage({ kind: "repeat_continue", taskId: id, conversationId: crypto.randomUUID() });
+        port.disconnect();
+      }, { id, name: PORT });
+      await h.panel.waitForTimeout(2500);
+      const list = await tasks(h);
+      expect(list[0].status === "triggered", `다시 누를 수 있게 되돌림(${list[0].status})`);
+      expect((await h.ctx.pages()).length === before, `연 탭이 남지 않음(${before} → ${(await h.ctx.pages()).length})`);
+      const started = await h.sw.evaluate(() => globalThis.__modelReqs.filter((r) => !r.body.response_format).length);
+      expect(started === 0, "대화를 시작하지 않음");
     },
   },
   {

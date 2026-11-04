@@ -10,8 +10,14 @@ export const KO = {
   welcomeKeyBody: "API 키는 AI 서비스를 쓰기 위한 개인 인증키입니다. 아래 서비스 중 하나에서 키를 받아 설정에 넣으세요.",
   welcomeKeyCost:
     "API는 쓴 만큼 그 서비스에 요금이 나갑니다. ChatGPT·Gemini·Claude 앱의 구독과는 따로입니다. 키를 받은 곳에서 사용량과 한도를 확인할 수 있습니다.",
-  welcomeKeyTip: "처음이라면 OpenRouter를 권합니다. 키 하나로 여러 회사의 모델을 고를 수 있습니다.",
+  welcomeKeyTip: "처음이라면 OpenRouter를 권합니다. 키 하나로 여러 회사의 모델을 고를 수 있습니다. 내 컴퓨터의 Ollama·LM Studio 같은 로컬 서버도 설정에서 고를 수 있습니다.",
+  welcomeLocalTitle: "로컬 서버의 주소와 모델을 넣어 주세요",
+  welcomeLocalBody: "설정 → 모델·연결에서 서버 주소(예: http://localhost:11434/v1)와 모델 이름을 넣으면 시작할 수 있습니다.",
   welcomeOpenSettings: "설정 열기",
+  // 보내는 것 안내(웹 스토어 사용자 데이터 정책). docs/privacy.md와 같은 범위로 쓴다(줄여 말하지 않음).
+  welcomePrivacy:
+    "요청하면(등록한 반복 작업은 확인할 때마다) 대화, 지금 탭의 주소·제목, 페이지 내용(보이지 않는 글자가 포함될 수 있음), 필요한 파일을 설정에서 고른 AI 서비스(직접 적은 로컬·호환 서버 포함)로 보냅니다. 텔레그램·MCP를 켜면 승인 질문(이동할 주소·입력할 값 등)이 그쪽으로도 갑니다. 이 프로젝트의 서버는 없습니다.",
+  welcomePrivacyLink: "개인정보처리방침",
   welcomeReadyTitle: "무엇을 도와드릴까요?",
   welcomeReadyBody: "지금 보는 페이지를 열어 둔 채로 말로 시켜 보세요. 눌러서 바로 보낼 수도 있습니다.",
   welcomeExamples: ["이 페이지 세 줄로 요약해 줘", "이 페이지 한국어로 번역해 줘", "이 페이지의 이미지 목록 보여 줘"],

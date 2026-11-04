@@ -42,8 +42,17 @@ export async function startHarness() {
   if (!chrome) throw new Error("Chrome for Testing을 찾지 못했습니다(HARNESS_CHROME).");
   // 시나리오가 경로마다 HTML을 등록한다(서버 둘 — 두 번째는 다른 출처).
   const pages = new Map();
+  // 서버가 받은 요청(서버 번호 + 경로, #193 — 리다이렉트를 따르지 않는지 본다).
+  const hits = [];
   const serve = (which) => (q, r) => {
     const path = q.url.split("?")[0];
+    hits.push(`${which}${path}`);
+    // /redir…(#193): 다른 출처(서버 2)의 같은 경로로 307 — 로컬 서버 주소가 넘기는 응답을 따르지 않는지 시험.
+    if (which === 1 && path.startsWith("/redir/")) {
+      r.writeHead(307, { location: `http://localhost:${srv2.address().port}/v1${path.slice("/redir".length)}` });
+      r.end();
+      return;
+    }
     const body = pages.get(`${which}${path}`) ?? (which === 1 ? DEFAULT_PAGE : "<title>X</title><p>external</p>");
     r.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     r.end(`<!doctype html><meta charset=utf-8>${body}`);
@@ -132,6 +141,13 @@ export async function startHarness() {
       globalThis.__voiceReply = undefined;
       globalThis.__voiceDelayMs = 0;
       globalThis.__voiceStatus = 0;
+      globalThis.__usage = undefined;
+      globalThis.__checkReply = undefined;
+      globalThis.__localModels = undefined;
+      globalThis.__localModelsDelayMs = 0;
+      globalThis.__localModelReqs = [];
+      globalThis.__translateDelayMs = 0;
+      globalThis.__translateReqs = [];
     });
     logs.length = 0;
     for (const p of optionsPages()) await p.close().catch(() => {});
@@ -213,7 +229,7 @@ export async function startHarness() {
     };
   }
 
-  return { base, base2, pages, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, installKeePassXC, userDataDir, optionsUrl, optionsPages, openOptions, waitOptions };
+  return { base, base2, pages, hits, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, installKeePassXC, userDataDir, optionsUrl, optionsPages, openOptions, waitOptions };
 }
 
 // 모의 모델: 단계마다 직전 도구 결과를 보고 다음 호출을 만든다. 도구 결과(모델에 간 그대로)는 __toolLog에 남긴다.
@@ -241,8 +257,9 @@ async function installMockModel(sw) {
       return realQuery(q);
     };
     const realFetch = globalThis.fetch;
+    // __usage(OpenAI 형식 usage, #126): 있으면 스트림 끝에 choices가 빈 사용량 조각을 붙인다. Anthropic은 message_start·message_delta에.
     const sse = (chunks) =>
-      new Response(chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n", {
+      new Response([...chunks, ...(globalThis.__usage ? [{ choices: [], usage: globalThis.__usage }] : [])].map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n", {
         headers: { "content-type": "text/event-stream" },
       });
     globalThis.fetch = async (url, init) => {
@@ -272,14 +289,45 @@ async function installMockModel(sw) {
         return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
       }
       // 모델 제공자 엔드포인트(#97)만 흉내 낸다. 요청 주소·본문은 __modelReqs에 남긴다.
-      if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com|api\.anthropic\.com/.test(String(url))) return realFetch(url, init);
+      // 로컬·호환 서버(#193): 시험용 주소 http://127.0.0.1:59999/v1. 모델 목록(GET /models)은 __localModels(늦추기 __localModelsDelayMs).
+      if (String(url) === "http://127.0.0.1:59999/v1/models") {
+        (globalThis.__localModelReqs ??= []).push({ headers: init?.headers ?? {} });
+        if (globalThis.__localModelsDelayMs) await new Promise((r) => setTimeout(r, globalThis.__localModelsDelayMs));
+        return new Response(JSON.stringify({ data: (globalThis.__localModels ?? []).map((id) => ({ id })) }), { headers: { "content-type": "application/json" } });
+      }
+      if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com|api\.anthropic\.com|127\.0\.0\.1:59999/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
-      (globalThis.__modelReqs ??= []).push({ url: String(url), body, headers: init.headers });
+      (globalThis.__modelReqs ??= []).push({ url: String(url), body, headers: init.headers, at: Date.now() });
+      // __checkReply(#132): 설정의 연결 확인 요청에 줄 응답 { status, body, delayMs, networkError }.
+      if (globalThis.__checkReply && JSON.stringify(body.messages ?? []).includes("Reply with the single word OK.")) {
+        const c = globalThis.__checkReply;
+        if (c.delayMs) await new Promise((r) => setTimeout(r, c.delayMs));
+        if (c.networkError) throw new TypeError("Failed to fetch");
+        return new Response(JSON.stringify(c.body), { status: c.status ?? 200, headers: { "content-type": "application/json" } });
+      }
       const anthropic = String(url).includes("api.anthropic.com");
       // Anthropic: 응답은 Messages 형식, 스트림은 content_block 이벤트(아래 anthropicSse).
       if (anthropic && !body.stream) {
         (globalThis.__draftReqs ??= []).push(body);
         return new Response(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(globalThis.__draft ?? {}) }] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      // 번역 배치(#193 시험): 입력 배열을 받아 같은 수의 "번역:원문"을 돌려준다. __translateDelayMs만큼 늦추고 중단 신호를 따른다.
+      const userText = typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : "";
+      if (body.response_format && userText.includes("translations 배열")) {
+        (globalThis.__translateReqs ??= []).push({ url: String(url) });
+        if (globalThis.__translateDelayMs) {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(resolve, globalThis.__translateDelayMs);
+            init.signal?.addEventListener("abort", () => {
+              clearTimeout(t);
+              reject(new DOMException("aborted", "AbortError"));
+            }, { once: true });
+          });
+        }
+        const input = JSON.parse(userText.slice(userText.lastIndexOf("입력:\n") + "입력:\n".length));
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: input.map((t) => `번역:${t}`) }) } }] }), {
           headers: { "content-type": "application/json" },
         });
       }
@@ -312,10 +360,18 @@ async function installMockModel(sw) {
         globalThis.__toolLog.push({ name: lastTool.name ?? call?.function?.name, ...parsed });
         data = parsed.result ?? null;
       }
-      const anthropicSse = (events) =>
-        new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), {
+      const anthropicSse = (raw) => {
+        const u = globalThis.__usage;
+        const events = u
+          ? [
+              { type: "message_start", message: { usage: { input_tokens: u.prompt_tokens - (u.prompt_tokens_details?.cached_tokens ?? 0), cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? 0, output_tokens: 1 } } },
+              ...raw.map((e) => (e.type === "message_delta" ? { ...e, usage: { output_tokens: u.completion_tokens } } : e)),
+            ]
+          : raw;
+        return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), {
           headers: { "content-type": "text/event-stream" },
         });
+      };
       if (anthropic && body.tool_choice?.type === "none") {
         return anthropicSse([
           { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
@@ -372,6 +428,13 @@ async function installMockModel(sw) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
         out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       } else if (step) out = step;
+      // httpStatus: 요청을 HTTP 오류로 거절한다(연결 단계 실패).
+      if (step?.httpStatus) return new Response(JSON.stringify({ error: { message: "거절" } }), { status: step.httpStatus, headers: { "content-type": "application/json" } });
+      // streamError: 글자·사용량을 보낸 뒤 스트림 오류 조각으로 끝난다(#126 — 끊긴 호출의 사용량).
+      if (step?.streamError && !anthropic) {
+        const parts = [{ choices: [{ delta: { content: "부분" } }] }, ...(globalThis.__usage ? [{ choices: [], usage: globalThis.__usage }] : []), { error: { message: "중간 오류" } }];
+        return new Response(parts.map((c) => `data: ${JSON.stringify(c)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+      }
       // lengthEmpty: 생각만 하다 응답 상한에 걸린 빈 응답(글자·도구 호출 없음, #160 재시도 시험).
       if (step?.lengthEmpty) {
         if (anthropic) return anthropicSse([{ type: "message_delta", delta: { stop_reason: "max_tokens" } }, { type: "message_stop" }]);

@@ -68,10 +68,11 @@ export function TelegramField() {
   useEffect(() => {
     void request({ kind: "telegram_status" });
   }, [request]);
-  // 다른 화면에서 연결·끊기·설정을 바꾸면(설정 탭을 오래 열어 두어도) 다시 읽는다. 받기 기록(offset·failures·recent)만 바뀐 것은
-  // 보지 않는다 — 상태 조회가 받기를 다시 시도해 실패 기록이 또 바뀌는 순환을 만들지 않게.
+  // 다른 화면에서 연결·끊기·설정을 바꾸거나 요청을 처리하면(최근 요청 recent, #145) 설정 탭을 오래 열어 두어도 다시 읽는다.
+  // 받기 기록(offset·failures)만 바뀐 것은 보지 않는다 — 상태 조회가 받기를 다시 시도해 실패 기록이 또 바뀌는 순환을 만들지 않게
+  // (recent는 요청 실행만 바꾸고 상태 조회는 바꾸지 않는다).
   useEffect(() => {
-    const fields = ["token", "botName", "chatId", "chatLabel", "connectedAt", "epoch", "notifyRepeat", "askApproval", "status", "pairing"];
+    const fields = ["token", "botName", "chatId", "chatLabel", "connectedAt", "epoch", "notifyRepeat", "askApproval", "status", "pairing", "recent"];
     const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== "local" || !("telegram" in changes)) return;
       const o = (changes.telegram.oldValue ?? {}) as Record<string, unknown>;

@@ -24,8 +24,10 @@ import {
 import { sameSiteAs } from "@/lib/siteTrust";
 import { httpOrigin } from "@/lib/url";
 import { activeModel } from "@/lib/settings";
-import { providerAdapter } from "@/lib/providers";
+import { providerAdapter, providerTimeout } from "@/lib/providers";
+import { beginTargetGuard } from "./modelTarget";
 import { withTimeout } from "@/lib/async";
+import { runContinue } from "@/lib/repeatContinue";
 import { getSettings } from "./storage";
 import { maskMessagesForModel, maskStringForModel } from "./loginSecrets";
 import { debugLog } from "./debug";
@@ -417,8 +419,9 @@ async function readSnapshot(page: OpenedPage): Promise<RepeatSnapshot> {
 }
 
 async function judge(t: RepeatTask, s: RepeatSnapshot, signal: AbortSignal): Promise<{ verdict: RepeatCheck["verdict"]; reason: string }> {
-  const { provider, apiKey, model } = activeModel(await getSettings());
-  if (!apiKey) throw new Error("API 키가 없어 확인하지 못했습니다.");
+  const active = activeModel(await getSettings());
+  const { provider, model } = active;
+  if (!active.ready) throw new Error(active.missing === "key" ? "API 키가 없어 확인하지 못했습니다." : "로컬 서버 주소와 모델이 없어 확인하지 못했습니다.");
   // 가림 목록을 못 읽으면 던진다(가릴 값을 모른 채 페이지 글자를 보내지 않는다).
   const { value: messages } = await maskMessagesForModel([
     { role: "system" as const, content: REPEAT_CHECK_SYSTEM },
@@ -429,20 +432,27 @@ async function judge(t: RepeatTask, s: RepeatSnapshot, signal: AbortSignal): Pro
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal.addEventListener("abort", onAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
+  const limit = providerTimeout(provider, MODEL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), limit);
+  // 준비하는 사이 대상이 바뀌면 보내지 않고, 보낸 뒤 바뀌면 결과를 버린다(#193).
+  const guard = beginTargetGuard(active, controller.signal);
   try {
+    await guard.verify();
     const text = await providerAdapter(provider).complete(
-      apiKey,
+      active,
       { model, messages, temperature: 0, reasoning: "off", maxTokens: 300, responseFormat: { type: "json_object" } },
-      controller.signal,
+      guard.signal,
     );
+    guard.assert();
     return parseVerdict(text);
   } catch (err) {
     if (signal.aborted) throw new Discarded();
-    if (controller.signal.aborted) throw new Error("모델이 25초 안에 답하지 않았습니다.");
+    guard.assert();
+    if (controller.signal.aborted) throw new Error(`모델이 ${Math.round(limit / 1000)}초 안에 답하지 않았습니다.`);
     throw err;
   } finally {
     clearTimeout(timer);
+    guard.end();
     signal.removeEventListener("abort", onAbort);
   }
 }
@@ -451,7 +461,12 @@ async function judge(t: RepeatTask, s: RepeatSnapshot, signal: AbortSignal): Pro
 
 // 조건이 맞은 작업을 한 번만 진행 상태로 바꾸고, 새 대화의 첫 요청 글과 턴 탭을 돌려준다. 요청 글은 저장된 작업 내용으로만 만든다.
 // site: 새 대화의 자동 실행 기준 사이트(등록한 주소의 출처로 고정 — 탭이 그 사이 다른 사이트로 넘어가도 그 사이트를 믿지 않게).
-export async function continueRepeatTask(id: string): Promise<{ text: string; tabId: number; site: string }> {
+// cancelled: 새 대화 동작이 있었거나 패널이 닫혔는지. handOver: 새 대화로 넘긴다(요청 글·탭·자동 실행 기준 사이트) — 실패하면 던진다.
+// 탭을 연 뒤 넘기기 전에 취소·검증 실패·넘기기 실패가 있으면 연 탭을 닫고 되돌린다(#145, lib/repeatContinue.ts).
+export async function continueRepeatTask(
+  id: string,
+  opts: { cancelled: () => boolean; handOver: (text: string, tabId: number, site: string) => void },
+): Promise<"started" | "cancelled"> {
   await recovered;
   let error: string | null = null;
   const claimed = await update(id, (t) => {
@@ -466,34 +481,38 @@ export async function continueRepeatTask(id: string): Promise<{ text: string; ta
     await announce();
     throw new Error(error ?? "반복 작업을 찾지 못했습니다.");
   }
-  try {
-    const tabId = await continueTab(claimed);
-    await announce();
-    // 탭을 준비하는 사이 작업을 지웠거나 상태가 바뀌었으면 시작하지 않는다. 이 확인 뒤 돌려주기까지는 기다림이 없다
-    // (부르는 쪽은 돌려받은 즉시 대화를 시작한다).
-    const still = (await load()).find((t) => t.id === id);
-    if (!still || still.status !== "started" || still.revision !== claimed.revision) throw new Error("그 사이 작업이 지워졌거나 바뀌었습니다.");
-    debugLog("repeat:continue", claimed.title);
-    return { text: followUpText(claimed), tabId, site: httpOrigin(claimed.url) ?? claimed.url };
-  } catch (err) {
-    // 탭을 열지 못했으면 다시 누를 수 있게 되돌린다.
-    await releaseRepeatTask(id);
-    throw err;
-  }
+  let windowId: number | undefined;
+  return runContinue({
+    cancelled: opts.cancelled,
+    // 등록한 주소로 새 탭을 연다(확인용 탭은 확인이 끝날 때 닫았다). 지금 활성 탭으로 대신하지 않는다.
+    openTab: async () => {
+      const created = await chrome.tabs.create({ url: claimed.url, active: true });
+      if (created.id === undefined) throw new Error("작업 탭을 열지 못했습니다.");
+      windowId = created.windowId;
+      return created.id;
+    },
+    closeTab: (tabId) => chrome.tabs.remove(tabId),
+    // 탭을 준비하는 사이 작업을 지웠거나 상태가 바뀌었으면 시작하지 않는다.
+    verify: async () => {
+      await announce();
+      const still = (await load()).find((t) => t.id === id);
+      if (!still || still.status !== "started" || still.revision !== claimed.revision) throw new Error("그 사이 작업이 지워졌거나 바뀌었습니다.");
+    },
+    focus: async () => {
+      if (windowId !== undefined) await chrome.windows.update(windowId, { focused: true }).catch(() => {});
+    },
+    handOver: (tabId) => {
+      opts.handOver(followUpText(claimed), tabId, httpOrigin(claimed.url) ?? claimed.url);
+      debugLog("repeat:continue", claimed.title);
+    },
+    release: () => releaseRepeatTask(id),
+  });
 }
 
 // 이어서 진행을 실제로 시작하지 못했을 때(탭 실패·그 사이 새 대화·패널 닫힘) 조건 맞음으로 되돌린다.
 export async function releaseRepeatTask(id: string): Promise<void> {
   await update(id, (t) => (t.status === "started" ? { ...t, status: "triggered", note: "", revision: t.revision + 1 } : null));
   await announce();
-}
-
-// 등록한 주소로 새 탭을 열어 앞으로 가져온다(확인용 탭은 확인이 끝날 때 닫았다). 지금 활성 탭으로 대신하지 않는다.
-async function continueTab(t: RepeatTask): Promise<number> {
-  const created = await chrome.tabs.create({ url: t.url, active: true });
-  if (created.id === undefined) throw new Error("작업 탭을 열지 못했습니다.");
-  if (created.windowId !== undefined) await chrome.windows.update(created.windowId, { focused: true }).catch(() => {});
-  return created.id;
 }
 
 // 등록한 주소와 같은 출처이거나 같은 등록 도메인(공유 호스팅은 같은 출처만).

@@ -21,8 +21,8 @@ jobs:
     name: 단위 테스트·타입 검사·빌드
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -33,6 +33,12 @@ jobs:
         run: npm run typecheck
       - name: 빌드
         run: npm run build
+      # 웹 스토어 최소 권한: Google 연동 없는 빌드엔 identity·oauth2가 없고, 넣은 빌드엔 둘 다 있다.
+      - name: manifest 검사
+        run: |
+          node scripts/checkManifest.mjs dist
+          GOOGLE_OAUTH_CLIENT_ID=ci-check.apps.googleusercontent.com npm run build
+          node scripts/checkManifest.mjs dist --google
 
   harness:
     name: 확장 하네스 (main 대상 PR 전용)
@@ -40,8 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

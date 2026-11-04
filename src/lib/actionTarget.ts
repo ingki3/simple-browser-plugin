@@ -149,10 +149,12 @@ export function sameApproved(a: TargetInfo, b: TargetInfo): boolean {
 // 행 안에 이미 있던 숨은 안내 글(입력 형식 오류 등)이 입력 처리기로 보이게 된 경우(#43 C의 오탐을 늘리지 않게).
 // 문구를 바꿔 보여 주는 것(A 문구를 숨기고 B 문구를 보임)은 다른 대상이다. 승인 카드·실행 직전 비교는 sameApproved.
 // 자동완성 입력 칸의 행에 새로 붙은 팝업 목록은 content 쪽에서 원문 행 글자에서 빼고 넘긴다(src/content/targets.ts pinnedRowOf).
+// 글자가 덧붙어 행 문맥이 한도를 넘게 된 것(잘림 false→true)만 함께 허용한다(#192 — 그 밖의 잘림 변화는 다른 대상).
 export function sameApprovedInFlight(now: TargetInfo, approved: TargetInfo): boolean {
   if (now.context !== approved.context) return false;
   if (!onlyAdded(approved.modelContext ?? "", now.modelContext ?? "")) return false;
-  return sameApproved({ ...now, modelContext: approved.modelContext }, approved);
+  const grewClipped = !!now.modelContextClipped && !approved.modelContextClipped;
+  return sameApproved({ ...now, modelContext: approved.modelContext, ...(grewClipped ? { modelContextClipped: approved.modelContextClipped } : {}) }, approved);
 }
 
 // after가 before에 글자를 더하기만 한 것인지: before의 낱말(공백 기준)이 after 안에 같은 순서로 모두 남아 있어야 한다.
@@ -222,7 +224,7 @@ const ROLE_LABELS: Record<string, string> = {
   searchbox: "검색 칸",
 };
 
-const REGION_LABELS: Record<PageRegion, string> = {
+export const REGION_LABELS: Record<PageRegion, string> = {
   main: "본문",
   article: "글",
   nav: "메뉴",
@@ -310,12 +312,16 @@ export function handoffFillList(items: Array<{ info: TargetInfo; value: string }
 // 입력 승인 카드. 비밀번호 칸은 값을 가리고 글자 수만 보여 준다.
 // checkbox·radio(메일 목록의 행 체크박스 — 모두 같은 이름일 수 있다), 이름 없는 칸, 묶음 안에서 이름이 겹치는 칸은
 // 행 문맥을 함께 보여 준다(#56). 한 칸만 채워도 어느 행인지 알 수 있게 이름 중복만으로 정하지 않는다.
+// 요약은 10칸·값 80자까지. 잘린 것이 있으면(칸이 10개를 넘거나 80자를 넘는 값) 같은 줄 형식으로 모든 칸·값 전체를 fullDetails로도 만든다
+// (#132 — 카드의 "전체 보기", 표시만). 비밀번호 칸은 어느 쪽이든 값 없이 ●와 글자 수만.
+const FILL_CARD_ITEMS = 10;
+const FILL_CARD_VALUE = 80;
 export function fillCard(
   items: Array<{ info: TargetInfo; value: string }>,
-): { summary: string; details: string } {
+): { summary: string; details: string; fullDetails?: string } {
   const nameCount = new Map<string, number>();
   for (const { info } of items) nameCount.set(info.name, (nameCount.get(info.name) ?? 0) + 1);
-  const shown = items.slice(0, 10).map(({ info, value }) => {
+  const line = ({ info, value }: { info: TargetInfo; value: string }, full: boolean) => {
     const name = info.name ? clip(info.name, 40) : "(이름 없는 칸)";
     // 행 문맥은 모델에 돌려준 글자(modelContext)를 쓴다(입력값·편집 영역·숨은 글자 제외).
     const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
@@ -329,7 +335,9 @@ export function fillCard(
           ? "☑ 체크"
           : want === false
             ? "☐ 해제"
-            : clip(value, 80);
+            : full
+              ? value
+              : clip(value, FILL_CARD_VALUE);
     let warn =
       info.sensitive === "password" ? " ⚠ 비밀번호 칸" : info.sensitive === "payment" ? " ⚠ 결제 정보 칸" : "";
     if (info.hidden) warn += info.proxy ? " ⚠ 화면에 보이지 않는 칸(보이는 라벨로 표시)" : " ⚠ 화면에 보이지 않는 칸";
@@ -338,9 +346,15 @@ export function fillCard(
     const where = [info.fieldType, REGION_LABELS[info.region]];
     if (info.inFrame) where.push("프레임 안");
     return `• ${name}${row} (${where.join(", ")}): ${shownValue}${warn}`;
-  });
-  if (items.length > 10) shown.push(`… 그 외 ${items.length - 10}개`);
-  return { summary: `입력 칸 ${items.length}개에 값을 채웁니다.`, details: shown.join("\n") };
+  };
+  const shown = items.slice(0, FILL_CARD_ITEMS).map((it) => line(it, false));
+  if (items.length > FILL_CARD_ITEMS) shown.push(`… 그 외 ${items.length - FILL_CARD_ITEMS}개`);
+  const cut = items.length > FILL_CARD_ITEMS || items.some((it) => line(it, false) !== line(it, true));
+  return {
+    summary: `입력 칸 ${items.length}개에 값을 채웁니다.`,
+    details: shown.join("\n"),
+    ...(cut ? { fullDetails: items.map((it) => line(it, true)).join("\n") } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

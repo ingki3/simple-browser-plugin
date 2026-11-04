@@ -20,7 +20,8 @@ import {
   type ParamChoice,
   type SavedLink,
 } from "@/lib/savedPages";
-import { providerAdapter } from "@/lib/providers";
+import { providerAdapter, providerTimeout } from "@/lib/providers";
+import { beginTargetGuard } from "./modelTarget";
 import { activeModel } from "@/lib/settings";
 import { withTimeout } from "@/lib/async";
 import { sensitiveUrlReason } from "@/lib/autoApprove";
@@ -324,8 +325,9 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
   const settings = await getSettings();
   // 카드가 남아 있어도 페이지 기억하기를 끈 뒤에는 보내지 않는다(카드를 열면 자동으로 묻는다).
   if (!settings.rememberPages) return null;
-  const { provider, apiKey, model } = activeModel(settings);
-  if (!apiKey) return null;
+  const active = activeModel(settings);
+  const { provider, model } = active;
+  if (!active.ready) return null;
   if (offer.warning) return null;
   const ctx = contexts.get(offerId);
   // 방문 기록 추천 카드는 추천이 초안이다(카드도 다시 채우기를 보이지 않는다).
@@ -349,22 +351,27 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
     JSON.stringify(ctx?.draft ?? {}),
   ].join("\n");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DRAFT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), providerTimeout(provider, DRAFT_TIMEOUT_MS));
+  // 준비하는 사이 대상(제공자·키·모델·서버 주소)이 바뀌면 어느 쪽으로도 보내지 않는다(#193).
+  const guard = beginTargetGuard(active, controller.signal);
   try {
+    // 자동 로그인으로 넣은 값이 페이지 글자로 옮겨졌어도 모델로 보내지 않는다(loginSecrets).
+    const content = (await maskStringForModel(prompt)).text;
+    await guard.verify();
     const text = await providerAdapter(provider).complete(
-      apiKey,
+      active,
       {
         model,
-        // 자동 로그인으로 넣은 값이 페이지 글자로 옮겨졌어도 모델로 보내지 않는다(loginSecrets).
-        messages: [{ role: "user", content: (await maskStringForModel(prompt)).text }],
+        messages: [{ role: "user", content }],
         temperature: 0,
         // 생각을 쓰는 모델이 상한을 생각에 다 써 답이 비지 않게 생각을 끄거나 줄인다(번역과 같은 설정).
         reasoning: "off",
         maxTokens: 1500,
         responseFormat: { type: "json_object" },
       },
-      controller.signal,
+      guard.signal,
     );
+    guard.assert();
     const draft = parseLinkDraft(text, offer.params.length, offer.title, offer.params.map((p) => p.key));
     if (!draft) debugLog("saved_link:draft_empty", model, "warn");
     return draft;
@@ -373,6 +380,7 @@ export async function draftLink(offerId: string): Promise<LinkDraft | null> {
     return null;
   } finally {
     clearTimeout(timer);
+    guard.end();
   }
 }
 

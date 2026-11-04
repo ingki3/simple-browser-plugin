@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLatestGate, useSyncedDraft } from "../hooks/syncHelpers";
+import { LATEST_RELEASE_URL } from "@/lib/projectLinks";
 
 interface Status {
   enabled: boolean;
@@ -10,11 +11,12 @@ interface Status {
   bridgeVersion: string;
   lastError: string;
   askApproval: boolean;
+  askViaTelegram: boolean;
 }
 
 type Req =
   | { kind: "mcp_status" }
-  | { kind: "mcp_set"; enabled?: boolean; port?: number; askApproval?: boolean }
+  | { kind: "mcp_set"; enabled?: boolean; port?: number; askApproval?: boolean; askViaTelegram?: boolean }
   | { kind: "mcp_regenerate" };
 
 const when = (ms: number) => new Date(ms).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -71,7 +73,7 @@ export function McpField() {
         secretGate();
         setSecret(null);
       }
-      if (o.secret !== n.secret || o.enabled !== n.enabled || o.port !== n.port || o.askApproval !== n.askApproval) void request({ kind: "mcp_status" });
+      if (o.secret !== n.secret || o.enabled !== n.enabled || o.port !== n.port || o.askApproval !== n.askApproval || o.askViaTelegram !== n.askViaTelegram) void request({ kind: "mcp_status" });
     };
     chrome.storage.onChanged.addListener(onChanged);
     return () => {
@@ -94,7 +96,11 @@ export function McpField() {
     <div className="field">
       <span className="field-label">MCP (다른 AI 도구에서 시키기)</span>
       <span className="field-help">
-        Claude Code·Claude Desktop 같은 AI 도구가 이 도우미에게 브라우저 일을 시키고 최종 답을 받습니다. 새 탭에서 처리하고, 승인이 필요한 동작은 아래 "MCP 클라이언트에 묻기"를 켰을 때만 이동·클릭을 그 AI 도구에 묻습니다(끄면 하지 않음). 함께 들어 있는 다리 프로그램(mcp/sbp-mcp.mjs, Node 22 이상 필요)을 그 AI 도구에 등록해야 합니다. 답은 그 AI 도구로 가고, 그 도구가 자기 AI 서비스로 보낼 수 있습니다.
+        Claude Code·Claude Desktop 같은 AI 도구가 이 도우미에게 브라우저 일을 시키고 최종 답을 받습니다. 새 탭에서 처리하고, 승인이 필요한 동작은 아래 "MCP 클라이언트에 묻기"를 켰을 때만 이동·클릭을 그 AI 도구에 묻습니다(끄면 하지 않음). 다리 프로그램(mcp/sbp-mcp.mjs, Node 22 이상 필요)을 그 AI 도구에 등록해야 합니다. 다리는 GitHub 릴리스의 설치용 ZIP에 들어 있습니다 — 웹 스토어로 설치했어도{" "}
+        <a className="mcp-release-link" href={LATEST_RELEASE_URL} target="_blank" rel="noopener noreferrer">
+          최신 릴리스
+        </a>
+        에서 ZIP을 받아 풀고 mcp 폴더의 파일을 씁니다. 답은 그 AI 도구로 가고, 그 도구가 자기 AI 서비스로 보낼 수 있습니다.
       </span>
       {error && <span className="field-help error-text">{error}</span>}
       <label className="check-row">
@@ -113,6 +119,19 @@ export function McpField() {
           </label>
           <span className="field-hint">
             켜면 승인을 MCP 클라이언트 프로그램에 맡깁니다. 클라이언트가 질문 창(elicitation)을 사람에게 보여 주지 않고 자동으로 답하게 만들어져 있으면 사람이 확인하지 않은 채 실행될 수 있습니다. 직접 쓰는 클라이언트(Claude Code·Claude Desktop 등)에서만 켜세요. 클라이언트가 질문 창을 지원하지 않으면 지금처럼 하지 않습니다.
+          </span>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              className="mcp-ask-telegram"
+              checked={st.askViaTelegram}
+              disabled={busy}
+              onChange={(e) => void request({ kind: "mcp_set", askViaTelegram: e.target.checked })}
+            />
+            <span>MCP 클라이언트가 묻지 못하면 텔레그램으로 묻기</span>
+          </label>
+          <span className="field-hint">
+            텔레그램 연동이 연결돼 있고 "텔레그램으로 묻기"가 켜져 있어야 합니다. 질문에는 "[MCP 요청]"과 요청 글 앞부분(120자), 할 동작(대상·주소·입력할 값)이 실려 텔레그램 서버를 거쳐 갑니다. 텔레그램 요청을 처리하는 중이거나 다른 질문이 열려 있으면 묻지 않고 하지 않습니다.
           </span>
           <div className="key-row">
             <input value={port} inputMode="numeric" onChange={(e) => portField.set(e.target.value.replace(/\D/g, ""))} aria-label="포트" />

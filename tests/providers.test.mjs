@@ -65,6 +65,7 @@ test("OpenAI 어댑터: 추론 모델은 reasoning_effort·max_completion_tokens
     max_completion_tokens: 8192,
     reasoning_effort: "medium",
     stream: true,
+    stream_options: { include_usage: true },
   });
   assert.equal(openAiPayload({ model: "gpt-5", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "minimal");
   assert.equal(openAiPayload({ model: "gpt-5-nano", messages: msgs, maxTokens: 10, reasoning: "off" }, false).reasoning_effort, "minimal");
@@ -103,10 +104,10 @@ test("OpenAI 어댑터: 기록에서 OpenRouter 전용 필드와 도구 결과�
 test("설정: 제공자·제공자별 키·모델 정리와 activeModel", () => {
   const def = normalizeSettings({ openRouterApiKey: "or", model: "deepseek/deepseek-v4-pro" });
   assert.equal(def.provider, "openrouter");
-  assert.deepEqual(activeModel(def), { provider: "openrouter", apiKey: "or", model: "deepseek/deepseek-v4-pro" });
+  assert.deepEqual(activeModel(def), { provider: "openrouter", apiKey: "or", model: "deepseek/deepseek-v4-pro", ready: true, missing: null });
   const oa = normalizeSettings({ provider: "openai", apiKeys: { openai: "  sk-x  ", other: "y" }, providerModels: { openai: "" } });
   assert.deepEqual(oa.apiKeys, { openai: "sk-x" });
-  assert.deepEqual(activeModel(oa), { provider: "openai", apiKey: "sk-x", model: "gpt-5-mini" });
+  assert.deepEqual(activeModel(oa), { provider: "openai", apiKey: "sk-x", model: "gpt-5-mini", ready: true, missing: null });
   assert.equal(normalizeSettings({ provider: "nope" }).provider, "openrouter");
   assert.deepEqual(normalizeSettings({ apiKeys: "x" }).apiKeys, {});
 });
@@ -149,7 +150,7 @@ test("다른 제공자의 extra_content는 OpenAI·OpenRouter 어댑터가 보�
 
 test("설정: Gemini 키·모델과 activeModel", () => {
   const g = normalizeSettings({ provider: "gemini", apiKeys: { gemini: "AIza" }, providerModels: { gemini: "gemini-3.1-pro-preview" } });
-  assert.deepEqual(activeModel(g), { provider: "gemini", apiKey: "AIza", model: "gemini-3.1-pro-preview" });
+  assert.deepEqual(activeModel(g), { provider: "gemini", apiKey: "AIza", model: "gemini-3.1-pro-preview", ready: true, missing: null });
   assert.equal(activeModel(normalizeSettings({ provider: "gemini" })).model, "gemini-3.6-flash");
 });
 

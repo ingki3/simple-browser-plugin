@@ -3,7 +3,8 @@
 // 2) send: 사용자가 확인 화면에서 체크한 항목만, 준비할 때 고정한 제공자·모델로 보낸다(한 번만).
 // 3) offer: 모델이 고른 항목(보낸 것의 부분집합)의 저장 카드를 누를 때 만든다. 저장은 카드에서 사용자가 누를 때만.
 import { SETTINGS_KEY } from "@/lib/messages";
-import { providerAdapter } from "@/lib/providers";
+import { providerAdapter, providerTimeout } from "@/lib/providers";
+import { beginTargetGuard } from "./modelTarget";
 import { activeModel } from "@/lib/settings";
 import { sensitiveUrlReason } from "@/lib/autoApprove";
 import {
@@ -90,8 +91,9 @@ async function checkContext(job: Job): Promise<void> {
 async function prepare(job: Job): Promise<{ items: SnapshotItem[]; provider: string; model: string }> {
   await checkContext(job);
   const settings = await getSettings();
-  const { provider, apiKey, model } = activeModel(settings);
-  if (!apiKey) throw new Error("모델 API 키가 없습니다(설정에서 입력).");
+  const active = activeModel(settings);
+  const { provider, model } = active;
+  if (!active.ready) throw new Error(active.missing === "key" ? "모델 API 키가 없습니다(설정에서 입력)." : "로컬 서버 주소와 모델을 넣어 주세요(설정에서 입력).");
   const gen = settingsGen;
   const raw = await chrome.history.search({ text: "", startTime: Date.now() - HISTORY_DAYS * DAY_MS, maxResults: HISTORY_MAX_RESULTS });
   const saved = await listPages();
@@ -140,8 +142,9 @@ async function send(job: Job, indices: unknown): Promise<Array<{ i: number; name
     if (job.gen !== settingsGen) throw new Error("설정이 바뀌었습니다. 다시 찾아 주세요.");
     const settings = await getSettings();
     stillSending();
-    const { provider, apiKey, model } = activeModel(settings);
-    if (provider !== job.provider || model !== job.model || !apiKey) throw new Error("설정이 바뀌었습니다. 다시 찾아 주세요.");
+    const active = activeModel(settings);
+    const { provider, model } = active;
+    if (provider !== job.provider || model !== job.model || !active.ready) throw new Error("설정이 바뀌었습니다. 다시 찾아 주세요.");
     const data = snapshot.filter((s) => sent.has(s.i));
     const prompt = [
       "사용자의 브라우저 방문 기록에서 고른 페이지 목록이다. 다음에 다른 값으로도 다시 쓸 만한 페이지(검색·조회·목록·지도·가격 비교 등)를 골라 저장 링크 초안을 만든다. JSON 하나로만 답한다.",
@@ -158,11 +161,14 @@ async function send(job: Job, indices: unknown): Promise<Array<{ i: number; name
     // 보내기 직전: 그 사이 취소·화면 닫기·설정 변경이 없었는지.
     stillSending();
     if (job.gen !== settingsGen) throw new Error("설정이 바뀌었습니다. 다시 찾아 주세요.");
-    const timer = setTimeout(() => controller.abort(), PICK_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), providerTimeout(provider, PICK_TIMEOUT_MS));
+    // 고정한 대상(#193): 확인 다음 줄에서 바로 보내고, 받은 직후 다시 본다.
+    const guard = beginTargetGuard(active, controller.signal);
     let text: string;
     try {
+      await guard.verify();
       text = await providerAdapter(provider).complete(
-        apiKey,
+        active,
         {
           model,
           messages: [{ role: "user", content: masked }],
@@ -171,10 +177,12 @@ async function send(job: Job, indices: unknown): Promise<Array<{ i: number; name
           maxTokens: 3000,
           responseFormat: { type: "json_object" },
         },
-        controller.signal,
+        guard.signal,
       );
+      guard.assert();
     } finally {
       clearTimeout(timer);
+      guard.end();
     }
     if (job.state !== "sending") throw new Error("취소했습니다.");
     const picks = parsePicks(text, sent, snapshot, (i) => paramCount(job.groups?.[i]?.url ?? ""));

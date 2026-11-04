@@ -20,6 +20,8 @@ import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { OPENAI_DEFAULT_MODEL, OPENAI_MODEL_SUGGESTIONS } from "@/lib/providers/openai";
 import { GEMINI_DEFAULT_MODEL, GEMINI_MODEL_SUGGESTIONS } from "@/lib/providers/gemini";
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_MODEL_SUGGESTIONS } from "@/lib/providers/anthropic";
+import { localEndpoint } from "@/lib/providers/local";
+import { LOCAL_LLM_DOC_URL } from "@/lib/projectLinks";
 
 // OpenRouter 밖에서 직접 연결하는 제공자의 설정 칸(#97).
 const DIRECT_PROVIDERS = {
@@ -58,7 +60,7 @@ import {
 } from "@/lib/messages";
 import { useSettings } from "../sidepanel/hooks/useSettings";
 import { FieldHelp } from "../sidepanel/components/FieldHelp";
-import { mergeSettingsPatch } from "@/lib/settings";
+import { activeModel, mergeSettingsPatch } from "@/lib/settings";
 import { mergeVoicePatch } from "@/lib/voice";
 import { VoiceInputField } from "../sidepanel/components/VoiceInputField";
 
@@ -89,6 +91,7 @@ function mergePatch(a: SettingsPatch, b: SettingsPatch): SettingsPatch {
     ...b,
     ...(a.apiKeys || b.apiKeys ? { apiKeys: { ...a.apiKeys, ...b.apiKeys } } : {}),
     ...(a.providerModels || b.providerModels ? { providerModels: { ...a.providerModels, ...b.providerModels } } : {}),
+    ...(a.localServer || b.localServer ? { localServer: { ...a.localServer, ...b.localServer } } : {}),
     ...(a.voiceInput || b.voiceInput ? { voiceInput: mergeVoicePatch(a.voiceInput, b.voiceInput) } : {}),
   };
 }
@@ -118,7 +121,9 @@ export function SettingsPage() {
   }, []);
   const { settings, loaded, savePatch } = useSettings();
   const [draft, setDraft] = useState(settings);
-  const direct = draft.provider === "openrouter" ? null : DIRECT_PROVIDERS[draft.provider];
+  // 로컬·호환 서버(#193)는 주소·모델을 따로 적고 키는 선택이다.
+  const isLocal = draft.provider === "local";
+  const direct = draft.provider === "openrouter" || draft.provider === "local" ? null : DIRECT_PROVIDERS[draft.provider];
   const [showKey, setShowKey] = useState(false);
   // 바꾸면 바로 저장(#99): 고르는 항목은 곧바로, 글자 칸은 입력이 멈추면(SAVE_DELAY_MS) 저장한다. 닫을 때 남은 저장을 마친다.
   // API 키만 "저장" 버튼으로 확정한다(keyDraft).
@@ -132,7 +137,7 @@ export function SettingsPage() {
   const [syncTick, setSyncTick] = useState(0);
   const [savedAt, setSavedAt] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const savedKey = direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
+  const savedKey = isLocal ? (settings.apiKeys.local ?? "") : direct ? (settings.apiKeys[direct.id] ?? "") : settings.openRouterApiKey;
   // 키 칸은 저장 값과 편집 초안을 나눈다(#127): 고치지 않은 칸은 다른 곳에서 저장한 키를 따라가고, 고치는 중이면 초안을 두고 알린다.
   // 제공자를 바꾸면 그 제공자의 저장된 키로 새로 시작한다.
   const keyField = useSyncedDraft(savedKey, draft.provider);
@@ -142,18 +147,14 @@ export function SettingsPage() {
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [diag, setDiag] = useState<string | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
-  // OpenRouter 모델을 목록 밖에서 직접 입력하는 중인지. 저장된 모델이 목록에 없으면 처음부터 입력 칸을 보인다.
-  const [customModel, setCustomModel] = useState(false);
-  useEffect(() => {
-    if (loaded && !(MODEL_IDS as readonly string[]).includes(settings.model)) setCustomModel(true);
-  }, [loaded, settings.model]);
-  // 번역할 언어를 목록 밖에서 직접 입력하는 중인지. 저장된 값이 목록에 없으면 입력 칸을 보인다.
-  const [customLang, setCustomLang] = useState(false);
-  useEffect(() => {
-    if (loaded && !TRANSLATION_LANGS.some(([code]) => code === settings.translationTargetLang)) setCustomLang(true);
-  }, [loaded, settings.translationTargetLang]);
+  // OpenRouter 모델·번역할 언어를 목록 밖에서 직접 입력하는지: 사용자가 "직접 입력"을 골랐거나, 화면 값(draft)이 목록 밖이면(저장된 값,
+  // 저장 실패로 되돌아온 값 포함 — #132) 입력 칸을 보인다. 목록 값을 고르면 고른 표시를 끈다.
+  const [pickedCustomModel, setCustomModel] = useState(false);
+  const customModel = pickedCustomModel || (loaded && !(MODEL_IDS as readonly string[]).includes(draft.model));
+  const [pickedCustomLang, setCustomLang] = useState(false);
+  const customLang = pickedCustomLang || (loaded && !TRANSLATION_LANGS.some(([code]) => code === draft.translationTargetLang));
   // 연결 확인(#129): 저장한 키·모델로 짧은 요청 한 번.
-  const [check, setCheck] = useState<{ state: "busy" | "ok" | "error"; text: string } | null>(null);
+  const [check, setCheck] = useState<{ state: "busy" | "ok" | "error"; text: string; detail?: string } | null>(null);
 
   // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 이 화면의 저장 중인 변경과 아직 보내지 않은 변경을 그 위에 둔다.
   useEffect(() => {
@@ -233,30 +234,60 @@ export function SettingsPage() {
   const checkConnection = async () => {
     const seq = ++checkSeq.current;
     setCheck({ state: "busy", text: "확인 중…" });
-    const show = (next: { state: "ok" | "error"; text: string }) => {
+    const show = (next: { state: "ok" | "error"; text: string; detail?: string }) => {
       if (seq === checkSeq.current) setCheck(next);
     };
     try {
       // 입력이 멈추기를 기다리는 모델 변경도 먼저 저장해, 화면에 보이는 모델로 확인한다.
       await flush();
       const res = (await chrome.runtime.sendMessage({ kind: "check_connection" })) as
-        | { ok: boolean; data?: { model: string }; error?: string }
+        | { ok: boolean; data?: { model: string }; error?: string; detail?: string }
         | undefined;
       if (res?.ok && res.data) show({ state: "ok", text: `✓ 연결됨 · ${res.data.model}` });
-      else show({ state: "error", text: res?.error ?? "응답이 없습니다." });
+      else show({ state: "error", text: res?.error ?? "응답이 없습니다.", ...(typeof res?.detail === "string" && res.detail ? { detail: res.detail } : {}) });
     } catch (err) {
       show({ state: "error", text: err instanceof Error ? err.message : String(err) });
     }
   };
-  const checkedModel = draft.provider === "openrouter" ? draft.model : (draft.providerModels[draft.provider] ?? "");
+  const checkedModel =
+    draft.provider === "openrouter" ? draft.model : draft.provider === "local" ? draft.localServer.model : (draft.providerModels[draft.provider] ?? "");
+  // 대상(제공자·키·모델·로컬 서버 주소)이 바뀌면 늦게 온 확인 결과를 버린다. 모델 목록은 서버(제공자·키·주소)가 바뀔 때만
+  // 비운다 — 모델 이름을 입력하며 후보를 좁힐 수 있게(#193).
   useEffect(() => {
     checkSeq.current++;
     setCheck(null);
-  }, [draft.provider, savedKey, checkedModel]);
+  }, [draft.provider, savedKey, checkedModel, draft.localServer.baseUrl]);
+  useEffect(() => {
+    modelsSeq.current++;
+    setLocalModels(null);
+  }, [draft.provider, savedKey, draft.localServer.baseUrl]);
+  // 로컬 서버의 모델 목록(#193): GET {주소}/models. 마지막 요청의 결과만 쓴다.
+  const modelsSeq = useRef(0);
+  const [localModels, setLocalModels] = useState<{ state: "busy" | "ok" | "error"; ids: string[]; text: string } | null>(null);
+  const loadLocalModels = async () => {
+    const seq = ++modelsSeq.current;
+    setLocalModels({ state: "busy", ids: [], text: "불러오는 중…" });
+    // 입력이 멈추기를 기다리는 주소 변경도 먼저 저장해, 화면에 보이는 주소로 묻는다. 저장이 실패하면 묻지 않는다(옛 값으로 묻지 않게).
+    const saved = await flush();
+    if (seq !== modelsSeq.current) return;
+    if (!saved) {
+      setLocalModels({ state: "error", ids: [], text: "설정을 저장하지 못해 목록을 불러오지 않았습니다. 다시 시도해 주세요." });
+      return;
+    }
+    try {
+      const res = (await chrome.runtime.sendMessage({ kind: "local_models" })) as { ok: boolean; data?: string[]; error?: string } | undefined;
+      if (seq !== modelsSeq.current) return;
+      if (res?.ok && res.data) setLocalModels({ state: "ok", ids: res.data, text: res.data.length ? `모델 ${res.data.length}개` : "서버가 모델을 알려 주지 않았습니다. 이름을 직접 넣어 주세요." });
+      else setLocalModels({ state: "error", ids: [], text: res?.error ?? "응답이 없습니다." });
+    } catch (err) {
+      if (seq === modelsSeq.current) setLocalModels({ state: "error", ids: [], text: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  const localCheck = isLocal && draft.localServer.baseUrl.trim() ? localEndpoint(draft.localServer.baseUrl) : null;
 
   const saveKey = () => {
     keyField.commit();
-    update(direct ? { apiKeys: { [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
+    update(isLocal ? { apiKeys: { local: keyDraft.trim() } } : direct ? { apiKeys: { [direct.id]: keyDraft.trim() } } : { openRouterApiKey: keyDraft.trim() });
   };
 
   // 연결 상태는 chrome.identity에만 있다: 열 때, 화면이 다시 보일 때, 다른 화면이 연결·해제했을 때 다시 읽고, 늦게 온 옛 응답은 버린다(#127).
@@ -410,20 +441,42 @@ export function SettingsPage() {
                 <option value="openai">OpenAI (ChatGPT API 키)</option>
                 <option value="gemini">Google Gemini (AI Studio API 키)</option>
                 <option value="anthropic">Anthropic Claude (Claude API 키)</option>
+                <option value="local">로컬·호환 서버 (Ollama·LM Studio 등)</option>
               </select>
               <FieldHelp summary="대화·페이지 내용은 고른 제공자로만 보냅니다.">
                 제공자나 모델을 바꾸면 대화를 새로 시작하고, 진행 중인 페이지 번역도 멈춥니다.
               </FieldHelp>
             </label>
 
+            {isLocal && (
+              <label className="field">
+                <span className="field-label">서버 주소</span>
+                <input
+                  type="text"
+                  className="local-base-url"
+                  value={draft.localServer.baseUrl}
+                  onChange={(e) => update({ localServer: { baseUrl: e.target.value } }, SAVE_DELAY_MS)}
+                  placeholder="http://localhost:11434/v1"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                {localCheck && !localCheck.ok && <span className="field-help error-text">{localCheck.error}</span>}
+                <FieldHelp summary="OpenAI 호환 API의 기본 주소(…/v1). 대화·페이지 내용이 이 주소의 서버로 갑니다.">
+                  http는 이 컴퓨터나 내부망 주소(localhost·127.x·10.x·172.16~31.x·192.168.x)만 쓸 수 있고, 그 밖은 https로 적습니다. 다른 컴퓨터의 서버면 그 서버가
+                  대화·페이지 내용을 받습니다. 다른 주소로 넘기는 응답(리다이렉트)은 따르지 않습니다. Ollama는 확장의 요청을 받으려면 환경 변수
+                  OLLAMA_ORIGINS에 chrome-extension://{chrome.runtime.id}를 넣고 다시 시작해야 합니다. 모델은 도구 호출(tools)을 지원해야 합니다.
+                </FieldHelp>
+              </label>
+            )}
+
             <div className="field">
-              <span className="field-label">{direct ? `${direct.label} API 키` : KO.apiKeyLabel}</span>
+              <span className="field-label">{isLocal ? "API 키 (선택)" : direct ? `${direct.label} API 키` : KO.apiKeyLabel}</span>
               <div className="key-row">
                 <input
                   type={showKey ? "text" : "password"}
                   value={keyDraft}
                   onChange={(e) => keyField.set(e.target.value)}
-                  placeholder={direct ? direct.keyPlaceholder : "sk-or-v1-..."}
+                  placeholder={isLocal ? "필요한 서버만(비워 두면 보내지 않음)" : direct ? direct.keyPlaceholder : "sk-or-v1-..."}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -443,22 +496,37 @@ export function SettingsPage() {
                 </span>
               )}
               <FieldHelp summary={keyDraft.trim() !== savedKey ? "바꾼 키는 저장을 눌러야 적용됩니다." : direct ? direct.keyHelp : "openrouter.ai/keys에서 발급합니다."}>
-                키는 이 브라우저(chrome.storage.local)에만 평문으로 저장되고, 그 제공자를 부를 때만 씁니다.
+                키는 이 브라우저(chrome.storage.local)에만 평문으로 저장되고, 그 제공자를 부를 때만 씁니다. 요청하면(등록한 반복 작업은
+                확인할 때마다) 대화, 지금 탭의 주소·제목, 페이지 내용(보이지 않는 글자가 포함될 수 있음), 필요한 파일을 이 제공자로
+                보냅니다(OpenRouter는 고른 모델의 회사로 다시 전달).
               </FieldHelp>
               <div className="provider-links">
-                <a href={PROVIDER_LINKS[draft.provider].keyUrl} target="_blank" rel="noopener noreferrer">키 발급</a>
-                <a href={PROVIDER_LINKS[draft.provider].pricingUrl} target="_blank" rel="noopener noreferrer">요금</a>
-                <a href={PROVIDER_LINKS[draft.provider].usageUrl} target="_blank" rel="noopener noreferrer">사용량</a>
+                {isLocal ? (
+                  <a href={LOCAL_LLM_DOC_URL} target="_blank" rel="noopener noreferrer">로컬 서버 설치 안내</a>
+                ) : (
+                  <>
+                    <a href={PROVIDER_LINKS[draft.provider].keyUrl} target="_blank" rel="noopener noreferrer">키 발급</a>
+                    <a href={PROVIDER_LINKS[draft.provider].pricingUrl} target="_blank" rel="noopener noreferrer">요금</a>
+                    <a href={PROVIDER_LINKS[draft.provider].usageUrl} target="_blank" rel="noopener noreferrer">사용량</a>
+                  </>
+                )}
                 <button
                   type="button"
                   className="ghost-btn"
-                  disabled={!savedKey || keyDraft.trim() !== savedKey || check?.state === "busy"}
+                  disabled={(isLocal ? !activeModel(settings).ready : !savedKey) || keyDraft.trim() !== savedKey || check?.state === "busy"}
                   onClick={() => void checkConnection()}
                 >
                   연결 확인
                 </button>
               </div>
               {check && <span className={`field-help${check.state === "error" ? " error-text" : ""}`}>{check.text}</span>}
+              {/* 제공자 원문(#132): 안내 문구로 바꾼 경우만, 접어서. 키는 백그라운드가 이미 가렸다. */}
+              {check?.detail && (
+                <details className="check-detail">
+                  <summary>자세히</summary>
+                  <pre>{check.detail}</pre>
+                </details>
+              )}
               <FieldHelp summary="API는 쓴 만큼 그 서비스에 요금이 나갑니다. 앱 구독과는 따로입니다.">
                 요청마다 보낸 글자(대화·페이지 내용)와 받은 답의 양에 따라 요금이 정해집니다. 긴 페이지를 읽거나 단계가 많은 작업일수록
                 많이 듭니다. 연결 확인은 아주 짧은 요청을 한 번 보냅니다. 키를 받은 곳에서 사용 한도를 정해 두면 안심하고 쓸 수 있습니다.
@@ -467,7 +535,41 @@ export function SettingsPage() {
 
             <label className="field">
               <span className="field-label">{KO.modelLabel}</span>
-              {direct ? (
+              {isLocal ? (
+                <>
+                  <div className="key-row">
+                    <input
+                      type="text"
+                      className="local-model"
+                      list="local-models"
+                      value={draft.localServer.model}
+                      onChange={(e) => update({ localServer: { model: e.target.value } }, SAVE_DELAY_MS)}
+                      placeholder="예: qwen3:8b, llama3.1"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="ghost-btn local-models-btn"
+                      disabled={!localCheck?.ok || localModels?.state === "busy"}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void loadLocalModels();
+                      }}
+                    >
+                      목록 불러오기
+                    </button>
+                  </div>
+                  <datalist id="local-models">
+                    {(localModels?.ids ?? []).map((id) => (
+                      <option key={id} value={id} />
+                    ))}
+                  </datalist>
+                  {localModels && localModels.state !== "busy" && (
+                    <span className={`field-help${localModels.state === "error" ? " error-text" : ""}`}>{localModels.text}</span>
+                  )}
+                  <FieldHelp summary="서버에 올린 모델 이름. 목록을 주지 않는 서버는 직접 입력하세요. 도구 호출을 지원해야 합니다." />
+                </>
+              ) : direct ? (
                 <>
                   <input
                     type="text"
@@ -508,7 +610,10 @@ export function SettingsPage() {
                     <input
                       type="text"
                       value={draft.model}
-                      onChange={(e) => update({ model: e.target.value }, SAVE_DELAY_MS)}
+                      onChange={(e) => {
+                        setCustomModel(true);
+                        update({ model: e.target.value }, SAVE_DELAY_MS);
+                      }}
                       placeholder="provider/model (예: anthropic/claude-sonnet-5.5)"
                       spellCheck={false}
                     />
@@ -614,6 +719,7 @@ export function SettingsPage() {
           <section className="settings-section" data-section="sites" hidden={section !== "sites"}>
             <h2>사이트</h2>
             <ManualSitesField sites={settings.manualSites} />
+            <ManualSitesField sites={settings.remoteSites} kind="remote" />
             <h3 className="settings-sub">자동 로그인 (선택 · KeePassXC 필요)</h3>
             <LoginSitesField sites={settings.loginSites} />
           </section>
@@ -664,7 +770,11 @@ export function SettingsPage() {
                 <input
                   type="text"
                   value={draft.translationTargetLang}
-                  onChange={(e) => update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS)}
+                  onChange={(e) => {
+                    // 자동으로 열린 칸에서도 고치기 시작하면 직접 입력으로 둔다(중간 값이 목록 값과 같아져도 칸이 닫히지 않게).
+                    setCustomLang(true);
+                    update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS);
+                  }}
                   placeholder="언어 코드(예: nl, pl, ar)"
                 />
               )}

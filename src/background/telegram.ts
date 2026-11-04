@@ -25,6 +25,7 @@ import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { onRepeatTriggered } from "./repeatTasks";
 import { debugLog } from "./debug";
+import { beginKeepalive, endKeepalive } from "./keepalive";
 
 const STORE_KEY = "telegram";
 const ALARM = "telegram-poll";
@@ -82,6 +83,9 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+// 연결된 채팅이 있는지(위임 질문의 canAsk용 — 저장할 때와 시작할 때 맞춘다).
+let linkedChat = false;
+
 async function load(): Promise<TelegramState> {
   const raw = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY];
   return raw && typeof raw === "object" ? { ...EMPTY, ...(raw as Partial<TelegramState>) } : { ...EMPTY };
@@ -95,6 +99,7 @@ function update(fn: (s: TelegramState) => TelegramState | null, epoch?: number):
     const next = fn(cur);
     if (!next) return null;
     await chrome.storage.local.set({ [STORE_KEY]: next });
+    linkedChat = !!next.token && next.chatId !== null;
     return next;
   });
 }
@@ -348,26 +353,31 @@ async function handleUpdate(s: TelegramState, u: unknown, conn: AbortSignal): Pr
       if (!next) return;
       debugLog("telegram:paired");
       await ensureAlarm();
-      await sendText(next, "간편 브라우저 도우미와 연결되었습니다. 할 일을 보내면 브라우저에서 처리하고 답을 보냅니다. /help로 사용법을 볼 수 있습니다.").catch(() => {});
+      await sendText(next, "간편 브라우저 도우미와 연결되었습니다. 할 일을 보내면 브라우저에서 처리하고 답을 보냅니다. /help로 사용법을 볼 수 있습니다.", conn).catch(() => {});
       return;
     }
     case "command":
       if (staleMessage(a.at, s.connectedAt, now)) return;
-      if (a.command === "help") await sendText(s, HELP).catch(() => {});
-      else if (a.command === "stop") await sendText(s, stopRun() ? "멈췄습니다." : "진행 중인 요청이 없습니다.").catch(() => {});
+      if (a.command === "help") await sendText(s, HELP, conn).catch(() => {});
+      else if (a.command === "stop") await sendText(s, stopRun() ? "멈췄습니다." : "진행 중인 요청이 없습니다.", conn).catch(() => {});
       else {
         stopRun();
         runner.drop();
-        await sendText(s, "새 대화를 시작합니다.").catch(() => {});
+        await sendText(s, "새 대화를 시작합니다.", conn).catch(() => {});
       }
       return;
     case "text":
       if (staleMessage(a.at, s.connectedAt, now)) {
-        await sendText(s, "오래된 요청이라 실행하지 않았습니다. 다시 보내 주세요.").catch(() => {});
+        await sendText(s, "오래된 요청이라 실행하지 않았습니다. 다시 보내 주세요.", conn).catch(() => {});
         return;
       }
       if (runner.busy || sending > 0) {
-        await sendText(s, "앞의 요청을 처리하고 있습니다. /stop으로 멈출 수 있습니다.").catch(() => {});
+        await sendText(s, "앞의 요청을 처리하고 있습니다. /stop으로 멈출 수 있습니다.", conn).catch(() => {});
+        return;
+      }
+      // MCP 요청의 승인 질문을 기다리는 중이면 새 요청을 받지 않는다(질문 칸은 한 번에 하나, #192).
+      if (pendingAsk?.delegate) {
+        await sendText(s, "다른 요청(MCP)의 승인 질문을 기다리고 있습니다. 그 질문에 답한 뒤 다시 보내 주세요.", conn).catch(() => {});
         return;
       }
       if (conn.aborted) return;
@@ -440,6 +450,8 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
   sendAbort = sendCtl;
   const out = AbortSignal.any([conn, run.signal, sendCtl.signal]);
   sending++;
+  // 답을 보내는 동안(가림·나눠 보내기·429 재시도)에도 서비스 워커를 붙잡아 둔다(#145). 아래 finally에서 놓는다.
+  beginKeepalive();
   void (async () => {
     const at = Date.now();
     let status: TelegramRecent["status"] = "failed";
@@ -477,6 +489,7 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
       runner.stop();
     } finally {
       sending--;
+      endKeepalive();
       if (sendAbort === sendCtl) sendAbort = null;
       await update((st) => ({ ...st, recent: st.recent.map((r) => (r.at === at && r.status === "running" ? { ...r, status } : r)) }), s.epoch).catch(() => {});
     }
@@ -489,6 +502,8 @@ function startRun(s: TelegramState, text: string, conn: AbortSignal): void {
 interface PendingAsk {
   askId: string;
   epoch: number;
+  // MCP 작업의 질문을 위임받아 묻는 중인지(#192). 그동안 새 텔레그램 요청은 받지 않는다(질문 칸은 한 번에 하나).
+  delegate?: boolean;
   // 절대 만료 시각. 타이머는 깨우기 용도이고 판정은 늘 이 시각으로 한다(절전 뒤 늦은 타이머·버튼).
   expiresAt: number;
   token: string;
@@ -529,6 +544,48 @@ function closeAskMessage(p: PendingAsk): void {
   }).catch(() => {});
 }
 
+// ---- MCP 작업의 질문 위임(#192) ----
+
+// 텔레그램이 연결돼 있고 "텔레그램으로 묻기"가 켜져 있으며, 지금 텔레그램 요청이 실행 중이 아니고 열린 질문이 없는지.
+// 상태는 저장소를 읽어 확인한다(연결 끊기·토큰 바꾸기를 놓치지 않게).
+async function delegateReady(): Promise<TelegramState | null> {
+  await recovered;
+  // 저장 큐를 거쳐 읽는다 — 연결 끊기·토큰 바꾸기는 새 연결 신호를 만든 같은 순간에 저장을 큐에 넣으므로, 그 뒤에 읽으면
+  // 옛 토큰·채팅이 아니라 바뀐 상태를 본다(#192 리뷰).
+  const s = await serial(() => load());
+  if (!askEnabled || !s.token || s.chatId === null) return null;
+  if (runner.busy || sending > 0 || pendingAsk) return null;
+  return s;
+}
+
+// MCP 작업의 승인 질문을 텔레그램 버튼으로 묻는다. until: MCP 작업 기한에 맞춘 절대 만료 시각. 연결 세대에 묶여(끊기·토큰 바꾸기·묻기 끄기면
+// 거둠) 열려 있는 동안 받기를 이어서 돌린다(1분 알람을 기다리지 않게). 등록 직전에 다시 확인하고, 그 사이 다른 질문·요청이 있으면 묻지 않는다.
+export async function telegramAskDelegated(q: RemoteQuestion, signal: AbortSignal, until: number): Promise<RemoteAskResult> {
+  // 상태를 읽기 전의 연결 세대를 붙잡는다 — 읽는 사이 연결을 끊거나 토큰을 바꾸면(세대가 바뀜) 옛 채팅으로 묻지 않는다(#192 리뷰).
+  const conn = connAbort.signal;
+  const s = await delegateReady();
+  if (!s || conn.aborted || conn !== connAbort.signal) return "unavailable";
+  if (signal.aborted) return "aborted";
+  // 여기서 등록까지 await가 없다.
+  const asking = askByTelegram(s, conn, q, signal, { until, delegate: true });
+  // 질문이 열려 있는 동안 받기를 이어서 돌린다.
+  void (async () => {
+    let failures = 0;
+    while (pendingAsk?.delegate && !signal.aborted && !conn.aborted) {
+      const r = await receive(FAST_POLL_S);
+      if (r === "stopped") break;
+      failures = r === "error" ? failures + 1 : 0;
+      if (failures) await new Promise((res) => setTimeout(res, Math.min(20_000, backoffMs(failures))));
+    }
+  })();
+  return asking;
+}
+
+// 지금 위임 질문을 받을 수 있는지(MCP approver의 canAsk — 동기). 실제 확인은 telegramAskDelegated가 다시 한다.
+export function telegramCanDelegate(): boolean {
+  return askEnabled && !connAbort.signal.aborted && linkedChat;
+}
+
 function approverFor(s: TelegramState, conn: AbortSignal): RemoteApprover {
   return {
     canAsk: () => askEnabled && !conn.aborted && s.chatId !== null,
@@ -536,11 +593,22 @@ function approverFor(s: TelegramState, conn: AbortSignal): RemoteApprover {
   };
 }
 
-async function askByTelegram(s: TelegramState, conn: AbortSignal, q: RemoteQuestion, signal: AbortSignal): Promise<RemoteAskResult> {
+async function askByTelegram(
+  s: TelegramState,
+  conn: AbortSignal,
+  q: RemoteQuestion,
+  signal: AbortSignal,
+  opts: { until?: number; delegate?: boolean } = {},
+): Promise<RemoteAskResult> {
   if (signal.aborted || conn.aborted) return "aborted";
   if (!askEnabled || s.chatId === null) return "unavailable";
-  // 한 번에 하나(앞 질문이 남았으면 거둔다).
-  if (pendingAsk) settleAsk(pendingAsk, "aborted", "withdrawn");
+  const expiresAt = Math.min(Date.now() + TELEGRAM_ASK_TTL_MS, opts.until ?? Infinity);
+  if (expiresAt <= Date.now()) return "unavailable";
+  // 한 번에 하나(앞 질문이 남았으면 거둔다). 위임 질문은 다른 질문이 있으면 묻지 않는다(부르는 쪽이 이미 확인했지만 한 번 더).
+  if (pendingAsk) {
+    if (opts.delegate) return "unavailable";
+    settleAsk(pendingAsk, "aborted", "withdrawn");
+  }
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const askId = newAskId(bytes);
@@ -550,7 +618,8 @@ async function askByTelegram(s: TelegramState, conn: AbortSignal, q: RemoteQuest
   const p: PendingAsk = {
     askId,
     epoch: s.epoch,
-    expiresAt: Date.now() + TELEGRAM_ASK_TTL_MS,
+    ...(opts.delegate ? { delegate: true } : {}),
+    expiresAt,
     token: s.token,
     chatId: s.chatId,
     text: q.text,
@@ -561,7 +630,7 @@ async function askByTelegram(s: TelegramState, conn: AbortSignal, q: RemoteQuest
     timer: null,
   };
   pendingAsk = p;
-  p.timer = setTimeout(() => settleAsk(p, "expired", "expired"), TELEGRAM_ASK_TTL_MS);
+  p.timer = setTimeout(() => settleAsk(p, "expired", "expired"), expiresAt - Date.now());
   const onAbort = () => settleAsk(p, "aborted", "withdrawn");
   signal.addEventListener("abort", onAbort, { once: true });
   conn.addEventListener("abort", onAbort, { once: true });
@@ -641,6 +710,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 const recovered = (async () => {
   try {
     const s = await load();
+    // 위임 질문(#192)의 canAsk가 저장된 설정·연결을 따르게.
+    askEnabled = s.askApproval;
+    linkedChat = !!s.token && s.chatId !== null;
     if (s.recent.some((r) => r.status === "running")) {
       const next = await update((cur) => ({ ...cur, recent: cur.recent.map((r) => (r.status === "running" ? { ...r, status: "interrupted" as const } : r)) }));
       if (next && next.chatId !== null) await sendText(next, "브라우저가 다시 시작되어 진행 중이던 요청이 중단되었습니다. 필요하면 다시 보내 주세요.").catch(() => {});

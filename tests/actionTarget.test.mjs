@@ -137,6 +137,26 @@ test("fillCard: 10개 넘으면 나머지는 개수만", () => {
   assert.equal(card.details.split("\n").length, 11);
 });
 
+test("fillCard 전체 보기(#132): 잘린 요약이면 모든 칸·값 전체, 비밀번호는 여전히 가림, 잘린 것이 없으면 없음", () => {
+  const field = { ...link, tag: "input", role: "textbox", href: "", fieldType: "text" };
+  const long = "가".repeat(120);
+  const items = [
+    ...Array.from({ length: 11 }, (_, i) => ({ info: { ...field, name: `칸${i}` }, value: i === 0 ? long : "v" })),
+    { info: { ...field, name: "비밀번호", fieldType: "password", sensitive: "password" }, value: "hunter22-very-long-secret-value-over-eighty-characters-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
+  ];
+  const card = fillCard(items);
+  assert.ok(!card.details.includes(long), "요약은 80자에서 자름");
+  assert.equal(card.fullDetails.split("\n").length, 12, "모든 칸");
+  assert.ok(card.fullDetails.includes(`• 칸0 (text, 본문): ${long}`), "값 전체");
+  assert.ok(!card.fullDetails.includes("hunter22"), "비밀번호 값 없음");
+  assert.match(card.fullDetails, /비밀번호 .*●{8} \(\d+자\) ⚠ 비밀번호 칸/);
+  // 잘린 것이 없으면 전체 보기를 만들지 않는다(비밀번호가 길어도 가린 줄은 같다).
+  assert.equal(fillCard([{ info: { ...field, name: "이름" }, value: "홍길동" }, items[11]]).fullDetails, undefined);
+  // 체크·해제는 글자 길이와 관계없이 같은 줄.
+  const box = { ...field, fieldType: "checkbox", role: "checkbox", name: "동의" };
+  assert.equal(fillCard([{ info: box, value: "true" }]).fullDetails, undefined);
+});
+
 test("navKind", () => {
   assert.equal(navKind("https://a.test/x", "https://a.test/x"), "none");
   assert.equal(navKind("https://a.test/x", "https://a.test/x#top"), "fragment");
@@ -220,6 +240,20 @@ test("sameApprovedInFlight: 원문 행 글자가 그대로면 모델용 행 문�
   // 그 밖의 항목은 그대로 비교한다.
   assert.equal(sameApprovedInFlight({ ...field, name: "비밀번호" }, field), false);
   assert.equal(sameApprovedInFlight({ ...field, list: { index: 2, count: 5, semantic: true } }, { ...field, list: { index: 3, count: 5, semantic: true } }), false);
+});
+
+test("잘림 표시(#192): 실행 전 비교는 잘림만 달라도 다른 대상, 입력 도중은 덧붙음으로 생긴 잘림(false→true)만 허용", () => {
+  const field = { ...rowBox, tag: "input", fieldType: "text", proxy: undefined, context: "행 원문", modelContext: "행" };
+  // 표제가 80→81자가 되어 모델용 문맥은 같고 잘림만 바뀜 → 실행 전 비교는 다름.
+  assert.equal(sameApproved({ ...field, modelContextClipped: true }, field), false);
+  assert.equal(sameApproved({ ...field, modelNameClipped: true }, field), false);
+  // 입력 도중: 글자가 덧붙어(onlyAdded) 한도를 넘게 된 것은 같은 대상.
+  assert.equal(sameApprovedInFlight({ ...field, modelContext: "행 안내 글", modelContextClipped: true }, field), true);
+  // 잘렸던 것이 풀리거나(true→false) 이름 잘림이 바뀌면 다른 대상.
+  assert.equal(sameApprovedInFlight({ ...field }, { ...field, modelContextClipped: true }), false);
+  assert.equal(sameApprovedInFlight({ ...field, modelNameClipped: true }, field), false);
+  // 원문이 바뀌면서 잘린 것은 거부.
+  assert.equal(sameApprovedInFlight({ ...field, context: "다른 원문", modelContext: "행 안내", modelContextClipped: true }, field), false);
 });
 
 test("parseCheckedRequest: 참·거짓 외의 값은 지정 오류", () => {

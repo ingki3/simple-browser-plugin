@@ -2,8 +2,8 @@ import { keepassxcAssociate, keepassxcForget, keepassxcStatus } from "./keepassx
 import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
-import { applyLoginSiteOp, applyManualSiteOp, applySettingsPatch, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
-import { parseLoginSiteOp, parseManualSiteOp } from "@/lib/settingsOps";
+import { applyLoginSiteOp, applyManualSiteOp, applyRemoteSiteOp, applySettingsPatch, getSettings, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
+import { parseLoginSiteOp, parseManualSiteOp, parseRemoteSiteOp } from "@/lib/settingsOps";
 import { openSettings } from "./settingsTab";
 import { deletePages, draftLink, listPages, rememberCurrentPage, rememberedFor, savePage, updateLink } from "./savedPagesStore";
 import { panelTarget } from "./panelTarget";
@@ -16,13 +16,16 @@ import { translateBatch } from "./translator";
 import { checkConnection } from "./connectionCheck";
 import { friendlyError } from "@/lib/friendlyError";
 import { registerDebugSink, debugLog } from "./debug";
+import { listLocalModels, setLocalNote } from "@/lib/providers/local";
+
+// 로컬 서버 어댑터의 메모(뺀 선택 필드 등, #193)를 디버그 타임라인으로.
+setLocalNote((tag, detail) => debugLog(tag, detail));
 import {
   continueRepeatTask,
   deleteRepeatTask,
   listRepeatTasks,
   pauseRepeatTask,
   registerRepeatSink,
-  releaseRepeatTask,
   resumeRepeatTask,
   runRepeatNow,
 } from "./repeatTasks";
@@ -134,24 +137,18 @@ chrome.runtime.onConnect.addListener((port) => {
         const conversationId = String(msg.conversationId);
         const taskId = String(msg.taskId);
         const seq = actionSeq;
-        continueRepeatTask(taskId)
-          .then(({ text, tabId, site }) => {
-            // 기다리는 사이 다른 대화 동작이 있었거나 패널이 닫혔으면 시작하지 않고, 다시 누를 수 있게 되돌린다.
-            if (seq !== actionSeq || disconnected) {
-              void releaseRepeatTask(taskId);
-              return;
-            }
-            try {
-              port.postMessage({ kind: "repeat_started", text });
-            } catch {
-              void releaseRepeatTask(taskId);
-              return;
-            }
+        // 기다리는 사이 다른 대화 동작이 있었거나 패널이 닫혔으면 시작하지 않는다(연 탭은 닫고 다시 누를 수 있게 되돌린다, #145).
+        continueRepeatTask(taskId, {
+          cancelled: () => seq !== actionSeq || disconnected,
+          handOver: (text, tabId, site) => {
+            // 패널에 알리지 못하면 던진다(탭을 닫고 되돌림).
+            port.postMessage({ kind: "repeat_started", text });
             agent?.abort();
             agent = new ChatAgent(port);
             activeConversationId = conversationId;
             agent.sendUserTurn(text, { tabId, site }).catch((err) => console.error("[sendUserTurn]", err));
-          })
+          },
+        })
           .catch((err: unknown) => {
             // 그 사이 사용자가 다른 대화 동작을 했으면 알리지 않는다(새 대화의 화면 상태를 덮지 않게).
             if (seq !== actionSeq || disconnected) return;
@@ -321,7 +318,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   }
 
   // 직접 조작할 사이트·자동 로그인 목록의 항목 하나 바꾸기(#127). 이 확장의 화면에서만 받고, 값은 여기서 다시 검사한다.
-  if (m.kind === "manual_site_op" || m.kind === "login_site_op") {
+  if (m.kind === "manual_site_op" || m.kind === "login_site_op" || m.kind === "remote_site_op") {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
@@ -333,6 +330,11 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             const op = parseManualSiteOp(raw);
             return op ? applyManualSiteOp(op) : Promise.reject(new Error("잘못된 사이트"));
           })()
+        : m.kind === "remote_site_op"
+          ? (() => {
+              const op = parseRemoteSiteOp(raw);
+              return op ? applyRemoteSiteOp(op) : Promise.reject(new Error("잘못된 사이트"));
+            })()
         : (() => {
             const op = parseLoginSiteOp(raw);
             return op ? applyLoginSiteOp(op) : Promise.reject(new Error("잘못된 자동 로그인 항목"));
@@ -357,6 +359,28 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   }
 
   // 설정의 연결 확인(#129). 이 확장의 화면에서만 받는다.
+  // 로컬 서버의 모델 목록(#193): 저장한 주소·키로 GET {주소}/models. 이 확장의 화면에서만 받는다.
+  if (m.kind === "local_models") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    void (async () => {
+      const s = await getSettings();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const ids = await listLocalModels({ apiKey: s.apiKeys.local ?? "", baseUrl: s.localServer.baseUrl }, controller.signal);
+        sendResponse({ ok: true, data: ids });
+      } catch (err) {
+        sendResponse({ ok: false, error: controller.signal.aborted ? "10초 안에 응답이 없습니다." : friendlyError(err).message });
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    return true;
+  }
+
   if (m.kind === "check_connection") {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
@@ -364,7 +388,11 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     }
     checkConnection()
       .then((data) => sendResponse({ ok: true, data }))
-      .catch((err: unknown) => sendResponse({ ok: false, error: friendlyError(err).message }));
+      .catch((err: unknown) => {
+        // 원문은 '자세히'로(#132). 키는 checkConnection이 이미 그 호출의 키로 가렸다.
+        const f = friendlyError(err, { check: true });
+        sendResponse({ ok: false, error: f.message, ...(f.detail ? { detail: f.detail } : {}) });
+      });
     return true;
   }
 
@@ -456,7 +484,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
       return false;
     }
-    const p = msg as { enabled?: unknown; port?: unknown; askApproval?: unknown };
+    const p = msg as { enabled?: unknown; port?: unknown; askApproval?: unknown; askViaTelegram?: unknown };
     const job: Promise<unknown> =
       m.kind === "mcp_secret"
         ? mcpSecret()
@@ -466,6 +494,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             ? mcpSet({
                 ...(typeof p.enabled === "boolean" ? { enabled: p.enabled } : {}),
                 ...(typeof p.port === "number" ? { port: p.port } : {}),
+                ...(typeof p.askViaTelegram === "boolean" ? { askViaTelegram: p.askViaTelegram } : {}),
                 ...(typeof p.askApproval === "boolean" ? { askApproval: p.askApproval } : {}),
               })
             : mcpStatus();
@@ -492,7 +521,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
 
   if (m.kind === "google_connect") {
     debugLog("google:connect:received");
-    if (typeof chrome.identity === "undefined") {
+    // 클라이언트 ID 없이 빌드하면 identity 권한도 없다(정상) — 그때는 connectGoogle이 "직접 빌드 필요"를 알린다.
+    const hasClientId = !!(chrome.runtime.getManifest() as { oauth2?: { client_id?: string } }).oauth2?.client_id;
+    if (hasClientId && typeof chrome.identity === "undefined") {
       const msg =
         "chrome.identity API를 사용할 수 없습니다. 확장에 'identity' 권한이 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 '삭제' 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.";
       debugLog("google:connect:no_identity", msg, "error");
@@ -587,12 +618,13 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   }
 
   if (m.kind === "translate_text_batch") {
-    const payload = msg as { kind: "translate_text_batch"; texts: string[]; targetLang: string };
+    const payload = msg as { kind: "translate_text_batch"; texts: string[]; targetLang: string; session?: unknown };
     if (!Array.isArray(payload.texts) || typeof payload.targetLang !== "string") {
       sendResponse({ ok: false, error: "invalid payload" });
       return true;
     }
-    translateBatch(payload.texts, payload.targetLang)
+    // 세션 id가 없는 옛 형식(업데이트 직후 열려 있던 옛 content script)은 보내지 않는다(#193 — 대상을 고정할 수 없다).
+    translateBatch(payload.texts, payload.targetLang, typeof payload.session === "string" ? payload.session : "")
       .then((translations) => sendResponse({ ok: true, data: translations }))
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);

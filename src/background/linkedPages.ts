@@ -70,7 +70,7 @@ export async function snapshotLinks(
   callId: string,
   turnTab: TurnTab,
   urls: string[],
-): Promise<{ choices: LinkChoice[]; defaults: string[]; rejected: string[]; grantBlock: string | null }> {
+): Promise<{ choices: LinkChoice[]; defaults: string[]; rejected: string[]; grantBlock: string | null; picks: Record<string, { url: string; note: string }> }> {
   const tabId = await resolveTurnTab(turnTab);
   const pageUrl = (await chrome.tabs.get(tabId)).url ?? "";
   // 페이지가 응답하지 않아도(alert·긴 스크립트) 카드 만들기가 무기한 기다리지 않게 시간 제한을 둔다.
@@ -86,6 +86,8 @@ export async function snapshotLinks(
   const rejected: string[] = [];
   // 이번 대화 허락(#53) 판정용: 카드의 경고와 같은 구조적 사실.
   const facts: LinkFacts[] = [];
+  // 원격 질문(#192)용: 후보 id → 주소와 코드가 만든 짧은 경고(페이지 글자·페이지 링크 주소는 넣지 않음).
+  const picks: Record<string, { url: string; note: string }> = {};
   const pageSite = siteOf(pageUrl);
   const memory = redirectMemory.get(turnTab);
   for (const item of res.data) {
@@ -106,6 +108,7 @@ export async function snapshotLinks(
     const via = pageLink ? `페이지 링크 ${pageLink.slice(0, 120)}가 리다이렉트한 주소` : "";
     const notes = [warn ? `⚠ ${warn} — 열기만 해도 동작하는 링크일 수 있음` : "", other, via].filter(Boolean).join(" · ");
     choices.push({ id: choiceId, label: item.text || item.url, sub: notes ? `${item.url} (${notes})` : item.url });
+    picks[choiceId] = { url: item.url, note: [other, pageLink ? "페이지 링크가 리다이렉트한 주소" : ""].filter(Boolean).join(" · ") };
     if (!warn) defaults.push(choiceId);
   }
   if (!list.length) throw new Error(`읽을 수 있는 링크가 없습니다: ${rejected.join(", ")}`);
@@ -115,7 +118,7 @@ export async function snapshotLinks(
     if (oldest === undefined) break;
     snapshots.delete(oldest);
   }
-  return { choices, defaults, rejected, grantBlock: linkReadGrantBlock(facts, rejected.length) };
+  return { choices, defaults, rejected, grantBlock: linkReadGrantBlock(facts, rejected.length), picks };
 }
 
 export function setChosenLinks(callId: string, ids: string[]): void {
