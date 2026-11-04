@@ -17,8 +17,8 @@ const FILE_EXT = new Set(
   "pdf doc docx xls xlsx ppt pptx hwp hwpx odt ods odp csv tsv txt rtf zip 7z rar png jpg jpeg gif webp heic svg mp4 mov".split(" "),
 );
 const SCHEME_CHAR = /[a-zA-Z0-9+.-]/;
-// 주소의 authority(사용자 정보@호스트:포트)에 올 수 있는 글자. 이 밖의 글자(/·?·#·따옴표·괄호 등)에서 호스트가 끝난다.
-const AUTHORITY_CHAR = /[A-Za-z0-9.\-:@\[\]%_~]/;
+// 호스트(와 :포트, IPv6의 [])에 올 수 있는 글자. 이 밖의 글자(따옴표·괄호 등)에서 호스트가 끝난다.
+const AUTHORITY_CHAR = /[A-Za-z0-9.\-:\[\]%_~]/;
 // 조각 끝의 문장 부호(파일 확장자 판정에서 뺀다).
 const TRAILING = /[)\]}>.,;:!?'"]+$/;
 
@@ -27,13 +27,23 @@ function maskUrlTail(tail: string): string {
   const sep = tail.indexOf("://");
   const scheme = tail.slice(0, sep + 3);
   const rest = tail.slice(sep + 3);
+  // authority 후보: 첫 / ? # 전까지(조각 끝까지일 수 있음). 사용자 정보는 마지막 @까지 통째로 버린다 — 비밀번호에 어떤 글자가 있어도.
+  let cut = rest.length;
+  for (const ch of ["/", "?", "#"]) {
+    const i = rest.indexOf(ch);
+    if (i >= 0 && i < cut) cut = i;
+  }
+  const authority = rest.slice(0, cut);
+  const at = authority.lastIndexOf("@");
+  const afterUser = at >= 0 ? authority.slice(at + 1) : authority;
+  // 호스트는 호스트 글자까지만(뒤에 붙은 선택자의 따옴표·속성 등은 호스트가 아니다).
   let end = 0;
-  while (end < rest.length && AUTHORITY_CHAR.test(rest[end])) end++;
-  let host = rest.slice(0, end);
-  if (host.includes("@")) host = host.slice(host.lastIndexOf("@") + 1);
-  const after = rest.slice(end);
+  while (end < afterUser.length && AUTHORITY_CHAR.test(afterUser[end])) end++;
+  const host = afterUser.slice(0, end);
+  if (!host) return "[주소]";
   // 호스트 뒤에 무엇이든 남으면(경로·쿼리·선택자의 나머지 등) 모두 가린다.
-  return `${scheme}${host}${after && after !== "/" ? "/…" : ""}`;
+  const leftover = afterUser.slice(end) + rest.slice(cut);
+  return `${scheme}${host}${leftover && leftover !== "/" ? "/…" : ""}`;
 }
 
 function fileExt(token: string): string | null {

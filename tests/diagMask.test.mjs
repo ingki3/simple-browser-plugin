@@ -36,6 +36,12 @@ test("주소 뒤 꼬리는 중괄호·인코딩한 이메일까지 모두 가리
   assert.equal(maskDiagnostics("x alice%40corp.test y").text, "x [이메일] y");
 });
 
+test("사용자 정보는 어떤 글자가 있어도 통째로 버린다", () => {
+  assert.equal(maskDiagnostics("x https://alice:secret!+$@example.com/private y").text, "x https://example.com/… y");
+  assert.equal(maskDiagnostics("https://alice:p@ss@example.com").text, "https://example.com");
+  assert.equal(maskDiagnostics("https://@/x").text, "[주소]");
+});
+
 test("주소 앞의 이메일도 가리고, 경로 없는 주소 뒤의 선택자 나머지도 가린다", () => {
   assert.equal(maskDiagnostics("query='alice@corp.test|https://shop.test/x'").text, "[이메일]https://shop.test/…");
   assert.equal(
