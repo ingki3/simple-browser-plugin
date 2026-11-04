@@ -121,7 +121,20 @@ async function restoreSession(id: string): Promise<TranslationSession | null> {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !("settings" in changes)) return;
   const key = targetKey(activeModel(normalizeSettings(changes.settings.newValue as Partial<Settings> | undefined)));
+  const before = targetKey(activeModel(normalizeSettings(changes.settings.oldValue as Partial<Settings> | undefined)));
   for (const [id, s] of sessions) if (s.key !== key) endTranslationSession(id);
+  // 대상이 바뀌면 메모리에 없는(서비스 워커가 다시 떠 아직 되살리지 않은) 저장 세션도 모두 끝낸다 — A→B→A로 되돌아와도
+  // 옛 세션이 해시가 같다는 이유로 되살아나지 않게(#193 리뷰).
+  if (key !== before) {
+    void persist((m) => {
+      for (const id of Object.keys(m)) {
+        if (sessions.has(id)) continue;
+        delete m[id];
+        ended.add(id);
+      }
+      return m;
+    }).catch(() => {});
+  }
 });
 
 export const TRANSLATION_SESSION_ENDED = "번역을 멈췄습니다(설정에서 모델 제공자·키·모델·서버 주소가 바뀌었거나 번역이 끝났습니다). 다시 번역을 요청해 주세요.";
