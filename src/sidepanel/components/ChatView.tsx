@@ -20,9 +20,10 @@ export function ChatView({ session, onOpenSettings }: Props) {
   const { sendUser, approveTool, cancelTool, abortStream, revokeChatGrant, revokeTask, continueRepeat, runSuggestion } = session;
   // 페이지 제안 규칙(#173).
   const { rules, request } = useSuggestionRules();
-  // 키가 없으면 첫 화면에서 키 안내를 보이고, 보내기는 설정을 연다(쓴 글은 남긴다, #129).
+  // 키(로컬 서버면 주소·모델, #193)가 없으면 첫 화면에서 안내를 보이고, 보내기는 설정을 연다(쓴 글은 남긴다, #129).
   const { settings, loaded } = useSettings();
-  const needsKey = loaded && !activeModel(settings).apiKey;
+  const active = activeModel(settings);
+  const needsKey = loaded && !active.ready;
 
   return (
     <>
@@ -30,6 +31,7 @@ export function ChatView({ session, onOpenSettings }: Props) {
         onApprove={approveTool}
         onCancel={cancelTool}
         needsKey={needsKey}
+        needsLocal={active.provider === "local"}
         onOpenSettings={onOpenSettings}
         onSend={sendUser}
       />

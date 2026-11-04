@@ -303,7 +303,8 @@ export const anthropicAdapter: ProviderAdapter = {
   label: LABEL,
   supportsFileParts: true,
   signsContext: true,
-  async openStream(apiKey, req, signal) {
+  timeoutScale: 1,
+  async openStream({ apiKey }, req, signal) {
     const response = await chatRequest(ANTHROPIC_MESSAGES_URL, headers(apiKey), anthropicPayload(req, true), signal, LABEL);
     const convert = anthropicStreamConverter();
     return {
@@ -318,7 +319,7 @@ export const anthropicAdapter: ProviderAdapter = {
         ),
     };
   },
-  async complete(apiKey, req, signal) {
+  async complete({ apiKey }, req, signal) {
     const response = await chatRequest(ANTHROPIC_MESSAGES_URL, headers(apiKey), anthropicPayload(req, false), signal, LABEL);
     const res = await chatJson<{ content?: Array<{ type?: string; text?: string }> }>(response, LABEL);
     return (res.content ?? [])

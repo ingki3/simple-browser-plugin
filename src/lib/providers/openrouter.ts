@@ -43,11 +43,12 @@ export const openRouterAdapter: ProviderAdapter = {
   label: "OpenRouter",
   supportsFileParts: true,
   signsContext: false,
-  async openStream(apiKey, req, signal) {
+  timeoutScale: 1,
+  async openStream({ apiKey }, req, signal) {
     const response = await openRouterRequest(apiKey, openRouterPayload(req, true), signal);
     return { read: (onChunk, inactivityMs) => readOpenRouterStream(response, onChunk, inactivityMs) };
   },
-  async complete(apiKey, req, signal) {
+  async complete({ apiKey }, req, signal) {
     const res = await openRouterJson<{ choices?: Array<{ message?: { content?: string | null } }> }>(
       apiKey,
       openRouterPayload(req, false),

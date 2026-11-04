@@ -82,18 +82,21 @@ function errorMessage(body: unknown, status: number, label: string): string {
 }
 
 // OpenAI 호환 Chat Completions 엔드포인트에 JSON 요청을 보낸다(제공자 어댑터 공용, #97). label은 오류 문구의 제공자 이름.
+// redirect "error": 3xx를 따르지 않는다(#193 로컬 서버 — 사용자가 적은 주소 밖으로 대화가 가지 않게).
 export async function chatRequest(
   url: string,
   headers: Record<string, string>,
   payload: Record<string, unknown>,
   signal: AbortSignal | undefined,
   label: string,
+  opts: { redirect?: RequestRedirect } = {},
 ): Promise<Response> {
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(payload),
     signal,
+    ...(opts.redirect ? { redirect: opts.redirect } : {}),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

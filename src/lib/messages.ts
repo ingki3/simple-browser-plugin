@@ -278,6 +278,8 @@ export type BgToPanel =
   | { kind: "suggestion_failed"; runId: string; message: string }
   | { kind: "thought_chunk"; text: string }
   | { kind: "assistant_done"; finishReason?: string }
+  // 받는 중이던 답을 거둔다(#193 — 설정에서 보낼 대상이 바뀌어 그 답을 쓰지 않음). 받는 중인 답 말풍선만 지운다.
+  | { kind: "assistant_retract" }
   | { kind: "status"; text: string | null }
   // 이번 요청에서 몇 번째 모델 요청(도구 순환 단계)인지와 지금 한도(#55). 이어 가기를 허락하면 한도가 늘어난다.
   | { kind: "hop_progress"; used: number; limit: number }
@@ -432,11 +434,14 @@ export type RuntimeMsg =
 
 export interface Settings {
   // 모델 제공자(#97). OpenRouter의 키·모델은 아래 openRouterApiKey·model(예전 설정 그대로), 다른 제공자는 apiKeys·providerModels.
-  provider: "openrouter" | "openai" | "gemini" | "anthropic";
+  provider: "openrouter" | "openai" | "gemini" | "anthropic" | "local";
   openRouterApiKey: string;
   model: ModelId;
-  apiKeys: { openai?: string; gemini?: string; anthropic?: string };
+  // local(#193)의 키는 선택(비우면 Authorization 머리글을 보내지 않음).
+  apiKeys: { openai?: string; gemini?: string; anthropic?: string; local?: string };
   providerModels: { openai?: string; gemini?: string; anthropic?: string };
+  // 로컬·호환 서버(#193): 사용자가 적은 기본 주소(그대로 저장 — 쓸 때 providers/local.ts localEndpoint로 검사)와 모델 이름.
+  localServer: { baseUrl: string; model: string };
   systemPrompt: string;
   translationTargetLang: string;
   downloadFolderPrefix: string;
@@ -469,7 +474,11 @@ export interface Settings {
 }
 
 // 바꾼 필드만 보내는 설정 patch. voiceInput은 하위 필드만(VoiceInputPatch).
-export type SettingsPatch = Omit<Partial<Settings>, "voiceInput"> & { voiceInput?: VoiceInputPatch };
+export type SettingsPatch = Omit<Partial<Settings>, "voiceInput" | "localServer"> & {
+  voiceInput?: VoiceInputPatch;
+  // 하위 필드만(주소와 모델을 따로 고쳐도 서로 덮지 않게).
+  localServer?: Partial<Settings["localServer"]>;
+};
 
 export const MAX_SYSTEM_PROMPT_LENGTH = 4000;
 

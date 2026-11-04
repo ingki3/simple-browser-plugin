@@ -2,7 +2,7 @@ import { keepassxcAssociate, keepassxcForget, keepassxcStatus } from "./keepassx
 import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
-import { applyLoginSiteOp, applyManualSiteOp, applySettingsPatch, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
+import { applyLoginSiteOp, applyManualSiteOp, applySettingsPatch, getSettings, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
 import { parseLoginSiteOp, parseManualSiteOp } from "@/lib/settingsOps";
 import { openSettings } from "./settingsTab";
 import { deletePages, draftLink, listPages, rememberCurrentPage, rememberedFor, savePage, updateLink } from "./savedPagesStore";
@@ -16,6 +16,10 @@ import { translateBatch } from "./translator";
 import { checkConnection } from "./connectionCheck";
 import { friendlyError } from "@/lib/friendlyError";
 import { registerDebugSink, debugLog } from "./debug";
+import { listLocalModels, setLocalNote } from "@/lib/providers/local";
+
+// 로컬 서버 어댑터의 메모(뺀 선택 필드 등, #193)를 디버그 타임라인으로.
+setLocalNote((tag, detail) => debugLog(tag, detail));
 import {
   continueRepeatTask,
   deleteRepeatTask,
@@ -350,6 +354,28 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   }
 
   // 설정의 연결 확인(#129). 이 확장의 화면에서만 받는다.
+  // 로컬 서버의 모델 목록(#193): 저장한 주소·키로 GET {주소}/models. 이 확장의 화면에서만 받는다.
+  if (m.kind === "local_models") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    void (async () => {
+      const s = await getSettings();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const ids = await listLocalModels({ apiKey: s.apiKeys.local ?? "", baseUrl: s.localServer.baseUrl }, controller.signal);
+        sendResponse({ ok: true, data: ids });
+      } catch (err) {
+        sendResponse({ ok: false, error: controller.signal.aborted ? "10초 안에 응답이 없습니다." : friendlyError(err).message });
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    return true;
+  }
+
   if (m.kind === "check_connection") {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
@@ -586,12 +612,13 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   }
 
   if (m.kind === "translate_text_batch") {
-    const payload = msg as { kind: "translate_text_batch"; texts: string[]; targetLang: string };
+    const payload = msg as { kind: "translate_text_batch"; texts: string[]; targetLang: string; session?: unknown };
     if (!Array.isArray(payload.texts) || typeof payload.targetLang !== "string") {
       sendResponse({ ok: false, error: "invalid payload" });
       return true;
     }
-    translateBatch(payload.texts, payload.targetLang)
+    // 세션 id가 없는 옛 형식(업데이트 직후 열려 있던 옛 content script)은 보내지 않는다(#193 — 대상을 고정할 수 없다).
+    translateBatch(payload.texts, payload.targetLang, typeof payload.session === "string" ? payload.session : "")
       .then((translations) => sendResponse({ ok: true, data: translations }))
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);

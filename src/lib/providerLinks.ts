@@ -1,5 +1,6 @@
 // 제공자별 키 발급·요금·사용량 안내 주소(#129). 첫 화면과 설정의 시작하기에서 함께 쓴다.
 import type { ProviderId } from "./providers/types.ts";
+import { LOCAL_LLM_DOC_URL } from "./projectLinks.ts";
 
 export interface ProviderLinks {
   label: string;
@@ -32,5 +33,12 @@ export const PROVIDER_LINKS: Record<ProviderId, ProviderLinks> = {
     keyUrl: "https://console.anthropic.com/settings/keys",
     pricingUrl: "https://www.anthropic.com/pricing#api",
     usageUrl: "https://console.anthropic.com/usage",
+  },
+  // 로컬·호환 서버(#193): 키 발급·요금이 없다 — 세 링크 모두 설치 안내로.
+  local: {
+    label: "로컬·호환 서버(Ollama 등)",
+    keyUrl: LOCAL_LLM_DOC_URL,
+    pricingUrl: LOCAL_LLM_DOC_URL,
+    usageUrl: LOCAL_LLM_DOC_URL,
   },
 };

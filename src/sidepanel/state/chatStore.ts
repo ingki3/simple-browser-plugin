@@ -95,6 +95,8 @@ interface ChatState {
   appendAssistantChunk: (text: string) => void;
   appendThoughtChunk: (text: string) => void;
   finalizeAssistant: () => void;
+  // 받는 중인 답 말풍선을 지운다(#193 — 보낼 대상이 바뀌어 쓰지 않는 답).
+  retractStreaming: () => void;
   addToolPending: (m: Extract<ChatMessage, { type: "tool_pending" }>) => void;
   resolveToolPending: (callId: string, state: "approved" | "cancelled") => void;
   addHopLimit: (m: Extract<ChatMessage, { type: "hop_limit" }>) => void;
@@ -206,6 +208,12 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: closeStreamingBubbles(s.messages),
       streaming: false,
       statusText: null,
+    })),
+
+  retractStreaming: () =>
+    set((s) => ({
+      ...s,
+      messages: s.messages.filter((m) => !(m.type === "assistant_text" && m.streaming)),
     })),
 
   setStatus: (text) => set((s) => ({ ...s, statusText: text })),

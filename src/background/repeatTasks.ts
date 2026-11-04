@@ -24,7 +24,8 @@ import {
 import { sameSiteAs } from "@/lib/siteTrust";
 import { httpOrigin } from "@/lib/url";
 import { activeModel } from "@/lib/settings";
-import { providerAdapter } from "@/lib/providers";
+import { providerAdapter, providerTimeout } from "@/lib/providers";
+import { beginTargetGuard } from "./modelTarget";
 import { withTimeout } from "@/lib/async";
 import { runContinue } from "@/lib/repeatContinue";
 import { getSettings } from "./storage";
@@ -418,8 +419,9 @@ async function readSnapshot(page: OpenedPage): Promise<RepeatSnapshot> {
 }
 
 async function judge(t: RepeatTask, s: RepeatSnapshot, signal: AbortSignal): Promise<{ verdict: RepeatCheck["verdict"]; reason: string }> {
-  const { provider, apiKey, model } = activeModel(await getSettings());
-  if (!apiKey) throw new Error("API 키가 없어 확인하지 못했습니다.");
+  const active = activeModel(await getSettings());
+  const { provider, model } = active;
+  if (!active.ready) throw new Error(active.missing === "key" ? "API 키가 없어 확인하지 못했습니다." : "로컬 서버 주소와 모델이 없어 확인하지 못했습니다.");
   // 가림 목록을 못 읽으면 던진다(가릴 값을 모른 채 페이지 글자를 보내지 않는다).
   const { value: messages } = await maskMessagesForModel([
     { role: "system" as const, content: REPEAT_CHECK_SYSTEM },
@@ -430,20 +432,27 @@ async function judge(t: RepeatTask, s: RepeatSnapshot, signal: AbortSignal): Pro
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal.addEventListener("abort", onAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
+  const limit = providerTimeout(provider, MODEL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), limit);
+  // 준비하는 사이 대상이 바뀌면 보내지 않고, 보낸 뒤 바뀌면 결과를 버린다(#193).
+  const guard = beginTargetGuard(active, controller.signal);
   try {
+    await guard.verify();
     const text = await providerAdapter(provider).complete(
-      apiKey,
+      active,
       { model, messages, temperature: 0, reasoning: "off", maxTokens: 300, responseFormat: { type: "json_object" } },
-      controller.signal,
+      guard.signal,
     );
+    guard.assert();
     return parseVerdict(text);
   } catch (err) {
     if (signal.aborted) throw new Discarded();
-    if (controller.signal.aborted) throw new Error("모델이 25초 안에 답하지 않았습니다.");
+    guard.assert();
+    if (controller.signal.aborted) throw new Error(`모델이 ${Math.round(limit / 1000)}초 안에 답하지 않았습니다.`);
     throw err;
   } finally {
     clearTimeout(timer);
+    guard.end();
     signal.removeEventListener("abort", onAbort);
   }
 }

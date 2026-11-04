@@ -631,6 +631,8 @@ export interface ExecOptions {
   grantImages?: ReadonlyMap<string, string>;
   // 이 대화의 실제 입력(디버거) 상태. 없으면 스크립트 클릭.
   inputSession?: InputSession;
+  // 이 대화 제공자의 제한 시간 배수(#193 — 로컬 서버는 2). 모델을 기다리는 content 도구(translate_page)의 제한에 곱한다.
+  timeoutScale?: number;
 }
 
 // 패널 결과 줄에 붙이는 클릭 수단(실제 입력 설정이 켜졌을 때 어느 쪽으로 눌렀는지 보이게).
@@ -1001,7 +1003,7 @@ async function runTool(
         inProgress?: boolean;
         perRoot?: Array<{ name: string; collected: number }>;
         totalCollected?: number;
-      }>(toolName, parsedArgs, callId, turnTab);
+      }>(toolName, parsedArgs, callId, turnTab, undefined, opts.timeoutScale);
       const breakdown = data.perRoot?.length
         ? " [" +
           data.perRoot

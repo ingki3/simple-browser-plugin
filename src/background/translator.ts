@@ -1,22 +1,62 @@
 import { maskStringForModel } from "./loginSecrets";
-import { providerAdapter } from "@/lib/providers";
-import { activeModel } from "@/lib/settings";
+import { providerAdapter, providerTimeout } from "@/lib/providers";
+import { activeModel, normalizeSettings, targetKey, type ActiveModel } from "@/lib/settings";
+import type { Settings } from "@/lib/messages";
 import {
   parseTranslationResponse,
   translationResponseFormat,
 } from "@/lib/translationProtocol";
 import { isUsableTranslation } from "@/lib/translationSegments";
-import { getSettings } from "./storage";
 import { debugLog } from "./debug";
+import { beginTargetGuard, TargetChangedError } from "./modelTarget";
 
 const TRANSLATION_CACHE_MAX = 5000;
 const TRANSLATION_REQUEST_TIMEOUT_MS = 90_000;
 const translationCache = new Map<string, string>();
 let batchCounter = 0;
 
-function cacheKey(model: string, targetLang: string, text: string): string {
-  return `${model}\u0000${targetLang}\u0000${text}`;
+// 같은 모델 이름이라도 제공자·로컬 서버가 다르면 다른 번역이다(#193). 키는 넣지 않는다.
+function cacheKey(active: Pick<ActiveModel, "provider" | "model" | "baseUrl">, targetLang: string, text: string): string {
+  return `${active.provider}\u0000${active.provider === "local" ? (active.baseUrl ?? "") : ""}\u0000${active.model}\u0000${targetLang}\u0000${text}`;
 }
+
+// ---- 번역 세션(#193) ----
+// translate_page 한 번(첫 화면·나머지 배치·동적 재번역 모두)은 시작할 때 대화에 고정한 대상으로만 보낸다. content script는 불투명한 세션 id만
+// 갖고(키·주소는 이 메모리에만), 대상이 바뀌거나 번역을 멈추면 세션을 끝내 그 뒤의 배치는 어느 쪽으로도 보내지 않는다.
+interface TranslationSession {
+  active: ActiveModel;
+  key: string;
+  // 진행 중인 배치 요청(대상이 바뀌면 멈춘다).
+  controllers: Set<AbortController>;
+}
+const sessions = new Map<string, TranslationSession>();
+const MAX_SESSIONS = 50;
+
+export function beginTranslationSession(active: ActiveModel): string {
+  const id = crypto.randomUUID();
+  sessions.set(id, { active, key: targetKey(active), controllers: new Set() });
+  while (sessions.size > MAX_SESSIONS) {
+    const oldest = sessions.keys().next().value;
+    if (oldest === undefined) break;
+    endTranslationSession(oldest);
+  }
+  return id;
+}
+
+export function endTranslationSession(id: string): void {
+  const s = sessions.get(id);
+  if (!s) return;
+  sessions.delete(id);
+  for (const c of s.controllers) c.abort();
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !("settings" in changes)) return;
+  const key = targetKey(activeModel(normalizeSettings(changes.settings.newValue as Partial<Settings> | undefined)));
+  for (const [id, s] of sessions) if (s.key !== key) endTranslationSession(id);
+});
+
+export const TRANSLATION_SESSION_ENDED = "번역을 멈췄습니다(설정에서 모델 제공자·키·모델·서버 주소가 바뀌었거나 번역이 끝났습니다). 다시 번역을 요청해 주세요.";
 
 function cacheTranslation(key: string, value: string): void {
   if (translationCache.size >= TRANSLATION_CACHE_MAX) {
@@ -26,19 +66,21 @@ function cacheTranslation(key: string, value: string): void {
   translationCache.set(key, value);
 }
 
-export async function translateBatch(texts: string[], targetLang: string): Promise<string[]> {
-  const { provider, apiKey, model } = activeModel(await getSettings());
+export async function translateBatch(texts: string[], targetLang: string, sessionId: string): Promise<string[]> {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error(TRANSLATION_SESSION_ENDED);
+  const active = session.active;
+  const { provider, model } = active;
   const adapter = providerAdapter(provider);
-  if (!apiKey) throw new Error(`${adapter.label} API 키가 설정되지 않았습니다.`);
   const uniqueTexts = [...new Set(texts)];
   const missingTexts = uniqueTexts.filter(
-    (text) => !translationCache.has(cacheKey(model, targetLang, text)),
+    (text) => !translationCache.has(cacheKey(active, targetLang, text)),
   );
   const batchId = ++batchCounter;
   if (missingTexts.length === 0) {
     debugLog("translate:batch:cache", `#${batchId} · ${texts.length}개`);
     return texts.map(
-      (text) => translationCache.get(cacheKey(model, targetLang, text)) ?? text,
+      (text) => translationCache.get(cacheKey(active, targetLang, text)) ?? text,
     );
   }
 
@@ -62,31 +104,44 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
     "translate:batch:start",
     `#${batchId} · model=${model} · ${missingTexts.length}/${texts.length}개 · ${charCount}자`,
   );
+  const limit = providerTimeout(provider, TRANSLATION_REQUEST_TIMEOUT_MS);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TRANSLATION_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), limit);
+  session.controllers.add(controller);
+  const guard = beginTargetGuard(active, controller.signal);
   let raw: string;
   try {
+    // 자동 로그인으로 넣은 값이 페이지 글자로 옮겨졌어도 모델로 보내지 않는다(loginSecrets).
+    const content = (await maskStringForModel(prompt)).text;
+    // 가림을 기다리는 사이 대상이 바뀌었거나 세션이 끝났으면 어느 쪽으로도 보내지 않는다. 확인 다음 줄에서 바로 보낸다.
+    await guard.verify();
+    if (!sessions.has(sessionId)) throw new Error(TRANSLATION_SESSION_ENDED);
     raw = await adapter.complete(
-      apiKey,
+      active,
       {
         model,
-        // 자동 로그인으로 넣은 값이 페이지 글자로 옮겨졌어도 모델로 보내지 않는다(loginSecrets).
-        messages: [{ role: "user", content: (await maskStringForModel(prompt)).text }],
+        messages: [{ role: "user", content }],
         temperature: 0,
         maxTokens: Math.min(8192, Math.max(1024, Math.ceil(charCount * 3))),
         reasoning: "off",
         responseFormat: translationResponseFormat(missingTexts.length),
         strictJson: true,
       },
-      controller.signal,
+      guard.signal,
     );
+    // 받은 직후에도 대상·세션을 다시 본다(바뀌었으면 결과를 버림).
+    guard.assert();
+    if (!sessions.has(sessionId)) throw new Error(TRANSLATION_SESSION_ENDED);
   } catch (err) {
-    const timedOut = controller.signal.aborted;
-    const message = timedOut
-      ? `${adapter.label} 번역 배치가 ${TRANSLATION_REQUEST_TIMEOUT_MS / 1000}초를 초과했습니다.`
-      : err instanceof Error
-        ? err.message
-        : String(err);
+    const ended = err instanceof TargetChangedError || guard.changed() || !sessions.has(sessionId);
+    const timedOut = !ended && controller.signal.aborted;
+    const message = ended
+      ? TRANSLATION_SESSION_ENDED
+      : timedOut
+        ? `${adapter.label} 번역 배치가 ${limit / 1000}초를 초과했습니다.`
+        : err instanceof Error
+          ? err.message
+          : String(err);
     debugLog(
       "translate:batch:error",
       `#${batchId} · ${Date.now() - startedAt}ms · ${message}`,
@@ -95,6 +150,8 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
     throw new Error(message);
   } finally {
     clearTimeout(timeout);
+    session.controllers.delete(controller);
+    guard.end();
   }
 
   let translated: string[];
@@ -102,9 +159,10 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
     translated = parseTranslationResponse(raw, missingTexts.length);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // 응답 원문은 남기지 않는다(키·서버 주소가 되돌아왔을 수 있다, #193) — 길이만.
     debugLog(
       "translate:batch:error",
-      `#${batchId} · ${Date.now() - startedAt}ms · ${message} · ${raw.slice(0, 160)}`,
+      `#${batchId} · ${Date.now() - startedAt}ms · ${message} · 응답 ${raw.length}자`,
       "error",
     );
     throw new Error(message);
@@ -117,7 +175,7 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
     const value = translated[index];
     fresh.set(text, value);
     if (isUsableTranslation(text, value, targetLang)) {
-      cacheTranslation(cacheKey(model, targetLang, text), value);
+      cacheTranslation(cacheKey(active, targetLang, text), value);
     } else {
       rejected += 1;
     }
@@ -130,6 +188,6 @@ export async function translateBatch(texts: string[], targetLang: string): Promi
   );
   return texts.map(
     (text) =>
-      fresh.get(text) ?? translationCache.get(cacheKey(model, targetLang, text)) ?? text,
+      fresh.get(text) ?? translationCache.get(cacheKey(active, targetLang, text)) ?? text,
   );
 }

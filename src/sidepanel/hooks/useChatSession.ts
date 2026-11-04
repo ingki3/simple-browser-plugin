@@ -43,6 +43,9 @@ export function useChatSession() {
         case "assistant_done":
           s.finalizeAssistant();
           return;
+        case "assistant_retract":
+          s.retractStreaming();
+          return;
         case "status":
           s.setStatus(msg.text);
           return;

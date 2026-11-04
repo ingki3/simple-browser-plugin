@@ -3,21 +3,29 @@
 import { activeModel } from "@/lib/settings";
 import { scrubSecret } from "@/lib/friendlyError";
 import { ProviderHttpError } from "@/lib/openrouter";
-import { providerAdapter } from "@/lib/providers";
+import { providerAdapter, providerTimeout } from "@/lib/providers";
 import { getSettings } from "./storage";
 import { debugLog } from "./debug";
+import { beginTargetGuard } from "./modelTarget";
 
 const CHECK_TIMEOUT_MS = 30_000;
 
 export async function checkConnection(): Promise<{ provider: string; model: string }> {
-  const { provider, apiKey, model } = activeModel(await getSettings());
-  if (!apiKey) throw new Error("저장한 API 키가 없습니다.");
+  const active = activeModel(await getSettings());
+  const { provider, model } = active;
+  if (!active.ready) {
+    throw new Error(active.missing === "key" ? "저장한 API 키가 없습니다." : "로컬 서버 주소와 모델을 넣어 주세요.");
+  }
+  const limit = providerTimeout(provider, CHECK_TIMEOUT_MS);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), limit);
+  // 확인하는 사이 대상(제공자·키·모델·서버 주소)이 바뀌면 멈춘다(#193).
+  const guard = beginTargetGuard(active, controller.signal);
   debugLog("connection:check", `${provider} · ${model}`);
   try {
+    await guard.verify();
     await providerAdapter(provider).complete(
-      apiKey,
+      active,
       {
         model,
         messages: [{ role: "user", content: "Reply with the single word OK." }],
@@ -25,17 +33,21 @@ export async function checkConnection(): Promise<{ provider: string; model: stri
         reasoning: "off",
         maxTokens: 64,
       },
-      controller.signal,
+      guard.signal,
     );
+    guard.assert();
   } catch (err) {
-    if (controller.signal.aborted) throw new Error("30초 안에 응답이 없습니다.");
+    guard.assert();
+    if (controller.signal.aborted) throw new Error(`${Math.round(limit / 1000)}초 안에 응답이 없습니다.`);
     // 오류 원문에서 이 요청에 쓴 키를 가린다(#132 — 늦게 온 응답이어도 그 호출의 키로). 오류 종류(HTTP 상태·연결 실패)는 그대로 둔다.
+    const apiKey = active.apiKey;
     if (err instanceof ProviderHttpError) throw new ProviderHttpError(scrubSecret(err.message, apiKey), err.status);
     if (err instanceof TypeError) throw new TypeError(scrubSecret(err.message, apiKey));
     if (err instanceof Error) throw new Error(scrubSecret(err.message, apiKey));
     throw new Error(scrubSecret(String(err), apiKey));
   } finally {
     clearTimeout(timer);
+    guard.end();
   }
   return { provider, model };
 }
