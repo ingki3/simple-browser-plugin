@@ -36,6 +36,14 @@ test("주소 뒤 꼬리는 중괄호·인코딩한 이메일까지 모두 가리
   assert.equal(maskDiagnostics("x alice%40corp.test y").text, "x [이메일] y");
 });
 
+test("주소 앞의 이메일도 가리고, 경로 없는 주소 뒤의 선택자 나머지도 가린다", () => {
+  assert.equal(maskDiagnostics("query='alice@corp.test|https://shop.test/x'").text, "[이메일]https://shop.test/…");
+  assert.equal(
+    maskDiagnostics(`selector='a[href="https://shop.test"][data-order="123456789"]'`).text,
+    `selector='a[href="https://shop.test/…`,
+  );
+});
+
 test("긴 파일 이름도 전체를 가리고, 긴 글(주소·이메일 실패 모양)도 빠르다", () => {
   assert.equal(maskDiagnostics(`${"고객_홍길동_" + "가".repeat(130)}.pdf`).text, "[파일].pdf");
   for (const long of ["a.".repeat(60_000), "가".repeat(60_000), "a@".repeat(30_000)]) {

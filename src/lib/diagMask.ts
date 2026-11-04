@@ -17,6 +17,8 @@ const FILE_EXT = new Set(
   "pdf doc docx xls xlsx ppt pptx hwp hwpx odt ods odp csv tsv txt rtf zip 7z rar png jpg jpeg gif webp heic svg mp4 mov".split(" "),
 );
 const SCHEME_CHAR = /[a-zA-Z0-9+.-]/;
+// 주소의 authority(사용자 정보@호스트:포트)에 올 수 있는 글자. 이 밖의 글자(/·?·#·따옴표·괄호 등)에서 호스트가 끝난다.
+const AUTHORITY_CHAR = /[A-Za-z0-9.\-:@\[\]%_~]/;
 // 조각 끝의 문장 부호(파일 확장자 판정에서 뺀다).
 const TRAILING = /[)\]}>.,;:!?'"]+$/;
 
@@ -25,14 +27,12 @@ function maskUrlTail(tail: string): string {
   const sep = tail.indexOf("://");
   const scheme = tail.slice(0, sep + 3);
   const rest = tail.slice(sep + 3);
-  let end = rest.length;
-  for (const ch of ["/", "?", "#"]) {
-    const i = rest.indexOf(ch);
-    if (i >= 0 && i < end) end = i;
-  }
+  let end = 0;
+  while (end < rest.length && AUTHORITY_CHAR.test(rest[end])) end++;
   let host = rest.slice(0, end);
   if (host.includes("@")) host = host.slice(host.lastIndexOf("@") + 1);
   const after = rest.slice(end);
+  // 호스트 뒤에 무엇이든 남으면(경로·쿼리·선택자의 나머지 등) 모두 가린다.
   return `${scheme}${host}${after && after !== "/" ? "/…" : ""}`;
 }
 
@@ -53,7 +53,9 @@ function maskToken(token: string, counts: Record<DiagMaskKind, number>): string 
     while (start < sep && !/[a-zA-Z]/.test(token[start])) start++;
     if (start < sep) {
       counts.url += 1;
-      return `${token.slice(0, start)}${maskUrlTail(token.slice(start))}`;
+      // 주소 앞 글자도 같은 규칙으로 가린다(검색어 'alice@corp.test|https://…' 등).
+      const head = token.slice(0, start);
+      return `${head ? maskToken(head, counts) : ""}${maskUrlTail(token.slice(start))}`;
     }
   }
   if (token.includes("@") || /%40/i.test(token)) {
