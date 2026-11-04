@@ -8,7 +8,8 @@
 
 - 릴리스(`vX.X.XX` 태그)마다 `simple-browser-plugin-vX.X.XX-webstore.zip`이 함께 올라갑니다(`.github/workflows/release.yml`).
   `manifest.json`이 ZIP 최상위에 있고, 소스 맵과 MCP 다리(`mcp/`)는 없습니다. 릴리스 워크플로가 `scripts/checkManifest.mjs`로
-  최상위 manifest, 버전, 권한(identity·activeTab 없음), 소스 맵 없음을 검사합니다.
+  최상위 manifest, 버전, 권한(identity·activeTab 없음), 소스 맵 없음, `web_accessible_resources` 없음, content script가 다른 조각을 불러오지 않는
+  한 파일(`content.js`)인지를 검사합니다(#215 — 웹 페이지가 확장 파일 주소를 불러 보아 설치 여부를 알 수 없게).
 - 대시보드 → 항목 → 패키지에 이 ZIP을 올립니다. manifest 버전이 지금 올라가 있는 것보다 높아야 합니다(릴리스마다 수정 번호를 올리므로 맞음).
 - 첫 게시는 등록 정보를 다 채워야 하므로 대시보드에서 직접 합니다. API(`chromewebstore.googleapis.com` v2)로 자동 업로드하는 일은 나중에 따로 합니다.
 

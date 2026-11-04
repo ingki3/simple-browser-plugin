@@ -36,6 +36,23 @@ if (wantGoogle) {
 }
 if (wantVersion && m.version !== wantVersion) errors.push(`manifest version ${m.version} ≠ ${wantVersion}`);
 
+// web_accessible_resources는 두지 않는다(#215 — 웹 페이지가 고정 주소로 설치 여부를 알 수 있다). content script는 한 파일로 묶는다.
+if ((m.web_accessible_resources ?? []).some((w) => (w.resources ?? []).length)) {
+  errors.push("web_accessible_resources가 있습니다(content script를 한 파일로 묶어 웹 접근 가능한 파일이 없어야 합니다).");
+}
+// content_scripts의 파일은 있어야 하고, 다른 조각을 불러오지 않는 한 파일이어야 한다(동적 import·모듈 문이 없음 — 빌드 산출물 검사).
+for (const cs of m.content_scripts ?? []) {
+  for (const js of cs.js ?? []) {
+    const file = path.join(dir, js);
+    if (!fs.existsSync(file)) {
+      errors.push(`content script 파일이 없습니다: ${js}`);
+      continue;
+    }
+    const code = fs.readFileSync(file, "utf8");
+    if (/\bimport\s*\(/.test(code) || /^\s*(import|export)\s/m.test(code)) errors.push(`content script가 다른 조각을 불러옵니다(한 파일이 아님): ${js}`);
+  }
+}
+
 // web_accessible_resources가 가리키는 파일은 모두 있어야 한다.
 for (const war of m.web_accessible_resources ?? []) {
   for (const r of war.resources ?? []) {
