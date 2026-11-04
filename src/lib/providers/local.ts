@@ -31,8 +31,10 @@ function privateIpv4(host: string): boolean {
   return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
+// IPv6 리터럴(URL hostname은 대괄호로 감싼 "[…]")만 본다 — "fc00:11434"처럼 쓴 것은 호스트 이름:포트라 대상이 아니다.
 function privateIpv6(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host.startsWith("[") || !host.endsWith("]")) return false;
+  const h = host.slice(1, -1).toLowerCase();
   if (h === "::1") return true;
   // 고유 로컬 주소 fc00::/7: 첫 16비트의 위 7비트가 1111110. 앞자리 0을 생략한 표기(fc::1 = 00fc::1)는 대역 밖이다.
   const first = h.split(":")[0];

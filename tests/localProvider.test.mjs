@@ -31,7 +31,10 @@ test("localEndpoint: http는 이 컴퓨터·내부망만, 그 밖은 https, 사�
   assert.equal(privateHost("192.168.1.1"), true);
   // fc00::/7만(앞자리 0을 생략한 fc::1·fd1::1은 대역 밖).
   for (const h of ["[fc00::1]", "[fd12:3456::1]", "[fdff::1]"]) assert.equal(privateHost(h), true, h);
-  for (const h of ["[fc::1]", "[fd1::1]", "[fe80::1]", "[2001:db8::1]", "[::ffff:7f00:1]"]) assert.equal(privateHost(h), false, h);
+  for (const h of ["[fc::1]", "[fd1::1]", "[fe80::1]", "[2001:db8::1]", "[::ffff:7f00:1]", "fc00", "fd12"]) assert.equal(privateHost(h), false, h);
+  // 대괄호 없이 쓴 것은 호스트 이름:포트(DNS) — 사설로 보지 않는다.
+  assert.equal(localEndpoint("http://fc00:11434/v1").ok, false);
+  assert.equal(localEndpoint("http://fd12:8000/v1").ok, false);
   assert.equal(privateHost("169.254.1.1"), false);
 });
 

@@ -251,13 +251,16 @@ export function SettingsPage() {
   };
   const checkedModel =
     draft.provider === "openrouter" ? draft.model : draft.provider === "local" ? draft.localServer.model : (draft.providerModels[draft.provider] ?? "");
-  // 대상(제공자·키·모델·로컬 서버 주소)이 바뀌면 늦게 온 확인·목록 결과를 버린다(#193).
+  // 대상(제공자·키·모델·로컬 서버 주소)이 바뀌면 늦게 온 확인 결과를 버린다. 모델 목록은 서버(제공자·키·주소)가 바뀔 때만
+  // 비운다 — 모델 이름을 입력하며 후보를 좁힐 수 있게(#193).
   useEffect(() => {
     checkSeq.current++;
-    modelsSeq.current++;
     setCheck(null);
-    setLocalModels(null);
   }, [draft.provider, savedKey, checkedModel, draft.localServer.baseUrl]);
+  useEffect(() => {
+    modelsSeq.current++;
+    setLocalModels(null);
+  }, [draft.provider, savedKey, draft.localServer.baseUrl]);
   // 로컬 서버의 모델 목록(#193): GET {주소}/models. 마지막 요청의 결과만 쓴다.
   const modelsSeq = useRef(0);
   const [localModels, setLocalModels] = useState<{ state: "busy" | "ok" | "error"; ids: string[]; text: string } | null>(null);
