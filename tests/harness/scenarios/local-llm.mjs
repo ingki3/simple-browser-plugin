@@ -91,6 +91,29 @@ export default [
     },
   },
   {
+    name: "로컬 서버(#193): 승인 카드를 기다리는 사이 주소를 바꿨다가(A→B→A) 되돌려도 그 턴은 더 보내지 않는다",
+    pages: { "/form": FORM },
+    async run(h) {
+      await local(h);
+      let before = -1;
+      await h.turn([{ tool: "find_clickables", args: {} }, { click: "적용" }, { tool: "describe_page", args: {} }, { text: "끝" }], {
+        path: "/form",
+        onCard: async (card, n) => {
+          if (n > 1) return;
+          await h.settings({ localServer: { baseUrl: "http://127.0.0.1:59998/v1", model: "qwen3:8b" } });
+          await h.panel.waitForTimeout(200);
+          await h.settings({ localServer: { baseUrl: LOCAL, model: "qwen3:8b" } });
+          await h.panel.waitForTimeout(200);
+          before = (await reqs(h)).length;
+          await card.locator(".btn-approve").click();
+        },
+      });
+      const sent = await reqs(h);
+      expect(before === 2 && sent.length === before, `되돌려도 요청 없음(${before} → ${sent.length})`);
+      expect((await h.panel.locator("body").innerText()).includes("이 요청을 멈췄습니다"), "멈춤 안내");
+    },
+  },
+  {
     name: "로컬 서버(#193): 답을 받는 중 서버 주소를 바꾸면 그 답을 거두고 멈춘다",
     async run(h) {
       await local(h);

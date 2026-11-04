@@ -529,10 +529,10 @@ export class ChatAgent {
     // 보낼 대상(제공자·키·모델·로컬 서버 주소)이 바뀌면 번역을 멈추고, 진행 중인 모델 요청도 멈춘다(#193 — 그 턴은 더 보내지 않는다).
     if (targetKey(activeModel(next)) !== this.conversationTarget()) {
       this.stopTranslations();
-      if (this.activeRequest) {
-        this.targetChangedTurn = this.currentTurn;
-        this.activeRequest.abort();
-      }
+      // 모델 요청 중이든 승인 카드·도구를 기다리는 중이든 지금 턴에 표시를 남긴다(그 턴은 다시 A로 돌아와도 더 보내지 않음, #193 리뷰).
+      // 끝난 턴에 남아도 다음 턴은 번호가 바뀌어 영향이 없다.
+      this.targetChangedTurn = this.currentTurn;
+      this.activeRequest?.abort();
     }
   }
 
