@@ -28,6 +28,7 @@ export type ChatMessage =
       args: unknown;
       previewSummary: string;
       previewDetails?: unknown;
+      previewFullDetails?: string;
       linkGrantOffer?: boolean;
       chatGrantOffer?: boolean;
       personalUrlOffer?: boolean;

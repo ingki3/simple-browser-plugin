@@ -1367,6 +1367,18 @@ body,
   word-break: break-word;
 }
 
+/* 연결 확인 실패의 제공자 원문(#132) */
+.check-detail {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.check-detail pre {
+  margin: 4px 0 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* 진단 공유 주의(#130) */
 .debug-note {
   margin: 0;
@@ -1374,6 +1386,41 @@ body,
   font-size: 12px;
   color: var(--fg-muted);
   border-bottom: 1px solid var(--border);
+}
+
+/* 진단 복사 미리보기(#132): 공유 전에 가린 글을 보여 주고, 확인한 글만 복사한다 */
+.diag-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+.diag-preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.diag-preview-body {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diag-preview-actions {
+  display: flex;
+  gap: 6px;
+}
+/* 승인 카드의 전체 보기(#132) */
+.tool-card-full {
+  align-self: flex-start;
+  font-size: 12px;
 }
 
 /* 반복 작업(#138): 조건이 맞은 작업 띠와 설정 목록 */

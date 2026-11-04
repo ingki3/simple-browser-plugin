@@ -142,18 +142,14 @@ export function SettingsPage() {
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [diag, setDiag] = useState<string | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
-  // OpenRouter 모델을 목록 밖에서 직접 입력하는 중인지. 저장된 모델이 목록에 없으면 처음부터 입력 칸을 보인다.
-  const [customModel, setCustomModel] = useState(false);
-  useEffect(() => {
-    if (loaded && !(MODEL_IDS as readonly string[]).includes(settings.model)) setCustomModel(true);
-  }, [loaded, settings.model]);
-  // 번역할 언어를 목록 밖에서 직접 입력하는 중인지. 저장된 값이 목록에 없으면 입력 칸을 보인다.
-  const [customLang, setCustomLang] = useState(false);
-  useEffect(() => {
-    if (loaded && !TRANSLATION_LANGS.some(([code]) => code === settings.translationTargetLang)) setCustomLang(true);
-  }, [loaded, settings.translationTargetLang]);
+  // OpenRouter 모델·번역할 언어를 목록 밖에서 직접 입력하는지: 사용자가 "직접 입력"을 골랐거나, 화면 값(draft)이 목록 밖이면(저장된 값,
+  // 저장 실패로 되돌아온 값 포함 — #132) 입력 칸을 보인다. 목록 값을 고르면 고른 표시를 끈다.
+  const [pickedCustomModel, setCustomModel] = useState(false);
+  const customModel = pickedCustomModel || (loaded && !(MODEL_IDS as readonly string[]).includes(draft.model));
+  const [pickedCustomLang, setCustomLang] = useState(false);
+  const customLang = pickedCustomLang || (loaded && !TRANSLATION_LANGS.some(([code]) => code === draft.translationTargetLang));
   // 연결 확인(#129): 저장한 키·모델로 짧은 요청 한 번.
-  const [check, setCheck] = useState<{ state: "busy" | "ok" | "error"; text: string } | null>(null);
+  const [check, setCheck] = useState<{ state: "busy" | "ok" | "error"; text: string; detail?: string } | null>(null);
 
   // 저장소의 설정(다른 창·패널에서 바꾼 것 포함)을 따라가되, 이 화면의 저장 중인 변경과 아직 보내지 않은 변경을 그 위에 둔다.
   useEffect(() => {
@@ -233,17 +229,17 @@ export function SettingsPage() {
   const checkConnection = async () => {
     const seq = ++checkSeq.current;
     setCheck({ state: "busy", text: "확인 중…" });
-    const show = (next: { state: "ok" | "error"; text: string }) => {
+    const show = (next: { state: "ok" | "error"; text: string; detail?: string }) => {
       if (seq === checkSeq.current) setCheck(next);
     };
     try {
       // 입력이 멈추기를 기다리는 모델 변경도 먼저 저장해, 화면에 보이는 모델로 확인한다.
       await flush();
       const res = (await chrome.runtime.sendMessage({ kind: "check_connection" })) as
-        | { ok: boolean; data?: { model: string }; error?: string }
+        | { ok: boolean; data?: { model: string }; error?: string; detail?: string }
         | undefined;
       if (res?.ok && res.data) show({ state: "ok", text: `✓ 연결됨 · ${res.data.model}` });
-      else show({ state: "error", text: res?.error ?? "응답이 없습니다." });
+      else show({ state: "error", text: res?.error ?? "응답이 없습니다.", ...(typeof res?.detail === "string" && res.detail ? { detail: res.detail } : {}) });
     } catch (err) {
       show({ state: "error", text: err instanceof Error ? err.message : String(err) });
     }
@@ -461,6 +457,13 @@ export function SettingsPage() {
                 </button>
               </div>
               {check && <span className={`field-help${check.state === "error" ? " error-text" : ""}`}>{check.text}</span>}
+              {/* 제공자 원문(#132): 안내 문구로 바꾼 경우만, 접어서. 키는 백그라운드가 이미 가렸다. */}
+              {check?.detail && (
+                <details className="check-detail">
+                  <summary>자세히</summary>
+                  <pre>{check.detail}</pre>
+                </details>
+              )}
               <FieldHelp summary="API는 쓴 만큼 그 서비스에 요금이 나갑니다. 앱 구독과는 따로입니다.">
                 요청마다 보낸 글자(대화·페이지 내용)와 받은 답의 양에 따라 요금이 정해집니다. 긴 페이지를 읽거나 단계가 많은 작업일수록
                 많이 듭니다. 연결 확인은 아주 짧은 요청을 한 번 보냅니다. 키를 받은 곳에서 사용 한도를 정해 두면 안심하고 쓸 수 있습니다.
@@ -510,7 +513,10 @@ export function SettingsPage() {
                     <input
                       type="text"
                       value={draft.model}
-                      onChange={(e) => update({ model: e.target.value }, SAVE_DELAY_MS)}
+                      onChange={(e) => {
+                        setCustomModel(true);
+                        update({ model: e.target.value }, SAVE_DELAY_MS);
+                      }}
                       placeholder="provider/model (예: anthropic/claude-sonnet-5.5)"
                       spellCheck={false}
                     />
@@ -666,7 +672,11 @@ export function SettingsPage() {
                 <input
                   type="text"
                   value={draft.translationTargetLang}
-                  onChange={(e) => update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS)}
+                  onChange={(e) => {
+                    // 자동으로 열린 칸에서도 고치기 시작하면 직접 입력으로 둔다(중간 값이 목록 값과 같아져도 칸이 닫히지 않게).
+                    setCustomLang(true);
+                    update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS);
+                  }}
                   placeholder="언어 코드(예: nl, pl, ar)"
                 />
               )}

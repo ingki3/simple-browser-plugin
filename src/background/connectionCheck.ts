@@ -1,6 +1,8 @@
 // 설정의 "연결 확인"(#129). 저장한 키·모델로 아주 짧은 요청을 한 번 보내 키와 모델이 쓰이는지 본다.
 // 요청 한 번만큼 요금이 조금 든다(설정 화면에 알린다).
 import { activeModel } from "@/lib/settings";
+import { scrubSecret } from "@/lib/friendlyError";
+import { ProviderHttpError } from "@/lib/openrouter";
 import { providerAdapter } from "@/lib/providers";
 import { getSettings } from "./storage";
 import { debugLog } from "./debug";
@@ -27,7 +29,11 @@ export async function checkConnection(): Promise<{ provider: string; model: stri
     );
   } catch (err) {
     if (controller.signal.aborted) throw new Error("30초 안에 응답이 없습니다.");
-    throw err;
+    // 오류 원문에서 이 요청에 쓴 키를 가린다(#132 — 늦게 온 응답이어도 그 호출의 키로). 오류 종류(HTTP 상태·연결 실패)는 그대로 둔다.
+    if (err instanceof ProviderHttpError) throw new ProviderHttpError(scrubSecret(err.message, apiKey), err.status);
+    if (err instanceof TypeError) throw new TypeError(scrubSecret(err.message, apiKey));
+    if (err instanceof Error) throw new Error(scrubSecret(err.message, apiKey));
+    throw new Error(scrubSecret(String(err), apiKey));
   } finally {
     clearTimeout(timer);
   }

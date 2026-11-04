@@ -357,7 +357,11 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     }
     checkConnection()
       .then((data) => sendResponse({ ok: true, data }))
-      .catch((err: unknown) => sendResponse({ ok: false, error: friendlyError(err).message }));
+      .catch((err: unknown) => {
+        // 원문은 '자세히'로(#132). 키는 checkConnection이 이미 그 호출의 키로 가렸다.
+        const f = friendlyError(err, { check: true });
+        sendResponse({ ok: false, error: f.message, ...(f.detail ? { detail: f.detail } : {}) });
+      });
     return true;
   }
 

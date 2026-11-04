@@ -137,6 +137,26 @@ test("fillCard: 10개 넘으면 나머지는 개수만", () => {
   assert.equal(card.details.split("\n").length, 11);
 });
 
+test("fillCard 전체 보기(#132): 잘린 요약이면 모든 칸·값 전체, 비밀번호는 여전히 가림, 잘린 것이 없으면 없음", () => {
+  const field = { ...link, tag: "input", role: "textbox", href: "", fieldType: "text" };
+  const long = "가".repeat(120);
+  const items = [
+    ...Array.from({ length: 11 }, (_, i) => ({ info: { ...field, name: `칸${i}` }, value: i === 0 ? long : "v" })),
+    { info: { ...field, name: "비밀번호", fieldType: "password", sensitive: "password" }, value: "hunter22-very-long-secret-value-over-eighty-characters-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
+  ];
+  const card = fillCard(items);
+  assert.ok(!card.details.includes(long), "요약은 80자에서 자름");
+  assert.equal(card.fullDetails.split("\n").length, 12, "모든 칸");
+  assert.ok(card.fullDetails.includes(`• 칸0 (text, 본문): ${long}`), "값 전체");
+  assert.ok(!card.fullDetails.includes("hunter22"), "비밀번호 값 없음");
+  assert.match(card.fullDetails, /비밀번호 .*●{8} \(\d+자\) ⚠ 비밀번호 칸/);
+  // 잘린 것이 없으면 전체 보기를 만들지 않는다(비밀번호가 길어도 가린 줄은 같다).
+  assert.equal(fillCard([{ info: { ...field, name: "이름" }, value: "홍길동" }, items[11]]).fullDetails, undefined);
+  // 체크·해제는 글자 길이와 관계없이 같은 줄.
+  const box = { ...field, fieldType: "checkbox", role: "checkbox", name: "동의" };
+  assert.equal(fillCard([{ info: box, value: "true" }]).fullDetails, undefined);
+});
+
 test("navKind", () => {
   assert.equal(navKind("https://a.test/x", "https://a.test/x"), "none");
   assert.equal(navKind("https://a.test/x", "https://a.test/x#top"), "fragment");

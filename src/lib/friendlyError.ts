@@ -25,14 +25,26 @@ function httpStatus(err: unknown): number | null {
   return typeof status === "number" ? status : null;
 }
 
-export function friendlyError(err: unknown): FriendlyError {
+// 오류 문구에서 요청에 쓴 키를 모두 가린다(#132 — 제공자 원문이 키를 되돌려줄 때). 빈 키면 그대로.
+export function scrubSecret(text: string, secret: string): string {
+  return secret ? text.split(secret).join("[키]") : text;
+}
+
+// check: 설정의 연결 확인(도구를 보내지 않는 짧은 요청)이면 400 안내를 그 경우에 맞게 바꾼다.
+export function friendlyError(err: unknown, opts: { check?: boolean } = {}): FriendlyError {
   const raw = err instanceof Error ? err.message : String(err);
   if (err instanceof Error && err.name === "MissingKeyError") {
     return { message: "API 키가 없습니다. 설정에서 모델 제공자의 API 키를 넣어 주세요.", action: "settings" };
   }
   const status = httpStatus(err);
   if (status !== null) {
-    const mapped = byStatus(status);
+    const mapped =
+      opts.check && (status === 400 || status === 422)
+        ? {
+            message: "모델 제공자가 요청을 받지 않았습니다. 모델 이름이 맞는지, 그 제공자에서 쓸 수 있는 모델인지 확인해 주세요.",
+            action: "settings" as const,
+          }
+        : byStatus(status);
     if (mapped) return { ...mapped, detail: raw };
   }
   // fetch가 서버에 닿지 못하면 TypeError를 던진다(네트워크 끊김·주소 차단).
