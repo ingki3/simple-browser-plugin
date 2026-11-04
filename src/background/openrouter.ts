@@ -13,8 +13,9 @@ import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "./down
 import { candidatesMessage, makeOffer, makeOfferResult, OFFER_REFUSAL_TEXT } from "./savedPagesStore";
 import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
-import { providerAdapter, type ChatStream, type ProviderId } from "@/lib/providers";
-import { activeModel } from "@/lib/settings";
+import { providerAdapter, providerTimeout, type ChatStream, type ProviderId } from "@/lib/providers";
+import { activeModel, targetKey } from "@/lib/settings";
+import { beginTranslationSession, endTranslationSession } from "./translator";
 import {
   type OpenRouterContentPart,
   type OpenRouterMessage,
@@ -112,6 +113,9 @@ interface ToolCallContext {
 }
 
 // 승인 단계의 결론. stale: 이 요청이 끝났다(중단·새 요청). done: 결과를 이미 남겼다(실패·취소).
+// 설정에서 보낼 대상(제공자·키·모델·로컬 서버 주소)이 턴 도중 바뀌어 멈춤(#193). 이 턴의 내용은 새 대상으로도, 옛 대상으로도 보내지 않는다.
+const TARGET_CHANGED_NOTE = "설정에서 모델 제공자·API 키·모델·서버 주소가 바뀌어 이 요청을 멈췄습니다. 다시 요청하면 새 설정으로 새 대화를 시작합니다.";
+
 const STALE = { kind: "stale" } as const;
 const DONE = { kind: "done" } as const;
 // 사용자가 직접 조작해 마쳤다(실행하지 않는다).
@@ -395,6 +399,12 @@ export class ChatAgent {
   private history: OpenRouterMessage[] = [];
   private apiKey: string | null = null;
   private model: ModelId | null = null;
+  // 로컬·호환 서버의 정규화한 기본 주소(#193). 이 대화가 보내는 대상(targetKey)의 일부.
+  private baseUrl: string | undefined = undefined;
+  // 설정에서 보낼 대상이 바뀌어 멈춘 턴(#193). 그 턴의 모델 요청·번역은 더 보내지 않는다.
+  private targetChangedTurn = -1;
+  // 이 대화가 연 번역 세션(#193 — 탭별). 번역을 멈추거나 대상이 바뀌면 끝낸다.
+  private translationSessions = new Map<number, string>();
   // 모델 제공자(#97). 바뀌면 대화 기록을 새로 시작한다(제공자마다 기록 형식·생각 정보가 다르다).
   private provider: ProviderId = "openrouter";
   private customSystemPrompt: string | null = null;
@@ -516,8 +526,23 @@ export class ChatAgent {
     // 다른 실행 방식으로 바꾸는 즉시 맡긴 작업과 열린 맡기기 카드를 거둔다(다시 task로 돌아와도 새로 묻는다, #123).
     if (this.effectiveRunMode(next.runMode) !== "task") this.withdrawTask();
     if (this.apiKey === null) return;
-    const now = activeModel(next);
-    if (now.provider !== this.provider || now.apiKey !== this.apiKey || now.model !== this.model) this.stopTranslations();
+    // 보낼 대상(제공자·키·모델·로컬 서버 주소)이 바뀌면 번역을 멈추고, 진행 중인 모델 요청도 멈춘다(#193 — 그 턴은 더 보내지 않는다).
+    if (targetKey(activeModel(next)) !== this.conversationTarget()) {
+      this.stopTranslations();
+      // 모델 요청 중이든 승인 카드·도구를 기다리는 중이든 지금 턴에 표시를 남긴다(그 턴은 다시 A로 돌아와도 더 보내지 않음, #193 리뷰).
+      // 끝난 턴에 남아도 다음 턴은 번호가 바뀌어 영향이 없다.
+      this.targetChangedTurn = this.currentTurn;
+      this.activeRequest?.abort();
+    }
+  }
+
+  // 이 대화가 고정한 대상(ensureCredentials가 정함).
+  private conversationTarget(): string {
+    return targetKey({ provider: this.provider, apiKey: this.apiKey ?? "", model: this.model ?? "", baseUrl: this.baseUrl });
+  }
+
+  private conversationAuth(): { apiKey: string; baseUrl?: string } {
+    return { apiKey: this.apiKey ?? "", ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}) };
   }
 
   abort(): void {
@@ -567,6 +592,8 @@ export class ChatAgent {
   // 백그라운드 번역 배치와 동적 재번역 옵저버를 멈춘다. 멈추지 않으면 사용자가
   // 대화를 끝낸 뒤에도 페이지 변화(예: 메일함 갱신)마다 번역 요청이 계속 나간다.
   private stopTranslations(): void {
+    for (const id of this.translationSessions.values()) endTranslationSession(id);
+    this.translationSessions.clear();
     for (const tabId of this.translatedTabs) {
       chrome.tabs.sendMessage(tabId, { kind: "translate_stop" }).catch(() => {
         /* 탭이 닫혔거나 이동함 — 멈출 대상이 없음 */
@@ -728,20 +755,25 @@ export class ChatAgent {
   }> {
     const settings = await getSettings();
     const active = activeModel(settings);
-    if (!active.apiKey) {
-      throw new MissingKeyError(`${providerAdapter(active.provider).label} API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.`);
+    if (!active.ready) {
+      throw new MissingKeyError(
+        active.missing === "key"
+          ? `${providerAdapter(active.provider).label} API 키가 설정되지 않았습니다. 설정에서 키를 입력해 주세요.`
+          : "로컬 서버 주소와 모델이 설정되지 않았습니다. 설정에서 넣어 주세요.",
+        active.missing ?? "key",
+      );
     }
     if (
       this.forceNewConversation ||
-      this.provider !== active.provider ||
-      this.apiKey !== active.apiKey ||
-      this.model !== active.model ||
+      this.apiKey === null ||
+      this.conversationTarget() !== targetKey(active) ||
       this.customSystemPrompt !== settings.systemPrompt ||
       this.conversationQuick !== settings.quickThinking
     ) {
       this.provider = active.provider;
       this.apiKey = active.apiKey;
       this.model = active.model;
+      this.baseUrl = active.provider === "local" ? active.baseUrl : undefined;
       this.customSystemPrompt = settings.systemPrompt;
       this.conversationQuick = settings.quickThinking;
       this.history = [];
@@ -1179,16 +1211,26 @@ export class ChatAgent {
   // 모델에 한 번 묻고 스트림을 끝까지 읽는다. 중단·새 턴에 밀렸으면 null.
   // wrapUpNote가 있으면 도구 없이 답만 받는 마무리 요청이다(한도에서 그만두기·헛돌기 감지, #55).
   private async requestModel(
-    apiKey: string,
+    // 대화가 고정한 자격으로 보낸다(conversationAuth, #193). 호출하는 쪽의 형태를 유지하려고 받기만 한다.
+    _apiKey: string,
     model: ModelId,
     systemPrompt: string,
     turn: number,
     opts: { lowReasoning?: boolean; wrapUpNote?: string },
   ): Promise<ModelReply | null> {
-    const CONNECT_TIMEOUT_MS = 20_000;
-    const INACTIVITY_MS = 60_000;
+    // 로컬 서버는 모델을 처음 올릴 때 첫 응답이 느려 제한을 늘린다(#193).
+    const CONNECT_TIMEOUT_MS = providerTimeout(this.provider, 20_000);
+    const INACTIVITY_MS = providerTimeout(this.provider, 60_000);
     const controller = new AbortController();
     this.activeRequest = controller;
+    // 설정에서 보낼 대상이 바뀌었는지(이 턴에서 멈춤 표시가 됐거나, 지금 설정의 대상이 이 대화의 대상과 다름).
+    const targetMoved = (now: Parameters<typeof targetKey>[0]) => this.targetChangedTurn === turn || targetKey(now) !== this.conversationTarget();
+    const stopForTarget = () => {
+      clearTimeout(connectTimer);
+      if (this.activeRequest === controller) this.activeRequest = null;
+      this.targetChangedTurn = turn;
+      return new Error(TARGET_CHANGED_NOTE);
+    };
     // 이 호출의 걸린 시간·사용량(#126). 요청을 연 뒤 끝날 때(정상·오류·중단) 한 번 남긴다.
     let openedAt = 0;
     let usage: ModelUsage | null = null;
@@ -1217,11 +1259,7 @@ export class ChatAgent {
       clearTimeout(connectTimer);
       return null;
     }
-    if (now.provider !== this.provider || now.apiKey !== apiKey || now.model !== model) {
-      clearTimeout(connectTimer);
-      if (this.activeRequest === controller) this.activeRequest = null;
-      throw new Error("설정에서 모델 제공자·API 키·모델이 바뀌어 이 요청을 멈췄습니다. 다시 요청하면 새 설정으로 새 대화를 시작합니다.");
-    }
+    if (targetMoved(now)) throw stopForTarget();
     // 문맥을 서명하는 제공자: 기록에 남긴 후보를 지웠거나 껐으면 거둘 수 없으니 멈추고 새 대화로, 바뀌지 않았으면 다시 싣지 않는다.
     let candidatesNote = savedCandidates;
     // 그런 제공자(Anthropic)는 도구 결과 바로 뒤에 글자 안내를 붙이면 빈 응답으로 끝낼 수 있어, 도구 결과 다음 요청에는
@@ -1258,15 +1296,19 @@ export class ChatAgent {
       this.secretsMasked = true;
       debugLog("login:masked", "모델 요청에서 넣은 로그인 값을 가림", "warn");
     }
+    // 가림 처리 등을 기다리는 사이 대상이 바뀌었을 수 있다 — 모든 준비가 끝난 뒤 한 번 더 보고, 이 확인 다음 줄에서 바로 요청을 연다
+    // (어댑터는 첫 await 전에 fetch를 시작한다, #193).
+    const latest = activeModel(await getSettings());
     if (this.isStale(turn)) {
       clearTimeout(connectTimer);
       return null;
     }
+    if (targetMoved(latest)) throw stopForTarget();
     let stream: ChatStream;
     try {
       openedAt = Date.now();
       stream = await providerAdapter(this.provider).openStream(
-        apiKey,
+        this.conversationAuth(),
         {
           model,
           messages: outgoing.value,
@@ -1285,6 +1327,7 @@ export class ChatAgent {
     } catch (err) {
       // 연결 단계에서 실패한 호출도 한 번으로 센다(사용량은 모름).
       this.recordUsage(turn, null, Date.now() - openedAt, this.isStale(turn) ? "중단" : "오류");
+      if (this.targetChangedTurn === turn && !this.isStale(turn)) throw new Error(TARGET_CHANGED_NOTE);
       if (connectTimedOut) {
         throw new Error(
           `${providerAdapter(this.provider).label} 연결이 ${Math.round(CONNECT_TIMEOUT_MS / 1000)}초 안에 열리지 않았습니다. 네트워크 상태나 API 키를 확인하고 다시 시도해 주세요.`,
@@ -1364,11 +1407,24 @@ export class ChatAgent {
       // 끊기기 전에 받은 사용량도 남긴다(요금은 이미 나갔다).
       this.recordUsage(turn, usage, Date.now() - openedAt, this.isStale(turn) ? "중단" : "오류");
       if (this.isStale(turn)) return null;
+      // 설정에서 대상이 바뀌어 멈췄으면 받은 조각은 기록에 넣지 않고 화면에서도 거둔다(#193).
+      if (this.targetChangedTurn === turn) {
+        this.send({ kind: "assistant_retract" });
+        throw new Error(TARGET_CHANGED_NOTE);
+      }
       throw err;
     } finally {
       if (this.activeRequest === controller) this.activeRequest = null;
     }
     this.recordUsage(turn, usage, Date.now() - openedAt);
+    // 다 받은 직후에도 대상이 그대로인지 본다(끝나는 순간에 바뀌었으면 그 답을 쓰지 않는다).
+    const after = activeModel(await getSettings());
+    if (this.isStale(turn)) return null;
+    if (targetMoved(after)) {
+      this.targetChangedTurn = turn;
+      this.send({ kind: "assistant_retract" });
+      throw new Error(TARGET_CHANGED_NOTE);
+    }
     const functionCalls = [...functionCallParts.entries()]
       .sort(([a], [b]) => a - b)
       .map(([, call]) => ({
@@ -2288,16 +2344,44 @@ export class ChatAgent {
   // 승인된(또는 승인 대상이 아닌) 호출을 실행하고 결과를 남긴다. false: 이 요청이 끝났다.
   private async runAuthorized(call: ToolCallContext, auth: AuthorizedRun): Promise<boolean> {
     const { turn, turnTab, callId, toolName, argsKey, failCall } = call;
-    const { execArgs, via } = auth;
+    const { via } = auth;
+    let { execArgs } = auth;
     const grantRan = via === "grant";
+    // 번역 세션(#193): 이 대화가 고정한 대상으로만 번역 배치를 보낸다. 실패하면(시간 초과 포함) 세션을 끝내 늦게 온 배치도 보내지 않는다.
+    let translationSession: string | null = null;
+    const translationTabs: number[] = [];
     // 실행 전에 등록해야 번역 도중 중단해도 translate_stop이 이 탭에 간다.
     // 팝업 창을 기다리는 사이 중단·새 요청이 오면 실행하지 않는다. 번역 중 팝업이 닫히면 도구는 원래 탭으로 돌아가므로
     // 지금 탭과 원래 탭을 함께 등록한다(멈춤 요청은 번역하지 않은 탭에는 아무 일도 하지 않는다).
     if (toolName === "translate_page") {
       const current = await currentToolTab(turnTab);
       if (this.isStale(turn)) return false;
-      if (current) this.translatedTabs.add(current.tabId);
-      if ("tabId" in turnTab) this.translatedTabs.add(turnTab.tabId);
+      if (current) translationTabs.push(current.tabId);
+      if ("tabId" in turnTab) translationTabs.push(turnTab.tabId);
+      // 승인 카드를 띄운 사이 설정에서 보낼 대상을 바꿨으면 번역하지 않는다(대화 대상과 지금 설정이 같아야 함).
+      const now = activeModel(await getSettings());
+      if (this.isStale(turn)) return false;
+      if (this.targetChangedTurn === turn || targetKey(now) !== this.conversationTarget()) {
+        this.targetChangedTurn = turn;
+        failCall("설정에서 모델 제공자·API 키·모델·서버 주소가 바뀌어 번역하지 않았습니다.", argsKey);
+        return true;
+      }
+      for (const tabId of translationTabs) this.translatedTabs.add(tabId);
+      // 같은 탭의 앞 번역 세션은 끝낸다(새 번역이 대신한다 — 세션이 쌓여 다른 탭의 진행 중 세션을 밀어내지 않게).
+      for (const tabId of translationTabs) {
+        const old = this.translationSessions.get(tabId);
+        if (old) endTranslationSession(old);
+      }
+      translationSession = beginTranslationSession({
+        provider: this.provider,
+        apiKey: this.apiKey ?? "",
+        model: this.model ?? "",
+        ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}),
+        ready: true,
+        missing: null,
+      });
+      for (const tabId of translationTabs) this.translationSessions.set(tabId, translationSession);
+      execArgs = { ...(execArgs as object), session: translationSession };
     }
     const toolAbort = new AbortController();
     this.activeTool = toolAbort;
@@ -2313,6 +2397,7 @@ export class ChatAgent {
         viaGrant: grantRan,
         ...(grantRan && auth.grantImages ? { grantImages: auth.grantImages } : {}),
         inputSession: this.inputSession,
+        timeoutScale: providerAdapter(this.provider).timeoutScale,
       });
       if (this.isStale(turn)) return false;
       debugLog(
@@ -2354,6 +2439,16 @@ export class ChatAgent {
         if (site) this.approvedSites.add(site);
       }
     } catch (err) {
+      // 번역이 실패하면(시간 초과 포함) 그 탭의 번역을 멈추고 세션을 끝낸다 — 늦게 온 배치 응답은 content의 번역 세대가 바뀌어 적용되지 않고,
+      // 그 뒤 배치는 세션이 없어 어디로도 보내지 않는다(#193).
+      if (translationSession) {
+        endTranslationSession(translationSession);
+        for (const tabId of translationTabs) {
+          if (this.translationSessions.get(tabId) === translationSession) this.translationSessions.delete(tabId);
+          // 그 탭이 이미 새 번역을 시작했으면 그 번역은 멈추지 않는다(세션이 같을 때만).
+          chrome.tabs.sendMessage(tabId, { kind: "translate_stop", session: translationSession }).catch(() => {});
+        }
+      }
       if (this.isStale(turn)) return false;
       const msg = err instanceof Error ? err.message : String(err);
       // 턴 탭 해석(내부 페이지·닫힌 탭) 등 실행 전 단계에서 실패해도 결과 줄을 남긴다(#54).

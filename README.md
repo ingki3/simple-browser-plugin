@@ -1,7 +1,7 @@
 # 간편 브라우저 도우미 (Simple Browser Plugin)
 
 Chrome 사이드 패널에서 말로 시키는 브라우저 도우미입니다. 지금 보는 페이지를 읽고 요약·번역하며, 입력칸을 채우고 버튼을 누르고, 파일을 읽거나 저장하는 일을 대신합니다.
-AI 모델은 직접 고릅니다: OpenRouter(여러 회사 모델), OpenAI, Google Gemini, Anthropic Claude.
+AI 모델은 직접 고릅니다: OpenRouter(여러 회사 모델), OpenAI, Google Gemini, Anthropic Claude, 또는 내 컴퓨터의 로컬 LLM(Ollama·LM Studio 등, [설치 안내](docs/install.md#로컬-llm선택)).
 
 **[최신 버전 받기](https://github.com/ingki3/simple-browser-plugin/releases/latest)** · [설치 안내](docs/install.md) · [English](README.en.md) · Chrome 116 이상 · MIT 라이선스
 
@@ -74,7 +74,7 @@ AI 모델은 직접 고릅니다: OpenRouter(여러 회사 모델), OpenAI, Goog
 
 ## 개인정보와 안전
 
-- **보내는 곳**: 대화와 페이지 내용은 설정에서 고른 AI 서비스로만 보냅니다(OpenRouter는 고른 모델의 회사로 다시 전달). 이 프로젝트의 서버는 없습니다.
+- **보내는 곳**: 대화와 페이지 내용은 설정에서 고른 AI 서비스로만 보냅니다(OpenRouter는 고른 모델의 회사로 다시 전달, 로컬·호환 서버는 직접 적은 주소의 서버로만). 이 프로젝트의 서버는 없습니다.
   텔레그램·MCP를 켜면 그 요청의 답과 승인 질문이 그쪽으로도 갑니다.
 - **보내는 것**
   - 지금 탭의 전체 주소(쿼리 포함)와 제목: 요청마다

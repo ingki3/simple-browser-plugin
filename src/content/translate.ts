@@ -208,11 +208,15 @@ function batchUnits(units: Unit[]): Unit[][] {
   return batches;
 }
 
+// 이번 번역의 세션 id(#193 — 백그라운드가 translate_page 실행 때 대상을 고정해 만든 불투명한 값). 동적 재번역도 같은 세션으로 보낸다.
+let activeSession = "";
+
 async function requestTranslation(texts: string[], targetLang: string): Promise<string[]> {
   const res = (await chrome.runtime.sendMessage({
     kind: "translate_text_batch",
     texts,
     targetLang,
+    session: activeSession,
   })) as { ok: boolean; data?: string[]; error?: string };
   if (!res?.ok || !Array.isArray(res.data)) {
     throw new Error(res?.error ?? "번역 요청 실패");
@@ -326,8 +330,11 @@ let activeTargetLang: string | null = null;
 // stopTranslation()마다 증가. 진행 중인 배치는 시작 시점의 값과 비교해 멈춘다.
 let generation = 0;
 
-export function stopTranslation(): void {
+// session을 주면 지금 번역이 그 세션일 때만 멈춘다(늦게 온 앞 번역의 정리 무시, #193).
+export function stopTranslation(session?: string): void {
+  if (session !== undefined && session !== activeSession) return;
   generation += 1;
+  activeSession = "";
   for (const obs of observers) obs.disconnect();
   observers = [];
   activeTargetLang = null;
@@ -422,6 +429,7 @@ function rootScanTarget(root: Root): Node | null {
 export async function translatePage(args: {
   targetLang: string;
   scope?: "visible" | "article";
+  session?: string;
 }): Promise<{
   translatedNodes: number;
   scheduledNodes: number;
@@ -430,6 +438,7 @@ export async function translatePage(args: {
   totalCollected: number;
 }> {
   const gen = generation;
+  activeSession = typeof args.session === "string" ? args.session : "";
   const allUnits: Unit[] = [];
   const perRoot: Array<{ name: string; collected: number }> = [];
   const seen = new Set<Text>();

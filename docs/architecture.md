@@ -7,7 +7,7 @@
 ```
 [Side Panel React UI] ⇄ long-lived port ⇄ [Background Service Worker] ⇄ tabs.sendMessage ⇄ [Content Script]
                                                     │
-                                                    ├── 모델 제공자 어댑터 (OpenRouter·OpenAI·Gemini·Anthropic)
+                                                    ├── 모델 제공자 어댑터 (OpenRouter·OpenAI·Gemini·Anthropic·로컬 호환 서버)
                                                     ├── ReAct stream loop (reasoning_details 보존)
                                                     ├── Tool dispatcher (zod 인자 검증)
                                                     └── webNavigation 통합 (settle 대기)
@@ -18,7 +18,7 @@
 
 - **Manifest V3** — `sidePanel`, `storage`, `scripting`, `downloads`, `tabs`, `alarms`, `webNavigation`, `offscreen`, `webRequest`, `debugger`(실제 입력 클릭, 설정에서 켤 때만 사용) 권한 + Google 클라이언트 ID를 넣은 빌드에만 `identity`·`oauth2`(`src/lib/manifestGoogle.ts`, 웹 스토어 최소 권한 — `activeTab`은 `<all_urls>`와 겹쳐 두지 않음, CI가 `scripts/checkManifest.mjs`로 검사) + 선택 권한 `nativeMessaging`(KeePassXC 자동 로그인)·`history`(방문 기록에서 찾기) + `host_permissions: ["<all_urls>"]`. `web_accessible_resources`는 없다(#215)
 - **content script 한 파일** (#215) — crxjs의 content script loader는 본체를 `import(chrome.runtime.getURL(…))`로 불러와 그 조각을 웹 접근 가능하게 둬야 한다(웹 페이지가 그 주소로 설치 여부를 알 수 있음). 빌드가 끝나면 `vite.config.ts`의 `contentScriptBundle`이 `src/content/index.ts`를 IIFE 한 파일(`dist/content.js`, 동적 import 안에 묶음 — 조각이 둘 이상이거나 import가 남으면 빌드 실패)로 따로 빌드해 manifest의 `content_scripts`가 그 파일을 가리키게 하고, content script용 `web_accessible_resources`와 loader를 지운다. 번들은 `Symbol.for("sbp.content.loaded")` 표시로 감싸 같은 isolated world에서 다시 실행돼도(설치 전 열린 탭 주입의 중복·동시 주입, allFrames) 한 번만 초기화된다(초기화 횟수 `sbp.content.inits`). 프로그램 주입(`getContentScriptFiles`)도 manifest의 같은 파일을 쓴다. 개발 서버(crx HMR)는 그대로
-- **모델 제공자 어댑터** (#97) — 에이전트 루프·번역·저장 링크 초안·키 확인은 `src/lib/providers`의 공통 인터페이스(`openStream`·`complete`)만 씀. 대화 기록·스트림 조각의 내부 기준은 OpenAI 호환 형식이고, 생각 강도는 의도(`agent`·`agent_low`·`off`)로 넘겨 어댑터가 제공자 설정으로 바꿈. OpenRouter·OpenAI·Gemini·Anthropic 어댑터(Anthropic은 Messages API와 내부 형식을 서로 바꿈). 제공자가 도구 호출에 붙여 돌려받아야 하는 값(`extra_content`)은 그 제공자 어댑터만 보냄
+- **모델 제공자 어댑터** (#97) — 에이전트 루프·번역·저장 링크 초안·키 확인은 `src/lib/providers`의 공통 인터페이스(`openStream`·`complete`)만 씀. 대화 기록·스트림 조각의 내부 기준은 OpenAI 호환 형식이고, 생각 강도는 의도(`agent`·`agent_low`·`off`)로 넘겨 어댑터가 제공자 설정으로 바꿈. OpenRouter·OpenAI·Gemini·Anthropic 어댑터(Anthropic은 Messages API와 내부 형식을 서로 바꿈). 제공자가 도구 호출에 붙여 돌려받아야 하는 값(`extra_content`)은 그 제공자 어댑터만 보냄. 어댑터는 `ProviderAuth`(키·로컬 기본 주소)를 받고, 첫 await 전에 fetch를 시작한다(부르는 쪽이 대상 확인 다음 줄에서 부르면 그 사이 설정이 바뀔 틈이 없음). 보낼 대상 고정은 `src/background/modelTarget.ts`(가드 — 준비 뒤 verify, 받은 뒤 assert, 대상이 바뀌면 진행 중 요청 abort)와 번역 세션(`translator.ts` — translate_page 한 번을 대화 대상에 묶은 불투명 id, content는 id만), 대화는 `targetKey` 비교(#193)
 - **Port 하트비트 + 자동 재연결** — MV3 서비스 워커 유휴 종료 대응
 - **스트림 청크 무활동 워치독** (60초) + **초기 연결 타임아웃** (20초) + **툴별 타임아웃** (기본 30초, translate 180초)
 - **webNavigation 기반 settle 대기** — URL 이동·클릭 직후 페이지 전환 중에 후속 툴이 경쟁 조건 만나지 않도록

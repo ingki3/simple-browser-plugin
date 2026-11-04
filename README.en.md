@@ -1,7 +1,7 @@
 # Simple Browser Plugin (간편 브라우저 도우미)
 
 A Chrome side-panel assistant you talk to. It reads the page you are on, summarizes and translates it, fills in forms, clicks buttons, and reads or saves files for you.
-You bring your own AI model: OpenRouter (many vendors), OpenAI, Google Gemini, or Anthropic Claude.
+You bring your own AI model: OpenRouter (many vendors), OpenAI, Google Gemini, Anthropic Claude, or a local LLM on your computer (Ollama, LM Studio, and other OpenAI-compatible servers).
 
 **[Download the latest release](https://github.com/ingki3/simple-browser-plugin/releases/latest)** · Chrome 116+ · MIT license
 
@@ -51,7 +51,7 @@ Set a spending limit at your provider. Your key is stored unencrypted in this br
 
 ## Safety
 
-- **Where data goes**: chat and page content go only to the provider you chose (OpenRouter forwards to the chosen model's company). There is no project server.
+- **Where data goes**: chat and page content go only to the provider you chose (OpenRouter forwards to the chosen model's company; a local/compatible server receives them only at the address you entered). There is no project server.
   If you turn on Telegram or MCP, answers and approval questions for those requests also go there.
 - **What is sent**: the current tab's full URL and title with every request, and page text when reading, summarizing, or translating. Page text can include hidden text and text in editable areas.
   Registered repeat tasks read their target page at the set interval even when the panel is closed.

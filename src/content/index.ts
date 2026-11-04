@@ -64,7 +64,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   const msg = raw as BgToContent;
   if (!msg || typeof msg !== "object") return false;
   if (msg.kind === "translate_stop") {
-    stopTranslation();
+    stopTranslation(typeof msg.session === "string" ? msg.session : undefined);
     sendResponse({ ok: true } satisfies ContentResponse);
     return false;
   }

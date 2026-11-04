@@ -367,6 +367,8 @@ export async function callContentTool<T = unknown>(
   turnTab: TurnTab,
   // 실제 입력 클릭 준비(click_element만). 모델 인자와 따로 메시지에 싣는다.
   trusted?: string,
+  // 제한 시간 배수(#193 — 모델을 기다리는 도구를 로컬 서버로 돌릴 때).
+  timeoutScale = 1,
 ): Promise<T> {
   const endCall = timeSpan(`tool:${toolName}`);
   const tabId = await resolveTurnTab(turnTab);
@@ -377,7 +379,7 @@ export async function callContentTool<T = unknown>(
   const navWait = Date.now() - navStart;
   if (navWait > 50) debugLog("navigation:settled", `${navWait}ms`);
   const msg: BgToContent = { kind: "tool_exec", toolName, args, callId, ...(trusted ? { trusted } : {}) };
-  const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
+  const timeoutMs = (TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS) * timeoutScale;
 
   const send = async (): Promise<ContentResponse<T>> => {
     // 탭으로 열린 팝업이면 기다린 뒤에도 앞에 보이는지 다시 보고, 확인한 문서에만 보낸다.

@@ -5,6 +5,8 @@ import { KO } from "../i18n/ko";
 
 interface Props {
   needsKey: boolean;
+  // 로컬·호환 서버(#193)를 골랐는데 주소·모델이 없다(키 대신 이 안내).
+  needsLocal?: boolean;
   onOpenSettings: () => void;
   onSend: (text: string) => void;
 }
@@ -22,7 +24,19 @@ function PrivacyNote() {
 }
 
 // 빈 대화 화면(#129). 키가 없으면 키 안내와 설정 열기를, 있으면 바로 눌러 볼 첫 작업을 보인다.
-export function Welcome({ needsKey, onOpenSettings, onSend }: Props) {
+export function Welcome({ needsKey, needsLocal, onOpenSettings, onSend }: Props) {
+  if (needsKey && needsLocal) {
+    return (
+      <div className="welcome">
+        <strong className="welcome-title">{KO.welcomeLocalTitle}</strong>
+        <p>{KO.welcomeLocalBody}</p>
+        <PrivacyNote />
+        <button type="button" className="btn-approve" onClick={onOpenSettings}>
+          {KO.welcomeOpenSettings}
+        </button>
+      </div>
+    );
+  }
   if (needsKey) {
     return (
       <div className="welcome">
@@ -31,7 +45,7 @@ export function Welcome({ needsKey, onOpenSettings, onSend }: Props) {
         <PrivacyNote />
         <p>{KO.welcomeKeyCost}</p>
         <ul className="welcome-providers">
-          {PROVIDER_IDS.map((id) => (
+          {PROVIDER_IDS.filter((id) => id !== "local").map((id) => (
             <li key={id}>
               <span>{PROVIDER_LINKS[id].label}</span>
               <a href={PROVIDER_LINKS[id].keyUrl} target="_blank" rel="noopener noreferrer">

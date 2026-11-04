@@ -1,6 +1,6 @@
 # 개인정보처리방침 (Privacy Policy)
 
-간편 브라우저 도우미(Simple Browser Plugin, 이하 "확장") · 시행일 2026-11-03
+간편 브라우저 도우미(Simple Browser Plugin, 이하 "확장") · 시행일 2026-11-05
 
 [English below](#english)
 
@@ -9,7 +9,8 @@
 
 ## 1. AI 서비스로 보내는 것
 
-사용자는 설정에서 AI 서비스 하나(OpenRouter, OpenAI, Google Gemini, Anthropic Claude)를 고르고 자기 API 키를 넣습니다.
+사용자는 설정에서 AI 서비스 하나(OpenRouter, OpenAI, Google Gemini, Anthropic Claude, 또는 사용자가 주소를 직접 적은 로컬·호환 서버)를 고르고 자기 API 키를 넣습니다(로컬 서버는 키가 선택).
+로컬·호환 서버를 고르면 아래 내용은 그 주소의 서버로만 갑니다. 다른 컴퓨터의 서버(https)를 적었다면 그 서버를 운영하는 쪽이 내용을 받습니다.
 요청을 보내면 그 요청을 처리하려고 다음을 그 서비스로 보냅니다.
 
 - 대화: 사용자가 쓴 요청, 모델의 답, 도구를 실행한 결과
@@ -78,14 +79,15 @@ OpenRouter를 고르면 OpenRouter가 고른 모델의 회사로 다시 전달�
 
 # Privacy Policy (English)
 
-Simple Browser Plugin ("the extension") · Effective 2026-11-03
+Simple Browser Plugin ("the extension") · Effective 2026-11-05
 
 The extension is open source. This project runs no server that receives user data. The extension sends data only to the
 services the user chooses in settings, to do what the user asks. Everything else stays in this browser.
 
 ## 1. What is sent to the AI provider
 
-The user picks one AI provider (OpenRouter, OpenAI, Google Gemini, or Anthropic Claude) and enters their own API key.
+The user picks one AI provider (OpenRouter, OpenAI, Google Gemini, Anthropic Claude, or a local/compatible server whose address the user enters) and enters their own API key (optional for a local server).
+With a local/compatible server, the data below goes only to the server at that address. If the address points to another computer (https), whoever runs that server receives it.
 To handle a request, the extension sends the following to that provider:
 
 - The conversation: the user's requests, the model's answers, and tool results

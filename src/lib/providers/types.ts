@@ -2,9 +2,10 @@
 // OpenAI 호환 형식(OpenRouterMessage·OpenRouterStreamChunk)이고, 어댑터가 제공자 형식과 서로 바꾼다.
 import type { OpenRouterMessage, OpenRouterStreamChunk } from "../openrouter.ts";
 
-export type ProviderId = "openrouter" | "openai" | "gemini" | "anthropic";
+// local(#193): 사용자가 적은 OpenAI 호환 서버(Ollama·LM Studio·llama.cpp·vLLM 등).
+export type ProviderId = "openrouter" | "openai" | "gemini" | "anthropic" | "local";
 
-export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai", "gemini", "anthropic"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["openrouter", "openai", "gemini", "anthropic", "local"];
 
 export function isProviderId(v: unknown): v is ProviderId {
   return typeof v === "string" && (PROVIDER_IDS as readonly string[]).includes(v);
@@ -37,6 +38,12 @@ export interface ChatRequest {
   strictJson?: boolean;
 }
 
+// 요청에 쓰는 자격(#193). 기본 주소는 로컬·호환 서버(local)만 쓴다 — 설정에서 사용자가 적은 값만 온다.
+export interface ProviderAuth {
+  apiKey: string;
+  baseUrl?: string;
+}
+
 export interface ChatStream {
   // 조각을 내부 기준 형식으로 넘긴다. inactivityMs 동안 조각이 없으면 오류.
   read(onChunk: (chunk: OpenRouterStreamChunk) => void, inactivityMs: number): Promise<void>;
@@ -50,8 +57,11 @@ export interface ProviderAdapter {
   // 응답(생각 서명)이 그 앞의 문맥까지 서명해, 다음 요청에서 앞 문맥이 바뀌면 거부하는지(Anthropic). 그러면 요청 끝에 붙인
   // 임시 안내(현재 시각·저장 링크 후보 등)도 그 응답 앞에 기록으로 남겨 기록을 덧붙이기만 한다.
   signsContext: boolean;
-  // 스트림 요청을 연다(연결·HTTP 오류는 여기서). 읽기는 돌려준 ChatStream으로.
-  openStream(apiKey: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatStream>;
+  // 제한 시간 배수(#193). 로컬 서버는 모델을 처음 올릴 때 첫 응답이 느려 2배. 쓰는 곳은 providerTimeout으로.
+  timeoutScale: number;
+  // 스트림 요청을 연다(연결·HTTP 오류는 여기서). 읽기는 돌려준 ChatStream으로. 첫 await 전에 요청(fetch)을 시작한다 — 부르는 쪽이
+  // 대상 확인 바로 다음 줄에서 부르면 그 사이에 설정이 바뀔 틈이 없다(#193).
+  openStream(auth: ProviderAuth, req: ChatRequest, signal?: AbortSignal): Promise<ChatStream>;
   // 스트림 없이 한 번 받는다. 응답 본문 글자(없으면 "").
-  complete(apiKey: string, req: ChatRequest, signal?: AbortSignal): Promise<string>;
+  complete(auth: ProviderAuth, req: ChatRequest, signal?: AbortSignal): Promise<string>;
 }

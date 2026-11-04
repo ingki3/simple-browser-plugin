@@ -26,7 +26,7 @@ function effort(model: string, intent: ReasoningIntent): string {
 }
 
 // 호환 엔드포인트는 파일 조각(PDF)을 받지 않는다. 기록에 남아 있으면 안내 글자로 바꿔 보낸다(새 첨부는 하지 않는다).
-function withoutFileParts(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+export function withoutFileParts(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   return messages.map((m) =>
     Array.isArray(m.content) && m.content.some((p: { type?: string }) => p?.type === "file")
       ? {
@@ -81,12 +81,13 @@ export const geminiAdapter: ProviderAdapter = {
   label: LABEL,
   supportsFileParts: false,
   signsContext: false,
-  async openStream(apiKey, req, signal) {
+  timeoutScale: 1,
+  async openStream({ apiKey }, req, signal) {
     const response = await chatRequest(GEMINI_CHAT_URL, { Authorization: `Bearer ${apiKey}` }, geminiPayload(req, true), signal, LABEL);
     const index = geminiIndexer();
     return { read: (onChunk, inactivityMs) => readOpenRouterStream(response, (c) => onChunk(index(c)), inactivityMs, LABEL) };
   },
-  async complete(apiKey, req, signal) {
+  async complete({ apiKey }, req, signal) {
     const response = await chatRequest(GEMINI_CHAT_URL, { Authorization: `Bearer ${apiKey}` }, geminiPayload(req, false), signal, LABEL);
     const res = await chatJson<{ choices?: Array<{ message?: { content?: string | null } }> }>(response, LABEL);
     return res.choices?.[0]?.message?.content ?? "";

@@ -11,11 +11,13 @@ export interface FriendlyError {
   action?: ErrorAction;
 }
 
-// 저장한 API 키가 없을 때.
+// 요청을 보낼 준비가 안 됐을 때: 저장한 API 키가 없거나(key), 로컬 서버 주소·모델이 없을 때(endpoint·model, #193).
 export class MissingKeyError extends Error {
-  constructor(message: string) {
+  readonly missing: "key" | "endpoint" | "model";
+  constructor(message: string, missing: "key" | "endpoint" | "model" = "key") {
     super(message);
     this.name = "MissingKeyError";
+    this.missing = missing;
   }
 }
 
@@ -34,6 +36,10 @@ export function scrubSecret(text: string, secret: string): string {
 export function friendlyError(err: unknown, opts: { check?: boolean } = {}): FriendlyError {
   const raw = err instanceof Error ? err.message : String(err);
   if (err instanceof Error && err.name === "MissingKeyError") {
+    const missing = (err as Error & { missing?: unknown }).missing;
+    if (missing === "endpoint" || missing === "model") {
+      return { message: "로컬 서버 주소와 모델이 없습니다. 설정에서 서버 주소와 모델 이름을 넣어 주세요.", action: "settings" };
+    }
     return { message: "API 키가 없습니다. 설정에서 모델 제공자의 API 키를 넣어 주세요.", action: "settings" };
   }
   const status = httpStatus(err);

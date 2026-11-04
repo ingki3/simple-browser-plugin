@@ -68,11 +68,12 @@ export const openAiAdapter: ProviderAdapter = {
   label: LABEL,
   supportsFileParts: true,
   signsContext: false,
-  async openStream(apiKey, req, signal) {
+  timeoutScale: 1,
+  async openStream({ apiKey }, req, signal) {
     const response = await chatRequest(OPENAI_CHAT_URL, { Authorization: `Bearer ${apiKey}` }, openAiPayload(req, true), signal, LABEL);
     return { read: (onChunk, inactivityMs) => readOpenRouterStream(response, onChunk, inactivityMs, LABEL) };
   },
-  async complete(apiKey, req, signal) {
+  async complete({ apiKey }, req, signal) {
     const response = await chatRequest(OPENAI_CHAT_URL, { Authorization: `Bearer ${apiKey}` }, openAiPayload(req, false), signal, LABEL);
     const res = await chatJson<{ choices?: Array<{ message?: { content?: string | null } }> }>(response, LABEL);
     return res.choices?.[0]?.message?.content ?? "";
