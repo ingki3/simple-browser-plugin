@@ -34,8 +34,10 @@ function privateIpv4(host: string): boolean {
 function privateIpv6(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, "").toLowerCase();
   if (h === "::1") return true;
-  // 고유 로컬 주소 fc00::/7.
-  return /^f[cd][0-9a-f]{0,2}:/.test(h);
+  // 고유 로컬 주소 fc00::/7: 첫 16비트의 위 7비트가 1111110. 앞자리 0을 생략한 표기(fc::1 = 00fc::1)는 대역 밖이다.
+  const first = h.split(":")[0];
+  if (!/^[0-9a-f]{1,4}$/.test(first)) return false;
+  return (parseInt(first, 16) & 0xfe00) === 0xfc00;
 }
 
 // 이 컴퓨터·내부망 주소인지(구조로만): localhost(와 *.localhost), IPv4 루프백·사설, IPv6 ::1·fc00::/7.

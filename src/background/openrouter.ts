@@ -2367,6 +2367,11 @@ export class ChatAgent {
         return true;
       }
       for (const tabId of translationTabs) this.translatedTabs.add(tabId);
+      // 같은 탭의 앞 번역 세션은 끝낸다(새 번역이 대신한다 — 세션이 쌓여 다른 탭의 진행 중 세션을 밀어내지 않게).
+      for (const tabId of translationTabs) {
+        const old = this.translationSessions.get(tabId);
+        if (old) endTranslationSession(old);
+      }
       translationSession = beginTranslationSession({
         provider: this.provider,
         apiKey: this.apiKey ?? "",
