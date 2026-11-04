@@ -9,6 +9,12 @@ test("주소는 scheme://host만, 사용자 정보는 버림, 경로가 없으�
   assert.equal(r.counts.url, 3);
 });
 
+test("IPv6 호스트·괄호가 든 경로도 주소로 가린다", () => {
+  const r = maskDiagnostics("a https://[2001:db8::1]/private/alice?email=alice%40corp.test b https://example.com/docs/(private)/alice?email=x");
+  assert.equal(r.text, "a https://[2001:db8::1]/… b https://example.com/…");
+  assert.equal(r.counts.url, 2);
+});
+
 test("이메일·파일 이름·긴 값·긴 숫자", () => {
   const r = maskDiagnostics("mail me@corp.co.kr file 2024 보고서_최종.hwpx key sk-or-v1-abcdefghijklmnopqrstuvwxyz order 98765432");
   assert.equal(r.text, "mail [이메일] file 2024 [파일].hwpx key [긴 값] order [숫자]");

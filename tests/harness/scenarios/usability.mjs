@@ -114,6 +114,15 @@ export default [
       expect((await langInput.count()) === 0, "목록 값이면 칸 없음");
       await lang.selectOption("__custom__");
       expect((await langInput.count()) === 1 && (await langInput.inputValue()) === "ko", "직접 입력을 고르면 칸이 열림");
+      // 자동으로 열린 칸에서 고치는 중 값이 목록 값과 같아져도 칸이 닫히지 않는다.
+      await langInput.fill("nl");
+      await opts.waitForTimeout(800);
+      await opts.reload();
+      await opts.waitForTimeout(500);
+      const reopened = opts.locator('input[placeholder^="언어 코드"]');
+      await reopened.fill("en");
+      await opts.waitForTimeout(800);
+      expect((await reopened.count()) === 1 && (await reopened.inputValue()) === "en", "고치는 중 목록 값과 같아져도 칸 유지");
 
       await opts.goto(`${h.optionsUrl}#model`);
       await opts.waitForTimeout(400);

@@ -513,7 +513,10 @@ export function SettingsPage() {
                     <input
                       type="text"
                       value={draft.model}
-                      onChange={(e) => update({ model: e.target.value }, SAVE_DELAY_MS)}
+                      onChange={(e) => {
+                        setCustomModel(true);
+                        update({ model: e.target.value }, SAVE_DELAY_MS);
+                      }}
                       placeholder="provider/model (예: anthropic/claude-sonnet-5.5)"
                       spellCheck={false}
                     />
@@ -669,7 +672,11 @@ export function SettingsPage() {
                 <input
                   type="text"
                   value={draft.translationTargetLang}
-                  onChange={(e) => update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS)}
+                  onChange={(e) => {
+                    // 자동으로 열린 칸에서도 고치기 시작하면 직접 입력으로 둔다(중간 값이 목록 값과 같아져도 칸이 닫히지 않게).
+                    setCustomLang(true);
+                    update({ translationTargetLang: e.target.value }, SAVE_DELAY_MS);
+                  }}
                   placeholder="언어 코드(예: nl, pl, ar)"
                 />
               )}
