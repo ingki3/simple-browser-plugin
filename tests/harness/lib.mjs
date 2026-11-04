@@ -132,6 +132,7 @@ export async function startHarness() {
       globalThis.__voiceReply = undefined;
       globalThis.__voiceDelayMs = 0;
       globalThis.__voiceStatus = 0;
+      globalThis.__usage = undefined;
     });
     logs.length = 0;
     for (const p of optionsPages()) await p.close().catch(() => {});
@@ -241,8 +242,9 @@ async function installMockModel(sw) {
       return realQuery(q);
     };
     const realFetch = globalThis.fetch;
+    // __usage(OpenAI 형식 usage, #126): 있으면 스트림 끝에 choices가 빈 사용량 조각을 붙인다. Anthropic은 message_start·message_delta에.
     const sse = (chunks) =>
-      new Response(chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n", {
+      new Response([...chunks, ...(globalThis.__usage ? [{ choices: [], usage: globalThis.__usage }] : [])].map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n", {
         headers: { "content-type": "text/event-stream" },
       });
     globalThis.fetch = async (url, init) => {
@@ -312,10 +314,18 @@ async function installMockModel(sw) {
         globalThis.__toolLog.push({ name: lastTool.name ?? call?.function?.name, ...parsed });
         data = parsed.result ?? null;
       }
-      const anthropicSse = (events) =>
-        new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), {
+      const anthropicSse = (raw) => {
+        const u = globalThis.__usage;
+        const events = u
+          ? [
+              { type: "message_start", message: { usage: { input_tokens: u.prompt_tokens - (u.prompt_tokens_details?.cached_tokens ?? 0), cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? 0, output_tokens: 1 } } },
+              ...raw.map((e) => (e.type === "message_delta" ? { ...e, usage: { output_tokens: u.completion_tokens } } : e)),
+            ]
+          : raw;
+        return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), {
           headers: { "content-type": "text/event-stream" },
         });
+      };
       if (anthropic && body.tool_choice?.type === "none") {
         return anthropicSse([
           { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
@@ -372,6 +382,13 @@ async function installMockModel(sw) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
         out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
       } else if (step) out = step;
+      // httpStatus: 요청을 HTTP 오류로 거절한다(연결 단계 실패).
+      if (step?.httpStatus) return new Response(JSON.stringify({ error: { message: "거절" } }), { status: step.httpStatus, headers: { "content-type": "application/json" } });
+      // streamError: 글자·사용량을 보낸 뒤 스트림 오류 조각으로 끝난다(#126 — 끊긴 호출의 사용량).
+      if (step?.streamError && !anthropic) {
+        const parts = [{ choices: [{ delta: { content: "부분" } }] }, ...(globalThis.__usage ? [{ choices: [], usage: globalThis.__usage }] : []), { error: { message: "중간 오류" } }];
+        return new Response(parts.map((c) => `data: ${JSON.stringify(c)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+      }
       // lengthEmpty: 생각만 하다 응답 상한에 걸린 빈 응답(글자·도구 호출 없음, #160 재시도 시험).
       if (step?.lengthEmpty) {
         if (anthropic) return anthropicSse([{ type: "message_delta", delta: { stop_reason: "max_tokens" } }, { type: "message_stop" }]);

@@ -47,6 +47,13 @@ export interface OpenRouterStreamChunk {
     };
     finish_reason?: string | null;
   }>;
+  // 토큰 사용량(#126, OpenAI 형식 — 보통 choices가 빈 마지막 조각). Anthropic은 어댑터가 이 형식으로 바꾼다. 읽기는 lib/usage.ts.
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
+  } | null;
   error?: { code?: number | string; message?: string; metadata?: unknown };
 }
 

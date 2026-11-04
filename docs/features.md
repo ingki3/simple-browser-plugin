@@ -129,3 +129,4 @@
 - **Shadow DOM + 동일 출처 iframe 커버리지** — 모든 툴이 shadow root와 iframe 내부까지 순회
 - **PDF 이해** — 현재 탭이 PDF면 자동으로 내려받아 OpenRouter의 PDF file input으로 붙여 내용 기반 질의응답 가능 (최대 20MB)
 - **문제 신고용 진단(디버그 타임라인)** (#130) — 사이드 패널의 🐞 버튼으로 BG·content·panel 이벤트를 실시간 추적, 복사 버튼으로 공유 가능
+  - 토큰 사용량(#126): 에이전트의 모델 호출(마무리·재시도 포함)마다 `model:usage`(입력·캐시 읽기/쓰기·출력·생각 토큰·걸린 시간, 끊긴 호출은 `· 오류`/`· 중단`), 턴이 끝날 때 `turn:usage`(호출 수·합계·시간과 대화 누계 — 기록을 비우면 새로 셈). 제공자 스트림의 usage만 읽고(`src/lib/usage.ts`, 내부 기준 OpenAI 형식 — OpenAI는 `stream_options.include_usage`, OpenRouter는 늘 줌, Anthropic은 `message_start`·`message_delta`를 어댑터가 바꿈, Gemini 호환 엔드포인트는 주면 읽음), 없으면 "사용량 없음"(글자 수로 추정하지 않음). 번역·초안 같은 보조 요청은 세지 않음
