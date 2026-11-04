@@ -6,6 +6,7 @@ import { providerAdapter, providerTimeout } from "@/lib/providers";
 import { getSettings } from "./storage";
 import { debugLog } from "./debug";
 import { beginTargetGuard } from "./modelTarget";
+import { beginKeepalive, endKeepalive } from "./keepalive";
 
 const CHECK_TIMEOUT_MS = 30_000;
 
@@ -21,6 +22,8 @@ export async function checkConnection(): Promise<{ provider: string; model: stri
   // 확인하는 사이 대상(제공자·키·모델·서버 주소)이 바뀌면 멈춘다(#193).
   const guard = beginTargetGuard(active, controller.signal);
   debugLog("connection:check", `${provider} · ${model}`);
+  // 로컬 서버는 모델을 올리느라 첫 응답이 30초를 넘을 수 있다 — 기다리는 동안 서비스 워커를 붙잡는다(#193 리뷰).
+  beginKeepalive();
   try {
     await guard.verify();
     await providerAdapter(provider).complete(
@@ -49,6 +52,7 @@ export async function checkConnection(): Promise<{ provider: string; model: stri
   } finally {
     clearTimeout(timer);
     guard.end();
+    endKeepalive();
   }
   return { provider, model };
 }
