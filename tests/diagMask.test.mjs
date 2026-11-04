@@ -29,6 +29,22 @@ test("이메일·파일 이름·긴 값·긴 숫자", () => {
   assert.deepEqual(r.counts, { url: 0, email: 1, file: 1, token: 1, number: 1 });
 });
 
+test("주소 뒤 꼬리는 중괄호·인코딩한 이메일까지 모두 가리고, 앞 글자는 둔다", () => {
+  const r = maskDiagnostics("see url=https://example.com/report?filter={status}&amp;email=alice%40corp.test.");
+  assert.equal(r.text, "see url=https://example.com/…");
+  assert.equal(r.counts.url, 1);
+  assert.equal(maskDiagnostics("x alice%40corp.test y").text, "x [이메일] y");
+});
+
+test("긴 파일 이름도 전체를 가리고, 긴 글(주소·이메일 실패 모양)도 빠르다", () => {
+  assert.equal(maskDiagnostics(`${"고객_홍길동_" + "가".repeat(130)}.pdf`).text, "[파일].pdf");
+  for (const long of ["a.".repeat(60_000), "가".repeat(60_000), "a@".repeat(30_000)]) {
+    const t0 = Date.now();
+    maskDiagnostics(long);
+    assert.ok(Date.now() - t0 < 300, `${long.slice(0, 4)}… ${Date.now() - t0}ms`);
+  }
+});
+
 test("겹치는 것은 원문에서 한 번에 — 긴 토큰 안의 숫자가 조각으로 남지 않음, 주소 안의 이메일·숫자는 주소로", () => {
   const r = maskDiagnostics("abcdefghijkl123456mnopqrst https://x.test/a/me@b.com/1234567");
   assert.equal(r.text, "[긴 값] https://x.test/…");

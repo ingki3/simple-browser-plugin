@@ -1,6 +1,10 @@
 // 진단 복사(#132)의 공유 전 가리기. 판정에는 쓰지 않고, 복사할 글에서 더 가리는 쪽으로만 쓴다(잘못 가려도 진단 글이 덜 보일 뿐).
-// 가릴 범위는 원문에서 한 번에(정규식 하나의 왼쪽부터) 정한다 — 앞에서 바꾼 글을 다시 훑지 않으므로 긴 토큰 안의 숫자처럼 겹치는 것이
-// 조각으로 남지 않는다. 같은 자리에서는 주소 → 이메일 → 파일 이름 → 긴 값 → 숫자 순으로 고른다. npm test로 시험하므로 다른 모듈을 불러오지 않는다.
+// 글을 공백으로 나눈 조각마다 한 번씩 본다(긴 글에서도 선형 — 정규식이 자리마다 되짚지 않게).
+// - 주소(scheme://)가 든 조각: 주소 앞은 두고, 주소부터 조각 끝까지를 `scheme://host/…`로(사용자 정보 버림 — 경로·쿼리의 괄호·따옴표·중괄호까지 모두 가림)
+// - @가 든 조각(이메일, %40 포함): 조각 전체를 [이메일]
+// - 파일 이름(조각이 문서·이미지·압축 확장자로 끝남): 조각 전체를 [파일].확장자 — 공백이 든 파일 이름은 마지막 조각만 가려진다(한계)
+// - 그 밖: 24자 이상 영숫자·_- 덩어리는 [긴 값], 6자리 이상 숫자는 [숫자]
+// npm test로 시험하므로 다른 모듈을 불러오지 않는다.
 
 export type DiagMaskKind = "url" | "email" | "file" | "token" | "number";
 
@@ -9,52 +13,76 @@ export interface DiagMaskResult {
   counts: Record<DiagMaskKind, number>;
 }
 
-const FILE_EXT = "pdf|docx?|xlsx?|pptx?|hwpx?|odt|ods|odp|csv|tsv|txt|rtf|zip|7z|rar|png|jpe?g|gif|webp|heic|svg|mp4|mov";
-const PATTERN = new RegExp(
-  [
-    // 주소: scheme://… (공백·큰따옴표·꺾쇠 전까지 — IPv6 호스트의 [], 경로의 ()·작은따옴표도 주소로 본다. 뒤에 붙은 문장 부호까지 먹어도 더 가릴 뿐)
-    String.raw`(?<url>[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"<>{}]+)`,
-    String.raw`(?<email>[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`,
-    // 파일 이름은 120자까지만 본다(긴 글에서 자리마다 끝까지 되짚지 않게 — 선형에 가깝게).
-    String.raw`(?<file>[^\s/\\'"<>()\[\]{}:|]{1,120}\.(?:${FILE_EXT}))(?![A-Za-z0-9])`,
-    String.raw`(?<token>[A-Za-z0-9_-]{24,})`,
-    String.raw`(?<number>\d{6,})`,
-  ].join("|"),
-  "giu",
+const FILE_EXT = new Set(
+  "pdf doc docx xls xlsx ppt pptx hwp hwpx odt ods odp csv tsv txt rtf zip 7z rar png jpg jpeg gif webp heic svg mp4 mov".split(" "),
 );
+const SCHEME_CHAR = /[a-zA-Z0-9+.-]/;
+// 조각 끝의 문장 부호(파일 확장자 판정에서 뺀다).
+const TRAILING = /[)\]}>.,;:!?'"]+$/;
 
-// scheme://host만 남긴다(사용자 정보는 버리고, 경로·쿼리·해시가 있으면 /…).
-function maskUrl(url: string): string {
-  const m = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/?#]*)(.*)$/.exec(url);
-  if (!m) return "[주소]";
-  const host = m[2].includes("@") ? m[2].slice(m[2].lastIndexOf("@") + 1) : m[2];
-  const rest = m[3];
-  return `${m[1]}${host}${rest && rest !== "/" ? "/…" : ""}`;
+function maskUrlTail(tail: string): string {
+  // tail = scheme://나머지(조각 끝까지)
+  const sep = tail.indexOf("://");
+  const scheme = tail.slice(0, sep + 3);
+  const rest = tail.slice(sep + 3);
+  let end = rest.length;
+  for (const ch of ["/", "?", "#"]) {
+    const i = rest.indexOf(ch);
+    if (i >= 0 && i < end) end = i;
+  }
+  let host = rest.slice(0, end);
+  if (host.includes("@")) host = host.slice(host.lastIndexOf("@") + 1);
+  const after = rest.slice(end);
+  return `${scheme}${host}${after && after !== "/" ? "/…" : ""}`;
+}
+
+function fileExt(token: string): string | null {
+  const core = token.replace(TRAILING, "");
+  const dot = core.lastIndexOf(".");
+  if (dot <= 0 || dot === core.length - 1) return null;
+  const ext = core.slice(dot + 1).toLowerCase();
+  return FILE_EXT.has(ext) ? ext : null;
+}
+
+function maskToken(token: string, counts: Record<DiagMaskKind, number>): string {
+  const sep = token.indexOf("://");
+  if (sep > 0) {
+    // scheme 시작: :// 앞에서 거꾸로 scheme 글자를 따라간다(첫 글자는 영문자).
+    let start = sep;
+    while (start > 0 && SCHEME_CHAR.test(token[start - 1])) start--;
+    while (start < sep && !/[a-zA-Z]/.test(token[start])) start++;
+    if (start < sep) {
+      counts.url += 1;
+      return `${token.slice(0, start)}${maskUrlTail(token.slice(start))}`;
+    }
+  }
+  if (token.includes("@") || /%40/i.test(token)) {
+    counts.email += 1;
+    return "[이메일]";
+  }
+  const ext = fileExt(token);
+  if (ext) {
+    counts.file += 1;
+    return `[파일].${ext}`;
+  }
+  return token
+    .replace(/[A-Za-z0-9_-]{24,}/g, () => {
+      counts.token += 1;
+      return "[긴 값]";
+    })
+    .replace(/\d{6,}/g, () => {
+      counts.number += 1;
+      return "[숫자]";
+    });
 }
 
 export function maskDiagnostics(text: string): DiagMaskResult {
   const counts: Record<DiagMaskKind, number> = { url: 0, email: 0, file: 0, token: 0, number: 0 };
-  const out = text.replace(PATTERN, (...args) => {
-    const groups = args[args.length - 1] as Record<DiagMaskKind, string | undefined>;
-    if (groups.url !== undefined) {
-      counts.url += 1;
-      return maskUrl(groups.url);
-    }
-    if (groups.email !== undefined) {
-      counts.email += 1;
-      return "[이메일]";
-    }
-    if (groups.file !== undefined) {
-      counts.file += 1;
-      return `[파일].${groups.file.slice(groups.file.lastIndexOf(".") + 1)}`;
-    }
-    if (groups.token !== undefined) {
-      counts.token += 1;
-      return "[긴 값]";
-    }
-    counts.number += 1;
-    return "[숫자]";
-  });
+  // 공백(줄바꿈 포함)은 그대로 두고 조각만 바꾼다.
+  const out = text
+    .split(/(\s+)/)
+    .map((part) => (part && !/^\s+$/.test(part) ? maskToken(part, counts) : part))
+    .join("");
   return { text: out, counts };
 }
 
