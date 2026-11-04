@@ -12,10 +12,11 @@ export interface DiagMaskResult {
 const FILE_EXT = "pdf|docx?|xlsx?|pptx?|hwpx?|odt|ods|odp|csv|tsv|txt|rtf|zip|7z|rar|png|jpe?g|gif|webp|heic|svg|mp4|mov";
 const PATTERN = new RegExp(
   [
-    // 주소: scheme://… (공백·따옴표·꺾쇠 전까지 — IPv6 호스트의 []와 경로의 ()도 주소로 본다. 뒤에 붙은 문장 괄호까지 먹어도 더 가릴 뿐)
-    String.raw`(?<url>[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s'"<>{}]+)`,
+    // 주소: scheme://… (공백·큰따옴표·꺾쇠 전까지 — IPv6 호스트의 [], 경로의 ()·작은따옴표도 주소로 본다. 뒤에 붙은 문장 부호까지 먹어도 더 가릴 뿐)
+    String.raw`(?<url>[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"<>{}]+)`,
     String.raw`(?<email>[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`,
-    String.raw`(?<file>[^\s/\\'"<>()\[\]{}:|]+\.(?:${FILE_EXT}))(?![A-Za-z0-9])`,
+    // 파일 이름은 120자까지만 본다(긴 글에서 자리마다 끝까지 되짚지 않게 — 선형에 가깝게).
+    String.raw`(?<file>[^\s/\\'"<>()\[\]{}:|]{1,120}\.(?:${FILE_EXT}))(?![A-Za-z0-9])`,
     String.raw`(?<token>[A-Za-z0-9_-]{24,})`,
     String.raw`(?<number>\d{6,})`,
   ].join("|"),

@@ -15,6 +15,14 @@ test("IPv6 호스트·괄호가 든 경로도 주소로 가린다", () => {
   assert.equal(r.counts.url, 2);
 });
 
+test("주소 안의 작은따옴표 뒤도 가린다, 긴 글도 빠르게", () => {
+  assert.equal(maskDiagnostics("x https://portal.example/users/O'Connor/private?session=short-secret y").text, "x https://portal.example/… y");
+  const long = "가".repeat(30_000);
+  const t0 = Date.now();
+  assert.equal(maskDiagnostics(long).text, long);
+  assert.ok(Date.now() - t0 < 300, `30,000자 ${Date.now() - t0}ms`);
+});
+
 test("이메일·파일 이름·긴 값·긴 숫자", () => {
   const r = maskDiagnostics("mail me@corp.co.kr file 2024 보고서_최종.hwpx key sk-or-v1-abcdefghijklmnopqrstuvwxyz order 98765432");
   assert.equal(r.text, "mail [이메일] file 2024 [파일].hwpx key [긴 값] order [숫자]");
