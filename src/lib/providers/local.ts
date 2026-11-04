@@ -83,6 +83,15 @@ export function scrubLocal(text: string, auth: ProviderAuth, base?: string): str
 export const LOCAL_CONNECT_ERROR =
   "로컬 서버에 연결하지 못했습니다. 서버가 켜져 있는지, 주소가 맞는지 확인해 주세요(다른 주소로 넘기는 응답은 따르지 않습니다).";
 
+// 로컬 서버가 이 확장의 출처를 거부함(HTTP 403 — Ollama의 OLLAMA_ORIGINS 등). 오류 종류를 따로 두어(이름으로), 안내 문구가
+// "API 키가 맞지 않습니다"(friendlyError의 403 안내)로 덮이지 않고 그대로 보이게 한다(#193 리뷰).
+export class LocalOriginError extends ProviderHttpError {
+  constructor(message: string) {
+    super(message, 403);
+    this.name = "LocalOriginError";
+  }
+}
+
 function extensionId(): string {
   const c = (globalThis as { chrome?: { runtime?: { id?: string } } }).chrome;
   return c?.runtime?.id ?? "<이 확장 ID>";
@@ -94,9 +103,8 @@ export function localError(err: unknown, auth: ProviderAuth, base: string | unde
   if (err instanceof ProviderHttpError) {
     const raw = scrubLocal(err.message, auth, base);
     if (err.status === 403 && base && privateHost(new URL(base).hostname)) {
-      return new ProviderHttpError(
+      return new LocalOriginError(
         `로컬 서버가 이 확장의 요청을 거부했습니다(HTTP 403). Ollama라면 OLLAMA_ORIGINS에 chrome-extension://${extensionId()}를 넣고 다시 시작하세요. 서버 원문: ${raw}`,
-        403,
       );
     }
     if ((err.status === 400 || err.status === 422) && toolsSent) {

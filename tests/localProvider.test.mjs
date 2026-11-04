@@ -126,6 +126,8 @@ test("localError: 403은 Ollama 허용 출처 안내, 도구를 보낸 400은 �
   const base = "http://localhost:11434/v1";
   const e403 = localError(new ProviderHttpError("forbidden", 403), auth, base, true);
   assert.ok(e403 instanceof ProviderHttpError && e403.status === 403 && e403.message.includes("OLLAMA_ORIGINS"));
+  // 화면 안내가 "API 키가 맞지 않습니다"로 덮이지 않는다.
+  assert.match(friendlyError(e403).message, /OLLAMA_ORIGINS/);
   const e400 = localError(new ProviderHttpError("model does not support tools", 400), auth, base, true);
   assert.ok(e400.message.includes("도구 호출(tools)") && e400.message.includes("does not support tools"));
   assert.equal(localError(new ProviderHttpError("bad", 400), auth, base, false).message, "bad");
