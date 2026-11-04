@@ -559,11 +559,12 @@ async function delegateReady(): Promise<TelegramState | null> {
 // MCP 작업의 승인 질문을 텔레그램 버튼으로 묻는다. until: MCP 작업 기한에 맞춘 절대 만료 시각. 연결 세대에 묶여(끊기·토큰 바꾸기·묻기 끄기면
 // 거둠) 열려 있는 동안 받기를 이어서 돌린다(1분 알람을 기다리지 않게). 등록 직전에 다시 확인하고, 그 사이 다른 질문·요청이 있으면 묻지 않는다.
 export async function telegramAskDelegated(q: RemoteQuestion, signal: AbortSignal, until: number): Promise<RemoteAskResult> {
-  const s = await delegateReady();
-  if (!s) return "unavailable";
-  if (signal.aborted) return "aborted";
-  // delegateReady 뒤 await가 없다 — 여기서 바로 등록한다.
+  // 상태를 읽기 전의 연결 세대를 붙잡는다 — 읽는 사이 연결을 끊거나 토큰을 바꾸면(세대가 바뀜) 옛 채팅으로 묻지 않는다(#192 리뷰).
   const conn = connAbort.signal;
+  const s = await delegateReady();
+  if (!s || conn.aborted || conn !== connAbort.signal) return "unavailable";
+  if (signal.aborted) return "aborted";
+  // 여기서 등록까지 await가 없다.
   const asking = askByTelegram(s, conn, q, signal, { until, delegate: true });
   // 질문이 열려 있는 동안 받기를 이어서 돌린다.
   void (async () => {

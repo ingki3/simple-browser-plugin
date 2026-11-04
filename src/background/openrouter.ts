@@ -4,7 +4,7 @@ import { appendCustomSystemPrompt, nowNote } from "@/lib/systemPrompt";
 import { describePopup, popupWhere } from "@/lib/actionTarget";
 import { remoteActionLines, remoteHopQuestion, remoteRefusal, remoteTaskQuestion, remoteToolQuestion, withPrefix, type RemoteApprover, type RemoteAskResult, type RemoteQuestion } from "@/lib/remoteApproval";
 import type { ModelId } from "@/lib/models";
-import { isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
+import { internalNavigateAutoBlock, isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
@@ -1778,8 +1778,11 @@ export class ChatAgent {
       // 내부 페이지에서 사용자가 적은 사이트로 자동 이동했으면, 이동이 성공한 뒤 그 사이트를 이 턴의 사이트로 삼아
       // 이후 클릭·입력의 자동 실행 범위로 쓴다(카드로 허락한 이동이 approvedSites가 되는 것과 같은 범위).
       // 원격 허용 사이트 덕분에 자동으로 간 이동은 턴의 사이트로 올리지 않는다(설정에서 빼면 바로 빠지게, #192).
-      const navSite = fromInternal && !this.turnSite ? siteOf(String(preview.details ?? "")) : null;
-      const onlyRemote = !!navSite && remoteTrusted.has(navSite) && !this.approvedSites.has(navSite) && !this.turnNamedSites.includes(navSite);
+      // 판정은 자동 이동과 같은 경계(withinTrusted — 같은 등록 도메인 포함)로: 허용 사이트를 빼고도 자동이었을 때만 올린다.
+      const navTarget = String(preview.details ?? "");
+      const navSite = fromInternal && !this.turnSite ? siteOf(navTarget) : null;
+      const withoutRemote = new Set(this.approvedSites);
+      const onlyRemote = !!navSite && remoteTrusted.size > 0 && internalNavigateAutoBlock(withoutRemote, this.turnNamedSites, navTarget) !== null;
       const internalNavSite = onlyRemote ? null : navSite;
       return { kind: "run", execArgs, via: "auto", signInAttempt, internalNavSite };
     }

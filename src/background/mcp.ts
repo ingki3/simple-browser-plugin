@@ -140,8 +140,14 @@ export async function mcpSet(patch: { enabled?: boolean; port?: number; askAppro
   }
   // 승인 묻기만 바꾸면 연결은 그대로 두고, 끄면 기다리는 질문을 거둔다(물을 수 없는 것으로).
   if (patch.askApproval !== undefined && patch.enabled === undefined && patch.port === undefined) {
-    const s = await update((cur) => ({ ...cur, askApproval: patch.askApproval === true }));
+    const s = await update((cur) => ({
+      ...cur,
+      askApproval: patch.askApproval === true,
+      ...(patch.askViaTelegram !== undefined ? { askViaTelegram: patch.askViaTelegram === true } : {}),
+    }));
     askEnabled = s.askApproval;
+    askViaTelegram = s.askViaTelegram === true;
+    if (!askViaTelegram) for (const c of [...delegateAsks]) c.abort();
     if (!askEnabled) for (const w of [...askWaiters.values()]) w.cancel("unavailable");
     return statusOf(s);
   }
@@ -152,9 +158,12 @@ export async function mcpSet(patch: { enabled?: boolean; port?: number; askAppro
     ...(patch.port !== undefined ? { port: patch.port } : {}),
     secret: cur.secret || newSecret(),
     ...(patch.askApproval !== undefined ? { askApproval: patch.askApproval } : {}),
+    ...(patch.askViaTelegram !== undefined ? { askViaTelegram: patch.askViaTelegram === true } : {}),
     lastError: "",
   }));
   askEnabled = s.askApproval;
+  askViaTelegram = s.askViaTelegram === true;
+  if (!askViaTelegram) for (const c of [...delegateAsks]) c.abort();
   restart();
   if (s.enabled) await chrome.alarms.create(ALARM, { periodInMinutes: 1 });
   else await chrome.alarms.clear(ALARM).catch(() => false);
