@@ -43,6 +43,10 @@ async function targetHash(active: Pick<ActiveModel, "provider" | "apiKey" | "mod
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// 끝낸 세션 id(늦게 끝난 해시 저장·복구가 되살리지 못하게, 최근 것만).
+const ended = new Set<string>();
+const ENDED_MAX = 200;
+
 let persistQueue: Promise<unknown> = Promise.resolve();
 function persist(fn: (m: Record<string, string>) => Record<string, string>): Promise<void> {
   const run = persistQueue.then(async () => {
@@ -64,6 +68,8 @@ export function beginTranslationSession(active: ActiveModel): string {
   void targetHash(active)
     .then((h) =>
       persist((m) => {
+        // 해시를 구하는 사이 끝낸 세션은 저장하지 않는다.
+        if (ended.has(id) || !sessions.has(id)) return m;
         m[id] = h;
         const ids = Object.keys(m);
         for (const old of ids.slice(0, Math.max(0, ids.length - MAX_SESSIONS))) delete m[old];
@@ -77,6 +83,12 @@ export function beginTranslationSession(active: ActiveModel): string {
 export function endTranslationSession(id: string): void {
   const s = sessions.get(id);
   sessions.delete(id);
+  ended.add(id);
+  while (ended.size > ENDED_MAX) {
+    const oldest = ended.values().next().value;
+    if (oldest === undefined) break;
+    ended.delete(oldest);
+  }
   if (s) for (const c of s.controllers) c.abort();
   void persist((m) => {
     delete m[id];
@@ -86,7 +98,7 @@ export function endTranslationSession(id: string): void {
 
 // 메모리에 없는 세션(서비스 워커가 다시 뜸)을 되살린다: 저장한 해시가 지금 설정의 대상과 같을 때만.
 async function restoreSession(id: string): Promise<TranslationSession | null> {
-  if (!id) return null;
+  if (!id || ended.has(id)) return null;
   const got = (await chrome.storage.session.get(PERSIST_KEY).catch(() => ({}))) as Record<string, unknown>;
   const saved = (got[PERSIST_KEY] ?? {}) as Record<string, string>;
   const hash = saved[id];
@@ -96,9 +108,10 @@ async function restoreSession(id: string): Promise<TranslationSession | null> {
     endTranslationSession(id);
     return null;
   }
-  // 기다리는 사이 다른 배치가 먼저 되살렸으면 그것을 쓴다.
+  // 기다리는 사이 다른 배치가 먼저 되살렸으면 그것을 쓰고, 그 사이 끝냈으면 되살리지 않는다.
   const again = sessions.get(id);
   if (again) return again;
+  if (ended.has(id)) return null;
   const session = { active, key: targetKey(active), controllers: new Set<AbortController>() };
   sessions.set(id, session);
   debugLog("translate:session_restored", id.slice(0, 8));
