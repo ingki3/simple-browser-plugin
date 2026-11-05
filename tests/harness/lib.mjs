@@ -137,6 +137,7 @@ export async function startHarness() {
       globalThis.__draft = null;
       globalThis.__realWindowQuery = false;
       globalThis.__modelReqs = [];
+      globalThis.__badToolIds = [];
       globalThis.__voiceReqs = [];
       globalThis.__voiceReply = undefined;
       globalThis.__voiceDelayMs = 0;
@@ -239,6 +240,42 @@ async function installMockModel(sw) {
     globalThis.__steps = [];
     globalThis.__toolLog = [];
     globalThis.__n = 0;
+    // 요청 기록의 도구 결과가 바로 앞 호출 블록과 맞는지(#221). 틀린 점을 글로 돌려준다(없으면 빈 배열).
+    function toolPairingErrors(messages, anthropic) {
+      const errs = [];
+      if (!Array.isArray(messages)) return errs;
+      if (anthropic) {
+        let open = null;
+        for (const m of messages) {
+          const blocks = Array.isArray(m.content) ? m.content : [];
+          if (m.role === "assistant") {
+            if (open?.size) errs.push(`결과 없는 호출 ${[...open].join(",")}`);
+            open = new Set(blocks.filter((b) => b.type === "tool_use").map((b) => b.id));
+            continue;
+          }
+          const results = blocks.filter((b) => b.type === "tool_result").map((b) => b.tool_use_id);
+          for (const id of results) {
+            if (!open?.has(id)) errs.push(`앞 호출에 없는 결과 ${id}`);
+            else open.delete(id);
+          }
+          if (open?.size) errs.push(`결과 없는 호출 ${[...open].join(",")}`);
+          open = null;
+        }
+        return errs;
+      }
+      let open = null;
+      for (const m of messages) {
+        if (m.role === "tool") {
+          if (!open?.has(m.tool_call_id)) errs.push(`앞 호출에 없는 결과 ${m.tool_call_id}`);
+          else open.delete(m.tool_call_id);
+          continue;
+        }
+        if (open?.size) errs.push(`결과 없는 호출 ${[...open].join(",")}`);
+        open = m.role === "assistant" ? new Set((m.tool_calls ?? []).map((c) => c.id)) : null;
+      }
+      return errs;
+    }
+
     // 사이드 패널을 탭으로 띄워 시험하므로 "활성 탭"은 시험 페이지 탭(http, 패널이 아닌 것)으로 고정한다.
     const realQuery = chrome.tabs.query.bind(chrome.tabs);
     chrome.tabs.query = async (q) => {
@@ -351,13 +388,20 @@ async function installMockModel(sw) {
             ),
           )
         : body.messages;
+      // 실제 API처럼 도구 결과가 바로 앞 호출 블록과 맞는지 본다(#221): 결과 id가 그 블록에 없거나 겹치거나, 블록의 호출에 결과가 빠지면
+      // 400으로 거절하고 __badToolIds에 남긴다(run.mjs가 시나리오마다 비어 있는지 확인 — 내부 키가 기록에 섞이는 회귀를 잡는다).
+      const bad = toolPairingErrors(body.messages, anthropic);
+      if (bad.length) {
+        (globalThis.__badToolIds ??= []).push(...bad);
+        return new Response(JSON.stringify({ error: { message: `tool result mismatch: ${bad.join("; ")}` } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
       const lastTool = [...msgs].reverse().find((m) => m.role === "tool");
       let data = null;
       if (lastTool) {
         const parsed = JSON.parse(lastTool.content);
-        // 도구 이름: 결과 메시지의 name(OpenRouter) 또는 같은 id의 도구 호출(name을 보내지 않는 제공자).
-        const call = msgs.flatMap((m) => m.tool_calls ?? []).find((c) => c.id === lastTool.tool_call_id);
-        globalThis.__toolLog.push({ name: lastTool.name ?? call?.function?.name, ...parsed });
+        // 도구 이름: 결과 메시지의 name(OpenRouter) 또는 같은 id의 마지막 도구 호출(name을 보내지 않는 제공자 — 모델이 id를 다시 써도 이번 호출).
+        const call = msgs.flatMap((m) => m.tool_calls ?? []).reverse().find((c) => c.id === lastTool.tool_call_id);
+        globalThis.__toolLog.push({ name: lastTool.name ?? call?.function?.name, callId: lastTool.tool_call_id, ...parsed });
         data = parsed.result ?? null;
       }
       const anthropicSse = (raw) => {
@@ -455,7 +499,7 @@ async function installMockModel(sw) {
         if (out.tool) {
           const args = JSON.stringify(out.args);
           ev.push(
-            { type: "content_block_start", index: i, content_block: { type: "tool_use", id: "toolu_" + ++globalThis.__n, name: out.tool, input: {} } },
+            { type: "content_block_start", index: i, content_block: { type: "tool_use", id: out.callId ?? "toolu_" + ++globalThis.__n, name: out.tool, input: {} } },
             { type: "content_block_delta", index: i, delta: { type: "input_json_delta", partial_json: args.slice(0, 3) } },
             { type: "content_block_delta", index: i, delta: { type: "input_json_delta", partial_json: args.slice(3) } },
             { type: "content_block_stop", index: i },
@@ -486,10 +530,12 @@ async function installMockModel(sw) {
         });
         return new Response(stream, { headers: { "content-type": "text/event-stream" } });
       }
-      const chunks = out.tool
-        ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: "call" + ++globalThis.__n, type: "function", function: { name: out.tool, arguments: JSON.stringify(out.args) }, ...(out.extra ? { extra_content: out.extra } : {}) }] } }] }]
+      // calls: 한 응답에 도구 호출 여러 개([{ tool, args, callId }], #221 시험). callId: 모델이 줄 호출 id(없으면 call<n>).
+      const calls = out.calls ?? (out.tool ? [{ tool: out.tool, args: out.args, callId: out.callId, extra: out.extra }] : []);
+      const chunks = calls.length
+        ? [{ choices: [{ delta: { tool_calls: calls.map((c, index) => ({ index, id: c.callId ?? "call" + ++globalThis.__n, type: "function", function: { name: c.tool, arguments: JSON.stringify(c.args ?? {}) }, ...(c.extra ? { extra_content: c.extra } : {}) })) } }] }]
         : [{ choices: [{ delta: { content: out.text } }] }];
-      chunks.push({ choices: [{ delta: {}, finish_reason: out.tool ? "tool_calls" : "stop" }] });
+      chunks.push({ choices: [{ delta: {}, finish_reason: calls.length ? "tool_calls" : "stop" }] });
       return sse(chunks);
     };
   });
