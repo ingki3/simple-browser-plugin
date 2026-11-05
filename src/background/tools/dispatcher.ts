@@ -585,6 +585,10 @@ async function observeClickEffect(
   return { navigation: navKind(before, url), url, sameDocument, newTab: newTabs(), dom };
 }
 
+// 다른 출처 iframe 알림(#235). declaredSrc는 페이지가 적은 주소라 지금 iframe 안 문서와 다를 수 있다.
+const CROSS_ORIGIN_FRAME_NOTE =
+  "crossOriginFrames는 다른 출처 iframe이라 그 안의 내용은 찾기·읽기 도구로 볼 수 없습니다. declaredSrc는 페이지가 iframe에 적어 둔 주소이며 그 안에서 이동했으면 지금 내용과 다를 수 있습니다. 찾는 내용이 그 안에 있어 보이면 declaredSrc로 navigate_to_url 해 보고, 다른 내용이면 사용자에게 안내하세요. declaredSrc가 비고 srcTooLong이 있으면 주소가 길어 실을 수 없으니 이동하지 마세요.";
+
 const POPUP_WINDOW_NOTE =
   "팝업 창 — 원래 탭에서 누른 버튼이 연 창입니다. 도구는 이 창에서 동작하고, 창이 닫히면 원래 탭으로 돌아갑니다.";
 const POPUP_TAB_NOTE =
@@ -958,12 +962,14 @@ async function runTool(
       // 관측한 창이 따라가는 팝업 창이면 모델이 어느 창을 보고 있는지 알 수 있게 적는다.
       const current = await currentToolTab(turnTab);
       const inPopup = current?.popup === true;
-      const data: PageDescription = inPopup ? { ...raw, window: current?.asTab ? POPUP_TAB_NOTE : POPUP_WINDOW_NOTE } : raw;
+      const withWindow: PageDescription = inPopup ? { ...raw, window: current?.asTab ? POPUP_TAB_NOTE : POPUP_WINDOW_NOTE } : raw;
+      const frames = withWindow.crossOriginFrames?.length ?? 0;
+      const data: PageDescription = frames ? { ...withWindow, crossOriginNote: CROSS_ORIGIN_FRAME_NOTE } : withWindow;
       const regionList =
         data.landmarks.map((l) => `${l.region}(${l.clickableCount})`).join(", ") || "없음";
       return {
         ok: true,
-        summary: `${inPopup ? "팝업 창 " : ""}페이지 관측: ${truncate(data.title, 40)} / 랜드마크: ${regionList}`,
+        summary: `${inPopup ? "팝업 창 " : ""}페이지 관측: ${truncate(data.title, 40)} / 랜드마크: ${regionList}${frames ? ` / 다른 출처 iframe ${frames}개` : ""}`,
         data,
       };
     }

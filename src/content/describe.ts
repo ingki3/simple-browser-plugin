@@ -1,5 +1,36 @@
 import type { LandmarkSnapshot, PageDescription, PageRegion } from "@/lib/messages";
-import { getAccessibleDocs, isHtmlElement, isTag } from "./docs";
+import { resultHref } from "@/lib/clickResult";
+import { crossOriginFrameElements, getAccessibleDocs, isHtmlElement, isTag } from "./docs";
+
+// 다른 출처 iframe 알림(#235)의 크기 하한(광고·추적 프레임 제외)과 개수.
+const FRAME_MIN_W = 200;
+const FRAME_MIN_H = 150;
+const FRAME_MAX = 5;
+
+function crossOriginFrames(): NonNullable<PageDescription["crossOriginFrames"]> {
+  const found: Array<{ declaredSrc: string; srcTooLong?: { length: number }; width: number; height: number }> = [];
+  for (const frame of crossOriginFrameElements()) {
+    if (!visibleElement(frame)) continue;
+    const rect = frame.getBoundingClientRect();
+    if (rect.width < FRAME_MIN_W || rect.height < FRAME_MIN_H) continue;
+    let src = "";
+    try {
+      const u = new URL(frame.src);
+      if (u.protocol === "http:" || u.protocol === "https:") src = frame.src;
+    } catch {
+      src = "";
+    }
+    if (!src) continue;
+    const shaped = resultHref(src);
+    found.push({
+      declaredSrc: shaped.href,
+      ...(shaped.hrefTooLong ? { srcTooLong: { length: shaped.hrefTooLong.length } } : {}),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    });
+  }
+  return found.sort((a, b) => b.width * b.height - a.width * a.height).slice(0, FRAME_MAX);
+}
 
 const REGION_SELECTORS: Record<Exclude<PageRegion, "other">, string> = {
   main: "main, [role='main']",
@@ -135,6 +166,7 @@ export function describePage(): PageDescription {
           .slice(0, 2000)
       : "";
 
+  const frames = crossOriginFrames();
   return {
     url: location.href,
     title: document.title ?? "",
@@ -142,5 +174,6 @@ export function describePage(): PageDescription {
     landmarks,
     headings,
     fallbackExcerpt,
+    ...(frames.length ? { crossOriginFrames: frames } : {}),
   };
 }

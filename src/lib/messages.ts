@@ -148,6 +148,11 @@ export interface PageDescription {
   readHints?: ReadHint[];
   // 관측한 창이 따라가는 팝업 창이면 그 안내(백그라운드가 붙인다).
   window?: string;
+  // 내용을 읽을 수 없는 다른 출처 iframe 중 화면에 크게 보이는 것(#235, 있을 때만). declaredSrc는 페이지가 iframe에 적은 주소
+  // (iframe 안에서 이동했으면 지금 문서와 다를 수 있다). 2,000자를 넘으면 비우고 srcTooLong에 길이만.
+  crossOriginFrames?: Array<{ declaredSrc: string; srcTooLong?: { length: number }; width: number; height: number }>;
+  // crossOriginFrames가 있을 때 모델에게 주는 안내(백그라운드가 붙인다).
+  crossOriginNote?: string;
 }
 
 // 모델에 돌려주는 입력 칸(#43). 사용자가 입력한 값은 담지 않는다.

@@ -72,6 +72,45 @@ const modelReqText = (h) => h.sw.evaluate(() => JSON.stringify(globalThis.__mode
 
 export default [
   {
+    name: "#235 다른 출처 iframe: 크게 보이는 것만(shadow root → 같은 출처 iframe 안 포함) declaredSrc로 알리고, 긴 주소는 비운다",
+    pages2: { "/map": "<title>지도</title><p>지도 내용</p>", "/ad": "<p>광고</p>", "/inner": "<p>안쪽</p>", "/long": "<p>긴</p>" },
+    async run(h) {
+      const long = `${h.base2}/long?q=${"y".repeat(2100)}`;
+      h.pages.set(
+        "1/cf",
+        `<title>지도 검색</title><header><a href="/h">홈</a></header>
+<iframe src="${h.base2}/map?q=%ED%8C%90%EA%B5%90" style="width:600px;height:400px"></iframe>
+<iframe src="${h.base2}/ad" style="width:120px;height:100px"></iframe>
+<iframe src="${long}" style="width:300px;height:200px"></iframe>
+<div id=host></div><p id=out></p>
+<script>
+  const r = document.getElementById("host").attachShadow({ mode: "open" });
+  const f = document.createElement("iframe");
+  f.style.cssText = "width:420px;height:320px";
+  f.srcdoc = "<body></body>";
+  f.addEventListener("load", () => {
+    const i = f.contentDocument.createElement("iframe");
+    i.src = ${JSON.stringify(h.base2)} + "/inner";
+    i.style.cssText = "width:300px;height:220px";
+    f.contentDocument.body.append(i);
+  });
+  r.append(f);
+</script>`,
+      );
+      const r = await h.turn([{ tool: "describe_page", args: {}, delayMs: 1500 }, { text: "끝" }], { path: "/cf" });
+      const page = okResult(r, "describe_page");
+      const frames = page.crossOriginFrames ?? [];
+      const srcs = frames.map((f) => f.declaredSrc);
+      expect(frames.length === 3, `큰 다른 출처 iframe 3개(${JSON.stringify(frames).slice(0, 400)})`);
+      expect(srcs[0] === `${h.base2}/map?q=%ED%8C%90%EA%B5%90`, `가장 큰 것이 먼저, 주소 원문(${srcs[0]})`);
+      expect(srcs.includes(`${h.base2}/inner`), `shadow → 같은 출처 iframe 안(${srcs})`);
+      expect(!srcs.some((x) => x.includes("/ad")), `작은 광고 iframe 제외(${srcs})`);
+      const tooLong = frames.find((f) => f.srcTooLong);
+      expect(tooLong && tooLong.declaredSrc === "" && tooLong.srcTooLong.length === long.length, `긴 주소는 비우고 길이(${JSON.stringify(tooLong)})`);
+      expect(String(page.crossOriginNote).includes("declaredSrc"), `안내(${page.crossOriginNote})`);
+    },
+  },
+  {
     name: "#234 빈 iframe은 관측에서 빠지고 글자 있는 iframe은 other, region=main 0개면 region을 빼라는 안내와 수",
     pages: { "/e": EMPTY_FRAMES, "/f": PLAIN_EMPTY_FRAME },
     async run(h) {
