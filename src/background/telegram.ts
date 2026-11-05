@@ -85,6 +85,8 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 
 // 연결된 채팅이 있는지(위임 질문의 canAsk용 — 저장할 때와 시작할 때 맞춘다).
 let linkedChat = false;
+// 설정의 "텔레그램으로 묻기". 저장할 때마다(토큰 지우기로 기본값에 돌아갈 때도) 저장 값으로 맞추고, 시작할 때 읽는다(#224).
+let askEnabled = true;
 
 async function load(): Promise<TelegramState> {
   const raw = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY];
@@ -100,6 +102,7 @@ function update(fn: (s: TelegramState) => TelegramState | null, epoch?: number):
     if (!next) return null;
     await chrome.storage.local.set({ [STORE_KEY]: next });
     linkedChat = !!next.token && next.chatId !== null;
+    askEnabled = next.askApproval;
     return next;
   });
 }
@@ -508,7 +511,8 @@ interface PendingAsk {
   expiresAt: number;
   token: string;
   chatId: number;
-  text: string;
+  // 보낸 질문 메시지 글(남은 시간 안내 포함). 답한 뒤 고칠 때 같은 글에 결과를 붙인다.
+  prompt: string;
   messageId: number | null;
   settled: boolean;
   // 확정한 결과의 표시(메시지를 고칠 때 쓴다).
@@ -517,8 +521,6 @@ interface PendingAsk {
   timer: ReturnType<typeof setTimeout> | null;
 }
 let pendingAsk: PendingAsk | null = null;
-// 설정의 "텔레그램으로 묻기"(요청을 시작할 때 저장소 값으로 맞추고, 설정을 바꾸면 바로 바꾼다).
-let askEnabled = true;
 
 // 한 번만 확정한다. 확정을 먼저 하고, 메시지 고치기(버튼 지우기)는 최선 노력(실패해도 확정은 그대로).
 function settleAsk(p: PendingAsk, r: RemoteAskResult, line: "approved" | "denied" | "expired" | "withdrawn"): boolean {
@@ -539,7 +541,7 @@ function closeAskMessage(p: PendingAsk): void {
   void tgCall(p.token, "editMessageText", {
     chat_id: p.chatId,
     message_id: p.messageId,
-    text: `${askMessageText(p.text)}\n\n${askResultLine(p.line)}`,
+    text: `${p.prompt}\n\n${askResultLine(p.line)}`,
     link_preview_options: { is_disabled: true },
   }).catch(() => {});
 }
@@ -622,7 +624,7 @@ async function askByTelegram(
     expiresAt,
     token: s.token,
     chatId: s.chatId,
-    text: q.text,
+    prompt: askMessageText(q.text, expiresAt - Date.now()),
     messageId: null,
     settled: false,
     line: null,
@@ -640,7 +642,7 @@ async function askByTelegram(
       "sendMessage",
       {
         chat_id: s.chatId,
-        text: askMessageText(q.text),
+        text: p.prompt,
         link_preview_options: { is_disabled: true },
         reply_markup: {
           inline_keyboard: [[

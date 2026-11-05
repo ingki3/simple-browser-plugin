@@ -2,6 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  askMessageText,
+  askTtlText,
   backoffMs,
   checkPairing,
   newPairing,
@@ -11,6 +13,7 @@ import {
   staleMessage,
   PAIRING_MAX_TRIES,
   PAIRING_TTL_MS,
+  TELEGRAM_ASK_TTL_MS,
   TELEGRAM_MAX_AGE_MS,
 } from "../src/lib/telegram.ts";
 
@@ -91,4 +94,13 @@ test("재시도 간격은 1초부터 두 배, 최대 5분", () => {
   assert.equal(backoffMs(1), 1000);
   assert.equal(backoffMs(3), 4000);
   assert.equal(backoffMs(20), 300_000);
+});
+
+test("승인 질문의 남은 시간 안내는 실제 만료에 맞추고 길게 말하지 않는다(#224)", () => {
+  assert.match(askMessageText("이동할까요?"), new RegExp(`${TELEGRAM_ASK_TTL_MS / 60_000}분 안에`));
+  assert.match(askMessageText("이동할까요?", 5 * 60_000), /5분 안에/);
+  assert.equal(askTtlText(4 * 60_000 + 59_999), "4분");
+  assert.equal(askTtlText(59_999), "59초");
+  assert.equal(askTtlText(400), "1초");
+  assert.equal(askTtlText(-5), "1초");
 });

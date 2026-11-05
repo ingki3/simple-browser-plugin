@@ -243,6 +243,37 @@ export default [
     },
   },
   {
+    name: "텔레그램 위임(#224): 묻기를 끈 뒤 토큰을 지우고 다시 연결하면 기본값(켬)대로 위임하고, 질문은 실제 만료(5분 이내)를 안내한다",
+    pages: { "/news": "<title>뉴스</title><p>경제</p>" },
+    async run(h) {
+      await tgConnect(h);
+      expect((await ask(h, { kind: "telegram_set_ask", on: false })).ok, "묻기 끔");
+      expect((await ask(h, { kind: "telegram_clear" })).ok, "토큰 지우기");
+      await tgConnect(h);
+      const st = await ask(h, { kind: "telegram_status" });
+      expect(st.data.askApproval === true, `다시 연결하면 묻기 켬(${JSON.stringify(st.data)})`);
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        expect((await ask(h, { kind: "mcp_set", askViaTelegram: true }))?.ok, "위임 켬");
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "다녀왔습니다" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해 줘" } } });
+        const a = await tgWaitAsk(h, 1, 20_000);
+        const m = /(\d+)(분|초) 안에 누르지 않으면/.exec(a[0]?.text ?? "");
+        expect(m && (m[2] === "초" || Number(m[1]) <= 5), `남은 시간 안내(${JSON.stringify(a)})`);
+        await tgPress(h, a[0].yes, { poll: false });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result?.content?.[0]?.text === "다녀왔습니다", `최종 답(${JSON.stringify(res)})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", askViaTelegram: false });
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
     name: "작업 기록(#145): 결과 전송이 실패하면 저장해 두고 다음 폴링에서 다시 보낸다",
     async run(h) {
       const bridge = await askReady(h, { askApproval: false, capabilities: {} });
