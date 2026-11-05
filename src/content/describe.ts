@@ -1,5 +1,64 @@
 import type { LandmarkSnapshot, PageDescription, PageRegion } from "@/lib/messages";
-import { getAccessibleDocs, isHtmlElement, isTag } from "./docs";
+import { resultHref } from "@/lib/clickResult";
+import { crossOriginFrameElements, getAccessibleDocs, isHtmlElement, isShadowRoot, isTag } from "./docs";
+
+// 다른 출처 iframe 알림(#235)의 크기 하한(광고·추적 프레임 제외)과 개수.
+const FRAME_MIN_W = 200;
+const FRAME_MIN_H = 150;
+const FRAME_MAX = 5;
+
+// 프레임 자신과 조상(shadow host·같은 출처 iframe 경계를 넘어)이 숨겨지거나 투명하지 않은지. 투명한 큰 프레임이 실제 본문 프레임을
+// 개수 한도 밖으로 밀어내지 않게 한다(#235 리뷰).
+function shownThroughAncestors(el: Element): boolean {
+  let cur: Element | null = el;
+  for (let depth = 0; cur && depth < 80; depth += 1) {
+    const style = cur.ownerDocument.defaultView?.getComputedStyle(cur);
+    if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+    // 합성 트리 부모: 슬롯에 배치된 요소는 그 슬롯(슬롯 쪽 조상의 숨김·투명도도 본다).
+    const next: Element | null = cur.assignedSlot ?? cur.parentElement;
+    if (next) {
+      cur = next;
+      continue;
+    }
+    const root = cur.getRootNode();
+    if (isShadowRoot(root)) {
+      cur = root.host;
+      continue;
+    }
+    // 문서 끝: 같은 출처 iframe 안이면 바깥 문서의 그 iframe 요소로 넘어간다.
+    try {
+      cur = cur.ownerDocument.defaultView?.frameElement ?? null;
+    } catch {
+      cur = null;
+    }
+  }
+  return true;
+}
+
+function crossOriginFrames(): NonNullable<PageDescription["crossOriginFrames"]> {
+  const found: Array<{ declaredSrc: string; srcTooLong?: { length: number }; width: number; height: number }> = [];
+  for (const frame of crossOriginFrameElements()) {
+    if (!visibleElement(frame) || !shownThroughAncestors(frame)) continue;
+    const rect = frame.getBoundingClientRect();
+    if (rect.width < FRAME_MIN_W || rect.height < FRAME_MIN_H) continue;
+    let src = "";
+    try {
+      const u = new URL(frame.src);
+      if (u.protocol === "http:" || u.protocol === "https:") src = frame.src;
+    } catch {
+      src = "";
+    }
+    if (!src) continue;
+    const shaped = resultHref(src);
+    found.push({
+      declaredSrc: shaped.href,
+      ...(shaped.hrefTooLong ? { srcTooLong: { length: shaped.hrefTooLong.length } } : {}),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    });
+  }
+  return found.sort((a, b) => b.width * b.height - a.width * a.height).slice(0, FRAME_MAX);
+}
 
 const REGION_SELECTORS: Record<Exclude<PageRegion, "other">, string> = {
   main: "main, [role='main']",
@@ -79,20 +138,27 @@ export function describePage(): PageDescription {
   // Top-frame landmarks first
   landmarks.push(...snapshotDocLandmarks(docs[0]));
 
-  // Iframe landmarks — if iframe has none but has body, add the body as a synthetic "main"
+  // 같은 출처 iframe의 랜드마크. 랜드마크가 없으면 본문을 "other"로 싣는다(#234 — 찾기 도구의 detectRegion도 그 안 요소를
+  // other로 본다. main으로 적으면 region=main으로 찾아도 하나도 걸리지 않는다). 보이지 않는 iframe, 보이는 클릭 대상도 글자도
+  // 없는 iframe(빈 광고·추적 프레임)은 싣지 않는다.
   for (let i = 1; i < docs.length; i += 1) {
     const doc = docs[i];
+    const frameEl = doc.defaultView?.frameElement;
+    if (frameEl && !visibleElement(frameEl)) continue;
     const framed = snapshotDocLandmarks(doc);
     if (framed.length > 0) {
       landmarks.push(...framed);
     } else if (doc.body) {
+      const clickableCount = Array.from(
+        doc.body.querySelectorAll('a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]'),
+      ).filter(visibleElement).length;
+      const textPreview = clean(doc.body.innerText || doc.body.textContent || "", 800);
+      if (clickableCount === 0 && !textPreview) continue;
       landmarks.push({
-        region: "main",
+        region: "other",
         elementCount: doc.body.querySelectorAll("*").length,
-        clickableCount: doc.body.querySelectorAll(
-          'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]',
-        ).length,
-        textPreview: clean(doc.body.innerText || doc.body.textContent || "", 800),
+        clickableCount,
+        textPreview,
         sampleClickables: Array.from(
           doc.body.querySelectorAll<HTMLElement>(
             'a[href], button, [role="button"], [role="link"]',
@@ -128,6 +194,7 @@ export function describePage(): PageDescription {
           .slice(0, 2000)
       : "";
 
+  const frames = crossOriginFrames();
   return {
     url: location.href,
     title: document.title ?? "",
@@ -135,5 +202,6 @@ export function describePage(): PageDescription {
     landmarks,
     headings,
     fallbackExcerpt,
+    ...(frames.length ? { crossOriginFrames: frames } : {}),
   };
 }

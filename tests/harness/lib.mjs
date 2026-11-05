@@ -456,6 +456,11 @@ async function installMockModel(sw) {
         }
         out = { tool: "click_element", args: { id } };
       }
+      else if (step?.clickStaleLocal) {
+        // 직전 찾기 결과의 id 꼬리표(문서마다 다름)로 없는 순번 id를 만든다 — 이 문서에서 등록이 정리된 id와 같은 경로(#236).
+        const tok = String(list[0]?.id ?? "c0-x").split("-").pop();
+        out = { tool: "click_element", args: { id: `c999999-${tok}` } };
+      }
       else if (step?.clickOption) {
         // 선택지 글자 + 그 목록을 연 칸(listFor)으로 고른다(자동완성 칸이 여럿일 때).
         const hit = list.find((c) => c.text === step.clickOption && (!step.listFor || (c.listFor ?? "").includes(step.listFor)));

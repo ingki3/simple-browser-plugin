@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   clickCard,
+  staleTargetCode,
   describeDifference,
   describeEffect,
   fillCard,
@@ -371,4 +372,12 @@ test("describeEffect: 같은 문서 주소 변경 + 대화상자(#158)", () => {
     describeEffect({ ...base, sameDocument: false, dom: null }),
     "같은 사이트의 다른 페이지로 이동했습니다(/s?…).",
   );
+});
+
+test("staleTargetCode: 꼬리표가 이 문서 것이면 정리된 id, 아니면 다른 문서의 id (#236)", () => {
+  assert.equal(staleTargetCode("c12-abc", "abc"), "stale_target");
+  assert.equal(staleTargetCode("c12-abc", "xyz"), "foreign_target");
+  assert.equal(staleTargetCode("f3-x-abc", "abc"), "stale_target");
+  assert.equal(staleTargetCode("c-missing", "abc"), "foreign_target");
+  assert.equal(staleTargetCode("nodash", "abc"), "foreign_target");
 });

@@ -10,7 +10,7 @@ import { findClickables, findClickablesCounted, clickElement } from "./clickable
 import { describePage } from "./describe";
 import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
-import { inspectTargets, readEffect, TargetDriftError } from "./targets";
+import { inspectTargets, readEffect, StaleTargetError, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
 import { modelText } from "./modelText";
 import { snapshotRole } from "@/lib/repeatTask";
@@ -77,6 +77,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
         ...(err instanceof TargetDriftError ? { diag: err.diag } : {}),
+        ...(err instanceof StaleTargetError ? { code: err.code } : {}),
       } satisfies ContentResponse);
     }
     return false;
