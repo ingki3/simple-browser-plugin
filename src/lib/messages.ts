@@ -419,6 +419,8 @@ export interface ContentResponse<T = unknown> {
   error?: string;
   // 실패 진단(디버그 로그 전용, 모델에 보내지 않는다 — 글자 내용 없이 종류·길이만).
   diag?: string;
+  // 실패 종류(구조로 정한 값 — 백그라운드가 안내 문구를 고른다). 예: 대상 확인의 foreign_target·stale_target(#236).
+  code?: string;
 }
 
 export type RuntimeMsg =

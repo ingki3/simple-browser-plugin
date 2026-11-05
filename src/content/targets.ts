@@ -13,6 +13,8 @@ import {
   sameApproved,
   sameApprovedInFlight,
   sameBase,
+  staleTargetCode,
+  type StaleTargetCode,
   type TargetInfo,
 } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
@@ -856,9 +858,20 @@ export class TargetDriftError extends Error {
   }
 }
 
+// 등록되지 않은 id(#236). code로 다른 문서의 id인지 이 문서에서 정리된 id인지 백그라운드에 알린다(안내 문구를 고르는 데만 쓴다).
+export class StaleTargetError extends Error {
+  constructor(
+    message: string,
+    readonly code: StaleTargetCode,
+  ) {
+    super(message);
+  }
+}
+
 function staleError(id: string): Error {
-  return new Error(
+  return new StaleTargetError(
     `id '${id}'는 지금 페이지에서 찾은 대상이 아닙니다(페이지가 바뀌었거나 다시 불러옴). find_clickables·find_form_fields로 다시 찾으세요.`,
+    staleTargetCode(id, TOKEN),
   );
 }
 

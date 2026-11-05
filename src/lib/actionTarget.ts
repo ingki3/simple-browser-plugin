@@ -4,6 +4,14 @@
 import type { PageRegion } from "./messages";
 import { httpOrigin } from "./url.ts";
 
+// 등록되지 않은 대상 id의 종류(#236). id는 `<접두어><순번>-<문서 꼬리표>`이고 꼬리표는 content script(문서)마다 다르다.
+// 꼬리표가 이 문서 것이 아니면 다른 문서(다른 창·이전 페이지)에서 찾은 id, 같으면 이 문서에서 등록이 정리된 id다.
+export type StaleTargetCode = "foreign_target" | "stale_target";
+export function staleTargetCode(id: string, docToken: string): StaleTargetCode {
+  const dash = id.lastIndexOf("-");
+  return dash >= 0 && id.slice(dash + 1) === docToken ? "stale_target" : "foreign_target";
+}
+
 // 대상 요소를 사람이 알아볼 수 있게 적은 것. find_* 때 기록하고, 승인 카드와 실행 직전 확인에 쓴다.
 export interface TargetInfo {
   tag: string;

@@ -9,6 +9,9 @@ const BOOKING_PAGE = `<title>예약 화면</title><main><h1>예약</h1><button>�
 // 광고 중간 주소처럼 로드를 마친 뒤 스스로 다른 문서로 넘어가는 새 탭(#146).
 const AD_LINK_PAGE = `<title>가게</title><main><a href="/adcr" target="_blank">예약</a><p id=out></p></main>`;
 const ADCR_PAGE = `<title>이동 중</title><p>잠시만요</p><script>addEventListener("load", () => setTimeout(() => location.replace("/booking"), 1500))</script>`;
+// 열린 뒤 1.2초에 버튼 글자가 바뀌는 새 탭(#236 — 팝업 안에서 찾은 대상이 바뀐 오류).
+const CHANGING_PAGE = `<title>예약 화면</title><main><h1>예약</h1><button id=b>시간 보기</button></main><script>setTimeout(() => { document.getElementById("b").textContent = "시간 보기 2"; }, 1200)</script>`;
+const POPUP_HINT = "다른 창이나 이전 페이지에서 찾은 id";
 const STILL_PAGE = `<title>중간</title><p>그대로</p>`;
 const OTHER_PAGE = `<title>다른 곳</title><p>사용자가 옮긴 곳</p>`;
 
@@ -20,6 +23,28 @@ async function closeExtraTabs(h) {
 }
 
 export default [
+  {
+    name: "#236 새 탭을 따라가는 중 원래 탭의 id로 누르면 다른 문서 id 안내, 새 탭 안 대상이 바뀐 오류·정리된 id에는 안내가 없다",
+    pages: { "/shop": LINK_PAGE, "/booking": CHANGING_PAGE },
+    async run(h) {
+      await closeExtraTabs(h);
+      await h.settings({ autoApprove: true });
+      try {
+        const r = await h.turn(
+          [findC, { click: "예약" }, { repeatLastClick: true }, findC, { click: "시간 보기", delayMs: 1800 }, findC, { clickStaleLocal: true }, { text: "끝" }],
+          { path: "/shop" },
+        );
+        const clicks = r.tools.filter((t) => t.name === "click_element");
+        expect(clicks.length === 4, `클릭 4번(${clicks.length})`);
+        const [, foreign, changed, stale] = clicks.map((c) => String(c.error ?? ""));
+        expect(foreign.includes("찾은 대상이 아닙니다") && foreign.includes(POPUP_HINT), `원래 탭 id는 안내(${foreign})`);
+        expect(stale.includes("찾은 대상이 아닙니다") && !stale.includes(POPUP_HINT), `정리된 id는 안내 없음(${stale})`);
+        expect(changed.includes("다시 찾으세요") && !changed.includes(POPUP_HINT), `바뀐 대상은 안내 없음(${changed})`);
+      } finally {
+        await closeExtraTabs(h);
+      }
+    },
+  },
   {
     name: "target=_blank 링크로 앞에 열린 새 탭을 따라간다",
     pages: { "/shop": LINK_PAGE, "/booking": BOOKING_PAGE },

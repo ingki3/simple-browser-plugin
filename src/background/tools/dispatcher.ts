@@ -37,6 +37,7 @@ import {
   recheckTabPopup,
   isMissingReceiver,
   pruneClosedPopups,
+  ContentError,
   queryContent,
   resolveTurnTab,
   stopFollowingPopups,
@@ -180,9 +181,10 @@ async function inspectTargets(
     if (isMissingReceiver(err)) {
       throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
     }
-    // 원래 탭에서 찾은 id를 팝업 창에 쓰면(또는 반대) 그 문서에는 없는 id라 실패한다. 어느 창인지 덧붙인다.
-    if (followingPopup(turnTab) && err instanceof Error) {
-      throw new Error(`${err.message} (지금 도구는 팝업 창에서 동작합니다. 원래 탭에서 찾은 id는 팝업 창에서 쓸 수 없습니다.)`);
+    // 원래 탭에서 찾은 id를 팝업 창에 쓰면(또는 반대) 그 문서에는 없는 id라 실패한다. 다른 문서의 id일 때만(#236 —
+    // 팝업 안에서 찾은 대상이 바뀐 오류에는 붙이지 않는다) 어느 창인지 덧붙인다.
+    if (followingPopup(turnTab) && err instanceof ContentError && err.code === "foreign_target") {
+      throw new Error(`${err.message} (지금 도구는 팝업 창에서 동작합니다. 다른 창이나 이전 페이지에서 찾은 id는 쓸 수 없습니다.)`);
     }
     throw err;
   }
