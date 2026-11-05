@@ -191,10 +191,19 @@ export default [
     },
   },
   {
-    name: "답 보내기(#145): 보내는 동안 서비스 워커를 붙잡고, 끝나면 놓는다 — 열린 설정 화면의 최근 요청도 바뀐다",
+    name: "답 보내기(#145·#222): 보내는 동안 서비스 워커를 붙잡고(알람과 20초마다 확장 API 호출), 끝나면 놓는다 — 열린 설정 화면의 최근 요청도 바뀐다",
     async run(h) {
       await connect(h);
       const opts = await h.openOptions("model");
+      // 확장 API 호출(getPlatformInfo)을 센다(#222 — 30초 알람이 1분으로 올림되는 Chrome 116~119에서도 붙잡는지).
+      await h.sw.evaluate(() => {
+        const orig = chrome.runtime.getPlatformInfo.bind(chrome.runtime);
+        globalThis.__pings = 0;
+        chrome.runtime.getPlatformInfo = (...a) => {
+          globalThis.__pings += 1;
+          return orig(...a);
+        };
+      });
       await h.sw.evaluate(() => {
         globalThis.__tg.holdReply = new Promise((r) => (globalThis.__tg.release = r));
         globalThis.__steps = [{ text: "붙잡은 답" }];
@@ -205,6 +214,12 @@ export default [
       expect(await h.sw.evaluate(() => globalThis.__tg.holding), "답을 보내는 중");
       const during = await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")));
       expect(during, "보내는 동안 keepalive 알람");
+      const pings = () => h.sw.evaluate(() => globalThis.__pings);
+      const first = await pings();
+      expect(first >= 1, `붙잡자마자 확장 API 호출(${first})`);
+      await h.panel.waitForTimeout(21_000);
+      const later = await pings();
+      expect(later >= first + 1, `20초 뒤 다시 호출(${first}→${later})`);
       await h.sw.evaluate(() => {
         globalThis.__tg.holdReply = null;
         globalThis.__tg.release();
@@ -218,6 +233,9 @@ export default [
         if (after) await h.panel.waitForTimeout(200);
       }
       expect(!after, "끝나면 keepalive를 놓음");
+      const released = await pings();
+      await h.panel.waitForTimeout(21_000);
+      expect((await pings()) === released, "놓은 뒤에는 호출하지 않음");
       // 오래 열어 둔 설정 화면이 최근 요청(recent)을 다시 읽는다.
       let shown = "";
       const seen = Date.now() + 5000;

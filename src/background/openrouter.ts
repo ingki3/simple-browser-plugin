@@ -103,7 +103,10 @@ interface ToolCallContext {
   turn: number;
   // 이 요청의 탭(this.turnTab은 새 요청이 바꿀 수 있다).
   turnTab: TurnTab;
+  // 이 대화 안에서 호출마다 유일한 내부 키(#221). 패널 카드·선택 저장소·content 대상 레지스트리·작업 기록의 키로 쓴다.
   callId: string;
+  // 모델이 준 호출 id. 대화 기록(tool_call_id)에만 쓴다 — 모델마다 단순하거나(call_0) 대화끼리 겹칠 수 있어 키로 쓰지 않는다.
+  modelCallId: string;
   toolName: ToolName;
   parsedArgs: unknown;
   argsKey: string;
@@ -401,6 +404,13 @@ const EXPECT_MISMATCH = Symbol("expect_mismatch");
 
 export class ChatAgent {
   private history: OpenRouterMessage[] = [];
+  // 도구 호출의 내부 키를 만드는 값(#221): 대화마다 난수, 호출마다 순번.
+  private readonly callNonce = (() => {
+    const b = new Uint8Array(8);
+    crypto.getRandomValues(b);
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  })();
+  private callSeq = 0;
   private apiKey: string | null = null;
   private model: ModelId | null = null;
   // 로컬·호환 서버의 정규화한 기본 주소(#193). 이 대화가 보내는 대상(targetKey)의 일부.
@@ -577,10 +587,18 @@ export class ChatAgent {
   // 중단된 턴이 tool_calls만 남기고 결과를 못 채웠으면 다음 요청이 API에서 거부된다.
   // 빠진 결과를 "중단됨"으로 채워 기록을 유효하게 만든다.
   private closeDanglingToolCalls(): void {
-    const last = [...this.history].reverse().find((m) => m.role === "assistant");
+    let at = -1;
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      if (this.history[i].role === "assistant") {
+        at = i;
+        break;
+      }
+    }
+    const last = this.history[at];
     if (!last || last.role !== "assistant" || !last.tool_calls?.length) return;
+    // 그 호출 블록 뒤의 결과만 센다 — 모델이 앞 턴의 id(call_0 등)를 다시 쓰면 앞 결과를 이번 호출의 답으로 보지 않게(#221).
     const answered = new Set(
-      this.history.flatMap((m) => (m.role === "tool" ? [m.tool_call_id] : [])),
+      this.history.slice(at + 1).flatMap((m) => (m.role === "tool" ? [m.tool_call_id] : [])),
     );
     for (const call of last.tool_calls) {
       if (answered.has(call.id)) continue;
@@ -1553,12 +1571,14 @@ export class ChatAgent {
     reads: { documents: number; otherTabs: number },
   ): Promise<boolean> {
     const toolName = fc.function.name as ToolName;
-    const callId = fc.id;
+    // 모델이 준 id는 대화 기록에만 쓰고, 나머지는 내부 키로 찾는다(#221 — 다른 대화·같은 대화의 다른 턴이 같은 id를 줘도 겹치지 않게).
+    const modelCallId = fc.id;
+    const callId = `k${this.callNonce}-${++this.callSeq}`;
     // 이 호출을 실패로 끝낸다: 패널 결과 줄, 대화 기록(모델이 보는 오류), 헛돌기 감지 기록을 함께 남긴다.
     // panelSummary: 패널에만 다르게 보일 문구(허락으로 실행한 호출 등).
     const failCall = (msg: string, key: string, panelSummary = msg): void => {
       this.send({ kind: "tool_result", callId, toolName, ok: false, summary: panelSummary });
-      this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
+      this.history.push({ role: "tool", tool_call_id: modelCallId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
       record(toolName, key, false, `error:${msg}`, msg);
     };
 
@@ -1585,7 +1605,7 @@ export class ChatAgent {
       return true;
     }
 
-    const call: ToolCallContext = { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall, record };
+    const call: ToolCallContext = { turn, turnTab, callId, modelCallId, toolName, parsedArgs, argsKey, failCall, record };
     // 원격 대화에서 쓰지 않는 도구: 자동 로그인(승인한 사이트여도), 저장 링크(요청 글에 적지 않은 사이트로 간다), 반복 작업 등록.
     if (this.remote && REMOTE_BLOCKED_TOOLS.has(toolName)) {
       this.cancelCall(call, null);
@@ -1961,7 +1981,7 @@ export class ChatAgent {
       note = "사용자가 작업을 맡겼습니다. 이 대화에서는 승인 카드 없이 진행합니다. 맡긴 일의 범위를 벗어나는 동작은 하지 않습니다.";
     }
     this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
-    this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { result: { note } }) });
+    this.history.push({ role: "tool", tool_call_id: call.modelCallId, name: toolName, content: this.toolContent(turnTab, { result: { note } }) });
     call.record(toolName, argsKey, true, `task:${summary}`, summary);
     return true;
   }
@@ -2022,7 +2042,7 @@ export class ChatAgent {
     this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
     this.history.push({
       role: "tool",
-      tool_call_id: callId,
+      tool_call_id: call.modelCallId,
       name: toolName,
       content: this.toolContent(turnTab, {
         result: {
@@ -2077,7 +2097,7 @@ export class ChatAgent {
     this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
     this.history.push({
       role: "tool",
-      tool_call_id: callId,
+      tool_call_id: call.modelCallId,
       name: toolName,
       content: this.toolContent(turnTab, {
         result: {
@@ -2295,7 +2315,7 @@ export class ChatAgent {
     this.send({ kind: "tool_result", callId, toolName, ok: false, summary });
     this.history.push({
       role: "tool",
-      tool_call_id: callId,
+      tool_call_id: call.modelCallId,
       name: toolName,
       content: this.toolContent(turnTab, {
         error: "remote_task_not_confirmed",
@@ -2325,7 +2345,7 @@ export class ChatAgent {
       const refusal = remoteRefusal(remoteResult);
       const note = remoteResult === "unavailable" ? REMOTE_REFUSED_NOTE : refusal.note;
       this.send({ kind: "tool_result", callId, toolName, ok: false, summary: refusal.summary, cancelled: true });
-      this.history.push({ role: "tool", tool_call_id: callId, name: toolName, content: this.toolContent(turnTab, { error: refusal.error, note }) });
+      this.history.push({ role: "tool", tool_call_id: call.modelCallId, name: toolName, content: this.toolContent(turnTab, { error: refusal.error, note }) });
       call.record(toolName, argsKey, false, refusal.error, refusal.summary, { cancelled: true });
       return DONE;
     }
@@ -2339,7 +2359,7 @@ export class ChatAgent {
     });
     this.history.push({
       role: "tool",
-      tool_call_id: callId,
+      tool_call_id: call.modelCallId,
       name: toolName,
       content: this.toolContent(turnTab, { error: "user_cancelled" }),
     });
@@ -2371,7 +2391,7 @@ export class ChatAgent {
     this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
     this.history.push({
       role: "tool",
-      tool_call_id: callId,
+      tool_call_id: call.modelCallId,
       name: toolName,
       content: this.toolContent(turnTab, { result: { handedOff: true, outcome, note } }),
     });
@@ -2458,7 +2478,7 @@ export class ChatAgent {
       });
       this.history.push({
         role: "tool",
-        tool_call_id: callId,
+        tool_call_id: call.modelCallId,
         name: toolName,
         content: this.toolContent(turnTab, { result: result.data }),
       });

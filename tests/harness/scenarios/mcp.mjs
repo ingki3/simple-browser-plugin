@@ -70,6 +70,46 @@ async function askReady(h, { askApproval = true, capabilities = { elicitation: {
   return bridge;
 }
 
+// 같은 모델 호출 id 시험(#221): 패널에서 요청을 보내고 승인 카드가 뜰 때까지 기다린다(h.turn은 멈춘 카드에서 턴을 중단하므로 직접).
+const LINKS221 = {
+  // #out: h.turn이 결과 칸을 읽는다(없으면 기다리다 늦어진다).
+  "/docs": `<title>자료</title><a href="/l1">첫 글</a> <a href="/l2">둘째 글</a><p id=out></p>`,
+  "/l1": "<title>L1</title><p>첫 번째 글 본문</p>",
+  "/l2": "<title>L2</title><p>두 번째 글 본문</p>",
+};
+async function panelCard(h, steps, text) {
+  await h.tab.goto(`${h.base}/docs`);
+  await h.tab.waitForTimeout(200);
+  await h.sw.evaluate((s) => {
+    globalThis.__steps = s;
+    globalThis.__toolLog = [];
+  }, steps);
+  await h.panel.fill("textarea.composer-input", text);
+  await h.panel.click("button.composer-btn.primary");
+  const card = h.panel.locator(".tool-pending:not(.resolved)").last();
+  await card.waitFor({ timeout: 15_000 });
+  return card;
+}
+async function panelIdle(h, ms = 20_000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (!(await h.panel.locator("button.composer-btn.danger").count())) return true;
+    await h.panel.waitForTimeout(200);
+  }
+  return false;
+}
+// MCP 질문 중 링크 읽기 질문을 기다린다(그 앞의 이동 질문은 승인 — 앞 시나리오에서 같은 사이트를 승인했으면 이동 질문이 없을 수 있다).
+async function linkQuestion(bridge) {
+  for (let n = 1; n <= 3; n++) {
+    const q = await bridge.request("elicitation/create", n);
+    if (!q) return null;
+    if (q.params?.message?.includes("링크 읽기")) return q;
+    bridge.send({ jsonrpc: "2.0", id: q.id, result: { action: "accept", content: { approve: true } } });
+  }
+  return null;
+}
+const linkReads = (h) => h.sw.evaluate(() => globalThis.__toolLog.filter((t) => t.name === "read_linked_pages").map((t) => ({ callId: t.callId, error: t.error ?? null })));
+
 const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
 
 const FORM192 = `<title>신청</title>
@@ -235,6 +275,139 @@ export default [
         const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
         expect(log[0] === "navigate_to_url:ok", `승인 뒤 이동(${log.join(",")})`);
         void tgAsks;
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", askViaTelegram: false });
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "같은 모델 호출 id(#221): 패널 카드가 기다리는 동안 MCP가 같은 id로 링크 읽기를 준비했다 거절해도, 패널을 승인하면 패널이 고른 링크를 읽는다",
+    pages: LINKS221,
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        const l1 = `${h.base}/l1`;
+        const l2 = `${h.base}/l2`;
+        const card = await panelCard(h, [{ tool: "read_linked_pages", args: { urls: [l1] }, callId: "call_0" }], "첫 글 읽어 줘");
+        await h.sw.evaluate(({ docs, l2 }) => {
+          globalThis.__steps = [
+            { tool: "navigate_to_url", args: { url: docs }, callId: "call_nav" },
+            // 원격 작업 탭이 막 이동한 뒤라 content script가 뜰 시간을 둔다.
+            { tool: "read_linked_pages", args: { urls: [l2] }, callId: "call_0", delayMs: 1000 },
+            { text: "MCP 끝" },
+          ];
+        }, { docs: `${h.base}/docs`, l2 });
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "자료 둘째 글 읽어 줘" } } });
+        const links = await linkQuestion(bridge);
+        expect(links, "MCP 링크 질문");
+        bridge.send({ jsonrpc: "2.0", id: links.id, result: { action: "decline" } });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result, `MCP 답(${JSON.stringify(res)})`);
+        h.hits.length = 0;
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ text: "패널 끝" }];
+        });
+        await card.locator(".btn-approve").first().click();
+        expect(await panelIdle(h), "패널 턴이 끝남");
+        expect(h.hits.some((x) => x.includes("/l1")), `패널이 고른 링크를 읽음(${JSON.stringify(h.hits)})`);
+        const reads = await linkReads(h);
+        expect(reads.some((r) => r.callId === "call_0" && r.error === null), `패널 결과는 모델 id 그대로·성공(${JSON.stringify(reads)})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "같은 모델 호출 id(#221): MCP 링크 읽기 질문이 열린 동안 패널이 같은 id 카드를 취소해도, MCP를 승인하면 MCP가 자기 후보를 읽는다",
+    pages: LINKS221,
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        const l1 = `${h.base}/l1`;
+        const l2 = `${h.base}/l2`;
+        const card = await panelCard(h, [{ tool: "read_linked_pages", args: { urls: [l1] }, callId: "call_0" }], "첫 글 읽어 줘");
+        await h.sw.evaluate(({ docs, l2 }) => {
+          globalThis.__steps = [
+            { tool: "navigate_to_url", args: { url: docs }, callId: "call_nav" },
+            // 원격 작업 탭이 막 이동한 뒤라 content script가 뜰 시간을 둔다.
+            { tool: "read_linked_pages", args: { urls: [l2] }, callId: "call_0", delayMs: 1000 },
+          ];
+        }, { docs: `${h.base}/docs`, l2 });
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "자료 둘째 글 읽어 줘" } } });
+        const links = await linkQuestion(bridge);
+        expect(links, "MCP 링크 질문");
+        // 양쪽 후보가 함께 살아 있는 동안 패널을 취소한다.
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ text: "끝" }, { text: "끝" }];
+        });
+        await card.locator(".btn-cancel").first().click();
+        expect(await panelIdle(h), "패널 턴이 끝남");
+        h.hits.length = 0;
+        bridge.send({ jsonrpc: "2.0", id: links.id, result: { action: "accept", content: { approve: true } } });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result, `MCP 답(${JSON.stringify(res)})`);
+        expect(h.hits.some((x) => x.includes("/l2")) && !h.hits.some((x) => x.includes("/l1")), `MCP가 자기 후보만 읽음(${JSON.stringify(h.hits)})`);
+        const reads = await linkReads(h);
+        expect(reads.some((r) => r.callId === "call_0" && r.error === null), `MCP 결과는 모델 id 그대로·성공(${JSON.stringify(reads)})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
+    name: "같은 모델 호출 id(#221): 한 대화에서 앞 턴의 id를 다시 쓰는 호출 블록이 중간에 멈춰도, 다음 요청에 이번 블록의 결과가 빠짐·겹침 없이 간다",
+    pages: LINKS221,
+    async run(h) {
+      const l1 = `${h.base}/l1`;
+      // 1턴: call_0·call_1 두 호출을 한 블록으로 끝낸다.
+      const r1 = await h.turn([{ calls: [{ tool: "describe_page", args: {}, callId: "call_0" }, { tool: "describe_page", args: {}, callId: "call_1" }] }, { text: "봤습니다" }], { path: "/docs", text: "봐 줘" });
+      expect(!r1.stoppedAtCard, "1턴은 카드 없이 끝남");
+      // 2턴: 같은 id로 call_0(완료) → call_1(승인 카드에서 멈춤).
+      await panelCard(h, [{ calls: [{ tool: "describe_page", args: {}, callId: "call_0" }, { tool: "read_linked_pages", args: { urls: [l1] }, callId: "call_1" }] }], "다시 봐 줘");
+      await h.panel.click("button.composer-btn.danger");
+      expect(await panelIdle(h), "멈춤");
+      // 3턴: 보낸 기록의 마지막 호출 블록 뒤에 이번 블록의 결과가 하나씩 있다.
+      await h.sw.evaluate(() => {
+        globalThis.__modelReqs = [];
+      });
+      await h.turn([{ text: "끝" }], { noReload: true, text: "이어서" });
+      const msgs = await h.sw.evaluate(() => globalThis.__modelReqs.find((r) => Array.isArray(r.body?.messages) && r.body.stream)?.body.messages ?? []);
+      let at = -1;
+      msgs.forEach((m, i) => {
+        if (m.role === "assistant" && m.tool_calls?.length) at = i;
+      });
+      const ids = msgs.slice(at + 1).filter((m) => m.role === "tool").map((m) => m.tool_call_id);
+      expect(at >= 0 && ids.filter((x) => x === "call_0").length === 1 && ids.filter((x) => x === "call_1").length === 1, `마지막 블록의 결과(${JSON.stringify(ids)})`);
+    },
+  },
+  {
+    name: "텔레그램 위임(#224): 묻기를 끈 뒤 토큰을 지우고 다시 연결하면 기본값(켬)대로 위임하고, 질문은 실제 만료(5분 이내)를 안내한다",
+    pages: { "/news": "<title>뉴스</title><p>경제</p>" },
+    async run(h) {
+      await tgConnect(h);
+      expect((await ask(h, { kind: "telegram_set_ask", on: false })).ok, "묻기 끔");
+      expect((await ask(h, { kind: "telegram_clear" })).ok, "토큰 지우기");
+      await tgConnect(h);
+      const st = await ask(h, { kind: "telegram_status" });
+      expect(st.data.askApproval === true, `다시 연결하면 묻기 켬(${JSON.stringify(st.data)})`);
+      const bridge = await askReady(h, { askApproval: false, capabilities: {} });
+      try {
+        expect((await ask(h, { kind: "mcp_set", askViaTelegram: true }))?.ok, "위임 켬");
+        await h.sw.evaluate((url) => {
+          globalThis.__steps = [{ tool: "navigate_to_url", args: { url } }, { text: "다녀왔습니다" }];
+          globalThis.__toolLog = [];
+        }, `${h.base}/news`);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해 줘" } } });
+        const a = await tgWaitAsk(h, 1, 20_000);
+        const m = /(\d+)(분|초) 안에 누르지 않으면/.exec(a[0]?.text ?? "");
+        expect(m && (m[2] === "초" || Number(m[1]) <= 5), `남은 시간 안내(${JSON.stringify(a)})`);
+        await tgPress(h, a[0].yes, { poll: false });
+        const res = await bridge.reply(2, 30_000);
+        expect(res?.result?.content?.[0]?.text === "다녀왔습니다", `최종 답(${JSON.stringify(res)})`);
       } finally {
         bridge.stop();
         await ask(h, { kind: "mcp_set", askViaTelegram: false });
