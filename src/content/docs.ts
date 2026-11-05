@@ -36,6 +36,32 @@ export function getAccessibleDocs(root: Document = document, depth = 0): Documen
   return docs;
 }
 
+// 내용을 읽을 수 없는 다른 출처 iframe(#235). 문서·열린 shadow root를 오가며(shadow root 안의 같은 출처 iframe 안까지) 찾는다.
+// contentDocument를 못 읽는 frame만 돌려준다(보이는지·크기는 부르는 쪽이 본다).
+export function crossOriginFrameElements(): Array<HTMLIFrameElement | HTMLFrameElement> {
+  const out: Array<HTMLIFrameElement | HTMLFrameElement> = [];
+  const seen = new Set<Node>();
+  const walk = (root: Document | ShadowRoot, depth: number) => {
+    if (seen.has(root) || depth > MAX_DEPTH) return;
+    seen.add(root);
+    for (const frame of root.querySelectorAll<HTMLIFrameElement | HTMLFrameElement>("iframe, frame")) {
+      let childDoc: Document | null = null;
+      try {
+        childDoc = frame.contentDocument;
+      } catch {
+        childDoc = null;
+      }
+      if (childDoc) walk(childDoc, depth + 1);
+      else out.push(frame);
+    }
+    const shadows: ShadowRoot[] = [];
+    collectShadowRoots(root, 0, shadows);
+    for (const sr of shadows) walk(sr, depth);
+  };
+  walk(document, 0);
+  return out;
+}
+
 export type Root = Document | ShadowRoot;
 
 function collectShadowRoots(root: ParentNode, depth: number, out: ShadowRoot[]): void {

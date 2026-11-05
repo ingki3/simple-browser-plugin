@@ -176,6 +176,7 @@ describe_page 결과를 읽는 법:
 - landmarks 배열: region(main/article/nav/aside/header/footer) 별로 textPreview(본문 요약)와 sampleClickables(대표 링크·버튼). 어떤 region이 본문 컨텐츠를 담고 있는지, 어떤 region이 사이트 크롬(메뉴, 툴바)인지 여기서 판단한다.
 - headings: 페이지 주제 파악용 표제 목록.
 - fallbackExcerpt: 시맨틱 랜드마크가 거의 없는 페이지일 때만 채워지는 본문 일부. 이때는 이 문자열이 주 단서다.
+- crossOriginFrames(있을 때만): 화면에 크게 보이지만 내용을 볼 수 없는 다른 출처 iframe(지도·결제·위젯 등). 찾기 결과가 비어 있고 원하는 내용이 그 안에 있어 보이면 crossOriginNote대로 declaredSrc로 이동해 본다.
 - readHints(있을 때만): 같은 구조의 페이지에서 전에 내용을 읽는 데 통한 도구 호출(tool, args, successes). 사용자가 원하는 내용이 그 호출로 얻을 수 있는 것이면(예: 본문·첨부 파일·특정 링크) 다른 시도보다 먼저 그대로 호출한다. 결과가 비었거나 원하는 내용이 아니면 평소대로 다른 방법을 찾는다. 원하는 것과 무관하면 무시한다.
 
 대상 해석 원칙:

@@ -698,9 +698,9 @@ function itemInViewport(item: Element, cands: Candidate[]): boolean {
   return cands.some((c) => c.inViewport && unhiddenUpTo(c.el, item));
 }
 
-function collectItems(args: FindClickablesArgs): FindClickablesResponse {
+// 항목 모드의 (i) 후보 수집 ~ (iii) 항목 글자·필터·점수. 대상 id는 발급하지 않는다(collectItems가 남은 항목에만).
+function itemCandidates(args: FindClickablesArgs) {
   const terms = queryTerms(args.query);
-  const limit = Math.min(args.limit ?? 20, 60);
   const expandedRef: { list: HTMLElement[] | null } = { list: null };
   const seen = new Set<HTMLElement>();
   const cands: Candidate[] = [];
@@ -774,6 +774,12 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
     return b.score > 0;
   });
   if (terms.length) kept.sort((a, b) => b.score - a.score || a.order - b.order);
+  return { terms, cands, unrelated, scanLimited, outside, unfiltered, kept };
+}
+
+function collectItems(args: FindClickablesArgs): FindClickablesResponse {
+  const limit = Math.min(args.limit ?? 20, 60);
+  const { terms, cands, unrelated, scanLimited, outside, unfiltered, kept } = itemCandidates(args);
   // (iv) 제한·예산. (v) 남은 항목의 대상만 id 발급(선택지 관계 전달, 항목 결합).
   const items: ListItem[] = [];
   let used = 0;
@@ -819,7 +825,24 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
       ...(b.cands.length > shown.length ? { moreTargets: b.cands.length - shown.length } : {}),
     });
   }
-  return { mode: "items", items, unfiltered, outside, omittedItems: kept.length - items.length, scanLimited, unrelatedChoices: unrelated, longHrefs };
+  // region 때문에 0개인지(#234): region만 뺀 같은 조건(query·onlyViewport 그대로)으로 남는 항목 수를 센다(대상 등록 없이).
+  // 그 재집계가 탐색 상한에 걸렸으면 수는 그 안에서 센 것이다.
+  let regionless: { withoutRegion: number; withoutRegionLimited?: true } | null = null;
+  if (!items.length && args.region) {
+    const again = itemCandidates({ ...args, region: undefined });
+    if (again.kept.length > 0) regionless = { withoutRegion: again.kept.length, ...(again.scanLimited ? { withoutRegionLimited: true as const } : {}) };
+  }
+  return {
+    mode: "items",
+    items,
+    unfiltered,
+    outside,
+    omittedItems: kept.length - items.length,
+    scanLimited,
+    unrelatedChoices: unrelated,
+    longHrefs,
+    ...(regionless && args.region ? { region: args.region, ...regionless } : {}),
+  };
 }
 
 // 승인 카드에서 확인한 그 요소일 때만 누른다. 결과 관찰은 클릭 직전에 시작해 백그라운드가 action_effect로 읽는다.

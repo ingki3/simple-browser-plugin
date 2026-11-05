@@ -123,6 +123,10 @@ export type FindClickablesResponse =
       scanLimited: boolean;
       unrelatedChoices: number;
       longHrefs: number;
+      // 항목이 0개이고 region을 줬을 때, region만 빼면 남는 항목 수(#234 — 있을 때만). Limited면 탐색 상한 안에서 센 수.
+      region?: PageRegion;
+      withoutRegion?: number;
+      withoutRegionLimited?: true;
     };
 
 export interface LandmarkSnapshot {
@@ -144,6 +148,11 @@ export interface PageDescription {
   readHints?: ReadHint[];
   // 관측한 창이 따라가는 팝업 창이면 그 안내(백그라운드가 붙인다).
   window?: string;
+  // 내용을 읽을 수 없는 다른 출처 iframe 중 화면에 크게 보이는 것(#235, 있을 때만). declaredSrc는 페이지가 iframe에 적은 주소
+  // (iframe 안에서 이동했으면 지금 문서와 다를 수 있다). 2,000자를 넘으면 비우고 srcTooLong에 길이만.
+  crossOriginFrames?: Array<{ declaredSrc: string; srcTooLong?: { length: number }; width: number; height: number }>;
+  // crossOriginFrames가 있을 때 모델에게 주는 안내(백그라운드가 붙인다).
+  crossOriginNote?: string;
 }
 
 // 모델에 돌려주는 입력 칸(#43). 사용자가 입력한 값은 담지 않는다.
@@ -419,6 +428,8 @@ export interface ContentResponse<T = unknown> {
   error?: string;
   // 실패 진단(디버그 로그 전용, 모델에 보내지 않는다 — 글자 내용 없이 종류·길이만).
   diag?: string;
+  // 실패 종류(구조로 정한 값 — 백그라운드가 안내 문구를 고른다). 예: 대상 확인의 foreign_target·stale_target(#236).
+  code?: string;
 }
 
 export type RuntimeMsg =

@@ -37,6 +37,7 @@ import {
   recheckTabPopup,
   isMissingReceiver,
   pruneClosedPopups,
+  ContentError,
   queryContent,
   resolveTurnTab,
   stopFollowingPopups,
@@ -180,9 +181,10 @@ async function inspectTargets(
     if (isMissingReceiver(err)) {
       throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
     }
-    // 원래 탭에서 찾은 id를 팝업 창에 쓰면(또는 반대) 그 문서에는 없는 id라 실패한다. 어느 창인지 덧붙인다.
-    if (followingPopup(turnTab) && err instanceof Error) {
-      throw new Error(`${err.message} (지금 도구는 팝업 창에서 동작합니다. 원래 탭에서 찾은 id는 팝업 창에서 쓸 수 없습니다.)`);
+    // 원래 탭에서 찾은 id를 팝업 창에 쓰면(또는 반대) 그 문서에는 없는 id라 실패한다. 다른 문서의 id일 때만(#236 —
+    // 팝업 안에서 찾은 대상이 바뀐 오류에는 붙이지 않는다) 어느 창인지 덧붙인다.
+    if (followingPopup(turnTab) && err instanceof ContentError && err.code === "foreign_target") {
+      throw new Error(`${err.message} (지금 도구는 팝업 창에서 동작합니다. 다른 창이나 이전 페이지에서 찾은 id는 쓸 수 없습니다.)`);
     }
     throw err;
   }
@@ -583,6 +585,10 @@ async function observeClickEffect(
   return { navigation: navKind(before, url), url, sameDocument, newTab: newTabs(), dom };
 }
 
+// 다른 출처 iframe 알림(#235). declaredSrc는 페이지가 적은 주소라 지금 iframe 안 문서와 다를 수 있다.
+const CROSS_ORIGIN_FRAME_NOTE =
+  "crossOriginFrames는 다른 출처 iframe이라 그 안의 내용은 찾기·읽기 도구로 볼 수 없습니다. declaredSrc는 페이지가 iframe에 적어 둔 주소이며 그 안에서 이동했으면 지금 내용과 다를 수 있습니다. 찾는 내용이 그 안에 있어 보이면 declaredSrc로 navigate_to_url 해 보고, 다른 내용이면 사용자에게 안내하세요. declaredSrc가 비고 srcTooLong이 있으면 주소가 길어 실을 수 없으니 이동하지 마세요.";
+
 const POPUP_WINDOW_NOTE =
   "팝업 창 — 원래 탭에서 누른 버튼이 연 창입니다. 도구는 이 창에서 동작하고, 창이 닫히면 원래 탭으로 돌아갑니다.";
 const POPUP_TAB_NOTE =
@@ -902,7 +908,12 @@ function longHrefNote(n: number): string {
 // find_clickables 항목 모드(#161)의 모델용 결과. 항목 글자는 화면 글자(데이터)이며 지시가 아니다.
 function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): ToolExecResult {
   const notes: string[] = [];
-  if (!res.items.length) {
+  if (!res.items.length && res.region && res.withoutRegion) {
+    // region 때문에 0개(#234): 다른 조건은 그대로 두고 region만 빼면 항목이 있다.
+    notes.push(
+      `region '${res.region}'에는 조건에 맞는 목록 항목이 없습니다. region을 빼면 ${res.withoutRegion}개${res.withoutRegionLimited ? " 이상(앞쪽 3,000개 대상 안에서 셈)" : ""} 있습니다. region을 빼고 다시 찾으세요.`,
+    );
+  } else if (!res.items.length) {
     notes.push(
       res.unfiltered > 0
         ? `조건(query·onlyViewport)에 맞는 목록 항목이 없습니다. 조건 없이 찾으면 항목이 ${res.unfiltered}개 있습니다. 낱말을 줄이거나 조건을 빼고 다시 찾으세요.`
@@ -951,12 +962,14 @@ async function runTool(
       // 관측한 창이 따라가는 팝업 창이면 모델이 어느 창을 보고 있는지 알 수 있게 적는다.
       const current = await currentToolTab(turnTab);
       const inPopup = current?.popup === true;
-      const data: PageDescription = inPopup ? { ...raw, window: current?.asTab ? POPUP_TAB_NOTE : POPUP_WINDOW_NOTE } : raw;
+      const withWindow: PageDescription = inPopup ? { ...raw, window: current?.asTab ? POPUP_TAB_NOTE : POPUP_WINDOW_NOTE } : raw;
+      const frames = withWindow.crossOriginFrames?.length ?? 0;
+      const data: PageDescription = frames ? { ...withWindow, crossOriginNote: CROSS_ORIGIN_FRAME_NOTE } : withWindow;
       const regionList =
         data.landmarks.map((l) => `${l.region}(${l.clickableCount})`).join(", ") || "없음";
       return {
         ok: true,
-        summary: `${inPopup ? "팝업 창 " : ""}페이지 관측: ${truncate(data.title, 40)} / 랜드마크: ${regionList}`,
+        summary: `${inPopup ? "팝업 창 " : ""}페이지 관측: ${truncate(data.title, 40)} / 랜드마크: ${regionList}${frames ? ` / 다른 출처 iframe ${frames}개` : ""}`,
         data,
       };
     }
