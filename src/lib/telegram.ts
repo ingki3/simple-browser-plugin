@@ -165,9 +165,15 @@ export function parseAskCallback(data: string): { askId: string; approve: boolea
   return { askId: m[1], approve: m[2] === "y" };
 }
 
-// 질문 메시지 글. 질문 글(원격 질문, 자르지 않음) 뒤에 버튼 안내.
-export function askMessageText(question: string): string {
-  return `${question}\n\n아래 버튼으로 답해 주세요. ${TELEGRAM_ASK_TTL_MS / 60_000}분 안에 누르지 않으면 하지 않습니다.`;
+// 답할 수 있는 남은 시간 글. 1분 이상이면 내림한 분(실제보다 길게 안내하지 않게), 그보다 짧으면 내림한 초(#224).
+export function askTtlText(ms: number): string {
+  const left = Math.max(0, ms);
+  return left >= 60_000 ? `${Math.floor(left / 60_000)}분` : `${Math.max(1, Math.floor(left / 1000))}초`;
+}
+
+// 질문 메시지 글. 질문 글(원격 질문, 자르지 않음) 뒤에 버튼 안내. ttlMs: 실제 만료까지 남은 시간(위임 질문은 MCP 작업 기한에 맞춰 짧다).
+export function askMessageText(question: string, ttlMs: number = TELEGRAM_ASK_TTL_MS): string {
+  return `${question}\n\n아래 버튼으로 답해 주세요. ${askTtlText(ttlMs)} 안에 누르지 않으면 하지 않습니다.`;
 }
 
 // 답한 뒤 메시지 끝에 붙일 결과.
