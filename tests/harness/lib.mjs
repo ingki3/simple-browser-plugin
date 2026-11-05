@@ -54,8 +54,14 @@ export async function startHarness() {
       return;
     }
     const body = pages.get(`${which}${path}`) ?? (which === 1 ? DEFAULT_PAGE : "<title>X</title><p>external</p>");
-    r.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    r.end(`<!doctype html><meta charset=utf-8>${body}`);
+    const send = () => {
+      r.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      r.end(`<!doctype html><meta charset=utf-8>${body}`);
+    };
+    // /slow…(#240): 응답을 늦춘다(/slow/ 1초, /slow4/ 4초) — 이동이 커밋되기 전에 턴이 끝나는 경우를 만든다.
+    const slow = /^\/slow(\d*)\//.exec(path);
+    if (slow) setTimeout(send, (Number(slow[1]) || 1) * 1000);
+    else send();
   };
   const srv = createServer(serve(1));
   const srv2 = createServer(serve(2));
@@ -134,6 +140,7 @@ export async function startHarness() {
       globalThis.__steps = [];
       globalThis.__toolLog = [];
       globalThis.__draftReqs = [];
+      globalThis.__draftReplies = 0;
       globalThis.__draft = null;
       globalThis.__realWindowQuery = false;
       globalThis.__modelReqs = [];
@@ -372,6 +379,8 @@ async function installMockModel(sw) {
         (globalThis.__draftReqs ??= []).push(body);
         // __draftDelayMs: 저장 카드 초안 응답을 늦춘다(닫았다 다시 연 동안 도착하는 응답 시험).
         if (globalThis.__draftDelayMs) await new Promise((r) => setTimeout(r, globalThis.__draftDelayMs));
+        // 보낸 초안 응답 수(#240 — 늦게 오는 응답을 고정 대기 대신 이 수로 기다린다).
+        globalThis.__draftReplies = (globalThis.__draftReplies ?? 0) + 1;
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(globalThis.__draft ?? {}) } }] }), {
           headers: { "content-type": "application/json" },
         });
