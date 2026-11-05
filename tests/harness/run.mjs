@@ -46,6 +46,9 @@ for (const s of chosen) {
   try {
     await h.reset();
     await s.run(h);
+    // 모든 시나리오 공통(#221): 모델에 보낸 도구 결과가 앞 호출과 맞아야 한다(내부 키가 기록에 섞이면 여기서 잡힌다).
+    const bad = await h.sw.evaluate(() => globalThis.__badToolIds ?? []);
+    if (bad.length) throw new Fail(`모델에 보낸 도구 결과가 앞 호출과 맞지 않음: ${bad.join("; ")}`);
   } catch (err) {
     status = err instanceof Fail ? "FAIL" : "ERROR";
     detail = err instanceof Error ? err.message : String(err);
