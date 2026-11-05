@@ -82,6 +82,8 @@ export default [
 <iframe src="${h.base2}/map?q=%ED%8C%90%EA%B5%90" style="width:600px;height:400px"></iframe>
 <iframe src="${h.base2}/ad" style="width:120px;height:100px"></iframe>
 <iframe src="${long}" style="width:300px;height:200px"></iframe>
+${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style="width:800px;height:600px;opacity:0"></iframe>`).join("")}
+<div style="opacity:0"><iframe src="${h.base2}/ad?wrap" style="width:800px;height:600px"></iframe></div>
 <div id=host></div><p id=out></p>
 <script>
   const r = document.getElementById("host").attachShadow({ mode: "open" });

@@ -1,16 +1,42 @@
 import type { LandmarkSnapshot, PageDescription, PageRegion } from "@/lib/messages";
 import { resultHref } from "@/lib/clickResult";
-import { crossOriginFrameElements, getAccessibleDocs, isHtmlElement, isTag } from "./docs";
+import { crossOriginFrameElements, getAccessibleDocs, isHtmlElement, isShadowRoot, isTag } from "./docs";
 
 // 다른 출처 iframe 알림(#235)의 크기 하한(광고·추적 프레임 제외)과 개수.
 const FRAME_MIN_W = 200;
 const FRAME_MIN_H = 150;
 const FRAME_MAX = 5;
 
+// 프레임 자신과 조상(shadow host·같은 출처 iframe 경계를 넘어)이 숨겨지거나 투명하지 않은지. 투명한 큰 프레임이 실제 본문 프레임을
+// 개수 한도 밖으로 밀어내지 않게 한다(#235 리뷰).
+function shownThroughAncestors(el: Element): boolean {
+  let cur: Element | null = el;
+  for (let depth = 0; cur && depth < 80; depth += 1) {
+    const style = cur.ownerDocument.defaultView?.getComputedStyle(cur);
+    if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+    if (cur.parentElement) {
+      cur = cur.parentElement;
+      continue;
+    }
+    const root = cur.getRootNode();
+    if (isShadowRoot(root)) {
+      cur = root.host;
+      continue;
+    }
+    // 문서 끝: 같은 출처 iframe 안이면 바깥 문서의 그 iframe 요소로 넘어간다.
+    try {
+      cur = cur.ownerDocument.defaultView?.frameElement ?? null;
+    } catch {
+      cur = null;
+    }
+  }
+  return true;
+}
+
 function crossOriginFrames(): NonNullable<PageDescription["crossOriginFrames"]> {
   const found: Array<{ declaredSrc: string; srcTooLong?: { length: number }; width: number; height: number }> = [];
   for (const frame of crossOriginFrameElements()) {
-    if (!visibleElement(frame)) continue;
+    if (!visibleElement(frame) || !shownThroughAncestors(frame)) continue;
     const rect = frame.getBoundingClientRect();
     if (rect.width < FRAME_MIN_W || rect.height < FRAME_MIN_H) continue;
     let src = "";
