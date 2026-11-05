@@ -14,8 +14,10 @@ function shownThroughAncestors(el: Element): boolean {
   for (let depth = 0; cur && depth < 80; depth += 1) {
     const style = cur.ownerDocument.defaultView?.getComputedStyle(cur);
     if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    if (cur.parentElement) {
-      cur = cur.parentElement;
+    // 합성 트리 부모: 슬롯에 배치된 요소는 그 슬롯(슬롯 쪽 조상의 숨김·투명도도 본다).
+    const next: Element | null = cur.assignedSlot ?? cur.parentElement;
+    if (next) {
+      cur = next;
       continue;
     }
     const root = cur.getRootNode();

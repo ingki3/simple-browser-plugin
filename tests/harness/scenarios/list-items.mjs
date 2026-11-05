@@ -84,7 +84,7 @@ export default [
 <iframe src="${long}" style="width:300px;height:200px"></iframe>
 ${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style="width:800px;height:600px;opacity:0"></iframe>`).join("")}
 <div style="opacity:0"><iframe src="${h.base2}/ad?wrap" style="width:800px;height:600px"></iframe></div>
-<div id=host></div><p id=out></p>
+<div id=host></div><div id=slotted><iframe src="${h.base2}/ad?slot" style="width:800px;height:600px"></iframe></div><p id=out></p>
 <script>
   const r = document.getElementById("host").attachShadow({ mode: "open" });
   const f = document.createElement("iframe");
@@ -97,6 +97,9 @@ ${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style=
     f.contentDocument.body.append(i);
   });
   r.append(f);
+  // 슬롯에 배치된 큰 프레임 — 슬롯을 감싼 shadow 쪽 조상이 투명하면 보이지 않는다.
+  const slotted = document.getElementById("slotted");
+  slotted.attachShadow({ mode: "open" }).innerHTML = '<div style="opacity:0"><slot></slot></div>';
 </script>`,
       );
       const r = await h.turn([{ tool: "describe_page", args: {}, delayMs: 1500 }, { text: "끝" }], { path: "/cf" });
