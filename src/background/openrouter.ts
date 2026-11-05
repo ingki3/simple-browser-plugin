@@ -25,6 +25,7 @@ import { functionDeclarations } from "./tools/declarations";
 import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
 import { registerRepeatTask } from "./repeatTasks";
 import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
+import { takeRebaseOffers, type RebaseOffer } from "./tools/rowRebase";
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
 import { settlePopups, watchNewTabs } from "./popups";
 
@@ -484,6 +485,11 @@ export class ChatAgent {
   private turnRequest = "";
   // 이 턴에 remember_page로 저장 카드를 띄운 주소(턴 끝 자동 제안이 같은 주소면 띄우지 않는다).
   private rememberedUrls: { turn: number; urls: Set<string> } = { turn: -1, urls: new Set() };
+  // 대화별 기준 갱신(#233). pending: 기록에 넣은 도구 결과(바뀐 행 글자를 보여 줌)가 낸 기준 — 그 결과를 실은 모델 요청의 응답이
+  // 아직 오지 않았다. confirmed: 응답이 와(모델이 그 결과를 보고 응답함) 이 대화의 대상 확인에 넘기는 기준(대상 id → nonce들).
+  // 같은 응답의 뒤 호출은 그 응답보다 늦게 난 결과를 볼 수 없으므로 pending을 쓰지 못한다. 기록을 비우면 함께 비운다.
+  private rebasePending: RebaseOffer[] = [];
+  private rebaseConfirmed = new Map<string, string[]>();
   // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 주소 글자 그대로,
   // 양식 제출 주소는 그 action).
   // 클릭·입력의 자동 실행 판정에서 이 주소들의 개인정보 주소 신호만 면제한다(사이트 경계·다른 신호는 그대로).
@@ -607,6 +613,35 @@ export class ChatAgent {
     return turn !== this.currentTurn;
   }
 
+  // 도구 결과를 기록에 넣은 직후 그 호출이 낸 대화별 기준을 받는다(#233). 기록에 넣지 않은 호출의 것은 받지 않는다.
+  private noteRebases(callId: string): void {
+    this.rebasePending.push(...takeRebaseOffers(callId));
+  }
+
+  // 요청에 실었던 결과의 기준 중 아직 pending인 것을 응답이 온 뒤 확정한다. 그 사이 기록을 비웠으면(새 pending 배열) 확정하지 않는다.
+  private confirmRebases(sent: readonly RebaseOffer[]): void {
+    for (const offer of sent) {
+      const at = this.rebasePending.indexOf(offer);
+      if (at < 0) continue;
+      this.rebasePending.splice(at, 1);
+      const list = (this.rebaseConfirmed.get(offer.id) ?? []).filter((n) => n !== offer.nonce);
+      list.push(offer.nonce);
+      if (list.length > 8) list.shift();
+      this.rebaseConfirmed.delete(offer.id);
+      this.rebaseConfirmed.set(offer.id, list);
+      while (this.rebaseConfirmed.size > 200) {
+        const oldest = this.rebaseConfirmed.keys().next().value;
+        if (oldest === undefined) break;
+        this.rebaseConfirmed.delete(oldest);
+      }
+    }
+  }
+
+  private clearRebases(): void {
+    this.rebasePending = [];
+    this.rebaseConfirmed = new Map();
+  }
+
   // 중단된 턴이 tool_calls만 남기고 결과를 못 채웠으면 다음 요청이 API에서 거부된다.
   // 빠진 결과를 "중단됨"으로 채워 기록을 유효하게 만든다.
   private closeDanglingToolCalls(): void {
@@ -726,6 +761,7 @@ export class ChatAgent {
 
   reset(): void {
     this.history = [];
+    this.clearRebases();
     this.conversationUsage = emptyUsageTotal();
     this.lastAttachedPdfUrl = null;
     this.committedCandidates = null;
@@ -822,6 +858,7 @@ export class ChatAgent {
       this.customSystemPrompt = settings.systemPrompt;
       this.conversationQuick = settings.quickThinking;
       this.history = [];
+      this.clearRebases();
       this.conversationUsage = emptyUsageTotal();
       // 첨부한 PDF는 지운 기록에 있었다. 새 기록(새 제공자)에는 다시 첨부해야 한다.
       this.lastAttachedPdfUrl = null;
@@ -1339,6 +1376,8 @@ export class ChatAgent {
       ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
       // 문맥을 서명하는 제공자는 이 안내를 기록에 남기므로 남기기 전에 가린다.
     ]).value;
+    // 이 요청 기록에 실린 결과가 낸 대화별 기준(#233). 응답을 끝까지 받으면 확정한다(아래 return 앞).
+    const sentRebases = [...this.rebasePending];
     // 자동 로그인으로 넣은 값은 어디서 왔든(기록·메모·안내) 모델로 보내지 않는다(기록에 넣을 때 이미 가렸고, 여기는 마지막 거르기).
     const outgoing = await maskMessagesForModel<OpenRouterMessage>([
       { role: "system", content: systemPrompt },
@@ -1490,6 +1529,7 @@ export class ChatAgent {
       `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
     );
     if (this.isStale(turn)) return null;
+    this.confirmRebases(sentRebases);
     return { sentNotes, sentCandidates: afterToolResult ? null : candidatesNote, assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
   }
 
@@ -1610,6 +1650,7 @@ export class ChatAgent {
     const failCall = (msg: string, key: string, panelSummary = msg): void => {
       this.send({ kind: "tool_result", callId, toolName, ok: false, summary: panelSummary });
       this.history.push({ role: "tool", tool_call_id: modelCallId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
+      this.noteRebases(callId);
       record(toolName, key, false, `error:${msg}`, msg);
     };
 
@@ -1663,7 +1704,7 @@ export class ChatAgent {
     }
     let preview: ToolPreview;
     try {
-      preview = await buildToolPreview(toolName, parsedArgs, callId, turnTab);
+      preview = await buildToolPreview(toolName, parsedArgs, callId, turnTab, this.rebaseConfirmed);
     } catch (err) {
       // 미리보기 실패가 턴 전체를 끝내지 않도록 이 호출의 오류 결과로 돌려준다.
       if (this.isStale(turn)) return STALE;
@@ -2515,6 +2556,7 @@ export class ChatAgent {
         name: toolName,
         content: this.toolContent(turnTab, { result: result.data }),
       });
+      this.noteRebases(callId);
       // 클릭은 뒤따른 이동·화면 변화가 관측되면 같은 id를 다시 누르는 것('다음 달' 등)이 반복이 아니다.
       const changed =
         toolName === "click_element" &&

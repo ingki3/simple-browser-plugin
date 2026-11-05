@@ -443,10 +443,12 @@ export async function callContentTool<T = unknown>(
 // 도구 실행이 아닌 짧은 내부 질의(승인 카드용 대상 확인, 클릭 결과 읽기). 주입·재시도는 하지 않는다 —
 // content script가 없으면 id를 준 페이지가 이미 사라진 것이다.
 // content script가 돌려준 실패. code는 content가 구조로 정한 실패 종류(없을 수 있다).
+// rebase: 대상 확인의 row_drift가 만든 대화별 기준(#233).
 export class ContentError extends Error {
   constructor(
     message: string,
     readonly code?: string,
+    readonly rebase?: { id: string; nonce: string },
   ) {
     super(message);
   }
@@ -460,7 +462,7 @@ export async function queryContent<T>(tabId: number, msg: BgToContent, timeoutMs
   )) as ContentResponse<T>;
   if (!res?.ok) {
     if (res?.diag) debugLog("content:diag", `${label} · ${res.diag}`, "warn");
-    throw new ContentError(res?.error ?? `${label} 실패`, res?.code);
+    throw new ContentError(res?.error ?? `${label} 실패`, res?.code, res?.rebase);
   }
   return res.data as T;
 }
