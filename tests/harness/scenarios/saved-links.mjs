@@ -1,6 +1,27 @@
 // 저장 링크(0.2.4·0.2.9): 이 페이지 기억하기 → 초안 자동 요청(요청·답·화면 글자 반영, 일반적인 템플릿) → 저장 → open_saved_link로 자리 값만 넣어 열기.
 import { expect, lastTool, okResult } from "../lib.mjs";
 
+// 조건이 참이 될 때까지 기다린다(#240 — 고정 대기 뒤 찾기 대신). 시간 안에 안 되면 실패.
+async function until(h, what, fn, ms = 5000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    if (await fn().catch(() => false)) return;
+    if (Date.now() > end) throw new Error(`기다림 시간 초과: ${what}`);
+    await h.panel.waitForTimeout(100);
+  }
+}
+
+// 펼친 카드에 초안이 반영됐다(채우는 중이 아니고 이름 칸이 초안 이름).
+const draftShown = (h, name) =>
+  until(h, `초안 반영(${name})`, async () => {
+    const card = h.panel.locator(".page-offer.open");
+    if ((await card.count()) !== 1 || (await card.getByText("채우는 중…").count())) return false;
+    return (await card.locator("input").first().inputValue()) === name;
+  });
+
+const savedCount = (h, n) =>
+  until(h, `저장 ${n}개`, async () => ((await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages ?? [])).length === n));
+
 const search = `<title>가격 검색</title><main><h1>검색 결과</h1><p>최저가 상품 목록</p><input id=memo value="비밀메모"><p id=out></p></main>`;
 
 async function saveFromOffer(h) {
@@ -18,18 +39,18 @@ async function saveFromOffer(h) {
     [{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=${encodeURIComponent("맥북 에어")}&trk=abc` } }, { tool: "describe_page", args: {} }, { text: "찾았습니다." }],
     { text: "맥북 에어 최저가 찾아줘" },
   );
-  await h.panel.waitForTimeout(500);
   const btn = h.panel.getByText("이 페이지 기억하기");
+  await btn.waitFor({ timeout: 5000 });
   expect((await btn.count()) === 1, "저장 제안 버튼이 떠야 한다");
   await btn.click();
   // 카드를 열면 초안을 자동으로 한 번 묻는다(사용자 결정으로 #129 변경).
-  await h.panel.waitForTimeout(1200);
+  await draftShown(h, "가격 검색");
   expect((await h.sw.evaluate(() => (globalThis.__draftReqs ?? []).length)) === 1, "카드를 열면 초안을 한 번 묻는다");
   const req = await h.sw.evaluate(() => globalThis.__draftReqs.at(-1));
   const content = req?.messages?.[0]?.content ?? "";
   const data = JSON.parse(content.slice(content.indexOf("데이터:\n") + 4));
   await h.panel.locator(".page-offer.open .btn-approve").click();
-  await h.panel.waitForTimeout(500);
+  await savedCount(h, 1);
   const saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages);
   return { r, data, saved };
 }
@@ -87,6 +108,38 @@ export default [
     },
   },
   {
+    name: "#240 이동만 하고 바로 답한 턴: 이동한 페이지가 뜬 뒤 그 페이지로 제안한다(시작 페이지로 보지 않음)",
+    pages: { "/slow/s": `<title>느린 검색</title><main><p>느린 목적 페이지 글자</p><p id=out></p></main>` },
+    async run(h) {
+      await h.settings({ autoApprove: true });
+      await h.sw.evaluate(() => {
+        globalThis.__draftDelayMs = 0;
+        globalThis.__draft = { name: "느린 검색", purpose: "검색", params: [{ index: 0, mode: "slot", slot: "검색어" }] };
+      });
+      await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/slow/s?q=a` } }, { text: "끝" }], { text: "찾아줘" });
+      await h.panel.getByText("이 페이지 기억하기").click({ timeout: 5000 });
+      await draftShown(h, "느린 검색");
+      const req = await h.sw.evaluate(() => globalThis.__draftReqs.at(-1));
+      const content = req?.messages?.[0]?.content ?? "";
+      const data = JSON.parse(content.slice(content.indexOf("데이터:\n") + 4));
+      expect(data.base === `${h.base}/slow/s`, `목적 주소(${data.base})`);
+      expect(data.page.includes("느린 목적 페이지 글자"), `목적 문서의 글자(${data.page})`);
+    },
+  },
+  {
+    name: "#240 이동이 3초 넘게 걸리면 턴 끝 제안을 하지 않는다(뒤에 페이지가 떠도 카드 없음)",
+    pages: { "/slow4/s": `<title>아주 느린 검색</title><main><p>아주 느린 페이지</p><p id=out></p></main>` },
+    async run(h) {
+      await h.settings({ autoApprove: true });
+      await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/slow4/s?q=a` } }, { text: "끝" }], { text: "찾아줘" });
+      // 턴 끝 처리(제안 판정 포함)가 끝난 뒤(turn:end), 목적 페이지가 다 뜰 때까지 본다.
+      await until(h, "턴 끝", async () => h.logs.some((l) => l.includes("turn:end")), 8000);
+      await h.tab.waitForFunction(() => document.title === "아주 느린 검색", null, { timeout: 8000 });
+      await h.panel.waitForTimeout(500);
+      expect((await h.panel.getByText("이 페이지 기억하기").count()) === 0, "턴 끝 카드 없음");
+    },
+  },
+  {
     name: "자동 초안: 닫았다 다시 열어도 한 번만, 늦게 온 응답은 다시 열면 반영, 다시 채우기는 다시 묻는다",
     pages: { "/s": search },
     async run(h) {
@@ -97,20 +150,21 @@ export default [
         globalThis.__draftReqs = [];
       });
       await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=${encodeURIComponent("맥북")}&trk=abc` } }, { text: "찾았습니다." }], { text: "맥북 찾아줘" });
-      await h.panel.waitForTimeout(500);
-      await h.panel.getByText("이 페이지 기억하기").click();
-      await h.panel.waitForTimeout(200);
+      await h.panel.getByText("이 페이지 기억하기").click({ timeout: 5000 });
+      await until(h, "초안 요청", async () => (await h.sw.evaluate(() => globalThis.__draftReqs.length)) === 1);
       await h.panel.locator(".page-offer.open .btn-cancel").click();
-      await h.panel.waitForTimeout(1800);
+      // 카드를 닫은 동안 늦은 응답이 도착한다.
+      await until(h, "늦은 초안 응답", async () => (await h.sw.evaluate(() => globalThis.__draftReplies)) === 1);
       await h.panel.getByText("이 페이지 기억하기").click();
-      await h.panel.waitForTimeout(300);
+      await draftShown(h, "가격 검색");
       const reqs = () => h.sw.evaluate(() => globalThis.__draftReqs.length);
       expect((await reqs()) === 1, `한 번만(${await reqs()})`);
       const nameVal = await h.panel.locator(".page-offer.open input").first().inputValue();
       expect(nameVal === "가격 검색", `늦게 온 초안 반영(${nameVal})`);
       await h.sw.evaluate(() => { globalThis.__draftDelayMs = 0; });
       await h.panel.getByText("다시 채우기").click();
-      await h.panel.waitForTimeout(800);
+      await until(h, "다시 채우기 응답", async () => (await h.sw.evaluate(() => globalThis.__draftReplies)) === 2);
+      await draftShown(h, "가격 검색");
       expect((await reqs()) === 2, `다시 채우기(${await reqs()})`);
       const body = await h.sw.evaluate(() => JSON.stringify(globalThis.__draftReqs[0]));
       expect(body.includes("일반적인 링크") && body.includes("구체 값") && body.includes("optional"), "일반화 지침");
@@ -123,7 +177,7 @@ export default [
       await h.settings({ autoApprove: true });
       await h.sw.evaluate(() => { globalThis.__draftReqs = []; globalThis.__draftDelayMs = 0; });
       await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=a` } }, { text: "끝" }], { text: "찾아줘" });
-      await h.panel.waitForTimeout(500);
+      await h.panel.getByText("이 페이지 기억하기").waitFor({ timeout: 5000 });
       await h.settings({ rememberPages: false });
       await h.panel.waitForTimeout(300);
       await h.panel.getByText("이 페이지 기억하기").click();
@@ -143,9 +197,8 @@ export default [
       await h.settings({ autoApprove: true });
       await h.sw.evaluate(() => { globalThis.__draftReqs = []; globalThis.__draftDelayMs = 0; });
       await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=a` } }, { tool: "describe_page", args: {} }, { text: "끝" }], { text: "찾아줘" });
-      await h.panel.waitForTimeout(500);
-      await h.panel.getByText("이 페이지 기억하기").click();
-      await h.panel.waitForTimeout(1000);
+      await h.panel.getByText("이 페이지 기억하기").click({ timeout: 5000 });
+      await until(h, "초안 요청", async () => (await h.sw.evaluate(() => globalThis.__draftReqs.length)) === 1);
       const body = await h.sw.evaluate(() => JSON.stringify(globalThis.__draftReqs));
       expect(body.includes("최저가 상품 목록"), "화면 글자는 보냄");
       expect(!/비밀값|편집글|숨은글/.test(body), "보호 글자 없음");
@@ -169,13 +222,13 @@ export default [
         };
       });
       await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=${encodeURIComponent("맥북")}&max=900000&sort=low` } }, { text: "끝" }], { text: "맥북 찾아줘" });
-      await h.panel.waitForTimeout(500);
-      await h.panel.getByText("이 페이지 기억하기").click();
-      await h.panel.waitForTimeout(1200);
+      await h.panel.getByText("이 페이지 기억하기").click({ timeout: 5000 });
+      await draftShown(h, "가격 검색");
       const optBox = h.panel.locator(".page-offer.open .check-row", { hasText: "비워도 됨" });
+      await until(h, "자리 체크박스", async () => (await optBox.count()) === 2).catch(() => {});
       expect((await optBox.count()) === 2, `자리마다 체크박스(${await optBox.count()})`);
       await h.panel.locator(".page-offer.open .btn-approve").click();
-      await h.panel.waitForTimeout(500);
+      await savedCount(h, 1);
       const saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages);
       const l = saved.at(-1) ?? saved[0];
       const norm = (slots) => JSON.stringify(slots.map((x) => [x.key, x.hint, x.optional === true]));
@@ -198,15 +251,14 @@ export default [
         globalThis.__draft = { name: "가격 검색", purpose: "상품 검색", params: [{ index: 0, mode: "slot", slot: "상품명", optional: false }, { index: 1, mode: "keep" }] };
       });
       await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=a&max=900000` } }, { text: "끝" }], { text: "찾아줘" });
-      await h.panel.waitForTimeout(500);
-      await h.panel.getByText("이 페이지 기억하기").click();
-      await h.panel.waitForTimeout(1200);
+      await h.panel.getByText("이 페이지 기억하기").click({ timeout: 5000 });
+      await draftShown(h, "가격 검색");
       const card = h.panel.locator(".page-offer.open");
       await card.locator(".offer-params select").nth(1).selectOption("slot");
       await card.locator(".offer-slot-name").nth(1).fill("최고  가격");
       await card.locator(".check-row", { hasText: "비워도 됨" }).nth(1).locator("input").check();
       await card.locator(".btn-approve").click();
-      await h.panel.waitForTimeout(500);
+      await savedCount(h, 1);
       const saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages);
       const slot = saved.flatMap((l) => l.slots).find((x) => x.key === "최고 가격");
       expect(slot?.optional === true, `정규화한 이름으로 선택 자리(${JSON.stringify(saved.map((l) => l.slots))})`);
@@ -229,7 +281,7 @@ export default [
       );
       const t = okResult(r, "remember_page");
       expect(t.shown === true && String(t.note).includes("아직 저장되지 않았습니다"), `결과(${JSON.stringify(t)})`);
-      await h.panel.waitForTimeout(1200);
+      await draftShown(h, "가격 검색");
       expect((await h.panel.locator(".page-offer.open").count()) === 1, "펼친 카드 하나(턴 끝 카드 겹치지 않음)");
       expect((await h.panel.locator(".page-offer:not(.open):not(.saved)").count()) === 0, "접힌 턴 끝 카드 없음");
       expect((await h.sw.evaluate(() => globalThis.__draftReqs.length)) === 1, "초안 자동 1회");
@@ -248,11 +300,13 @@ export default [
       await h.settings({ autoApprove: true });
       await h.sw.evaluate(() => { globalThis.__draftDelayMs = 0; globalThis.__draft = { name: "가격 검색", purpose: "상품 검색", params: [] }; });
       await h.turn([{ tool: "navigate_to_url", args: { url: `${h.base}/s?q=b` } }, { tool: "remember_page", args: {} }, { text: "끝" }], { text: "기억해줘" });
-      await h.panel.waitForTimeout(1200);
+      await draftShown(h, "가격 검색");
       await h.panel.locator(".page-offer.open .btn-approve").click();
-      await h.panel.waitForTimeout(500);
+      await savedCount(h, 1);
       const saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages ?? []);
       expect(saved.some((l) => l.name === "가격 검색"), `저장됨(${JSON.stringify(saved.map((l) => l.name))})`);
+      // 이동 직후 불러도 이동한 페이지를 기억한다(#240 — 시작 페이지 카드가 아님).
+      expect(saved[0].template.base === `${h.base}/s`, `이동한 페이지(${saved[0].template.base})`);
       await h.settings({ rememberPages: false });
       const r = await h.turn([{ tool: "remember_page", args: {} }, { text: "끝" }], { noReload: true, text: "기억해줘" });
       const t = lastTool(r, "remember_page");
@@ -270,7 +324,7 @@ export default [
         { path: "/s?x=1", approve: true },
       );
       okResult(r, "remember_page");
-      await h.panel.waitForTimeout(1000);
+      await h.panel.locator(".page-offer.open").first().waitFor({ timeout: 5000 });
       expect((await h.panel.locator(".page-offer.open").count()) >= 1, "카드는 뜸");
       expect((await h.sw.evaluate(() => globalThis.__draftReqs.length)) === 0, "자동 초안 없음");
       expect((await h.panel.locator(".page-offer.open").innerText()).includes("자동으로 채우지 않았습니다"), "안내");
@@ -289,7 +343,7 @@ export default [
       const btn = h.panel.locator(".remember-btn");
       expect(!(await btn.isDisabled()), "웹 페이지면 버튼이 켜져 있다");
       await btn.click();
-      await h.panel.waitForTimeout(1200);
+      await draftShown(h, "가격 검색");
       expect((await h.panel.locator(".page-offer.open").count()) === 1, "펼친 카드");
       const reqs = await h.sw.evaluate(() => globalThis.__draftReqs ?? []);
       expect(reqs.length === 1, `초안 요청 1회(${reqs.length})`);
@@ -301,7 +355,7 @@ export default [
       expect(before.length === 0, "누르기 전에는 저장하지 않는다");
       expect((await h.panel.locator(".page-offer.open input").first().inputValue()) === "가격 검색", "초안 이름");
       await h.panel.locator(".page-offer.open .btn-approve").click();
-      await h.panel.waitForTimeout(500);
+      await savedCount(h, 1);
       const saved = await h.sw.evaluate(async () => (await chrome.storage.local.get("savedPages")).savedPages ?? []);
       expect(saved.length === 1 && saved[0].template.params.length === 1, `저장(${JSON.stringify(saved)})`);
       const msgs = await h.sw.evaluate(() => globalThis.__modelReqs.filter((r) => !r.body.response_format).length);

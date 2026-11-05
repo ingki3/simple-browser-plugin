@@ -383,6 +383,28 @@ function spinStopNote(what: string): string {
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
 
 // 정해진 탭으로 턴 탭을 만든다(반복 작업의 이어서 진행). 탭이 없으면 오류 턴 탭 — 활성 탭으로 대신하지 않는다.
+// 기억하기 제안(#240): 탭이 로딩 중이면 최대 3초 기다린다(이동 직후 끝난 턴·도구가 옛 주소와 글자로 제안하지 않게).
+// 다 떴으면 true, 그때도 로딩 중이거나 탭이 없으면 false.
+const OFFER_LOAD_WAIT_MS = 3_000;
+async function tabLoaded(tabId: number): Promise<boolean> {
+  const until = Date.now() + OFFER_LOAD_WAIT_MS;
+  for (;;) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return false;
+    if (tab.status !== "loading") return true;
+    if (Date.now() >= until) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+// 다 뜬 최상위 문서와 주소(턴 끝 제안이 이것으로 고정한다). 제때 뜨지 않았으면 null.
+async function loadedPage(tabId: number): Promise<{ documentId: string | null; url: string } | null> {
+  if (!(await tabLoaded(tabId))) return null;
+  const documentId = await topDocumentId(tabId);
+  const url = (await chrome.tabs.get(tabId).catch(() => null))?.url ?? "";
+  return { documentId, url };
+}
+
 async function turnTabOf(tabId: number): Promise<TurnTab> {
   try {
     const tab = await chrome.tabs.get(tabId);
@@ -1197,10 +1219,18 @@ export class ChatAgent {
       commitReads(turnTab, completed && !this.isStale(turn) && !this.externalContent);
       // 답을 마친 턴에서 탭이 다른 화면에 있으면 "이 페이지 기억하기"를 제안한다(시크릿·꺼짐·같은 주소는 제안 없음).
       if (completed && !this.isStale(turn) && "tabId" in turnTab) {
-        const offer = await makeOffer(turnTab.tabId, startUrl, {
-          query: userText,
-          answer: this.lastAnswerText(),
-        }).catch(() => null);
+        const context = { query: userText, answer: this.lastAnswerText() };
+        let offer: Awaited<ReturnType<typeof makeOffer>> = null;
+        if (this.remote) offer = await makeOffer(turnTab.tabId, startUrl, context).catch(() => null);
+        else {
+          // 패널 카드는 이동을 마친 페이지로 만든다(#240 — 이동 직후 끝난 턴이 옛 주소를 읽어 같은 페이지로 보지 않게).
+          // 다 뜬 문서·주소를 고정하고, 제안을 만드는 사이 바뀌면 만들지 않는다. 제때 뜨지 않으면 제안하지 않는다.
+          const page = await loadedPage(turnTab.tabId);
+          if (page && !this.isStale(turn)) {
+            const res = await makeOfferResult(turnTab.tabId, startUrl, context, page.documentId, page.url).catch(() => null);
+            offer = res && "offer" in res ? res.offer : null;
+          }
+        }
         const already = this.rememberedUrls.turn === turn && !!offer && this.rememberedUrls.urls.has(offer.url);
         if (offer && !already && !this.isStale(turn)) this.send({ kind: "page_save_offer", offer });
       }
@@ -2070,6 +2100,8 @@ export class ChatAgent {
     let expectUrl: string;
     try {
       tabId = await resolveTurnTab(turnTab);
+      // 이동 직후 불렸으면 페이지가 뜬 뒤의 문서로 만든다(#240 — 아직 커밋되지 않은 이동이면 이전 페이지의 카드가 뜬다).
+      if (!(await tabLoaded(tabId))) throw new Error("페이지가 아직 뜨는 중이라 기억하지 않았습니다. 페이지가 다 뜬 뒤 다시 요청하세요.");
       // 따라가는 탭 팝업이면 확인한 문서에 고정한다(그 사이 바뀌면 만들지 않음). 아니면 지금 문서. 확인하지 못하면(null) 만들지 않는다.
       expectDoc = (await recheckTabPopup(turnTab, tabId)) ?? (await topDocumentId(tabId));
       // 문서를 고정한 뒤의 주소(같은 문서 안 주소 이동도 막는다).
