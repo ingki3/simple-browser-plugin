@@ -388,7 +388,8 @@ export type BgToContent =
   | { kind: "translate_stop"; session?: string }
   // 승인 카드용: id들이 find_* 때와 같은 요소인지 확인하고 이 호출의 승인 대상으로 남긴다.
   // prefix는 기대하는 대상 종류("c" 클릭, "f" 입력 칸).
-  | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f"; values?: string[] }
+  // rebases: 이 호출의 대화가 본 대화별 기준(대상 id → nonce들, #233).
+  | { kind: "target_inspect"; ids: string[]; callId: string; prefix: "c" | "f"; values?: string[]; rebases?: Record<string, string[]> }
   // 자동 로그인(sign_in): 칸 둘레의 로그인 양식 모양을 읽고 넣을 칸·제출 버튼을 이 호출의 승인 대상으로 남긴다(login_inspect),
   // 비밀번호 관리자의 값을 넣고 제출한다(login_fill — 값은 백그라운드에서만 오고 응답에 싣지 않는다), 제출 뒤 칸이 그대로인지 본다.
   | { kind: "login_inspect"; id: string; callId: string }
@@ -430,6 +431,8 @@ export interface ContentResponse<T = unknown> {
   diag?: string;
   // 실패 종류(구조로 정한 값 — 백그라운드가 안내 문구를 고른다). 예: 대상 확인의 foreign_target·stale_target(#236).
   code?: string;
+  // 대상 확인의 row_drift가 만든 대화별 기준(#233). 백그라운드가 그 오류를 본 대화에만 남긴다.
+  rebase?: { id: string; nonce: string };
 }
 
 export type RuntimeMsg =

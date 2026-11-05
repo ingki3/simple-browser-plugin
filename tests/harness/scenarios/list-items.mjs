@@ -251,7 +251,7 @@ ${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style=
         for (const s of document.querySelectorAll("li span")) if (s.textContent === "1005원") s.textContent = "9999원";
       });
       const r = await turn;
-      // 첫 클릭은 기존 행 문맥 검사(행 내용 바뀜 — 같은 id 재호출 안내), 같은 id로 다시 불러도 항목 검사가 막는다.
+      // 모델이 본 적 없는 항목 글자로 바뀌었으므로 첫 클릭부터 항목 검사가 막고(#233 — row_drift로 넘기지 않음), 같은 id로 다시 불러도 막는다.
       const clicks = r.tools.filter((t) => t.name === "click_element").slice(-2);
       expect(clicks.length === 2 && clicks.every((c) => String(c.error ?? "").includes("다시 찾으세요")), `둘 다 막힘(${JSON.stringify(clicks)})`);
       expect(String(clicks[1].error).includes("목록 항목"), `재호출은 항목 검사(${clicks[1].error})`);

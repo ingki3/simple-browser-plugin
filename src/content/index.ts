@@ -70,13 +70,13 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind === "target_inspect") {
     try {
-      const data = inspectTargets(msg.ids, msg.callId, msg.prefix, msg.values);
+      const data = inspectTargets(msg.ids, msg.callId, msg.prefix, msg.values, msg.rebases);
       sendResponse({ ok: true, data } satisfies ContentResponse);
     } catch (err) {
       sendResponse({
         ok: false,
         error: err instanceof Error ? err.message : String(err),
-        ...(err instanceof TargetDriftError ? { diag: err.diag } : {}),
+        ...(err instanceof TargetDriftError ? { diag: err.diag, ...(err.rebase ? { rebase: err.rebase } : {}) } : {}),
         ...(err instanceof StaleTargetError ? { code: err.code } : {}),
       } satisfies ContentResponse);
     }

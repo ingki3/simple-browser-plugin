@@ -465,6 +465,29 @@ async function installMockModel(sw) {
         }
         out = { tool: "click_element", args: { id } };
       }
+      else if (step?.clickN) {
+        // 한 응답에서 같은 대상을 n번 누른다(#233 응답 경계 시험). 직전 찾기 결과의 글자(text), 없으면 직전 click_element의 id.
+        const prev = [...msgs].reverse().flatMap((m) => m.tool_calls ?? []).find((c) => c.function?.name === "click_element");
+        let prevId = "c-missing";
+        try {
+          prevId = JSON.parse(prev?.function?.arguments ?? "{}").id ?? prevId;
+        } catch {
+          /* ignore */
+        }
+        const id = (step.clickN.text && list.find((c) => c.text === step.clickN.text)?.id) || prevId;
+        out = { calls: Array.from({ length: step.clickN.n }, () => ({ tool: "click_element", args: { id } })) };
+      }
+      else if (step?.refill) {
+        // 직전 fill_form_fields와 같은 id들에 새 값(refill 배열, 칸 순서대로)을 넣는다(#233 입력 칸 시험).
+        const prev = [...msgs].reverse().flatMap((m) => m.tool_calls ?? []).find((c) => c.function?.name === "fill_form_fields");
+        let fills = [];
+        try {
+          fills = JSON.parse(prev?.function?.arguments ?? "{}").fills ?? [];
+        } catch {
+          /* ignore */
+        }
+        out = { tool: "fill_form_fields", args: { fills: fills.map((f, i) => ({ id: f.id, value: step.refill[i] ?? f.value })) } };
+      }
       else if (step?.clickStaleLocal) {
         // 직전 찾기 결과의 id 꼬리표(문서마다 다름)로 없는 순번 id를 만든다 — 이 문서에서 등록이 정리된 id와 같은 경로(#236).
         const tok = String(list[0]?.id ?? "c0-x").split("-").pop();

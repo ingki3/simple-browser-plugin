@@ -88,6 +88,7 @@ import { recipeArgs, usefulResult, type ReadHint } from "@/lib/readRecipe";
 import { prepareSignIn, runSignIn, stepLabel, type SignInPreview } from "../signIn";
 import { loginShapeBlocks } from "@/lib/loginPolicy";
 import { httpOrigin } from "@/lib/url";
+import { offerRebase } from "./rowRebase";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -164,20 +165,34 @@ function personalUrlFields(
 
 // 승인 카드를 띄우기 전에 대상이 find_* 때와 같은 요소인지 페이지에서 확인하고, 사람이 알아볼 기술을 받는다.
 // content script는 이 기술을 이 호출(callId)의 승인 대상으로 남기고, 실행 직전에 다시 같은지 본다.
+// rebases: 이 호출의 대화가 본 대화별 기준(대상 id → nonce들, #233). 그 ids의 것만 보낸다.
 async function inspectTargets(
   ids: string[],
   prefix: "c" | "f",
   callId: string,
   turnTab: TurnTab,
   values?: string[],
+  rebases?: ReadonlyMap<string, readonly string[]>,
 ): Promise<TargetInfo[]> {
   const tabId = await resolveTurnTab(turnTab);
   await waitForNavigationSettle(tabId, 10_000);
   // 탭으로 열린 팝업이면 기다린 뒤에도 앞에 보이는지 다시 본다(확인 실패면 오류로 멈춘다).
   await recheckTabPopup(turnTab, tabId);
+  const known: Record<string, string[]> = {};
+  for (const id of ids) {
+    const nonces = rebases?.get(id);
+    if (nonces?.length) known[id] = [...nonces];
+  }
   try {
-    return await queryContent<TargetInfo[]>(tabId, { kind: "target_inspect", ids, callId, prefix, values }, 5_000, "대상 확인");
+    return await queryContent<TargetInfo[]>(
+      tabId,
+      { kind: "target_inspect", ids, callId, prefix, values, ...(Object.keys(known).length ? { rebases: known } : {}) },
+      5_000,
+      "대상 확인",
+    );
   } catch (err) {
+    // row_drift 오류(지금 행 글자를 보여 줌)가 만든 기준은 이 오류를 기록에 넣을 때 이 대화가 가져간다.
+    if (err instanceof ContentError && err.rebase) offerRebase(callId, err.rebase);
     if (isMissingReceiver(err)) {
       throw new Error("대상을 찾은 페이지가 바뀌었습니다. find_clickables·find_form_fields로 다시 찾으세요.");
     }
@@ -244,11 +259,13 @@ async function observeRead(
   noteRead(turnTab, before, picked.tool, picked.args, useful);
 }
 
+// rebases: 이 대화가 결과를 보고 응답한 대화별 기준(#233 — ChatAgent가 넘긴다). 클릭·입력 대상 확인에만 쓴다.
 export async function buildToolPreview(
   toolName: ToolName,
   parsedArgs: unknown,
   callId: string,
   turnTab: TurnTab,
+  rebases?: ReadonlyMap<string, readonly string[]>,
 ): Promise<ToolPreview> {
   switch (toolName) {
     case "fill_form_fields": {
@@ -259,6 +276,7 @@ export async function buildToolPreview(
         callId,
         turnTab,
         args.fills.map((f) => f.value),
+        rebases,
       );
       await beginActionLog(
         callId,
@@ -398,7 +416,7 @@ export async function buildToolPreview(
     }
     case "click_element": {
       const args = parsedArgs as ToolArgs["click_element"];
-      const [info] = await inspectTargets([args.id], "c", callId, turnTab);
+      const [info] = await inspectTargets([args.id], "c", callId, turnTab, undefined, rebases);
       await beginActionLog(callId, "click_element", turnTab, [logTarget(info)]);
       // 선택지(option·menuitem*)는 펼친 트리거의 위험 정보도 따로 받는다. 승인·사이트 판정은 선택지와 트리거
       // 양쪽을 모두 본다(하나로 합치지 않아 어느 쪽의 목적지·위험 문구도 사라지지 않는다).
@@ -875,6 +893,10 @@ async function clickTool(
     return created.some((t) => !t.reused);
   });
   const opens = await readOpens();
+  // 클릭이 바꾼 행·항목 글자(#233): nonce는 떼어 이 호출에 남기고(이 결과를 기록에 넣는 대화가 가져간다), 글자만 결과에 싣는다.
+  const rebase = effect.dom?.rebase;
+  if (effect.dom) delete effect.dom.rebase;
+  if (rebase) offerRebase(callId, { id: rebase.id, nonce: rebase.nonce });
   // 클릭한 팝업 창이 클릭 뒤 닫혔으면(고른 값을 원래 페이지에 써 넣고 닫히는 달력 등) 아래 창으로 돌아간다.
   // 결과 문구가 돌아간 것을 알리므로 다음 도구 결과에는 따로 붙이지 않는다.
   let closed: "original" | "popup" | null = null;
@@ -891,7 +913,15 @@ async function clickTool(
     summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}${inputLabel(data)}`,
     // 팝업 창이 열리거나 막히거나 닫혔거나, 같은 문서 안에서 주소가 바뀌었거나(목록 다시 찾기 안내) 대화상자가 열렸으면(#158)
     // 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
-    data: { text: data.text, href: data.href, effect, ...(clickNoteNeeded(effect) ? { note: describeEffect(effect) } : {}) },
+    data: {
+      text: data.text,
+      href: data.href,
+      effect,
+      ...(clickNoteNeeded(effect) ? { note: describeEffect(effect) } : {}),
+      // 누른 뒤 대상이 든 행·목록 항목의 화면 글자(바뀌었을 때만). 같은 대상을 다시 누르면 이 상태와 비교한다(#233).
+      ...(rebase?.row !== undefined ? { rowAfter: rebase.row } : {}),
+      ...(rebase?.item !== undefined ? { itemAfter: rebase.item } : {}),
+    },
   };
 }
 

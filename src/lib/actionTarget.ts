@@ -399,6 +399,8 @@ export interface DomEffect {
   aborted?: string | null;
   // 대상이 든 같은 출처 iframe이 다른 문서로 이동했는지(탭 주소는 그대로).
   frameNavigated?: boolean;
+  // 클릭이 바꾼 대상의 행·항목 글자와 그 상태의 대화별 기준(#233). 백그라운드가 떼어 내 글자만 결과에 싣는다(nonce는 모델에 보내지 않음).
+  rebase?: { id: string; nonce: string; row?: string; item?: string };
 }
 
 export interface ClickEffect {
