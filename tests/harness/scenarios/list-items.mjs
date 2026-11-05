@@ -54,10 +54,64 @@ const BUDGET = `<title>예산</title><main><ul id=u></ul><p id=out></p></main><s
 
 // 같은 출처 iframe 안의 display:contents 항목(제목 span만 화면 안, 링크는 화면 밖).
 const IFRAME_CONTENTS = `<title>프레임</title><main><iframe style="width:600px;height:300px" srcdoc='<ul>${Array.from({ length: 3 }, (_, i) => `<li style="display:contents"><span>제목${i}</span><a href="/f/${i}" style="display:block;margin-top:3000px">상품${i}</a></li>`).join("")}</ul>'></iframe><p id=out></p></main>`;
+// #234: 랜드마크 없는 본문의 상품 목록 + 빈 iframe(1px·빈 글자) — 빈 iframe은 관측 결과에 main으로 나오지 않는다.
+const EMPTY_FRAMES = `<title>쇼핑</title><div><ul>${Array.from({ length: 12 }, (_, i) => product(i)).join("")}</ul></div>
+<iframe srcdoc="" style="width:1px;height:1px"></iframe><iframe srcdoc="<p></p>" style="width:300px;height:60px"></iframe>
+<iframe srcdoc="<p>프레임 글자</p><a href=/x>프레임 링크</a>" style="width:300px;height:80px"></iframe><p id=out></p>`;
+// main 안은 항목 없는 버튼 하나, 항목은 main 밖(화면 아래)·nav(입력값·숨은 글자에만 낱말).
+const OUTSIDE_MAIN = `<title>밖</title><main><button>필터</button></main>
+<nav style="margin-top:3000px"><ul>${Array.from({ length: 3 }, (_, i) => product(i, `<textarea class=memo></textarea><span hidden>숨은글</span>`)).join("")}</ul></nav>
+<ul style="margin-top:3000px">${Array.from({ length: 12 }, (_, i) => product(20 + i)).join("")}</ul><p id=out></p>
+<script>for (const t of document.querySelectorAll(".memo")) t.value = "비밀값";</script>`;
+// main은 비고 다른 영역에 클릭 대상이 3,000개를 넘는다.
+const BIG_OUTSIDE = `<title>큰</title><main><p>빈</p></main><nav>${Array.from({ length: 3100 }, (_, i) => `<a href="/n/${i}">링크${i}</a>`).join(" ")}</nav><footer><ul>${Array.from({ length: 3 }, (_, i) => product(i)).join("")}</ul></footer><p id=out></p>`;
+// 랜드마크 없는 본문 + 빈 iframe: 본문 글자는 fallbackExcerpt로 나가고 textarea 값은 없다(#44 범위 그대로).
+const PLAIN_EMPTY_FRAME = `<title>본문</title><p>본문 글자</p><textarea id=t></textarea><iframe srcdoc="" style="width:1px;height:1px"></iframe><p id=out></p><script>document.getElementById("t").value = "입력한값";</script>`;
 const clear = (h) => h.sw.evaluate(() => { globalThis.__modelReqs = []; });
 const modelReqText = (h) => h.sw.evaluate(() => JSON.stringify(globalThis.__modelReqs ?? []));
 
 export default [
+  {
+    name: "#234 빈 iframe은 관측에서 빠지고 글자 있는 iframe은 other, region=main 0개면 region을 빼라는 안내와 수",
+    pages: { "/e": EMPTY_FRAMES, "/f": PLAIN_EMPTY_FRAME },
+    async run(h) {
+      const plain = okResult(await h.turn([{ tool: "describe_page", args: {} }, { text: "끝" }], { path: "/f" }), "describe_page");
+      expect(plain.landmarks.length === 0 && plain.fallbackExcerpt.includes("본문 글자") && !plain.fallbackExcerpt.includes("입력한값"), `본문 대체 글(${JSON.stringify(plain)})`);
+      const page = okResult(await h.turn([{ tool: "describe_page", args: {} }, { text: "끝" }], { path: "/e" }), "describe_page");
+      const regions = page.landmarks.map((l) => l.region);
+      expect(!regions.includes("main"), `main 없음(${regions})`);
+      expect(regions.length === 1 && regions[0] === "other" && page.landmarks[0].textPreview.includes("프레임 글자"), `글자 있는 iframe 하나만 other(${JSON.stringify(page.landmarks)})`);
+      const none = await h.turn([items({ region: "main" }), { text: "끝" }], { path: "/e" });
+      const res = okResult(none, "find_clickables");
+      expect(res.items.length === 0 && String(res.note).includes("region 'main'") && String(res.note).includes("12개"), `region 안내(${res.note})`);
+      const all = okResult(await h.turn([items(), { text: "끝" }], { path: "/e" }), "find_clickables");
+      expect(all.items.length >= 12, `region 없이 항목(${all.items.length})`);
+    },
+  },
+  {
+    name: "#234 region 안내는 region이 원인일 때만: query 불일치·onlyViewport·입력값/숨은 글자에만 있는 낱말이면 없다",
+    pages: { "/n": NAV, "/o": OUTSIDE_MAIN },
+    async run(h) {
+      const q = okResult(await h.turn([items({ region: "main", query: "없는낱말" }), { text: "끝" }], { path: "/n" }), "find_clickables");
+      expect(q.items.length === 0 && !String(q.note).includes("region '"), `query 불일치는 query 안내(${q.note})`);
+      const v = okResult(await h.turn([items({ region: "main", onlyViewport: true }), { text: "끝" }], { path: "/o" }), "find_clickables");
+      expect(v.items.length === 0 && !String(v.note).includes("region '"), `화면 밖이면 region 안내 없음(${v.note})`);
+      for (const word of ["비밀값", "숨은글"]) {
+        const p = okResult(await h.turn([items({ region: "main", query: word }), { text: "끝" }], { path: "/o" }), "find_clickables");
+        expect(p.items.length === 0 && !String(p.note).includes("region '") && p.withoutRegion === undefined, `${word}: 보호 글자로 세지 않음(${p.note})`);
+      }
+      const ok = okResult(await h.turn([items({ region: "main", query: "맥북" }), { text: "끝" }], { path: "/o" }), "find_clickables");
+      expect(ok.items.length === 0 && String(ok.note).includes("region 'main'"), `화면 글자 낱말은 region 안내(${ok.note})`);
+    },
+  },
+  {
+    name: "#234 region을 뺀 재집계가 탐색 상한에 걸리면 '이상'으로 알린다",
+    pages: { "/b": BIG_OUTSIDE },
+    async run(h) {
+      const res = okResult(await h.turn([items({ region: "main" }), { text: "끝" }], { path: "/b" }), "find_clickables");
+      expect(res.items.length === 0 && String(res.note).includes("region 'main'") && String(res.note).includes("이상"), `상한 안내(${res.note})`);
+    },
+  },
   {
     name: "섹션 안 상품: 상품 항목 24개(가격 포함), 섹션 항목은 안쪽 상품 글자 없이, 가격으로 고른 상품을 누른다",
     pages: { "/s": SECTIONS },

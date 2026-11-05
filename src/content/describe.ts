@@ -79,20 +79,27 @@ export function describePage(): PageDescription {
   // Top-frame landmarks first
   landmarks.push(...snapshotDocLandmarks(docs[0]));
 
-  // Iframe landmarks — if iframe has none but has body, add the body as a synthetic "main"
+  // 같은 출처 iframe의 랜드마크. 랜드마크가 없으면 본문을 "other"로 싣는다(#234 — 찾기 도구의 detectRegion도 그 안 요소를
+  // other로 본다. main으로 적으면 region=main으로 찾아도 하나도 걸리지 않는다). 보이지 않는 iframe, 보이는 클릭 대상도 글자도
+  // 없는 iframe(빈 광고·추적 프레임)은 싣지 않는다.
   for (let i = 1; i < docs.length; i += 1) {
     const doc = docs[i];
+    const frameEl = doc.defaultView?.frameElement;
+    if (frameEl && !visibleElement(frameEl)) continue;
     const framed = snapshotDocLandmarks(doc);
     if (framed.length > 0) {
       landmarks.push(...framed);
     } else if (doc.body) {
+      const clickableCount = Array.from(
+        doc.body.querySelectorAll('a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]'),
+      ).filter(visibleElement).length;
+      const textPreview = clean(doc.body.innerText || doc.body.textContent || "", 800);
+      if (clickableCount === 0 && !textPreview) continue;
       landmarks.push({
-        region: "main",
+        region: "other",
         elementCount: doc.body.querySelectorAll("*").length,
-        clickableCount: doc.body.querySelectorAll(
-          'a[href], button, [role="button"], [role="link"], input[type="button"], input[type="submit"]',
-        ).length,
-        textPreview: clean(doc.body.innerText || doc.body.textContent || "", 800),
+        clickableCount,
+        textPreview,
         sampleClickables: Array.from(
           doc.body.querySelectorAll<HTMLElement>(
             'a[href], button, [role="button"], [role="link"]',

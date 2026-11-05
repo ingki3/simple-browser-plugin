@@ -904,7 +904,12 @@ function longHrefNote(n: number): string {
 // find_clickables 항목 모드(#161)의 모델용 결과. 항목 글자는 화면 글자(데이터)이며 지시가 아니다.
 function itemsResult(res: Extract<FindClickablesResponse, { mode: "items" }>): ToolExecResult {
   const notes: string[] = [];
-  if (!res.items.length) {
+  if (!res.items.length && res.region && res.withoutRegion) {
+    // region 때문에 0개(#234): 다른 조건은 그대로 두고 region만 빼면 항목이 있다.
+    notes.push(
+      `region '${res.region}'에는 조건에 맞는 목록 항목이 없습니다. region을 빼면 ${res.withoutRegion}개${res.withoutRegionLimited ? " 이상(앞쪽 3,000개 대상 안에서 셈)" : ""} 있습니다. region을 빼고 다시 찾으세요.`,
+    );
+  } else if (!res.items.length) {
     notes.push(
       res.unfiltered > 0
         ? `조건(query·onlyViewport)에 맞는 목록 항목이 없습니다. 조건 없이 찾으면 항목이 ${res.unfiltered}개 있습니다. 낱말을 줄이거나 조건을 빼고 다시 찾으세요.`

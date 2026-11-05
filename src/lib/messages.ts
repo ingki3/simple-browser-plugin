@@ -123,6 +123,10 @@ export type FindClickablesResponse =
       scanLimited: boolean;
       unrelatedChoices: number;
       longHrefs: number;
+      // 항목이 0개이고 region을 줬을 때, region만 빼면 남는 항목 수(#234 — 있을 때만). Limited면 탐색 상한 안에서 센 수.
+      region?: PageRegion;
+      withoutRegion?: number;
+      withoutRegionLimited?: true;
     };
 
 export interface LandmarkSnapshot {
