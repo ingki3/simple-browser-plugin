@@ -22,6 +22,13 @@ export function useChatSession() {
   const ensureRef = useRef<(reason: "즉석") => chrome.runtime.Port | null>(() => null);
   // 대화 유실 안내 중복 방지(새 요청을 보내면 다시 띄울 수 있다).
   const lostNotice = useRef(new LostNotice());
+  // 패널 대화에 사용자 요청을 더하는 유일한 경로(#243): 직접 보냄(입력창·음성 바로 보내기·첫 화면 예시 — sendUser),
+  // 페이지 제안 실행(suggestion_started), 반복 작업 이어서 진행(repeat_started). 새 요청이므로 다음에 대화를 잃으면 다시 안내하고,
+  // 끊길 때의 "이을 대화 있음" 판단(사용자 메시지 유무)에도 들어간다.
+  const addUserRequest = (text: string) => {
+    lostNotice.current.onUserMessage();
+    useChatStore.getState().appendUser(text);
+  };
   // 마지막으로 누른 페이지 제안 실행(#173). 늦게 온 시작·실패 알림이 다른 실행에 붙지 않게.
   const lastRunId = useRef("");
 
@@ -188,14 +195,14 @@ export function useChatSession() {
           return;
         case "suggestion_started":
           // 페이지 제안 실행(#173): 백그라운드가 확인한 뒤 보낸 요청 글. 마지막으로 누른 실행일 때만 보인다.
-          if (msg.runId === lastRunId.current) s.appendUser(msg.text);
+          if (msg.runId === lastRunId.current) addUserRequest(msg.text);
           return;
         case "suggestion_failed":
           if (msg.runId === lastRunId.current) s.addInfo("제안을 실행하지 않았습니다", msg.message);
           return;
         case "repeat_started":
           // 이어서 진행(#138): 백그라운드가 저장된 작업으로 만든 첫 요청 글.
-          s.appendUser(msg.text);
+          addUserRequest(msg.text);
           s.bumpRepeat();
           return;
       }
@@ -375,10 +382,8 @@ export function useChatSession() {
   const sendUser = (text: string) => {
     // 직접 보낸 요청이 앞선 제안 실행을 대신한다(늦게 온 시작 알림을 붙이지 않는다).
     lastRunId.current = "";
-    const { conversationId, appendUser } = useChatStore.getState();
-    // 새 요청을 보냈으니 다음에 대화를 잃으면 다시 안내한다(#243).
-    lostNotice.current.onUserMessage();
-    appendUser(text);
+    const { conversationId } = useChatStore.getState();
+    addUserRequest(text);
     localDebug("user_msg", `${text.length}자`);
     send({ kind: "user_msg", text, conversationId });
   };

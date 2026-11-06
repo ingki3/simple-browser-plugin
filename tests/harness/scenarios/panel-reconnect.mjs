@@ -202,6 +202,31 @@ export default [
     },
   },
   {
+    name: "페이지 제안으로 보낸 요청도 새 요청으로 쳐서, 그 뒤 다시 잃으면 안내가 다시 뜬다",
+    pages: { "/article/1": `<title>글</title><main><h1>긴 글</h1><p>Hello world</p><p id=out></p></main>` },
+    async run(h) {
+      await h.settings({});
+      await h.sw.evaluate(async (base) => {
+        await chrome.storage.local.set({
+          pageSuggestions: [{ id: "r1", origin: base, path: "/article/*", label: "번역해 드릴까요?", request: "제안 요청 S1", enabled: true, version: 1, createdAt: 1 }],
+        });
+      }, h.base);
+      await h.turn([], { path: "/article/1", text: "첫 요청 A1" });
+      await drop(h, { forget: true });
+      expect((await lostCount(h)) === 1, `안내 1개(${await lostCount(h)})`);
+      await h.tab.reload();
+      await h.panel.waitForSelector(".suggestion-chip", { timeout: 5000 });
+      await h.sw.evaluate(() => {
+        globalThis.__steps = [{ text: "제안 답" }];
+      });
+      await h.panel.locator(".suggestion-run").click();
+      await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger") && [...document.querySelectorAll(".bubble-user")].some((b) => b.textContent.includes("제안 요청 S1")), null, { timeout: 10_000 });
+      expect((await lastReq(h)).includes("제안 요청 S1"), "제안 요청이 모델로 감");
+      await drop(h, { forget: true });
+      expect((await lostCount(h)) === 2, `제안 요청 뒤 다시 잃으면 안내 2개(${await lostCount(h)})`);
+    },
+  },
+  {
     name: "승인 대기 중 끊기면 잇지 않고, 패널은 중단 없이 다음 요청을 보낼 수 있다",
     pages,
     async run(h) {
