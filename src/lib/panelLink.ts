@@ -141,3 +141,14 @@ export function prevDisconnectDetail(c: PanelClose | null, now: number): string 
 export function heartbeatLate(prevAt: number | null, now: number, intervalMs: number): boolean {
   return prevAt !== null && now - prevAt > intervalMs * 2;
 }
+
+// 끊긴 순간의 대화 상태(#243): 그때 이을 대화(보낸 사용자 메시지)가 있었는지. 재연결 때 resume을 보낼지는 이것으로 정한다 —
+// 재연결 직전에 막 추가한 첫 요청(빈 패널에서 끊긴 직후 보낸 것)은 이을 대화가 아니다.
+export interface DropSnapshot {
+  conversationId: string;
+  hadConversation: boolean;
+}
+
+export function resumeNeeded(drop: DropSnapshot | null, conversationId: string): boolean {
+  return !!drop && drop.hadConversation && drop.conversationId === conversationId;
+}

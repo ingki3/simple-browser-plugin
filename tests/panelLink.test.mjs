@@ -9,6 +9,7 @@ import {
   PARK_TTL_MS,
   ParkedConversations,
   prevDisconnectDetail,
+  resumeNeeded,
 } from "../src/lib/panelLink.ts";
 
 test("ParkedConversations: 같은 id로 한 번만 꺼내고, 다른 id는 없다", () => {
@@ -85,4 +86,12 @@ test("heartbeatLate: 예정의 두 배를 넘을 때만", () => {
   assert.equal(heartbeatLate(null, 100_000, 20_000), false);
   assert.equal(heartbeatLate(0, 40_000, 20_000), false);
   assert.equal(heartbeatLate(0, 40_001, 20_000), true);
+});
+
+test("resumeNeeded: 끊긴 순간 같은 대화에 보낸 요청이 있었을 때만(재연결 직전에 막 추가한 첫 요청은 아님)", () => {
+  assert.equal(resumeNeeded(null, "c1"), false);
+  assert.equal(resumeNeeded({ conversationId: "c1", hadConversation: false }, "c1"), false);
+  assert.equal(resumeNeeded({ conversationId: "c1", hadConversation: true }, "c1"), true);
+  // 끊긴 뒤 새 대화로 바꿨으면 잇지 않는다.
+  assert.equal(resumeNeeded({ conversationId: "c1", hadConversation: true }, "c2"), false);
 });

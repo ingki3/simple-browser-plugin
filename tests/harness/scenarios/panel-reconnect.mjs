@@ -71,6 +71,20 @@ export default [
     },
   },
   {
+    name: "빈 패널에서 끊긴 직후 보낸 첫 요청은 잃은 대화가 없으니 안내 없이 정상으로 간다",
+    pages,
+    async run(h) {
+      await h.tab.goto(`${h.base}/t`);
+      await slowReconnect(h);
+      await drop(h, { reconnect: false });
+      await h.turn([{ text: "첫 답" }], { noReload: true, maxWaitMs: 6000, text: "첫 요청 B1" });
+      expect(count(h.panelLogs, "port:connect] 즉석") === 1, "즉석 연결로 보냄");
+      expect((await lostCount(h)) === 0, `안내 없음(${await lostCount(h)})`);
+      expect(!h.logs.some((l) => l.includes("conversation:not_resumed")), "이을 대화가 없으니 resume을 묻지 않는다");
+      expect((await lastReq(h)).includes("첫 요청 B1"), "첫 요청이 모델로 감");
+    },
+  },
+  {
     name: "즉석 재연결 뒤 중단·새 대화도 그 연결의 대화에 닿는다",
     pages,
     async run(h) {

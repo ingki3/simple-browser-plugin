@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { PORT_NAME, type BgToPanel, type PanelToBg, type ToolName } from "@/lib/messages";
 import { useChatStore } from "../state/chatStore";
-import { acceptResume, disconnectDetail, heartbeatLate, LostNotice } from "@/lib/panelLink";
+import { acceptResume, disconnectDetail, heartbeatLate, LostNotice, resumeNeeded, type DropSnapshot } from "@/lib/panelLink";
 
 const HEARTBEAT_MS = 20_000;
 
@@ -37,6 +37,8 @@ export function useChatSession() {
     let lastWorker: string | null = null;
     // 바로 앞 끊김에서 진행 중이던 요청을 멈췄는지(다음 안내 문구에 붙인다).
     let droppedBusy = false;
+    // 바로 앞 끊김 때의 대화 상태(그때 이을 대화가 있었는지 — resume 여부는 이것으로 정한다).
+    let lastDrop: DropSnapshot | null = null;
     // 이 연결에서 보낸 resume 요청(답을 받으면 비운다).
     let resumeAsked: { gen: number; conversationId: string } | null = null;
     let visibility = document.visibilityState;
@@ -278,6 +280,7 @@ export function useChatSession() {
           droppedBusy = true;
         }
         resumeAsked = null;
+        lastDrop = { conversationId: s.conversationId, hadConversation: s.messages.some((m) => m.type === "user") };
         const lastErr = chrome.runtime.lastError?.message;
         pushPanelDebug(
           "port:disconnect",
@@ -296,7 +299,9 @@ export function useChatSession() {
 
       startHeartbeat(port);
       const s = useChatStore.getState();
-      if (connectedOnce && s.messages.some((m) => m.type === "user")) {
+      const drop = lastDrop;
+      lastDrop = null;
+      if (connectedOnce && resumeNeeded(drop, s.conversationId)) {
         resumeAsked = { gen: myGen, conversationId: s.conversationId };
         try {
           port.postMessage({ kind: "resume_conversation", conversationId: s.conversationId, gen: myGen } satisfies PanelToBg);
