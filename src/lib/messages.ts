@@ -1,3 +1,5 @@
+import type { ZeroDiag } from "./clickQuery";
+import type { ResumeMissing } from "./panelLink";
 import type { HrefTooLong } from "./clickResult";
 import type { VoiceInputPatch, VoiceInputSettings } from "./voice";
 import type { ProviderId } from "./providers/types";
@@ -97,6 +99,8 @@ export interface ClickableElement {
   contextTruncated?: boolean;
   // 선택지면 그 목록을 연 칸(트리거)의 라벨(이름 또는 "칸 n"). 칸이 여럿일 때 구분한다.
   listFor?: string;
+  // 이름에는 query가 없고 자기 화면 글자(modelText)에 있어 찾은 요소(#242 — query가 이름으로 0개일 때만).
+  matchedBy?: "screenText";
 }
 
 // find_clickables 항목 모드(#161)의 목록 항목: 반복 항목(같은 모양 형제가 가장 많은 조상)의 화면 글자와 그 안의 클릭 대상.
@@ -113,7 +117,16 @@ export interface ListItem {
 
 // content의 find_clickables 응답(모드별). 모델용 결과는 dispatcher가 만든다.
 export type FindClickablesResponse =
-  | { mode: "list"; items: ClickableElement[]; unfiltered: number; unrelatedChoices: number; longHrefs: number }
+  | {
+      mode: "list";
+      items: ClickableElement[];
+      unfiltered: number;
+      unrelatedChoices: number;
+      longHrefs: number;
+      // query로 0개일 때의 진단 수(#242, 글자 없음). 화면 글자로 다시 맞춰 찾은 수(screenText).
+      zeroDiag?: ZeroDiag;
+      screenText?: number;
+    }
   | {
       mode: "items";
       items: ListItem[];
@@ -266,7 +279,9 @@ export type PanelToBg =
   | { kind: "revoke_task" }
   | { kind: "abort_stream" }
   | { kind: "reset_conversation"; conversationId: string }
-  | { kind: "heartbeat" };
+  | { kind: "heartbeat" }
+  // 다시 연결한 패널이 앞 대화를 이어 쓰자고 요청한다(#243 — 같은 패널 문서의 재연결에서, 그 연결의 첫 메시지). gen: 패널의 연결 세대.
+  | { kind: "resume_conversation"; conversationId: string; gen: number };
 
 export type DebugLevel = "info" | "warn" | "error";
 export interface DebugEvent {
@@ -279,6 +294,10 @@ export interface DebugEvent {
 
 export type BgToPanel =
   | { kind: "assistant_chunk"; text: string }
+  // 연결 직후 서비스 워커 실행 식별자(시작마다 새 값)와 가동 시간(#243 진단).
+  | { kind: "port_hello"; workerRun: string; uptimeMs: number }
+  // resume_conversation의 답(#243). gen·conversationId는 받은 값 그대로. resumed=false면 reason.
+  | { kind: "conversation_resume"; conversationId: string; gen: number; resumed: boolean; reason?: ResumeMissing }
   // 반복 작업(#138): 목록이 바뀌었다(패널이 다시 읽는다) / 이어서 진행을 시작했다(새 대화의 첫 요청 글).
   | { kind: "repeat_update" }
   | { kind: "repeat_started"; text: string }

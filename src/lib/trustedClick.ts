@@ -85,6 +85,8 @@ export type TrustedClickReport = TrustedClickStatus & {
   viewport: { width: number; height: number };
   // 결과를 읽을 때 탭이 화면에 보이지 않았는지(뒤에 있는 탭에는 실제 입력이 오지 않을 수 있다).
   hidden?: boolean;
+  // 처음 막은 순간의 구조 사실(#241, 막혔을 때만).
+  firstBlock?: FirstBlock;
 };
 
 // 실제 입력이 대상에 오지 않았을 때(none) 원인을 좁히는 설명. frameBlocked: 다른 프레임 가드가 막은 입력 수.
@@ -132,4 +134,73 @@ export function unguardedFrame<T extends { documentId: string; url: string }>(
 // 가드를 걸기 시작한 시각(armedAt)부터 재어, 지금 누르기 시작해도 가드가 GUARD_MIN_REMAINING_MS 넘게 남는지.
 export function guardTimeLeft(armedAt: number, now: number): boolean {
   return armedAt + GUARD_MS - now >= GUARD_MIN_REMAINING_MS;
+}
+
+// 가드가 처음 막은 순간의 구조 사실(#241 진단). 글자(textContent·value·aria-label)는 담지 않는다.
+// event: 처음 막은 이벤트 종류(또는 "확인 중 오류"·"만료"·"취소"). seenBefore: 그 이벤트 앞에 받은 실제 입력 종류.
+// targetConnected: 승인 대상이 아직 문서에 붙어 있었는지. targetShown: 붙어 있다면 화면에 보였는지(display·visibility·상자).
+// hit: 그 이벤트가 닿은 요소의 태그와 role(구조 토큰 꼴일 때만).
+export interface FirstBlock {
+  event: string;
+  seenBefore: string[];
+  targetConnected: boolean;
+  targetShown: boolean;
+  hit: { tag: string; role?: string } | null;
+}
+
+const ROLE_TOKEN_RE = /^[a-z]+( [a-z]+)*$/;
+
+// role 속성이 구조 토큰 꼴(소문자 낱말, 40자 안)일 때만 진단에 싣는다(페이지가 넣은 아무 글자나 남기지 않게).
+export function roleToken(role: string | null | undefined): string | undefined {
+  if (!role || role.length > 40 || !ROLE_TOKEN_RE.test(role)) return undefined;
+  return role;
+}
+
+const PHASE_LABEL: Record<string, string> = {
+  pointerdown: "누르기(pointerdown)",
+  mousedown: "누르기(mousedown)",
+  pointerup: "떼기(pointerup)",
+  mouseup: "떼기(mouseup)",
+  click: "클릭(click)",
+};
+
+// 막힌 실제 입력 클릭의 모델 문구(#241). 구조로 확인한 사실과 고정 안내만 — 사이트 동작은 단정하지 않는다.
+export function describeBlockedClick(reason: string, first?: FirstBlock | null): string {
+  const facts: string[] = [];
+  if (first) {
+    const at = PHASE_LABEL[first.event];
+    if (at) facts.push(`${at} 단계에서 막음`);
+    if (!first.targetConnected) facts.push("누르기 도중 대상이 문서에서 떨어졌습니다");
+    else if (!first.targetShown) facts.push("누르기 도중 대상이 화면에서 사라졌습니다(숨겨짐)");
+  }
+  return (
+    `실제 입력 클릭을 도중에 막았습니다(${reason}).${facts.length ? ` ${facts.join(". ")}.` : ""}` +
+    " 클릭은 끝나지 않았지만 앞 단계의 페이지 처리는 이미 일어났을 수 있습니다." +
+    " 함께 보낸 effect(이동·화면 변화·대화상자)와 지금 화면을 먼저 보고, 원하는 결과가 이미 있으면 다시 누르지 마세요. 끝나지 않았을 때만 다시 찾아 시도하세요."
+  );
+}
+
+// 누르기 입력을 보낸 뒤의 다른 실패 문구(#241). 단계 이름과 고정 안내.
+export function describePressedFailure(what: string): string {
+  return (
+    `${what}.` +
+    " 누르기 단계의 페이지 처리는 이미 일어났을 수 있습니다. 함께 보낸 effect와 지금 화면을 먼저 보고, 원하는 결과가 이미 있으면 다시 누르지 마세요. 끝나지 않았을 때만 다시 찾아 시도하세요."
+  );
+}
+
+function clip(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+// 막힘 진단 줄(디버그 로그 input:blocked). name은 모델에 준 대상 이름(modelName).
+export function blockDiagText(reason: string, first: FirstBlock | null | undefined, name: string): string {
+  const parts: string[] = [];
+  if (first) {
+    parts.push(`첫 차단 ${first.event}(앞: ${first.seenBefore.length ? first.seenBefore.join(",") : "없음"})`);
+    parts.push(first.targetConnected ? (first.targetShown ? "대상 연결됨·보임" : "대상 연결됨·숨겨짐") : "대상 연결 끊김");
+    parts.push(first.hit ? `닿은 요소 ${first.hit.tag}${first.hit.role ? `[${first.hit.role}]` : ""}` : "닿은 요소 없음");
+  } else parts.push("첫 차단 정보 없음");
+  parts.push(`이유 ${reason}`);
+  parts.push(`대상 '${clip(name, 60)}'`);
+  return parts.join(" · ");
 }

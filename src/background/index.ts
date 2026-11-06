@@ -1,5 +1,6 @@
 import { keepassxcAssociate, keepassxcForget, keepassxcStatus } from "./keepassxc";
-import { PORT_NAME, SETTINGS_KEY, type PanelToBg, type Settings } from "@/lib/messages";
+import { PORT_NAME, SETTINGS_KEY, type BgToPanel, type PanelToBg, type Settings } from "@/lib/messages";
+import { PARK_TTL_MS, ParkedConversations, prevDisconnectDetail, type PanelClose, type ResumeMissing } from "@/lib/panelLink";
 import { normalizeSettings } from "@/lib/settings";
 import { ChatAgent } from "./openrouter";
 import { applyLoginSiteOp, applyManualSiteOp, applyRemoteSiteOp, applySettingsPatch, getSettings, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
@@ -60,6 +61,47 @@ chrome.action.onClicked.addListener((tab) => {
   }
 });
 
+// 이 서비스 워커 실행의 식별자(시작마다 새 값)와 시작 시각(#243 진단 — 패널이 앞 연결과 비교해 워커가 다시 떴는지 안다).
+const WORKER_RUN = { id: crypto.randomUUID().slice(0, 8), startedAt: Date.now() };
+let panelConnectSeq = 0;
+// 끊길 때 쉬고 있던 대화(같은 워커 안에서 60초, #243). 같은 패널이 다시 붙어 resume_conversation을 보내면 한 번 꺼내 이어 쓴다.
+// 메모리에만 두고 저장하지 않는다. 만료·밀려나면 abort로 정리한다.
+const parked = new ParkedConversations<ChatAgent>((a) => a.abort());
+// 백그라운드가 본 마지막 패널 끊김(다음 연결 때 port:prev_disconnect로 남긴다).
+let lastPanelClose: PanelClose | null = null;
+
+// 확장 화면(패널)에서 연 연결인지(content script·웹 페이지의 연결은 sender.url이 웹 주소).
+function fromExtensionPage(port: chrome.runtime.Port): boolean {
+  return port.sender?.id === chrome.runtime.id && !!port.sender?.url?.startsWith(chrome.runtime.getURL(""));
+}
+
+// 지금 열린 패널 연결(하네스가 끊김을 만들 때 쓴다). close: onDisconnect와 같은 정리(연결마다 한 번).
+const panelLinks = new Set<{ port: chrome.runtime.Port; close: () => void; agent: () => ChatAgent | null }>();
+// 하네스용(기존 __sbpSettings와 같은 방식, 확장 맥락에서만 접근): 백그라운드 쪽에서 패널 연결을 끊는다. 자기 쪽 disconnect()는
+// 자기 onDisconnect를 부르지 않으므로 정리(보관 포함)를 먼저 직접 부르고, forget이면 보관함을 비운 뒤 끊는다 — 패널의 재연결은 그
+// 뒤에야 일어나므로 "끊김 정리 → 보관함 비우기 → 재연결" 순서가 보장된다.
+(globalThis as { __sbpPorts?: unknown }).__sbpPorts = {
+  dropPanelPorts(opts: { forget?: boolean } = {}): number {
+    const links = [...panelLinks];
+    for (const l of links) l.close();
+    if (opts.forget) parked.clear();
+    for (const l of links) {
+      try {
+        l.port.disconnect();
+      } catch {
+        /* already closed */
+      }
+    }
+    return links.length;
+  },
+  parkedCount: (): number => parked.size,
+  // 지금 연결의 대화를 "사용자가 디버깅을 취소함" 상태로(실제 막대 취소는 하네스에서 누를 수 없다) / 그 상태를 읽는다.
+  cancelInput(): void {
+    for (const l of panelLinks) l.agent()?.markInputCanceledForHarness();
+  },
+  inputCanceled: (): boolean[] => [...panelLinks].map((l) => l.agent()?.inputCanceled() ?? false),
+};
+
 chrome.runtime.onConnect.addListener((port) => {
   // 방문 기록에서 기억할 페이지 찾기(#175): 이 확장의 화면(설정)에서 연 연결만.
   if (port.name === HISTORY_PICK_PORT) {
@@ -81,9 +123,18 @@ chrome.runtime.onConnect.addListener((port) => {
   // 그 준비는 버린다(사용자가 연 새 대화를 덮지 않게, #138).
   let actionSeq = 0;
   let disconnected = false;
+  const connectedAt = Date.now();
+  let lastHeartbeatAt: number | null = null;
   registerDebugSink(port);
   registerRepeatSink(port);
-  debugLog("port:connect");
+  panelConnectSeq += 1;
+  debugLog("port:connect", `worker ${WORKER_RUN.id} · 가동 ${Math.round((connectedAt - WORKER_RUN.startedAt) / 1000)}초 · 이 워커의 ${panelConnectSeq}번째 연결`);
+  debugLog("port:prev_disconnect", prevDisconnectDetail(lastPanelClose, connectedAt));
+  try {
+    port.postMessage({ kind: "port_hello", workerRun: WORKER_RUN.id, uptimeMs: connectedAt - WORKER_RUN.startedAt } satisfies BgToPanel);
+  } catch {
+    /* port closed */
+  }
 
   port.onMessage.addListener((raw: unknown) => {
     const msg = raw as PanelToBg;
@@ -194,7 +245,32 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       case "heartbeat":
         // panel liveness ping — keep the service worker from idling out
+        lastHeartbeatAt = Date.now();
         return;
+      case "resume_conversation": {
+        // 다시 연결한 패널의 앞 대화 이어 쓰기(#243): 확장 화면 연결이고, 이 연결에 아직 대화가 없고, 같은 대화가 보관돼 있을 때만.
+        const conversationId = String(msg.conversationId);
+        const gen = Number(msg.gen);
+        const reply = (resumed: boolean, reason?: ResumeMissing) => {
+          debugLog(resumed ? "conversation:resumed" : "conversation:not_resumed", reason ?? "");
+          try {
+            port.postMessage({ kind: "conversation_resume", conversationId, gen, resumed, ...(reason ? { reason } : {}) } satisfies BgToPanel);
+          } catch {
+            /* port closed */
+          }
+        };
+        if (!fromExtensionPage(port)) return reply(false, "sender");
+        if (agent) return reply(false, "missing");
+        const got = parked.take(conversationId, Date.now());
+        if ("value" in got) {
+          agent = got.value;
+          activeConversationId = conversationId;
+          agent.attachPort(port);
+          return reply(true);
+        }
+        const busy = lastPanelClose?.conversationId === conversationId && lastPanelClose.busy;
+        return reply(false, busy ? "busy" : got.missing);
+      }
     }
   });
 
@@ -204,13 +280,32 @@ chrome.runtime.onConnect.addListener((port) => {
   };
   chrome.storage.onChanged.addListener(onStorage);
 
-  port.onDisconnect.addListener(() => {
-    disconnected = true;
-    chrome.storage.onChanged.removeListener(onStorage);
-    agent?.abort();
-    agent = null;
-    activeConversationId = null;
-  });
+  // 연결이 끝났을 때의 정리(패널이 끊었거나 백그라운드가 끊음). 연결마다 한 번만.
+  // 쉬고 있던 대화는 허용을 넓히는 상태를 지운 뒤 잠깐 보관하고(#243), 진행 중이던 대화는 지금처럼 멈추고 버린다.
+  const link = {
+    port,
+    agent: () => agent,
+    close: () => {
+      if (disconnected) return;
+      disconnected = true;
+      panelLinks.delete(link);
+      chrome.storage.onChanged.removeListener(onStorage);
+      const now = Date.now();
+      const busy = !!agent && !agent.idle();
+      let kept = false;
+      if (agent && !busy && activeConversationId) {
+        agent.suspendForReconnect();
+        parked.put(activeConversationId, agent, now);
+        kept = true;
+        setTimeout(() => parked.expire(Date.now()), PARK_TTL_MS + 1_000);
+      } else agent?.abort();
+      lastPanelClose = { at: now, connectedMs: now - connectedAt, heartbeatAt: lastHeartbeatAt, conversationId: activeConversationId, busy, parked: kept };
+      agent = null;
+      activeConversationId = null;
+    },
+  };
+  panelLinks.add(link);
+  port.onDisconnect.addListener(() => link.close());
 });
 
 chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {

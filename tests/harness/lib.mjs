@@ -94,6 +94,11 @@ export async function startHarness() {
   await tab.goto(base + "/");
   await installMockModel(sw);
   const panel = await ctx.newPage();
+  // 패널 쪽 디버그 줄(useChatSession의 panelConsole — "[SBP panel <tag>] ..."). reset마다 비운다.
+  const panelLogs = [];
+  panel.on("console", (m) => {
+    if (m.text().startsWith("[SBP panel ")) panelLogs.push(m.text());
+  });
   // 설정 페이지(옵션 탭, #127). openOptions는 새 탭으로 연다. optionsPages는 지금 열린 설정 탭들(패널의 ⚙가 연 것 포함).
   const optionsUrl = `chrome-extension://${extId}/src/options/index.html`;
   const optionsPages = () => ctx.pages().filter((p) => p.url().startsWith(optionsUrl));
@@ -158,6 +163,7 @@ export async function startHarness() {
       globalThis.__translateReqs = [];
     });
     logs.length = 0;
+    panelLogs.length = 0;
     for (const p of optionsPages()) await p.close().catch(() => {});
     await panel.goto(`chrome-extension://${extId}/src/sidepanel/index.html`);
     await panel.waitForTimeout(500);
@@ -166,7 +172,8 @@ export async function startHarness() {
 
   // 한 턴: 탭을 path로 열고(noReload면 그대로) 단계 목록으로 모의 모델을 돌린다.
   // approve: 승인 카드가 뜨면 누른다(true) / 카드가 뜨면 거기서 멈춘다(false). onCard(card, n): 카드가 뜰 때 대신 할 일.
-  async function turn(steps, { path = "/", server = 1, noReload = false, approve = false, onCard, maxWaitMs = 20_000, text = "시험" } = {}) {
+  // keepRunning: 카드에서 멈췄을 때 반환 전에 중단 버튼을 누르지 않는다(끊김 뒤 패널 정리를 시험할 때 — 기본은 누름).
+  async function turn(steps, { path = "/", server = 1, noReload = false, approve = false, onCard, maxWaitMs = 20_000, text = "시험", keepRunning = false } = {}) {
     if (!noReload) await tab.goto((server === 1 ? base : base2) + path);
     await tab.waitForTimeout(200);
     await sw.evaluate((s) => {
@@ -204,7 +211,7 @@ export async function startHarness() {
     if (!finished && !stoppedAtCard) throw new Fail(`턴이 ${maxWaitMs}ms 안에 끝나지 않았습니다`);
     const tools = await sw.evaluate(() => globalThis.__toolLog);
     const out = await tab.locator("#out").innerText().catch(() => null);
-    if (await panel.locator("button.composer-btn.danger").count()) {
+    if (!keepRunning && (await panel.locator("button.composer-btn.danger").count())) {
       await panel.click("button.composer-btn.danger");
       await panel.waitForTimeout(300);
     }
@@ -237,7 +244,7 @@ export async function startHarness() {
     };
   }
 
-  return { base, base2, pages, hits, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, installKeePassXC, userDataDir, optionsUrl, optionsPages, openOptions, waitOptions };
+  return { base, base2, pages, hits, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, panelLogs, installKeePassXC, userDataDir, optionsUrl, optionsPages, openOptions, waitOptions };
 }
 
 // 모의 모델: 단계마다 직전 도구 결과를 보고 다음 호출을 만든다. 도구 결과(모델에 간 그대로)는 __toolLog에 남긴다.
