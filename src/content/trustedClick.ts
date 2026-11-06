@@ -5,12 +5,25 @@ import {
   clickPoints,
   GUARDED_EVENTS,
   GUARD_MS,
+  roleToken,
+  type FirstBlock,
   type Point,
   type TrustedClickReport,
   type TrustedClickStatus,
 } from "@/lib/trustedClick";
 import { isTag } from "./docs";
 import { expandedTriggers } from "./targets";
+
+// 막힌 순간 대상이 화면에 보였는지(#241 진단): 상자가 있고 display·visibility로 숨기지 않았다.
+function shownNow(el: HTMLElement): boolean {
+  try {
+    if (el.getClientRects().length === 0) return false;
+    const st = el.ownerDocument.defaultView?.getComputedStyle(el);
+    return !st || (st.display !== "none" && st.visibility !== "hidden");
+  } catch {
+    return false;
+  }
+}
 
 // 승인한 대상 안에 있어도 따로 활성화되는 요소(링크·버튼·입력·프레임 등). 실제 입력이 이것에 닿으면 승인한 대상이 아닌
 // 그 요소가 동작하므로(기존 el.click()과 다름) 누르지 않는다. 구조(요소 종류·역할)로만 정한다.
@@ -218,6 +231,8 @@ interface TopGuard {
   status: TrustedClickStatus;
   // 받은 실제 입력 종류(진단용, 앞의 몇 개만).
   seen: string[];
+  // 처음 막은 순간의 구조 사실(#241 진단).
+  firstBlock?: FirstBlock;
   remove: () => void;
   probe: () => boolean;
   probed: boolean;
@@ -273,6 +288,18 @@ export function armTopGuard(
     probe: () => false,
     probed: false,
   };
+  // 처음 막을 때만 기록한다. seenBefore는 이 이벤트를 넣기 전의 받은 입력(부르는 쪽이 넘긴다).
+  const noteBlock = (event: string, seenBefore: string[], e?: Event) => {
+    if (guard.firstBlock) return;
+    let hit: FirstBlock["hit"] = null;
+    try {
+      const t = e?.composedPath?.()[0];
+      if (t instanceof Element) hit = { tag: t.localName, ...(roleToken(t.getAttribute("role")) ? { role: roleToken(t.getAttribute("role")) } : {}) };
+    } catch {
+      hit = null;
+    }
+    guard.firstBlock = { event, seenBefore, targetConnected: el.isConnected, targetShown: el.isConnected && shownNow(el), hit };
+  };
   // 가드 리스너가 아직 붙어 있는지 확인하는 표지(document.open·만료 정리는 리스너를 지운다). 입력을 막는 같은 handler에
   // 붙여, 입력 리스너가 지워지면 표지도 함께 사라진다. 이름은 토큰이라 페이지가 미리 알 수 없다.
   const probeType = `sbp-guard-${token}`;
@@ -282,20 +309,28 @@ export function armTopGuard(
       return;
     }
     if (!e.isTrusted) return;
+    // 이 이벤트를 넣기 전의 받은 입력(첫 차단 진단의 "앞 이벤트" — 막힌 이벤트 자신은 넣지 않는다).
+    const before = [...guard.seen];
     if (guard.seen.length < 12) guard.seen.push(e.type);
-    if (guard.status.status === "blocked") return block(e);
+    if (guard.status.status === "blocked") {
+      // 누르기 전 확인·취소·만료로 이미 막힘이면 처음 온 입력을 첫 차단으로 기록한다.
+      noteBlock(guard.status.reason === "확인 시간이 지남" ? "만료" : e.type, before, e);
+      return block(e);
+    }
     if (guard.status.status === "clicked") return;
     // 확인 도중 예외(페이지가 양식 속성을 가리는 이름의 칸을 넣는 등)도 막는다 — 리스너의 예외는 이벤트를 취소하지 않는다.
     try {
-      inspect(e);
+      inspect(e, before);
     } catch {
       guard.status = { status: "blocked", reason: "확인 중 오류" };
+      noteBlock("확인 중 오류", before, e);
       block(e);
     }
   };
-  const inspect = (e: Event) => {
+  const inspect = (e: Event, before: string[]) => {
     const stop = (reason: string) => {
       guard.status = { status: "blocked", reason };
+      noteBlock(e.type, before, e);
       block(e);
     };
     if (Date.now() > guard.deadline) return stop("확인 시간이 지남");
@@ -397,6 +432,7 @@ export function guardResult(token: string): TrustedClickReport | null {
     seen: [...guard.seen],
     viewport: { width: window.innerWidth, height: window.innerHeight },
     hidden: document.visibilityState === "hidden",
+    ...(guard.firstBlock ? { firstBlock: guard.firstBlock } : {}),
   };
 }
 

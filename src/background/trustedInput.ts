@@ -5,7 +5,10 @@ import type { BgToContent, ContentResponse } from "@/lib/messages";
 import { withTimeout } from "@/lib/async";
 import { originLabel } from "@/lib/url";
 import {
+  blockDiagText,
+  describeBlockedClick,
   describeMissedClick,
+  describePressedFailure,
   FRAME_ARM_TIMEOUT_MS,
   frameNeedsGuard,
   guardTimeLeft,
@@ -207,6 +210,20 @@ export interface InputClickResult extends ClickData {
   inputNote?: string;
 }
 
+// 누르기 입력(mousePressed)을 보낸 뒤의 실패(#241). 누르기 단계의 페이지 처리는 이미 일어났을 수 있으므로, 부르는 쪽(clickTool)이
+// effectToken으로 그 사이 화면 변화를 관측해 실패 결과와 함께 돌려준다. 실패는 실패로 둔다(변화만으로 성공 판정하지 않음).
+export class PressedClickError extends Error {
+  constructor(
+    message: string,
+    readonly effectToken: string,
+    readonly text: string,
+    readonly href: string,
+  ) {
+    super(message);
+    this.name = "PressedClickError";
+  }
+}
+
 function fail(reason: string): Error {
   return new Error(`실제 입력으로 누르지 않았습니다(${reason}). 다시 관측하세요.`);
 }
@@ -332,7 +349,8 @@ async function pressIn(
     // 응답 없이 끝났으면 눌린 상태일 수 있어 떼기를 보내지 않고 디버거를 뗀다.
     await dropTab(session, tabId);
     if (err instanceof ClickAbortedError) throw err;
-    throw new Error(`실제 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)}). 다시 관측하세요.`);
+    // 응답 없이 끝났으면 눌렸을 수 있으므로 관측을 붙인다(실패는 그대로).
+    throw pressedFail(data, `실제 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)})`, "누르기 전송 실패");
   }
   // 떼기 전 확인: 누르기 처리기가 문서를 바꾸거나(document.open 등으로 가드 리스너가 지워짐) 다른 문서로 옮겼으면 새 문서에
   // 떼기를 보내지 않는다. 중단됐으면 가드를 막힘으로 바꾼 뒤에만 뗀다(떼기의 click은 가드가 막는다). 어느 쪽이든 확인하지
@@ -346,12 +364,12 @@ async function pressIn(
     // 누르기만으로 다른 문서로 옮겨 갔으면 결과는 observeClickEffect가 이동으로 판정한다.
     if (!abortedWhilePressed && isMissingReceiver(err)) return { ...data, input: "trusted" };
     if (abortedWhilePressed) throw new ClickAbortedError();
-    throw new Error("마우스를 누른 뒤 문서를 확인하지 못해 떼기 입력을 보내지 않았습니다. 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.");
+    throw pressedFail(data, "마우스를 누른 뒤 문서를 확인하지 못해 떼기 입력을 보내지 않았습니다", "떼기 전 확인 실패");
   }
   if (!alive) {
     await dropTab(session, tabId);
     if (abortedWhilePressed) throw new ClickAbortedError();
-    throw new Error("마우스를 누른 뒤 페이지가 문서를 바꿔 떼기 입력을 보내지 않았습니다. 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.");
+    throw pressedFail(data, "마우스를 누른 뒤 페이지가 문서를 바꿔 떼기 입력을 보내지 않았습니다", "문서 바뀜");
   }
   // 확인을 기다리는 사이 중단됐으면 가드를 막힘으로 바꾼 것을 확인한 뒤에만 뗀다. 이 확인과 떼기 사이에는 await가 없다.
   let canceled = abortedWhilePressed;
@@ -368,9 +386,7 @@ async function pressIn(
   } catch (err) {
     await cancel("입력 전송 실패");
     await dropTab(session, tabId);
-    throw new Error(
-      `마우스를 누른 뒤 떼는 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)}). 누르기 단계의 처리는 이미 일어났을 수 있으니 다시 관측하세요.`,
-    );
+    throw pressedFail(data, `마우스를 누른 뒤 떼는 입력을 보내지 못했습니다(${err instanceof Error ? err.message : String(err)})`, "떼기 전송 실패");
   }
 
   if (canceled) throw new ClickAbortedError();
@@ -383,16 +399,16 @@ async function pressIn(
     } catch (err) {
       // 누른 뒤 문서가 바뀌었으면(누르기만으로 이동하는 사이트 포함) 결과는 observeClickEffect가 이동으로 판정한다.
       if (isMissingReceiver(err)) return { ...data, input: "trusted" };
-      throw new Error("실제 입력 클릭의 결과를 확인하지 못했습니다. 다시 관측하세요.");
+      throw pressedFail(data, "실제 입력 클릭의 결과를 확인하지 못했습니다", "결과 확인 실패");
     }
     if (status?.status !== "none") break;
   }
-  if (!status) throw new Error("실제 입력 클릭의 결과를 확인하지 못했습니다. 다시 관측하세요.");
+  if (!status) throw pressedFail(data, "실제 입력 클릭의 결과를 확인하지 못했습니다", "결과 확인 실패");
   if (status.status === "clicked") return { ...data, input: "trusted" };
   if (status.status === "blocked") {
-    throw new Error(
-      `실제 입력 클릭을 도중에 막았습니다(${status.reason}). 누르기 단계의 처리는 페이지에서 이미 일어났을 수 있으니 다시 관측하세요.`,
-    );
+    // 첫 차단 진단(#241): 이벤트 종류·앞 이벤트·대상 연결·표시·닿은 요소(글자 없음)·대상 이름(modelName).
+    debugLog("input:blocked", `tab ${tabId} · ${blockDiagText(status.reason, status.firstBlock, data.text)}`, "warn");
+    throw new PressedClickError(describeBlockedClick(status.reason, status.firstBlock), data.effectToken, data.text, data.href);
   }
   await cancel("입력이 도착하지 않음");
   // 원인을 좁힌다: 다른 프레임이 받았는지(가드를 떼며 막은 수를 읽는다), 점이 화면 밖인지, 이 문서가 무엇을 받았는지.
@@ -410,5 +426,11 @@ async function pressIn(
     `tab ${tabId} · 점 (${point.x}, ${point.y}) · 화면 ${status.viewport?.width}×${status.viewport?.height} · ${why}${frames ? ` · ${frames}` : ""}`,
     "warn",
   );
-  throw new Error(`실제 입력 클릭이 대상에 도착하지 않았습니다(${why}). 다시 관측하세요.`);
+  throw new PressedClickError(describePressedFailure(`실제 입력 클릭이 대상에 도착하지 않았습니다(${why})`), data.effectToken, data.text, data.href);
+}
+
+// 누르기 뒤의 다른 실패(#241): 진단 줄을 남기고 관측을 붙일 오류로 만든다.
+function pressedFail(data: ClickData, what: string, stage: string): PressedClickError {
+  debugLog("input:pressed_fail", `${stage} · 대상 '${data.text.length > 60 ? data.text.slice(0, 59) + "…" : data.text}'`, "warn");
+  return new PressedClickError(describePressedFailure(what), data.effectToken, data.text, data.href);
 }

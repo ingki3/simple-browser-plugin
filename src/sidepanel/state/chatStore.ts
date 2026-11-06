@@ -114,6 +114,8 @@ interface ChatState {
   ) => void;
   setStatus: (text: string | null) => void;
   abortLocal: () => void;
+  // 연결이 끊겨 백그라운드가 진행 중이던 턴을 버렸을 때(#243): 응답 중 표시를 끄고 미결 카드를 취소로 닫는다(중단 문구 없음).
+  dropLocal: () => void;
   reset: () => void;
   pushDebugEvent: (ev: DebugEvent) => void;
   clearDebugEvents: () => void;
@@ -288,6 +290,17 @@ export const useChatStore = create<ChatState>((set) => ({
       }
       return { ...s, messages: finalized, streaming: false, statusText: null };
     }),
+
+  dropLocal: () =>
+    set((s) => ({
+      ...s,
+      messages: closeStreamingBubbles(s.messages).map((m) =>
+        (m.type === "tool_pending" || m.type === "hop_limit") && m.resolved === null ? { ...m, resolved: "cancelled" as const } : m,
+      ),
+      streaming: false,
+      statusText: null,
+      hopProgress: null,
+    })),
 
   reset: () =>
     set((s) => ({

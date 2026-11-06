@@ -5,6 +5,7 @@ import {
   SPIN_FAILURE_LIMIT,
   SPIN_REPEAT_LIMIT,
   canonicalJson,
+  clickChangedForSpin,
   clickObservedChange,
   detectSpin,
   fingerprint,
@@ -171,4 +172,12 @@ test("summarizeRuns: 도구별 횟수(많은 순), 실패·취소 수, 최근 �
   assert.equal(s.recent[0], "click_element: 실패");
   assert.ok(s.recent[2].endsWith("…"));
   assert.ok(s.recent[2].length <= "click_element: ".length + 120);
+});
+
+test("clickChangedForSpin: 성공한 클릭의 변화만 반복 연속을 끊는다(#241)", () => {
+  const changed = { navigation: "none", dom: { mutations: 3 } };
+  assert.equal(clickChangedForSpin(true, changed), true);
+  assert.equal(clickChangedForSpin(false, changed), false);
+  assert.equal(clickChangedForSpin(true, { navigation: "none", dom: { mutations: 3, aborted: "바뀜" } }), false);
+  assert.equal(clickChangedForSpin(true, null), false);
 });
