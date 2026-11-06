@@ -45,7 +45,7 @@ import {
   type TurnTab,
 } from "./handlers";
 import { ClickAbortedError, settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
-import { clickWithInput, type InputClickResult, type InputSession } from "../trustedInput";
+import { clickWithInput, PressedClickError, type InputClickResult, type InputSession } from "../trustedInput";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
 import { CAPTURE_LIMITS } from "@/lib/pageCapture";
@@ -817,9 +817,10 @@ function actionOutcome(
   result: ToolExecResult,
 ): { outcome: ActionOutcome; extra: Pick<ActionLogEntry, "effect" | "fill" | "reason"> } {
   if (toolName === "click_element") {
-    const effect = (result.data as { effect: ClickEffect }).effect;
+    const { effect, error } = result.data as { effect: ClickEffect; error?: string };
     if (effect.dom?.aborted) return { outcome: "aborted", extra: { reason: "target_changed" } };
-    return { outcome: result.ok ? "done" : "failed", extra: { effect: summarizeClickEffect(effect) } };
+    // 누른 뒤 실패(#241)는 관측한 변화와 오류 사유를 함께 남긴다.
+    return { outcome: result.ok ? "done" : "failed", extra: { effect: summarizeClickEffect(effect), ...(error ? { reason: reasonCode(error) } : {}) } };
   }
   const data = result.data as { filledCount: number; results: Array<{ applied: boolean; note?: string }> };
   const fill = { applied: data.filledCount, total: data.results.length };
@@ -859,6 +860,23 @@ async function clickTool(
     // 설정이 켜져 있으면 실제 입력 클릭(0.2.0), 아니면 스크립트 클릭.
     data = await clickWithInput(parsedArgs, callId, turnTab, signal, opts.inputSession);
   } catch (err) {
+    // 누르기 입력을 보낸 뒤의 실패(가드 막힘 등, #241): 그 사이 이동·화면 변화·대화상자·팝업을 관측해 실패 결과와 함께 돌려준다.
+    // 실패는 실패로 둔다(ok:false — 변화만으로 성공 판정하지 않음). 행 기준 갱신(#233)은 하지 않는다.
+    if (err instanceof PressedClickError) {
+      const { effect } = await finishClick(turnTab, tabId, before, err.effectToken, newTabs, readOpens, clickedPopup, sourceWindowId);
+      if (effect.dom) delete effect.dom.rebase;
+      return {
+        ok: false,
+        summary: `'${truncate(err.text, 60) || "(글자 없음)"}' 클릭 실패: ${truncate(err.message, 80)} · 그 사이 관측: ${describeEffect(effect)} · 실제 입력`,
+        data: {
+          error: err.message,
+          text: err.text,
+          href: err.href,
+          effect,
+          ...(clickNoteNeeded(effect) ? { note: describeEffect(effect) } : {}),
+        },
+      };
+    }
     const createdEarly = newTabs.stop();
     void readOpens();
     // 누른 팝업 창이 응답하기 전에 닫혔으면(고르자마자 닫히는 달력) 실패가 아니라 창이 닫힌 결과로 알린다.
@@ -886,28 +904,11 @@ async function clickTool(
     }
     throw err;
   }
-  markOptimisticNavigation(tabId);
-  let created: ReturnType<typeof newTabs.stop> = [];
-  const effect = await observeClickEffect(tabId, before, data.effectToken, () => {
-    created = newTabs.stop();
-    return created.some((t) => !t.reused);
-  });
-  const opens = await readOpens();
+  const { effect } = await finishClick(turnTab, tabId, before, data.effectToken, newTabs, readOpens, clickedPopup, sourceWindowId);
   // 클릭이 바꾼 행·항목 글자(#233): nonce는 떼어 이 호출에 남기고(이 결과를 기록에 넣는 대화가 가져간다), 글자만 결과에 싣는다.
   const rebase = effect.dom?.rebase;
   if (effect.dom) delete effect.dom.rebase;
   if (rebase) offerRebase(callId, { id: rebase.id, nonce: rebase.nonce });
-  // 클릭한 팝업 창이 클릭 뒤 닫혔으면(고른 값을 원래 페이지에 써 넣고 닫히는 달력 등) 아래 창으로 돌아간다.
-  // 결과 문구가 돌아간 것을 알리므로 다음 도구 결과에는 따로 붙이지 않는다.
-  let closed: "original" | "popup" | null = null;
-  if (clickedPopup) {
-    closed = await pruneClosedPopups(turnTab);
-    if (closed) takeTabNote(turnTab);
-  }
-  // 닫힘 정리 뒤에 새 창을 등록한다: 닫히면서 다음 창을 연 팝업(A가 B를 열고 닫힘)이면 B를 남은 창(원래 탭이나
-  // 그 아래 팝업) 위에 쌓아 따라간다.
-  const popup = await settlePopups(turnTab, before, created, opens, tabId, sourceWindowId);
-  if (popup || closed) effect.popup = { ...(popup ?? {}), ...(closed ? { closed } : {}) };
   return {
     ok: data.clicked && !effect.dom?.aborted,
     summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}${inputLabel(data)}`,
@@ -923,6 +924,39 @@ async function clickTool(
       ...(rebase?.item !== undefined ? { itemAfter: rebase.item } : {}),
     },
   };
+}
+
+// 누른 뒤의 관측(성공·누른 뒤 실패 공통, #241): 이동·화면 변화·대화상자, 클릭한 팝업 창의 닫힘, 새 창 따라가기.
+// 실패 경로는 effect.dom.rebase를 지운다(누르기가 끝나지 않은 상태를 대화별 기준으로 삼지 않게).
+async function finishClick(
+  turnTab: TurnTab,
+  tabId: number,
+  before: string,
+  effectToken: string,
+  newTabs: ReturnType<typeof watchNewTabs>,
+  readOpens: Awaited<ReturnType<typeof watchWindowOpen>>,
+  clickedPopup: boolean,
+  sourceWindowId: number | null,
+): Promise<{ effect: ClickEffect }> {
+  markOptimisticNavigation(tabId);
+  let created: ReturnType<typeof newTabs.stop> = [];
+  const effect = await observeClickEffect(tabId, before, effectToken, () => {
+    created = newTabs.stop();
+    return created.some((t) => !t.reused);
+  });
+  const opens = await readOpens();
+  // 클릭한 팝업 창이 클릭 뒤 닫혔으면(고른 값을 원래 페이지에 써 넣고 닫히는 달력 등) 아래 창으로 돌아간다.
+  // 결과 문구가 돌아간 것을 알리므로 다음 도구 결과에는 따로 붙이지 않는다.
+  let closed: "original" | "popup" | null = null;
+  if (clickedPopup) {
+    closed = await pruneClosedPopups(turnTab);
+    if (closed) takeTabNote(turnTab);
+  }
+  // 닫힘 정리 뒤에 새 창을 등록한다: 닫히면서 다음 창을 연 팝업(A가 B를 열고 닫힘)이면 B를 남은 창(원래 탭이나
+  // 그 아래 팝업) 위에 쌓아 따라간다.
+  const popup = await settlePopups(turnTab, before, created, opens, tabId, sourceWindowId);
+  if (popup || closed) effect.popup = { ...(popup ?? {}), ...(closed ? { closed } : {}) };
+  return { effect };
 }
 
 // 관계를 확인하지 못해 뺀 선택지 안내(자동완성·드롭다운 목록이 여럿 열린 경우).

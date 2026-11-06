@@ -107,6 +107,12 @@ export function clickObservedChange(effect: ClickEffectLike | null | undefined):
   return !!dom && (!!dom.dialogOpened || !!dom.frameNavigated || (dom.mutations ?? 0) > 0);
 }
 
+// 헛돌기 감지의 "클릭 뒤 변화"(#241): 성공한 클릭만 센다. 실패한 클릭(실제 입력이 도중에 막힘 등)이 그 사이 화면을
+// 바꿨어도 같은 호출 반복의 연속을 끊지 않는다.
+export function clickChangedForSpin(ok: boolean, effect: ClickEffectLike | null | undefined): boolean {
+  return ok && clickObservedChange(effect);
+}
+
 // 이어 가기 카드에 보일 "지금까지 한 일": 도구별 횟수(많은 순), 실패·취소 수, 최근 결과 몇 줄.
 export interface RunSummary {
   total: number;

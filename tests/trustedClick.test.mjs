@@ -88,3 +88,56 @@ test("clickPoints: 가운데 다음 안쪽 네 점, 화면 밖 사각형은 건�
   const r = [{ left: 10, top: 20, width: 100, height: 40 }];
   assert.deepEqual(clickPoints(r, VIEW)[0], clickPoint(r, VIEW));
 });
+
+// #241: 막힌 실제 입력 클릭의 모델 문구·진단 줄.
+import { blockDiagText, describeBlockedClick, describePressedFailure, roleToken } from "../src/lib/trustedClick.ts";
+
+const fb = (over = {}) => ({ event: "mousedown", seenBefore: ["pointerdown"], targetConnected: false, targetShown: false, hit: { tag: "button" }, ...over });
+
+test("describeBlockedClick: 단계와 대상 상태(떨어짐·숨겨짐)를 구조 사실로만 알리고 결과 먼저 확인을 안내", () => {
+  const detached = describeBlockedClick("다른 요소에 닿음", fb());
+  assert.match(detached, /실제 입력 클릭을 도중에 막았습니다\(다른 요소에 닿음\)/);
+  assert.match(detached, /누르기\(mousedown\) 단계에서 막음/);
+  assert.match(detached, /문서에서 떨어졌습니다/);
+  assert.match(detached, /다시 누르지 마세요/);
+  const hidden = describeBlockedClick("다른 요소에 닿음", fb({ event: "pointerup", targetConnected: true, targetShown: false }));
+  assert.match(hidden, /떼기\(pointerup\) 단계/);
+  assert.match(hidden, /화면에서 사라졌습니다\(숨겨짐\)/);
+  assert.doesNotMatch(hidden, /떨어졌/);
+  const shown = describeBlockedClick("다른 요소에 닿음", fb({ event: "click", targetConnected: true, targetShown: true }));
+  assert.doesNotMatch(shown, /떨어졌|사라졌/);
+  // 옛 보고(첫 차단 정보 없음)·모르는 단계 이름은 기본 문구만.
+  const plain = describeBlockedClick("확인 시간이 지남");
+  assert.match(plain, /^실제 입력 클릭을 도중에 막았습니다\(확인 시간이 지남\)\. 클릭은 끝나지 않았지만/);
+  assert.doesNotMatch(describeBlockedClick("x", fb({ event: "만료", targetConnected: true, targetShown: true })), /단계에서 막음/);
+});
+
+test("describePressedFailure: 단계 문장 + 고정 안내", () => {
+  const t = describePressedFailure("마우스를 누른 뒤 페이지가 문서를 바꿔 떼기 입력을 보내지 않았습니다");
+  assert.match(t, /^마우스를 누른 뒤 페이지가 문서를 바꿔 떼기 입력을 보내지 않았습니다\. 누르기 단계의 페이지 처리는/);
+  assert.match(t, /끝나지 않았을 때만 다시/);
+});
+
+test("blockDiagText: 첫 차단·앞 이벤트(없음 포함)·대상 상태·닿은 요소·이유·이름(60자)", () => {
+  assert.equal(
+    blockDiagText("다른 요소에 닿음", fb({ hit: { tag: "li", role: "option" } }), "올림픽공원"),
+    "첫 차단 mousedown(앞: pointerdown) · 대상 연결 끊김 · 닿은 요소 li[option] · 이유 다른 요소에 닿음 · 대상 '올림픽공원'",
+  );
+  const first = blockDiagText("다른 요소에 닿음", fb({ event: "pointerdown", seenBefore: [], targetConnected: false }), "가");
+  assert.match(first, /첫 차단 pointerdown\(앞: 없음\)/);
+  assert.match(blockDiagText("r", fb({ targetConnected: true, targetShown: false, hit: null }), "가"), /대상 연결됨·숨겨짐 · 닿은 요소 없음/);
+  assert.match(blockDiagText("r", fb({ targetConnected: true, targetShown: true }), "가"), /대상 연결됨·보임/);
+  assert.match(blockDiagText("r", undefined, "가"), /^첫 차단 정보 없음 · 이유 r · 대상 '가'$/);
+  const long = blockDiagText("r", fb(), "가".repeat(80));
+  assert.ok(long.endsWith(`'${"가".repeat(59)}…'`));
+});
+
+test("roleToken: 구조 토큰 꼴만(소문자 낱말, 40자 안)", () => {
+  assert.equal(roleToken("option"), "option");
+  assert.equal(roleToken("menuitem radio"), "menuitem radio");
+  assert.equal(roleToken("Option"), undefined);
+  assert.equal(roleToken("서울 선택"), undefined);
+  assert.equal(roleToken("a".repeat(41)), undefined);
+  assert.equal(roleToken(null), undefined);
+  assert.equal(roleToken(""), undefined);
+});

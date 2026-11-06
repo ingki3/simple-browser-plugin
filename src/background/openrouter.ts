@@ -62,7 +62,7 @@ import { youtubeVideoId } from "@/lib/youtubeUrl";
 import { addUsage, emptyUsageTotal, formatTurnUsage, formatUsage, usageFromChunk, type ModelUsage, type UsageTotal } from "@/lib/usage";
 import {
   canonicalJson,
-  clickObservedChange,
+  clickChangedForSpin,
   detectSpin,
   fingerprint,
   summarizeRuns,
@@ -2558,9 +2558,10 @@ export class ChatAgent {
       });
       this.noteRebases(callId);
       // 클릭은 뒤따른 이동·화면 변화가 관측되면 같은 id를 다시 누르는 것('다음 달' 등)이 반복이 아니다.
+      // 실패한 클릭(실제 입력이 도중에 막힘 등, #241)의 화면 변화는 반복 연속을 끊지 않는다.
       const changed =
         toolName === "click_element" &&
-        clickObservedChange((result.data as { effect?: ClickEffectLike } | null)?.effect);
+        clickChangedForSpin(result.ok, (result.data as { effect?: ClickEffectLike } | null)?.effect);
       call.record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, { changed });
       if (auth.internalNavSite && result.ok && !this.turnSite) {
         this.turnSite = auth.internalNavSite;
