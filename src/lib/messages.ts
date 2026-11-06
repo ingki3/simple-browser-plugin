@@ -1,4 +1,5 @@
 import type { ZeroDiag } from "./clickQuery";
+import type { ResumeMissing } from "./panelLink";
 import type { HrefTooLong } from "./clickResult";
 import type { VoiceInputPatch, VoiceInputSettings } from "./voice";
 import type { ProviderId } from "./providers/types";
@@ -278,7 +279,9 @@ export type PanelToBg =
   | { kind: "revoke_task" }
   | { kind: "abort_stream" }
   | { kind: "reset_conversation"; conversationId: string }
-  | { kind: "heartbeat" };
+  | { kind: "heartbeat" }
+  // 다시 연결한 패널이 앞 대화를 이어 쓰자고 요청한다(#243 — 같은 패널 문서의 재연결에서, 그 연결의 첫 메시지). gen: 패널의 연결 세대.
+  | { kind: "resume_conversation"; conversationId: string; gen: number };
 
 export type DebugLevel = "info" | "warn" | "error";
 export interface DebugEvent {
@@ -291,6 +294,10 @@ export interface DebugEvent {
 
 export type BgToPanel =
   | { kind: "assistant_chunk"; text: string }
+  // 연결 직후 서비스 워커 실행 식별자(시작마다 새 값)와 가동 시간(#243 진단).
+  | { kind: "port_hello"; workerRun: string; uptimeMs: number }
+  // resume_conversation의 답(#243). gen·conversationId는 받은 값 그대로. resumed=false면 reason.
+  | { kind: "conversation_resume"; conversationId: string; gen: number; resumed: boolean; reason?: ResumeMissing }
   // 반복 작업(#138): 목록이 바뀌었다(패널이 다시 읽는다) / 이어서 진행을 시작했다(새 대화의 첫 요청 글).
   | { kind: "repeat_update" }
   | { kind: "repeat_started"; text: string }

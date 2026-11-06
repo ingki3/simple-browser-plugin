@@ -539,9 +539,11 @@ export class ChatAgent {
   private turnErrors: Array<{ action?: "settings" | "usage" }> = [];
   // 이번 요청의 사용자 메시지를 기록에 넣었으면 그 턴과 위치. 넣기 전에 실패했으면 이전 요청의 답을 이번 답으로 보지 않는다.
   private turnStart: { turn: number; index: number } | null = null;
+  // 진행 중인 sendUserTurn 수(#243 idle 판정).
+  private runningTurns = 0;
 
   constructor(
-    private readonly port: AgentSink,
+    private port: AgentSink,
     opts: { channel?: AgentChannel } = {},
   ) {
     this.channel = opts.channel ?? "panel";
@@ -586,6 +588,49 @@ export class ChatAgent {
 
   private conversationAuth(): { apiKey: string; baseUrl?: string } {
     return { apiKey: this.apiKey ?? "", ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}) };
+  }
+
+  // 진행 중인 턴·승인 대기·모델 요청·도구가 없는지(#243 — 끊길 때 기록을 보관할지).
+  idle(): boolean {
+    return this.runningTurns === 0 && this.pendingApprovals.size === 0 && !this.activeRequest && !this.activeTool;
+  }
+
+  // 패널 연결이 끊겨 기록만 잠깐 보관할 때(#243). 진행 중인 것을 멈추고(디버거도 뗌), 허용을 넓히는 상태는 모두 지운다 —
+  // 대화 허락·맡긴 작업·이동 허락 사이트·링크 허락·개인정보 주소 허락·자동 로그인 선택·행 기준(#233). 남기는 것: 기록, 더 묻게
+  // 만드는 보호 상태(외부 본문 보호·로그인 값 가림·자동 로그인 시도), 기록 형식 상태(제공자·모델·지침·저장 링크 후보·호출 키),
+  // 사용량 누계, 디버거 세션(사용자의 디버깅 취소 선택 canceledByUser를 지키려고 — 연결은 abort가 뗀다).
+  // 새 상태를 더하면 reset()과 이 함수 중 어느 쪽에서 지울지 정할 것(넓히는 상태면 여기서도 지운다).
+  suspendForReconnect(): void {
+    this.abort();
+    this.chatGrants.clear();
+    this.chatGrantOffers.clear();
+    this.withdrawTask();
+    this.pendingTaskCall = null;
+    this.approvedSites.clear();
+    this.linkGrant = null;
+    this.linkGrantOffers.clear();
+    this.allowedPersonalUrls.clear();
+    this.personalUrlOffers.clear();
+    this.rememberLogin.clear();
+    this.loginSiteOffers.clear();
+    this.signInTokens.clear();
+    this.clearRebases();
+  }
+
+  // 보관했던 대화를 새 패널 연결에 붙인다(#243). 패널 표시(허락·맡긴 작업)를 지운 상태와 맞춘다.
+  attachPort(port: AgentSink): void {
+    this.port = port;
+    this.sendChatGrants();
+    this.sendTaskState();
+  }
+
+  // 하네스용(#243): 사용자가 디버깅 막대를 취소한 것과 같은 상태로 만든다 / 읽는다.
+  markInputCanceledForHarness(): void {
+    this.inputSession.canceledByUser = true;
+  }
+
+  inputCanceled(): boolean {
+    return this.inputSession.canceledByUser;
   }
 
   abort(): void {
@@ -1113,10 +1158,15 @@ export class ChatAgent {
   // 도구 호출이 없는 마지막 답. aborted: 중단·새 요청에 밀림. error: 오류로 끝남(action은 다음 행동의 종류).
   async sendUserTurn(userText: string, opts: TurnOpts = {}): Promise<TurnOutcome> {
     this.turnErrors = [];
+    this.runningTurns += 1;
     const running = this.runUserTurn(userText, opts);
     // runUserTurn은 첫 await 전에 턴 번호를 올린다.
     const turn = this.currentTurn;
-    await running;
+    try {
+      await running;
+    } finally {
+      this.runningTurns -= 1;
+    }
     if (this.isStale(turn)) return { outcome: "aborted", finalText: "" };
     const finalText = this.turnStart?.turn === turn ? this.answerSince(this.turnStart.index) : "";
     if (finalText) return { outcome: "ok", finalText };
