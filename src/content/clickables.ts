@@ -863,7 +863,7 @@ export function clickElement(
     scrollToCenter(el);
     const changed = recheckApproved(CLICK_KIND, el, info, relation, false, false, item);
     if (changed) {
-      startEffectWatch(effectToken, el, changed);
+      startEffectWatch(effectToken, el, changed, null, args.id);
       return { clicked: true, text, href, effectToken, trusted: { mode: "aborted" } };
     }
     // 대상에 닿는 점을 고른다(#89 — 가운데가 고정 바 등에 덮였으면 다른 자리). 모든 점이 덮였거나 대상 안의 다른 활성 요소가
@@ -883,10 +883,10 @@ export function clickElement(
     if (reason || !point) {
       const why = reason ?? "누를 점 없음";
       // 덮여서 스크립트로 누르면 그 이유를 결과(effect.dom.covered)에도 싣는다(모델이 목록을 먼저 처리하게).
-      setTimeout(() => scriptClick(el, info, relation, effectToken, false, item, reason ?? null), 0);
+      setTimeout(() => scriptClick(el, info, relation, effectToken, args.id, false, item, reason ?? null), 0);
       return { clicked: true, text, href, effectToken, trusted: { mode: "script", reason: why } };
     }
-    startEffectWatch(effectToken, el);
+    startEffectWatch(effectToken, el, null, null, args.id);
     // click 단계에서 대상(또는 label의 컨트롤)이 checkbox·radio면 브라우저가 처리기보다 먼저 체크 상태를 바꿔 양식 값(제출 주소)도 달라진다.
     // 그 변화를 잠깐 되돌린 상태로(승인 때와 같은 체크 상태에서) 확인한다.
     // label이면 연결된 checkbox·radio(투명한 칸이 label을 덮어 실제 입력이 칸에 닿는 경우)도 같다.
@@ -908,7 +908,7 @@ export function clickElement(
 
   // Defer actual click so the content-script response can fly back to the
   // background before a potential navigation tears down this context.
-  setTimeout(() => scriptClick(el, info, relation, effectToken, true, item), 0);
+  setTimeout(() => scriptClick(el, info, relation, effectToken, args.id, true, item), 0);
 
   return { clicked: true, text, href, effectToken };
 }
@@ -986,6 +986,7 @@ function scriptClick(
   info: TargetInfo,
   relation: Relation | null,
   effectToken: string,
+  targetId: string,
   scroll: boolean,
   item?: ItemBinding,
   // 실제 입력 경로가 이미 본 덮개 이유. 없으면(스크립트 클릭 경로) 누르기 바로 앞에서 본다.
@@ -1008,7 +1009,7 @@ function scriptClick(
   }
   // 덮개가 열린 목록·대화상자일 때만 결과에 싣는다(일반 덮개는 대개 무해한 장식이라 지금처럼 조용히).
   // 스크롤·포커스로 생긴 변화는 빼고 클릭 뒤의 변화만 센다.
-  startEffectWatch(effectToken, el, changed, covered === OVERLAY_COVER ? covered : null);
+  startEffectWatch(effectToken, el, changed, covered === OVERLAY_COVER ? covered : null, targetId);
   if (changed) return;
   try {
     el.click();

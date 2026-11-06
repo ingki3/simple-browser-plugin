@@ -67,7 +67,17 @@ interface Entry {
   gen: number;
   // find_clickables 항목 모드(#161)로 돌려준 대상이면 그 목록 항목(모델이 보고 고른 글자). 검사 때 항목이 그대로여야 한다.
   item?: ItemBinding;
+  // 대화별 기준(#233): 바뀐 행·항목 글자를 모델에게 보여 준 결과(클릭 뒤 결과·row_drift 오류)마다 만든 기준. 공용 기준(base·item)은
+  // 바꾸지 않고, 그 결과를 본 대화만 nonce로 골라 쓴다(백그라운드가 결과를 실은 모델 요청의 응답이 온 뒤에만 넘긴다).
+  snaps?: RowSnap[];
 }
+
+interface RowSnap {
+  nonce: string;
+  base: TargetInfo;
+  itemText: string | null;
+}
+const MAX_SNAPS = 8;
 
 // 목록 항목 결합: 항목 요소, 항목 글자에서 뺀 안쪽 항목 요소들, 돌려준 항목 글자(itemText로 만든 것).
 export interface ItemBinding {
@@ -90,19 +100,43 @@ function containsAcross(anc: Element, el: Element): boolean {
   return false;
 }
 
-// 항목 결합이 지금도 그대로인지. 다르면 이유(모델에 그대로 보여 줄 고정 문구), 같으면 null.
-function itemDifference(item: ItemBinding | undefined, el: HTMLElement): string | null {
-  if (!item) return null;
+const ITEM_CHANGED = "대상이 든 목록 항목의 내용이 찾은 뒤 바뀜";
+
+// 항목 결합의 지금 글자. 구성이 깨졌으면(다시 그려짐·구성 바뀜) 그 이유(모델에 그대로 보여 줄 고정 문구).
+function itemTextNow(item: ItemBinding, el: HTMLElement): { text: string } | { broken: string } {
   const host = item.ref.deref();
-  if (!host || !host.isConnected || !containsAcross(host, el)) return "대상이 든 목록 항목이 다시 그려지거나 사라짐";
+  if (!host || !host.isConnected || !containsAcross(host, el)) return { broken: "대상이 든 목록 항목이 다시 그려지거나 사라짐" };
   const excludes = new Set<Element>();
   for (const r of item.excludes) {
     const ex = r.deref();
-    if (!ex || !ex.isConnected || !containsAcross(host, ex)) return "목록 항목의 구성이 바뀜";
+    if (!ex || !ex.isConnected || !containsAcross(host, ex)) return { broken: "목록 항목의 구성이 바뀜" };
     excludes.add(ex);
   }
-  if (itemText(host, excludes).text !== item.text) return "대상이 든 목록 항목의 내용이 찾은 뒤 바뀜";
-  return null;
+  return { text: itemText(host, excludes).text };
+}
+
+// 항목 결합이 지금도 그대로인지. 다르면 이유(모델에 그대로 보여 줄 고정 문구), 같으면 null.
+function itemDifference(item: ItemBinding | undefined, el: HTMLElement): string | null {
+  if (!item) return null;
+  const now = itemTextNow(item, el);
+  if ("broken" in now) return now.broken;
+  return now.text !== item.text ? ITEM_CHANGED : null;
+}
+
+// 바뀐 행이 모델에게 다 보이는지(#233): 두 기술 모두 모델용 행 글자가 한도에서 잘리지 않았으면 원문 행과의 차이는 입력값·숨은 글자
+// 같은 보호 글자뿐이라, 모델이 본 행 글자로 판단한 것이 된다. 잘렸으면 잘린 뒤쪽의 변화를 모델이 볼 수 없어 기준을 갱신하지 않는다.
+function rowChangeShown(a: TargetInfo, b: TargetInfo): boolean {
+  return !a.modelContextClipped && !b.modelContextClipped;
+}
+
+// 대화별 기준을 하나 더한다(최근 MAX_SNAPS개). nonce는 모델에 보내지 않는 난수(백그라운드가 대화별로 들고 있다 돌려준다).
+function addSnap(entry: Entry, base: TargetInfo, itemText: string | null): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  const nonce = `rb-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  const snaps = (entry.snaps ??= []);
+  snaps.push({ nonce, base, itemText });
+  if (snaps.length > MAX_SNAPS) snaps.shift();
+  return nonce;
 }
 
 // content script가 새로 뜰 때마다(페이지 이동) 바뀐다. 이전 페이지의 id가 새 페이지의 다른 요소를 가리키지 않게 한다.
@@ -834,6 +868,8 @@ export function registerTarget(kind: TargetKind, el: HTMLElement, relation: Rela
     entry.item = item;
     entry.approved = null;
     entry.gen = generation;
+    // 다시 찾은 기준이 새 공용 기준이다. 이전 결과로 만든 대화별 기준은 버린다.
+    entry.snaps = undefined;
     return existing;
   }
   counter += 1;
@@ -849,10 +885,12 @@ export function registeredInfo(id: string): TargetInfo | undefined {
 }
 
 // 모델에 보내는 오류 문구와 따로, 백그라운드 디버그 로그에만 남길 진단(diag)을 싣는 오류.
+// rebase: 이 오류(지금 행 글자를 보여 줌)로 만든 대화별 기준(#233). 백그라운드가 이 결과를 본 대화에만 돌려준다.
 export class TargetDriftError extends Error {
   constructor(
     message: string,
     readonly diag: string,
+    readonly rebase?: { id: string; nonce: string },
   ) {
     super(message);
   }
@@ -915,29 +953,45 @@ function checkVisible(entry: Entry, el: HTMLElement, name: string, acting: boole
 }
 
 // 승인 카드용: 지금 요소가 find_* 때와 같은지 확인하고, 목록 위치까지 담은 기술을 이 호출(callId)의 승인 대상으로 남긴다.
-export function inspectTarget(id: string, callId: string, prefix: string): TargetInfo {
+// nonces: 이 호출의 대화가 본 대화별 기준(#233). 찾기 기준이나 그중 하나와 같으면 통과한다(공용 기준은 바꾸지 않는다).
+export function inspectTarget(id: string, callId: string, prefix: string, nonces: readonly string[] = []): TargetInfo {
   entryOf(id, prefix);
   const { entry, el } = resolve(id);
   const now = baseInfo(entry.kind, el);
-  if (!sameBase(now, entry.base)) {
-    if (onlyRowDiffers(entry.base, now)) {
-      // 같은 요소인데 든 행의 글자만 바뀌었다(운임·남은 시간이 계속 갱신되는 목록 등). 다시 찾기와 같이 지금 기술로
-      // 바꿔 두고, 지금 행 글자(모델용)를 돌려준다. 모델이 그 행이 맞는지 보고 같은 id로 다시 부르면 지금 기술과 비교한다.
+  const item = entry.item;
+  const itemState = item ? itemTextNow(item, el) : null;
+  const itemNow = itemState && "text" in itemState ? itemState.text : null;
+  const candidates: Array<{ base: TargetInfo; itemText: string | null }> = [
+    { base: entry.base, itemText: item?.text ?? null },
+    ...(entry.snaps ?? []).filter((snap) => nonces.includes(snap.nonce)),
+  ];
+  const itemMatches = (c: { itemText: string | null }) => !item || (itemNow !== null && itemNow === c.itemText);
+  const itemError = () => `대상 '${id}'의 ${itemState && "broken" in itemState ? itemState.broken : ITEM_CHANGED}. 다시 찾으세요.`;
+  const chosen = candidates.find((c) => sameBase(now, c.base) && itemMatches(c));
+  if (!chosen) {
+    if (candidates.some((c) => sameBase(now, c.base))) {
+      // 대상은 그대로인데 항목 모드로 찾은 목록 항목이 바뀌었다(모델이 고른 근거, #161).
+      checkVisible(entry, el, entry.base.modelName || id, false);
+      throw new Error(itemError());
+    }
+    if (onlyRowDiffers(entry.base, now) && rowChangeShown(entry.base, now)) {
+      // 같은 요소인데 든 행의 글자만 바뀌었다(운임·남은 시간이 계속 갱신되는 목록 등). 지금 행 글자(모델용)를 돌려주고 그 상태를
+      // 이 결과를 본 대화의 기준으로 남긴다(공용 기준은 그대로 — 같은 응답의 다음 호출·다른 대화는 쓰지 못한다). 모델이 그 행이 맞는지
+      // 보고 다음 응답에서 같은 id로 다시 부르면 그 기준과 비교한다. 항목 글자가 모델이 본 것과 다르면 이 경로로 넘기지 않는다.
+      if (item && !candidates.some(itemMatches)) throw new Error(itemError());
       const diag = rowDriftDiag(entry.base, now);
-      entry.base = now;
       entry.approved = null;
+      const nonce = addSnap(entry, now, itemNow);
       const row = now.modelContext ? ` 지금 행: '${clip(now.modelContext, 200)}'.` : "";
       throw new TargetDriftError(
         `대상 '${id}'이(가) 든 행의 내용이 찾은 뒤 바뀌었습니다.${row} 이 행이 고르려던 것이 맞으면 같은 id로 다시 호출하고, 아니면 다시 찾으세요.`,
         `row_drift ${diag}`,
+        { id, nonce },
       );
     }
     throw new Error(`대상 '${id}'의 ${describeDifference(entry.base, now)}. 다시 찾으세요.`);
   }
   checkVisible(entry, el, entry.base.modelName || id, false);
-  // 항목 모드로 찾은 대상이면 그 목록 항목이 찾을 때와 같아야 한다(모델이 고른 근거, #161).
-  const itemDiff = itemDifference(entry.item, el);
-  if (itemDiff) throw new Error(`대상 '${id}'의 ${itemDiff}. 다시 찾으세요.`);
   // 선택지면 지금 트리거 관계가 찾을 때와 같아야 한다. 승인은 지금 관계를 기준으로 남긴다.
   let relation: Relation | null = null;
   if (entry.relation) {
@@ -950,7 +1004,8 @@ export function inspectTarget(id: string, callId: string, prefix: string): Targe
     { ...fullInfo(entry.kind, el), hidden: !entry.kind.visible(el), ...entry.kind.risk?.(el) },
     relation,
   );
-  entry.approved = { callId, info, relation, ...(entry.item ? { item: entry.item } : {}) };
+  // 항목 결합은 고른 기준의 항목 글자로 이 호출에 고정한다(실행 직전 재검사가 같은 기준으로 본다 — 공용 entry.item은 그대로).
+  entry.approved = { callId, info, relation, ...(item ? { item: { ...item, text: chosen.itemText ?? item.text } } : {}) };
   const row = rowElement(el)?.row;
   const texts = row ? rowTextNodes(row) : null;
   if (row && texts) {
@@ -1034,8 +1089,14 @@ export function noteWritten(callId: string, el: Element, value: string): void {
 }
 
 // 예외는 개인정보 칸이 든 양식(양식 밖 칸은 그 칸 자신)에만 붙인다 — 다른 양식에 새로 생긴 개인정보는 허용하지 않는다.
-export function inspectTargets(ids: string[], callId: string, prefix: string, values?: string[]): TargetInfo[] {
-  const infos = ids.map((id) => inspectTarget(id, callId, prefix));
+export function inspectTargets(
+  ids: string[],
+  callId: string,
+  prefix: string,
+  values?: string[],
+  rebases?: Readonly<Record<string, readonly string[]>>,
+): TargetInfo[] {
+  const infos = ids.map((id) => inspectTarget(id, callId, prefix, rebases?.[id] ?? []));
   // 이번 호출이 선택 칸에 쓴 상태는 쓰는 순간 기록한다(noteChoiceWritten). 승인 때 지난 기록이 있으면 지운다.
   consentDeleteChoices.delete(callId);
   // 같은 호출 id가 다시 쓰여도(모델이 같은 id를 돌려줌) 이전 실행의 쓰기·선택 기록을 이번 승인의 예외로 쓰지 않는다.
@@ -1393,6 +1454,8 @@ interface EffectWatch {
   covered: string | null;
   // 대상이 같은 출처 iframe 안이면 그 프레임과 클릭 당시 문서. 프레임만 이동하면 탭 주소는 그대로라 따로 본다.
   frame: { el: Element; doc: Document } | null;
+  // 누른 대상과 그 id(클릭 뒤 대화별 기준을 만들 때, #233).
+  target: { id: string; el: HTMLElement } | null;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -1423,7 +1486,13 @@ function newDialogText(before: Set<Element>): { text: string; truncated: boolean
   return info.cut ? { text: info.text, truncated: true } : { text: info.text, truncated: false };
 }
 
-export function startEffectWatch(token: string, target: HTMLElement, aborted: string | null = null, covered: string | null = null): void {
+export function startEffectWatch(
+  token: string,
+  target: HTMLElement,
+  aborted: string | null = null,
+  covered: string | null = null,
+  targetId: string | null = null,
+): void {
   const doc = target.ownerDocument;
   const frameEl = doc !== document ? doc.defaultView?.frameElement : null;
   const watch: EffectWatch = {
@@ -1432,6 +1501,7 @@ export function startEffectWatch(token: string, target: HTMLElement, aborted: st
     aborted,
     covered,
     frame: frameEl ? { el: frameEl, doc } : null,
+    target: targetId ? { id: targetId, el: target } : null,
     dialogsBefore: new Set(openDialogs()),
     timer: setTimeout(() => stopEffectWatch(token), WATCH_MAX_MS),
   };
@@ -1471,6 +1541,7 @@ export function readEffect(
   aborted: string | null;
   frameNavigated: boolean;
   covered?: string;
+  rebase?: ClickRebase;
 } | null {
   const watch = stopEffectWatch(token);
   if (!watch) return null;
@@ -1481,6 +1552,7 @@ export function readEffect(
     frameNavigated = !f.isConnected || f.contentDocument !== watch.frame.doc;
   }
   const dialog = newDialogText(watch.dialogsBefore);
+  const rebase = !watch.aborted && watch.target ? afterClickSnapshot(watch.target.id, watch.target.el) : null;
   const dialogOpened = openDialogs().some((d) => !watch.dialogsBefore.has(d));
   return {
     mutations: watch.mutations,
@@ -1489,5 +1561,36 @@ export function readEffect(
     aborted: watch.aborted,
     frameNavigated,
     ...(watch.covered ? { covered: watch.covered } : {}),
+    ...(rebase ? { rebase } : {}),
   };
+}
+
+// 클릭 뒤 대화별 기준(#233): 누른 대상이 같은 요소로 남아 있고 그 행(모델에게 다 보이는 변화)·항목 글자만 바뀌었으면 그 상태를 기준으로
+// 남기고, 바뀐 글자 전체(행은 모델용 행 글자, 항목은 항목 글자 — 모두 modelText 경로)와 nonce를 돌려준다. 백그라운드는 글자를 클릭
+// 결과에 싣고 nonce는 이 결과를 본 대화에만 남긴다. 찾기 기준과 같으면(바뀐 것 없음) null.
+export interface ClickRebase {
+  id: string;
+  nonce: string;
+  row?: string;
+  item?: string;
+}
+
+function afterClickSnapshot(id: string, el: HTMLElement): ClickRebase | null {
+  const entry = registry.get(id);
+  // iframe이 다른 문서로 이동하면 이전 문서의 요소도 isConnected다. 지금 보이는 문서인지도 본다(resolve와 같은 조건).
+  if (!entry || entry.ref.deref() !== el || !el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return null;
+  const after = baseInfo(entry.kind, el);
+  const same = sameBase(after, entry.base);
+  if (!same && !(onlyRowDiffers(entry.base, after) && rowChangeShown(entry.base, after))) return null;
+  let itemNow: string | null = null;
+  if (entry.item) {
+    const st = itemTextNow(entry.item, el);
+    if ("broken" in st) return null;
+    itemNow = st.text;
+  }
+  const itemChanged = !!entry.item && itemNow !== entry.item.text;
+  if (same && !itemChanged) return null;
+  const nonce = addSnap(entry, after, itemNow);
+  const rowChanged = (after.modelContext ?? "") !== (entry.base.modelContext ?? "");
+  return { id, nonce, ...(rowChanged ? { row: after.modelContext ?? "" } : {}), ...(itemChanged && itemNow !== null ? { item: itemNow } : {}) };
 }
