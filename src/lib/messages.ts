@@ -1,3 +1,4 @@
+import type { ZeroDiag } from "./clickQuery";
 import type { HrefTooLong } from "./clickResult";
 import type { VoiceInputPatch, VoiceInputSettings } from "./voice";
 import type { ProviderId } from "./providers/types";
@@ -97,6 +98,8 @@ export interface ClickableElement {
   contextTruncated?: boolean;
   // 선택지면 그 목록을 연 칸(트리거)의 라벨(이름 또는 "칸 n"). 칸이 여럿일 때 구분한다.
   listFor?: string;
+  // 이름에는 query가 없고 자기 화면 글자(modelText)에 있어 찾은 요소(#242 — query가 이름으로 0개일 때만).
+  matchedBy?: "screenText";
 }
 
 // find_clickables 항목 모드(#161)의 목록 항목: 반복 항목(같은 모양 형제가 가장 많은 조상)의 화면 글자와 그 안의 클릭 대상.
@@ -113,7 +116,16 @@ export interface ListItem {
 
 // content의 find_clickables 응답(모드별). 모델용 결과는 dispatcher가 만든다.
 export type FindClickablesResponse =
-  | { mode: "list"; items: ClickableElement[]; unfiltered: number; unrelatedChoices: number; longHrefs: number }
+  | {
+      mode: "list";
+      items: ClickableElement[];
+      unfiltered: number;
+      unrelatedChoices: number;
+      longHrefs: number;
+      // query로 0개일 때의 진단 수(#242, 글자 없음). 화면 글자로 다시 맞춰 찾은 수(screenText).
+      zeroDiag?: ZeroDiag;
+      screenText?: number;
+    }
   | {
       mode: "items";
       items: ListItem[];

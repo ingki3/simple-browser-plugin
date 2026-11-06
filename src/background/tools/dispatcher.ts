@@ -45,6 +45,7 @@ import {
   type TurnTab,
 } from "./handlers";
 import { ClickAbortedError, settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
+import { SCREEN_TEXT_NOTE, zeroDiagText, zeroMatchNote } from "@/lib/clickQuery";
 import { clickWithInput, PressedClickError, type InputClickResult, type InputSession } from "../trustedInput";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
@@ -1263,11 +1264,16 @@ async function runTool(
       if (res.mode === "items") return itemsResult(res);
       const { items, unfiltered, unrelatedChoices } = res;
       const notes: string[] = [];
-      // 찾기 조건 때문에 0개면 조건 없이 찾은 수를 알려 모델이 바로 조건을 넓히게 한다(#151).
-      if (!items.length && unfiltered > 0) {
-        notes.push(
-          `찾기 조건(query·region·onlyViewport)에 맞는 요소가 없습니다. 조건 없이 찾으면 클릭 가능 요소가 ${unfiltered}개 있습니다. query는 화면 글자에 그대로 들어 있어야 맞으니 낱말을 짧게 줄이거나 '|'로 다른 표현을 더하고, 그래도 없으면 조건을 빼고 다시 찾으세요.`,
-        );
+      // 찾기 조건 때문에 0개면 조건 없이 찾은 수를 알려 모델이 바로 조건을 넓히게 한다(#151). query로 0개면 진단 수(#242 — 글자 없음)를
+      // 로그에 남기고, 안내는 실제 매칭 규칙(이름·주소)과 진단 수의 구조 분기로 정한다.
+      if (res.zeroDiag) debugLog("find_clickables:zero", zeroDiagText(res.zeroDiag));
+      if (res.screenText) {
+        debugLog("find_clickables:screen_text", String(res.screenText));
+        notes.push(SCREEN_TEXT_NOTE);
+      }
+      if (!items.length) {
+        const zero = zeroMatchNote(unfiltered, res.zeroDiag);
+        if (zero) notes.push(zero);
       }
       if (unrelatedChoices > 0) notes.push(unrelatedNote(unrelatedChoices));
       if (res.longHrefs > 0) notes.push(longHrefNote(res.longHrefs));

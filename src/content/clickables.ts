@@ -1,10 +1,10 @@
 import type { ClickableElement, FindClickablesResponse, ListItem, PageRegion } from "@/lib/messages";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
-import { clickMatchScore, queryTerms } from "@/lib/clickQuery";
+import { clickMatchScore, emptyZeroDiag, queryTerms, type ZeroDiag } from "@/lib/clickQuery";
 import { resultHref, resultRole } from "@/lib/clickResult";
 import { getAccessibleRoots, isTag } from "./docs";
-import { modelName, modelNameInfo } from "./modelText";
+import { modelName, modelNameInfo, modelText, modelTextInfo } from "./modelText";
 import {
   choiceUrlsOf,
   controlHasPersonalValue,
@@ -80,14 +80,15 @@ function isToggleInput(el: Element): el is HTMLInputElement {
 
 // 사용자에게 드러난 클릭 대상인지: 레이아웃상 보이고(크기·display·visibility·opacity) aria-hidden 영역 안이 아니다.
 // 입력 칸의 보임(forms.ts layoutVisible)과 달리 aria-hidden 안의 요소는 클릭 후보로 내지 않는다.
-function shownToUser(el: HTMLElement): boolean {
+// ignoreAriaHidden: aria-hidden 조상은 보지 않는다(0개 진단에서 뺀 이유를 가를 때만).
+function shownToUser(el: HTMLElement, ignoreAriaHidden = false): boolean {
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   const style = el.ownerDocument.defaultView?.getComputedStyle(el);
   if (!style) return true;
   if (style.display === "none" || style.visibility === "hidden") return false;
   if (style.opacity === "0") return false;
-  if (el.closest("[aria-hidden='true']")) return false;
+  if (!ignoreAriaHidden && el.closest("[aria-hidden='true']")) return false;
   return true;
 }
 
@@ -445,14 +446,30 @@ interface Candidate {
 // 후보 하나를 만든다(보이는 것·편집 영역 제외·비활성 제외·선택지는 트리거 관계가 정해질 때만). 아니면 null.
 // list·items 모드가 같은 규칙을 쓴다.
 // 선택지인데 펼친 트리거와의 관계를 정하지 못해 뺀 것은 "unrelated"(수를 알린다, 리뷰 #2).
-function safeCandidate(node: HTMLElement, seen: Set<HTMLElement>, expandedRef: { list: HTMLElement[] | null }): Candidate | null | "unrelated" {
+// rej: 뺀 이유별 수(#242 0개 진단). 주면 센다.
+function safeCandidate(
+  node: HTMLElement,
+  seen: Set<HTMLElement>,
+  expandedRef: { list: HTMLElement[] | null },
+  rej?: ZeroDiag["rejected"],
+): Candidate | null | "unrelated" {
   // 진짜 checkbox·radio: 보이면 그 칸, 숨겼으면 대신 보여 주는 label을 누른다(그 label은 누르면 이 칸이 작동한다).
   // 값(value)은 보내지 않는다 — 이름은 modelName(label 글자), 상태는 checked뿐이다(#43). 비활성 칸은 뺀다.
   const toggle = isToggleInput(node) ? node : null;
-  if (toggle?.disabled) return null;
+  if (toggle?.disabled) {
+    if (rej) rej.disabled += 1;
+    return null;
+  }
   const el: HTMLElement | null = toggle ? (shownToUser(toggle) ? toggle : proxyLabel(toggle)) : node;
   if (!el || seen.has(el)) return null;
-  if (!shownToUser(el)) return null;
+  if (!shownToUser(el)) {
+    // 크기·스타일로는 보이는데 aria-hidden 영역 안이라 뺐으면 따로 센다.
+    if (rej) {
+      if (el.closest("[aria-hidden='true']") && shownToUser(el, true)) rej.ariaHidden += 1;
+      else rej.hidden += 1;
+    }
+    return null;
+  }
   // 역할로만 잡힌 새 대상에서 값 컨트롤·편집 영역은 뺀다(편집형 combobox의 입력값이 클릭 대상 글자로 나가지 않게;
   // 그런 칸은 find_form_fields의 값 미전송 계약을 따른다). checkbox·radio는 값을 보내지 않으므로 편집 영역만 뺀다.
   const roleOnly = !el.matches(BASE_SELECTOR);
@@ -465,7 +482,10 @@ function safeCandidate(node: HTMLElement, seen: Set<HTMLElement>, expandedRef: {
   // 모델에 돌려주는 글자(입력 칸·편집 영역·숨은 글자 제외). 검색어 필터도 이 글자로 본다(#43).
   const text = modelName(el);
   // 역할 기반 대상은 글자가 비어도 돌려준다(role·상태로 구분). 기존 대상은 글자·주소가 모두 비면 뺀다.
-  if (!text && !href && !roleOnly) return null;
+  if (!text && !href && !roleOnly) {
+    if (rej) rej.emptyName += 1;
+    return null;
+  }
   // 선택지(option·menuitem*)는 펼친 트리거와의 관계를 정할 수 있을 때만 돌려준다(targets.ts의 choiceRelation).
   let relation: Relation | null = null;
   if (isChoice(el)) {
@@ -487,11 +507,26 @@ export function findClickablesCounted(args: FindClickablesArgs): FindClickablesR
   if (args.mode === "items") return scanTargets(() => collectItems(args));
   return scanTargets(() => {
     const r = collectClickables(args);
-    return { mode: "list" as const, items: r.items, unfiltered: r.unfiltered, unrelatedChoices: r.unrelated, longHrefs: r.longHrefs };
+    return {
+      mode: "list" as const,
+      items: r.items,
+      unfiltered: r.unfiltered,
+      unrelatedChoices: r.unrelated,
+      longHrefs: r.longHrefs,
+      ...(r.zeroDiag ? { zeroDiag: r.zeroDiag } : {}),
+      ...(r.screenText ? { screenText: r.screenText } : {}),
+    };
   });
 }
 
-function collectClickables(args: FindClickablesArgs): { items: ClickableElement[]; unfiltered: number; unrelated: number; longHrefs: number } {
+function collectClickables(args: FindClickablesArgs): {
+  items: ClickableElement[];
+  unfiltered: number;
+  unrelated: number;
+  longHrefs: number;
+  zeroDiag?: ZeroDiag;
+  screenText?: number;
+} {
   const limit = Math.min(args.limit ?? 50, 200);
   const terms = queryTerms(args.query);
   // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
@@ -508,12 +543,15 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
   let unfiltered = 0;
   // 관계를 정하지 못해 뺀 선택지 수(이번에 본 범위).
   let unrelated = 0;
+  // query가 있을 때(#242): 이름·주소에 맞지 않은 후보(찾기 조건 region·onlyViewport는 통과)와 뺀 이유별 수.
+  const misses: Candidate[] = [];
+  const rej = terms.length ? emptyZeroDiag().rejected : undefined;
   for (const root of getAccessibleRoots()) {
     if (full()) break;
     const nodes = root.querySelectorAll<HTMLElement>(CLICK_SELECTOR);
     for (const node of nodes) {
       if (full()) break;
-      const c = safeCandidate(node, seen, expandedRef);
+      const c = safeCandidate(node, seen, expandedRef, rej);
       if (c === "unrelated") {
         unrelated += 1;
         continue;
@@ -526,7 +564,10 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
         score = clickMatchScore(terms, c.text, c.href);
         // matchContext: 대상이 든 묶음 글자(modelText 경로로 만든 context)에도 맞춘다(#159). 원문 글자는 쓰지 않는다(#43).
         if (args.matchContext) score += termHits(terms, clickContextInfo(c.el).text);
-        if (!score) continue;
+        if (!score) {
+          if (misses.length < MISS_MAX) misses.push(c);
+          continue;
+        }
       }
       const entry = { c, score };
       if (!ranked) {
@@ -539,6 +580,35 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
       while (i > 0 && found[i - 1].score < score) i -= 1;
       found.splice(i, 0, entry);
       if (found.length > limit) found.pop();
+    }
+  }
+
+  // query가 이름·주소(·context)로 0개면(#242): 이름이 자기 화면 글자와 다른 후보를 화면 글자(modelText 경로 — 입력값·편집 영역·숨은
+  // 글자 제외)로 한 번 더 맞춘다. 이미 모은 후보만 다시 본다(후보 집합·승인·실행 직전 재검사는 그대로). 그래도 0개면 진단 수를 센다.
+  let zeroDiag: ZeroDiag | undefined;
+  let screenText: number | undefined;
+  const byScreen = new Set<HTMLElement>();
+  if (terms.length && !found.length && rej) {
+    let nameNotScreen = 0;
+    const hits: Array<{ c: Candidate; score: number }> = [];
+    for (const c of misses) {
+      const shown = modelTextInfo(c.el, 200).text;
+      if (shown === c.text) continue;
+      nameNotScreen += 1;
+      const score = termHits(terms, shown) * 2;
+      if (score) hits.push({ c, score });
+    }
+    if (hits.length) {
+      hits.sort((a, b) => b.score - a.score);
+      for (const h of hits.slice(0, limit)) {
+        found.push(h);
+        byScreen.add(h.c.el);
+      }
+      screenText = found.length;
+    } else {
+      rej.unrelated = unrelated;
+      zeroDiag = { ...emptyZeroDiag(), candidates: unfiltered, nameNotScreen, rejected: rej };
+      countOutside(terms, seen, zeroDiag);
     }
   }
 
@@ -564,9 +634,68 @@ function collectClickables(args: FindClickablesArgs): { items: ClickableElement[
       ...(cut ? { contextTruncated: true } : {}),
       ...(info?.states ? { states: info.states } : {}),
       ...(listFor ? { listFor } : {}),
+      ...(byScreen.has(c.el) ? { matchedBy: "screenText" as const } : {}),
     };
   });
-  return { items, unfiltered, unrelated, longHrefs };
+  return { items, unfiltered, unrelated, longHrefs, ...(zeroDiag ? { zeroDiag } : {}), ...(screenText ? { screenText } : {}) };
+}
+
+// 0개 진단에서 다시 볼 후보 상한과 글자 노드 순회 상한(#242).
+const MISS_MAX = 3000;
+const TEXT_SCAN_MAX = 20_000;
+const OUTSIDE_CLIMB = 6;
+
+// 후보 밖에서 query 낱말이 화면 글자로 보이는 요소를 센다(#242 진단 — 수만). 글자 노드는 위치 찾기에만 쓰고, 셀 때는 그 부모의
+// modelText(보호 영역·입력 칸·편집 영역·숨은 글자 제외)에도 낱말이 있는지 다시 본다(#43). 분류는 위로 6단계 안의 첫 구조 신호.
+function countOutside(terms: string[], candidates: Set<HTMLElement>, d: ZeroDiag): void {
+  const counted = new Set<Element>();
+  let scanned = 0;
+  for (const root of getAccessibleRoots()) {
+    const doc = (root as Node).ownerDocument ?? (root as Document);
+    const walker = doc.createTreeWalker(root as Node, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (++scanned > TEXT_SCAN_MAX) {
+        d.limited = true;
+        return;
+      }
+      const raw = (n.nodeValue ?? "").toLowerCase();
+      if (!raw.trim() || !terms.some((t) => raw.includes(t))) continue;
+      const parent = n.parentElement;
+      if (!parent || counted.has(parent)) continue;
+      // 후보 안의 글자는 후보 쪽(이름 차이)에서, 선택자에 걸렸지만 뺀 요소 안의 글자는 뺀 수(rejected)에서 본다.
+      let inCandidate = false;
+      for (let cur: Element | null = parent; cur; cur = cur.parentElement) {
+        if (candidates.has(cur as HTMLElement) || cur.matches(CLICK_SELECTOR)) {
+          inCandidate = true;
+          break;
+        }
+      }
+      if (inCandidate) continue;
+      if (parent.getClientRects().length === 0) continue;
+      const shown = modelText(parent, 200).toLowerCase();
+      if (!terms.some((t) => shown.includes(t))) continue;
+      counted.add(parent);
+      d.outside.total += 1;
+      d.outside[outsideSignal(parent)] += 1;
+    }
+  }
+}
+
+function outsideSignal(start: Element): "aNoHref" | "onclick" | "tabindex" | "cursor" | "none" {
+  let cur: Element | null = start;
+  for (let depth = 0; cur && depth < OUTSIDE_CLIMB; depth++, cur = cur.parentElement) {
+    if (cur.localName === "body" || cur.localName === "html") break;
+    if (cur.localName === "a" && !cur.hasAttribute("href")) return "aNoHref";
+    if (cur.hasAttribute("onclick")) return "onclick";
+    const tab = cur.getAttribute("tabindex");
+    if (tab !== null && Number(tab) >= 0) return "tabindex";
+    try {
+      if (cur.ownerDocument.defaultView?.getComputedStyle(cur).cursor === "pointer") return "cursor";
+    } catch {
+      /* ignore */
+    }
+  }
+  return "none";
 }
 
 // 선택지마다 어느 칸(트리거)의 목록인지 모델에 보일 라벨(#자동완성): 트리거의 이름(modelName — 입력값 제외 #43). 같은 이름이
