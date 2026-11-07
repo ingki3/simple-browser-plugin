@@ -1,7 +1,6 @@
 // 실제 입력 클릭(0.2.0)의 content script 쪽: 누를 점 계산, 누르기 직전 확인, 들어온 실제 입력을 보고 막는 가드.
 // 보안 모델과 한계는 src/lib/trustedClick.ts 머리말.
 import {
-  clickPoint,
   clickPoints,
   GUARDED_EVENTS,
   GUARD_MS,
@@ -177,12 +176,6 @@ export function checkPoint(el: HTMLElement, p: Point): PointCheck {
 
 function rectsOf(el: HTMLElement) {
   return Array.from(el.getClientRects()).map((r) => ({ left: r.left, top: r.top, width: r.width, height: r.height }));
-}
-
-// 대상의 누를 점(top 문서 viewport 기준 CSS px). top 문서의 대상만 다룬다.
-export function pointOf(el: HTMLElement): Point | null {
-  if (el.ownerDocument !== document) return null;
-  return clickPoint(rectsOf(el), { width: window.innerWidth, height: window.innerHeight });
 }
 
 export type PointChoice =

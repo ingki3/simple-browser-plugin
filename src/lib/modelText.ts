@@ -57,8 +57,6 @@ export const QUERY_DOM_ATTRS = [
   "hidden",
 ] as const;
 
-export type QueryDomAttr = (typeof QUERY_DOM_ATTRS)[number];
-
 // 보호 영역 안이면 돌려주지 않는 이름 성격의 속성.
 export const NAME_ATTRS = new Set<string>(["alt", "title", "aria-label"]);
 

@@ -53,6 +53,7 @@ import { CAPTURE_LIMITS } from "@/lib/pageCapture";
 import { markOptimisticNavigation, waitForNavigationSettle } from "../navigation";
 import {
   clickCard,
+  clip,
   describeEffect,
   fillCard,
   handoffFillList,
@@ -148,7 +149,7 @@ export interface ToolPreview {
   autoBlockIfUrlsAllowed?: string | null;
   // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
   execArgs?: unknown;
-  // sign_in: 로그인 양식 모양·출처·비밀번호 관리자 항목(이름·아이디만, 값 없음). 승인 판정은 openrouter.ts가 한다.
+  // sign_in: 로그인 양식 모양·출처·비밀번호 관리자 항목(이름·아이디만, 값 없음). 승인 판정은 agent/chatAgent.ts가 한다.
   signIn?: SignInPreview;
 }
 
@@ -473,7 +474,7 @@ export async function buildToolPreview(
       const args = parsedArgs as ToolArgs["read_other_tabs"];
       const choices = await snapshotCandidates(callId, turnTab);
       return {
-        summary: `다른 탭의 본문을 읽어 대화에 넣습니다: ${truncate(args.purpose, 120)}. 읽을 탭을 고르세요(최대 ${MAX_TABS_PER_CALL}개). 고른 탭의 내용은 모델 제공자로 전송됩니다.`,
+        summary: `다른 탭의 본문을 읽어 대화에 넣습니다: ${clip(args.purpose, 120)}. 읽을 탭을 고르세요(최대 ${MAX_TABS_PER_CALL}개). 고른 탭의 내용은 모델 제공자로 전송됩니다.`,
         choices,
         choiceLimit: MAX_TABS_PER_CALL,
       };
@@ -496,7 +497,7 @@ export async function buildToolPreview(
       }
       return {
         remoteDocument,
-        summary: `${host}에서 파일 '${truncate(target.filename, 60)}'을(를) 로그인 쿠키와 함께 내려받아 읽습니다.`,
+        summary: `${host}에서 파일 '${clip(target.filename, 60)}'을(를) 로그인 쿠키와 함께 내려받아 읽습니다.`,
         details: `${target.url}\n\n${warning}`,
       };
     }
@@ -512,7 +513,7 @@ export async function buildToolPreview(
       const personal = values.some((v) => looksPersonalValue(decodeDeepText(v))) ? "자리 값이 개인정보처럼 보임" : null;
       const destructive = destructiveRoute(url) ? DESTRUCTIVE_REASON : null;
       return {
-        summary: `${followingPopup(turnTab) ? "팝업 창 따라가기를 멈추고 원래 탭에서 " : ""}저장한 링크 '${truncate(link.name, 60)}'을(를) 엽니다(${host}).`,
+        summary: `${followingPopup(turnTab) ? "팝업 창 따라가기를 멈추고 원래 탭에서 " : ""}저장한 링크 '${clip(link.name, 60)}'을(를) 엽니다(${host}).`,
         details: `${link.purpose ? `용도: ${link.purpose}\n` : ""}${url}${destructive ? `\n⚠ ${destructive}일 수 있습니다. 여는 주소를 확인하세요.` : ""}`,
         autoBlock: personal ?? navigateAutoBlock(new Set([link.site]), url),
         // 되돌리기 어려운 동작은 어떤 허락으로도 건너뛰지 않고 묻는다(#62).
@@ -537,7 +538,7 @@ export async function buildToolPreview(
       const colCount = Math.max(...args.values.map((r) => r.length));
       const preview = args.values
         .slice(0, 5)
-        .map((r) => r.slice(0, 5).map((c) => truncate(c, 40)).join(" | "))
+        .map((r) => r.slice(0, 5).map((c) => clip(c, 40)).join(" | "))
         .join("\n");
       return {
         summary: `Google Sheets '${args.range}' 범위에 ${rowCount}×${colCount} 값 덮어쓰기.`,
@@ -617,11 +618,11 @@ const POPUP_TAB_NOTE =
 function downloadSummary(res: DownloadRunResult): string {
   const failed = res.results.filter((r) => !r.ok);
   const saved = res.results.filter((r) => r.ok && r.savedAs).map((r) => r.savedAs as string);
-  const names = saved.length ? ` (${saved.slice(0, 3).map((n) => truncate(n, 60)).join(", ")}${saved.length > 3 ? ` 외 ${saved.length - 3}개` : ""})` : "";
+  const names = saved.length ? ` (${saved.slice(0, 3).map((n) => clip(n, 60)).join(", ")}${saved.length > 3 ? ` 외 ${saved.length - 3}개` : ""})` : "";
   const fails = failed.length
     ? ` 실패 ${failed.length}개: ${failed
         .slice(0, 3)
-        .map((r) => `${truncate(r.label || r.url, 40)}(${r.reason ?? ""})`)
+        .map((r) => `${clip(r.label || r.url, 40)}(${r.reason ?? ""})`)
         .join(", ")}`
     : "";
   const notes = res.results.filter((r) => r.note).length;
@@ -634,17 +635,13 @@ function captureSummary(res: CaptureResult): string {
   const saved = res.images
     .filter((i) => i.ok && i.savedAs)
     .slice(0, 3)
-    .map((i) => `${truncate(i.savedAs as string, 80)} ${i.width}×${i.height}px`);
+    .map((i) => `${clip(i.savedAs as string, 80)} ${i.width}×${i.height}px`);
   const failed = res.images.filter((i) => !i.ok).map((i) => i.reason ?? "");
   return (
     `${what}: ${res.savedCount}개 저장${saved.length ? ` (${saved.join(", ")})` : ""}.` +
     (failed.length ? ` 실패 ${failed.length}개(${failed.slice(0, 2).join(", ")}).` : "") +
     (res.truncated ? " 페이지 아래쪽은 잘림." : "")
   );
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
 export function parseToolArgs<T extends ToolName>(
@@ -686,7 +683,7 @@ export interface ExecOptions {
 // 패널 결과 줄에 붙이는 클릭 수단(실제 입력 설정이 켜졌을 때 어느 쪽으로 눌렀는지 보이게).
 function inputLabel(data: InputClickResult): string {
   if (data.input === "trusted") return " · 실제 입력";
-  return data.inputNote ? ` · 스크립트 클릭(${truncate(data.inputNote, 60)})` : "";
+  return data.inputNote ? ` · 스크립트 클릭(${clip(data.inputNote, 60)})` : "";
 }
 
 // 원래 탭을 웹 주소로 이동한다(navigate_to_url·open_saved_link). 팝업을 따라가던 중이면 따라가기를 끝낸다.
@@ -773,7 +770,7 @@ export function clearOfferedHints(turnTab: TurnTab): void {
 // 레시피 인자를 로그용 한 줄로(값은 각 120자까지).
 function recipeArgsText(args: Record<string, string | number | boolean>): string {
   return Object.entries(args)
-    .map(([k, v]) => `${k}=${typeof v === "string" ? `'${truncate(v, 120)}'` : String(v)}`)
+    .map(([k, v]) => `${k}=${typeof v === "string" ? `'${clip(v, 120)}'` : String(v)}`)
     .join(" ");
 }
 
@@ -868,7 +865,7 @@ async function clickTool(
       if (effect.dom) delete effect.dom.rebase;
       return {
         ok: false,
-        summary: `'${truncate(err.text, 60) || "(글자 없음)"}' 클릭 실패: ${truncate(err.message, 80)} · 그 사이 관측: ${describeEffect(effect)} · 실제 입력`,
+        summary: `'${clip(err.text, 60) || "(글자 없음)"}' 클릭 실패: ${clip(err.message, 80)} · 그 사이 관측: ${describeEffect(effect)} · 실제 입력`,
         data: {
           error: err.message,
           text: err.text,
@@ -912,7 +909,7 @@ async function clickTool(
   if (rebase) offerRebase(callId, { id: rebase.id, nonce: rebase.nonce });
   return {
     ok: data.clicked && !effect.dom?.aborted,
-    summary: `'${truncate(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}${inputLabel(data)}`,
+    summary: `'${clip(data.text, 60) || "(글자 없음)"}' 클릭: ${describeEffect(effect)}${inputLabel(data)}`,
     // 팝업 창이 열리거나 막히거나 닫혔거나, 같은 문서 안에서 주소가 바뀌었거나(목록 다시 찾기 안내) 대화상자가 열렸으면(#158)
     // 모델이 놓치지 않게 고정 문구(줄인 주소만 포함)를 함께 싣는다.
     data: {
@@ -1034,7 +1031,7 @@ async function runTool(
         data.landmarks.map((l) => `${l.region}(${l.clickableCount})`).join(", ") || "없음";
       return {
         ok: true,
-        summary: `${inPopup ? "팝업 창 " : ""}페이지 관측: ${truncate(data.title, 40)} / 랜드마크: ${regionList}${frames ? ` / 다른 출처 iframe ${frames}개` : ""}`,
+        summary: `${inPopup ? "팝업 창 " : ""}페이지 관측: ${clip(data.title, 40)} / 랜드마크: ${regionList}${frames ? ` / 다른 출처 iframe ${frames}개` : ""}`,
         data,
       };
     }
@@ -1042,7 +1039,7 @@ async function runTool(
       const data = await callContentTool<PageContent>(toolName, parsedArgs, callId, turnTab);
       return {
         ok: true,
-        summary: `본문 ${data.wordCount}자 추출: ${truncate(data.title, 60)}`,
+        summary: `본문 ${data.wordCount}자 추출: ${clip(data.title, 60)}`,
         data,
       };
     }
@@ -1051,7 +1048,7 @@ async function runTool(
       return {
         ok: true,
         summary:
-          `스크립트 ${data.segmentCount}줄 추출: ${truncate(data.title, 60)}` +
+          `스크립트 ${data.segmentCount}줄 추출: ${clip(data.title, 60)}` +
           (data.truncated ? " (일부 잘림)" : "") +
           (data.complete ? "" : " (로딩 미완료, 뒷부분 누락 가능)"),
         data,
@@ -1071,7 +1068,7 @@ async function runTool(
       const okCount = data.filter((d) => "mainText" in d).length;
       return {
         ok: okCount > 0,
-        summary: `다른 탭 ${data.length}개 중 ${okCount}개 읽음: ${data.map((d) => truncate(d.title || d.origin, 30)).join(", ")}`,
+        summary: `다른 탭 ${data.length}개 중 ${okCount}개 읽음: ${data.map((d) => clip(d.title || d.origin, 30)).join(", ")}`,
         data,
       };
     }
@@ -1080,7 +1077,7 @@ async function runTool(
       return {
         ok: true,
         summary:
-          `문서 읽기: ${truncate(data.filename, 60)} (${data.format}, ${data.totalChars}자)` +
+          `문서 읽기: ${clip(data.filename, 60)} (${data.format}, ${data.totalChars}자)` +
           (data.truncated ? ` (앞 ${data.markdown.length}자만 전달)` : ""),
         data,
       };
@@ -1109,7 +1106,7 @@ async function runTool(
         ? " [" +
           data.perRoot
             .filter((d) => d.collected > 0)
-            .map((d) => `${truncate(d.name, 40)}:${d.collected}`)
+            .map((d) => `${clip(d.name, 40)}:${d.collected}`)
             .join(", ") +
           "]"
         : "";
@@ -1150,7 +1147,7 @@ async function runTool(
       const failNote = failed.length
         ? ` 반영 안 됨 ${failed.length}개: ${failed
             .slice(0, 3)
-            .map((r) => `${r.label || r.id}(${truncate(r.note ?? "", 60)})`)
+            .map((r) => `${r.label || r.id}(${clip(r.note ?? "", 60)})`)
             .join(", ")}`
         : "";
       return {
@@ -1210,7 +1207,7 @@ async function runTool(
     case "query_dom": {
       const qa = parsedArgs as ToolArgs["query_dom"];
       // 디버그 로그에 선택자를 남긴다(#156). 모델이 만든 인자만 — 입력 칸 값은 없다.
-      debugLog("tool:query_dom:args", `selector='${truncate(qa.selector, 120)}'${qa.attr ? ` attr=${qa.attr}` : ""}`);
+      debugLog("tool:query_dom:args", `selector='${clip(qa.selector, 120)}'${qa.attr ? ` attr=${qa.attr}` : ""}`);
       const data = await callContentTool<Array<{ text: string; attrs: Record<string, string> }>>(
         toolName,
         parsedArgs,
@@ -1229,7 +1226,7 @@ async function runTool(
       const { leftPopup, note } = await navigateOriginalTab(url, turnTab, signal);
       return {
         ok: true,
-        summary: `${leftPopup ? "팝업 창 따라가기를 멈추고 원래 탭 " : "현재 탭 "}이동 시작: ${truncate(url, 100)}`,
+        summary: `${leftPopup ? "팝업 창 따라가기를 멈추고 원래 탭 " : "현재 탭 "}이동 시작: ${clip(url, 100)}`,
         data: leftPopup ? { url, note } : { url },
       };
     }
@@ -1243,7 +1240,7 @@ async function runTool(
       await markUsed(link.id).catch(() => {});
       return {
         ok: true,
-        summary: `저장한 링크 '${truncate(link.name, 40)}' 열기 시작: ${truncate(args.url, 100)}`,
+        summary: `저장한 링크 '${clip(link.name, 40)}' 열기 시작: ${clip(args.url, 100)}`,
         data: leftPopup ? { url: args.url, link: link.name, note } : { url: args.url, link: link.name },
       };
     }
@@ -1254,7 +1251,7 @@ async function runTool(
         "tool:find_clickables:args",
         [
           args.mode === "items" ? "mode=items" : "",
-          args.query ? `query='${truncate(args.query, 40)}'` : "",
+          args.query ? `query='${clip(args.query, 40)}'` : "",
           args.matchContext ? "matchContext" : "",
           args.region ? `region=${args.region}` : "",
           args.onlyViewport ? "onlyViewport" : "",
@@ -1292,7 +1289,7 @@ async function runTool(
       const data = await listSheets(args.spreadsheetId);
       return {
         ok: true,
-        summary: `'${truncate(data.title, 50)}' — 시트 ${data.sheets.length}개`,
+        summary: `'${clip(data.title, 50)}' — 시트 ${data.sheets.length}개`,
         data,
       };
     }

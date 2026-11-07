@@ -1,8 +1,7 @@
 // 같은 대상 연속 클릭(#233): 클릭이 바꾼 행·항목 글자를 결과로 보여 주고, 그 결과를 본 다음 응답부터만 그 상태를 기준으로 쓴다
 // (같은 응답의 뒤 호출·다른 대화·기록을 비운 대화는 쓰지 못한다). 공용 기준은 다시 찾을 때만 바뀐다.
-import { expect } from "../lib.mjs";
+import { duringTurn, expect, findC, pollUntil } from "../lib.mjs";
 
-const findC = { tool: "find_clickables", args: {} };
 const findF = { tool: "find_form_fields", args: {} };
 const items = { tool: "find_clickables", args: { mode: "items" } };
 
@@ -74,11 +73,8 @@ async function noNonce(h) {
 }
 
 async function waitReqs(h, n) {
-  for (let i = 0; i < 100; i++) {
-    if ((await h.sw.evaluate(() => globalThis.__modelReqs.length)) >= n) return;
-    await h.tab.waitForTimeout(50);
-  }
-  throw new Error(`모델 요청 ${n}개를 기다리다 시간 초과`);
+  const count = () => h.sw.evaluate(() => globalThis.__modelReqs.length);
+  await pollUntil(async () => (await count()) >= n, { tries: 100, intervalMs: 50, label: `모델 요청 ${n}개`, detail: async () => `지금 ${await count()}개` });
 }
 
 export default [
@@ -151,9 +147,11 @@ export default [
       await h.settings({ autoApprove: true });
       const turn = h.turn([findC, { click: "수량증가" }, { repeatLastClick: true, delayMs: 1500 }, { repeatLastClick: true }, { text: "끝" }], { path: "/c" });
       // 클릭 결과가 실린 요청(3번째)이 도착한 뒤(클릭 뒤 상태를 읽은 뒤) 행 합계를 바꾼다.
-      await waitReqs(h, 3);
-      await h.tab.evaluate(() => {
-        document.querySelector("#cart li .total").textContent = "9,999원";
+      await duringTurn(turn, async () => {
+        await waitReqs(h, 3);
+        await h.tab.evaluate(() => {
+          document.querySelector("#cart li .total").textContent = "9,999원";
+        });
       });
       const r = await turn;
       const [c1, c2, c3] = clicksOf(await toolMessages(h));
@@ -220,9 +218,11 @@ export default [
       const stopAfterClick = async (steps, opts, reqs) => {
         const base = await h.sw.evaluate(() => globalThis.__modelReqs.length);
         const turn = h.turn(steps, opts);
-        await waitReqs(h, base + reqs);
-        await h.panel.waitForTimeout(200);
-        await h.panel.click("button.composer-btn.danger");
+        await duringTurn(turn, async () => {
+          await waitReqs(h, base + reqs);
+          await h.panel.waitForTimeout(200);
+          await h.panel.click("button.composer-btn.danger");
+        });
         return turn;
       };
       await stopAfterClick([findC, { click: "수량증가" }, { text: "늦은 답", delayMs: 3000 }], { path: "/c" }, 3);
@@ -251,9 +251,11 @@ export default [
       // 묶음: 다시 찾은 뒤 A의 합계가 페이지에서 바뀌고 A·B를 함께 넣으면 A가 row_drift라 B에도 쓰지 않는다.
       const before = await h.sw.evaluate(() => globalThis.__modelReqs.length);
       const turn = h.turn([findF, { fillMany: [{ label: "수량 A", value: "5" }, { label: "수량 B", value: "7" }], delayMs: 1500 }, { text: "끝" }], { noReload: true });
-      await waitReqs(h, before + 2);
-      await h.tab.evaluate(() => {
-        document.querySelector("#cart li .total").textContent = "8,888원";
+      await duringTurn(turn, async () => {
+        await waitReqs(h, before + 2);
+        await h.tab.evaluate(() => {
+          document.querySelector("#cart li .total").textContent = "8,888원";
+        });
       });
       await turn;
       const batch = (await toolMessages(h)).filter((m) => m.name === "fill_form_fields").at(-1);

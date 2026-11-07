@@ -36,7 +36,8 @@ const DEFAULT_PAGE = `<title>shop</title><body><main>
 <p id=out></p></main>`;
 
 
-export async function startHarness() {
+// onWorker(sw): 서비스 워커를 잡은 직후, 시험 페이지·패널을 열기 전에 부른다(격리 시나리오가 워커 전역 대역을 먼저 걸 때, #263 R6).
+export async function startHarness({ onWorker } = {}) {
   const { chromium } = await import("playwright-core");
   const chrome = findChrome();
   if (!chrome) throw new Error("Chrome for Testing을 찾지 못했습니다(HARNESS_CHROME).");
@@ -90,6 +91,7 @@ export async function startHarness() {
   const extId = sw.url().split("/")[2];
   const logs = [];
   sw.on("console", (m) => logs.push(m.text()));
+  if (onWorker) await onWorker(sw);
   const tab = ctx.pages()[0] ?? (await ctx.newPage());
   await tab.goto(base + "/");
   await installMockModel(sw);
@@ -102,19 +104,16 @@ export async function startHarness() {
   // 설정 페이지(옵션 탭, #127). openOptions는 새 탭으로 연다. optionsPages는 지금 열린 설정 탭들(패널의 ⚙가 연 것 포함).
   const optionsUrl = `chrome-extension://${extId}/src/options/index.html`;
   const optionsPages = () => ctx.pages().filter((p) => p.url().startsWith(optionsUrl));
-  // 패널이 연 설정 탭을 기다린다(section이 있으면 그 묶음 해시까지). 없으면 null.
+  // 패널이 연 설정 탭을 기다린다(section이 있으면 그 묶음 해시까지). 한도 안에 없으면 열린 설정 탭 주소를 담아 실패한다.
   async function waitOptions(section, ms = 5000) {
-    const until = Date.now() + ms;
-    while (Date.now() < until) {
-      const p = optionsPages().find((x) => !section || x.url().endsWith(`#${section}`));
-      if (p) {
-        await p.waitForLoadState().catch(() => {});
-        await p.waitForTimeout(300);
-        return p;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    return null;
+    const p = await waitUntil(() => optionsPages().find((x) => !section || x.url().endsWith(`#${section}`)), {
+      timeoutMs: ms,
+      label: `설정 탭${section ? `(#${section})` : ""}`,
+      detail: () => `열린 설정 탭: ${JSON.stringify(optionsPages().map((x) => new URL(x.url()).hash))}`,
+    });
+    await p.waitForLoadState().catch(() => {});
+    await p.waitForTimeout(300);
+    return p;
   }
   async function openOptions(section = "model") {
     const p = await ctx.newPage();
@@ -161,6 +160,16 @@ export async function startHarness() {
       globalThis.__localModelReqs = [];
       globalThis.__translateDelayMs = 0;
       globalThis.__translateReqs = [];
+      // 번역 응답 게이트(#256): 앞 시나리오가 붙잡아 둔 응답은 풀고 비운다.
+      globalThis.__releaseTranslate?.();
+      globalThis.__translateHold = false;
+      globalThis.__translateHeld = 0;
+      globalThis.__translateEcho = undefined;
+      // 스트림 게이트(textParts holdAfter, #252): 앞 시나리오가 남긴 붙잡힌 스트림은 풀고 비운다.
+      globalThis.__releaseStream?.();
+      globalThis.__streamGate = null;
+      globalThis.__releaseStream = null;
+      globalThis.__streamHeld = false;
     });
     logs.length = 0;
     panelLogs.length = 0;
@@ -346,6 +355,15 @@ async function installMockModel(sw) {
         if (globalThis.__localModelsDelayMs) await new Promise((r) => setTimeout(r, globalThis.__localModelsDelayMs));
         return new Response(JSON.stringify({ data: (globalThis.__localModels ?? []).map((id) => ({ id })) }), { headers: { "content-type": "application/json" } });
       }
+      // 바꾼 뒤 주소(127.0.0.1:59998, 서버 없음 #252): 요청을 주소와 함께 남긴 뒤 실제처럼 연결 거부로 끝낸다(시나리오가 주소별로 센다).
+      if (String(url).startsWith("http://127.0.0.1:59998/")) {
+        let body = null;
+        try {
+          body = init?.body ? JSON.parse(init.body) : null;
+        } catch {}
+        (globalThis.__modelReqs ??= []).push({ url: String(url), body, headers: init?.headers, at: Date.now() });
+        throw new TypeError("Failed to fetch");
+      }
       if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com|api\.anthropic\.com|127\.0\.0\.1:59999/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
       (globalThis.__modelReqs ??= []).push({ url: String(url), body, headers: init.headers, at: Date.now() });
@@ -365,9 +383,25 @@ async function installMockModel(sw) {
         });
       }
       // 번역 배치(#193 시험): 입력 배열을 받아 같은 수의 "번역:원문"을 돌려준다. __translateDelayMs만큼 늦추고 중단 신호를 따른다.
+      // 기록에는 실제로 보낸 입력 글자 배열(texts)을 남긴다(#256 — 편집 영역 글자가 요청에 실리지 않는지 본문으로 검사).
+      // __translateEcho(#256): 이 글자가 든 입력은 원문 그대로 돌려준다(쓸 수 없는 번역 → 그 단위만 다시 요청하는 경로 시험).
+      // __translateHold(#256): 켜져 있으면 응답을 붙잡고 __translateHeld를 센다. __releaseTranslate()로 붙잡힌 응답을 모두 풀고 끈다.
       const userText = typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : "";
       if (body.response_format && userText.includes("translations 배열")) {
-        (globalThis.__translateReqs ??= []).push({ url: String(url) });
+        const input = JSON.parse(userText.slice(userText.lastIndexOf("입력:\n") + "입력:\n".length));
+        (globalThis.__translateReqs ??= []).push({ url: String(url), texts: input });
+        if (globalThis.__translateHold) {
+          globalThis.__translateGate ??= new Promise((resolve) => {
+            globalThis.__releaseTranslate = () => {
+              globalThis.__translateHold = false;
+              globalThis.__translateGate = null;
+              globalThis.__releaseTranslate = null;
+              resolve();
+            };
+          });
+          globalThis.__translateHeld = (globalThis.__translateHeld ?? 0) + 1;
+          await globalThis.__translateGate;
+        }
         if (globalThis.__translateDelayMs) {
           await new Promise((resolve, reject) => {
             const t = setTimeout(resolve, globalThis.__translateDelayMs);
@@ -377,8 +411,7 @@ async function installMockModel(sw) {
             }, { once: true });
           });
         }
-        const input = JSON.parse(userText.slice(userText.lastIndexOf("입력:\n") + "입력:\n".length));
-        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: input.map((t) => `번역:${t}`) }) } }] }), {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: input.map((t) => (globalThis.__translateEcho && t.includes(globalThis.__translateEcho) ? t : `번역:${t}`)) }) } }] }), {
           headers: { "content-type": "application/json" },
         });
       }
@@ -528,6 +561,19 @@ async function installMockModel(sw) {
         if (anthropic) return anthropicSse([{ type: "message_delta", delta: { stop_reason: "max_tokens" } }, { type: "message_stop" }]);
         return sse([{ choices: [{ delta: {}, finish_reason: "length" }] }]);
       }
+      // lengthText: 글자가 있는 채로 응답 상한에 걸린 답(잘린 답 안내 시험, #263).
+      if (step?.lengthText) {
+        if (anthropic) {
+          return anthropicSse([
+            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: step.lengthText } },
+            { type: "content_block_stop", index: 0 },
+            { type: "message_delta", delta: { stop_reason: "max_tokens" } },
+            { type: "message_stop" },
+          ]);
+        }
+        return sse([{ choices: [{ delta: { content: step.lengthText } }] }, { choices: [{ delta: {}, finish_reason: "length" }] }]);
+      }
       if (anthropic) {
         const ev = [];
         // 생각 블록(서명 포함)을 먼저 보낸다 — 다음 요청에 그대로 돌아오는지 본다.
@@ -559,25 +605,38 @@ async function installMockModel(sw) {
         return anthropicSse(ev);
       }
       // textParts + gapMs: 답 글자를 여러 조각으로 나눠 사이를 띄워 보낸다(응답을 받는 중의 패널 동작 시험).
+      // holdAfter: k — k번째 조각을 보낸 뒤 __streamGate가 풀릴 때까지 멈춘다(그동안 __streamHeld = true, #252).
+      //   시나리오는 __streamHeld를 조건 대기로 확인하고 개입한 뒤 __releaseStream()으로 푼다(시간 간격에 기대지 않는다).
       if (step?.textParts && !anthropic) {
         const parts = [...step.textParts.map((t) => ({ choices: [{ delta: { content: t } }] })), { choices: [{ delta: {}, finish_reason: "stop" }] }];
         const enc = new TextEncoder();
         const stream = new ReadableStream({
           async start(c) {
-            for (let k = 0; k < parts.length; k++) {
-              if (k > 0 && k < parts.length - 1) await new Promise((r) => setTimeout(r, step.gapMs ?? 1000));
-              c.enqueue(enc.encode(`data: ${JSON.stringify(parts[k])}\n\n`));
+            try {
+              for (let k = 0; k < parts.length; k++) {
+                if (k > 0 && k < parts.length - 1) await new Promise((r) => setTimeout(r, step.gapMs ?? 1000));
+                c.enqueue(enc.encode(`data: ${JSON.stringify(parts[k])}\n\n`));
+                if (step.holdAfter === k + 1) {
+                  globalThis.__streamGate ??= new Promise((r) => (globalThis.__releaseStream = r));
+                  globalThis.__streamHeld = true;
+                  await globalThis.__streamGate;
+                  globalThis.__streamHeld = false;
+                }
+              }
+              c.enqueue(enc.encode("data: [DONE]\n\n"));
+              c.close();
+            } catch {
+              // 붙잡힌 사이 읽는 쪽이 끊었으면(중단) 더 보내지 않는다.
             }
-            c.enqueue(enc.encode("data: [DONE]\n\n"));
-            c.close();
           },
         });
         return new Response(stream, { headers: { "content-type": "text/event-stream" } });
       }
       // calls: 한 응답에 도구 호출 여러 개([{ tool, args, callId }], #221 시험). callId: 모델이 줄 호출 id(없으면 call<n>).
-      const calls = out.calls ?? (out.tool ? [{ tool: out.tool, args: out.args, callId: out.callId, extra: out.extra }] : []);
+      // rawArgs(#263): args 대신 이 글자를 인자 원문으로 그대로 보낸다(깨진 JSON 인자 시험 — OpenAI 형식 제공자만).
+      const calls = out.calls ?? (out.tool ? [{ tool: out.tool, args: out.args, rawArgs: out.rawArgs, callId: out.callId, extra: out.extra }] : []);
       const chunks = calls.length
-        ? [{ choices: [{ delta: { tool_calls: calls.map((c, index) => ({ index, id: c.callId ?? "call" + ++globalThis.__n, type: "function", function: { name: c.tool, arguments: JSON.stringify(c.args ?? {}) }, ...(c.extra ? { extra_content: c.extra } : {}) })) } }] }]
+        ? [{ choices: [{ delta: { tool_calls: calls.map((c, index) => ({ index, id: c.callId ?? "call" + ++globalThis.__n, type: "function", function: { name: c.tool, arguments: typeof c.rawArgs === "string" ? c.rawArgs : JSON.stringify(c.args ?? {}) }, ...(c.extra ? { extra_content: c.extra } : {}) })) } }] }]
         : [{ choices: [{ delta: { content: out.text } }] }];
       chunks.push({ choices: [{ delta: {}, finish_reason: calls.length ? "tool_calls" : "stop" }] });
       return sse(chunks);
@@ -585,7 +644,88 @@ async function installMockModel(sw) {
   });
 }
 
+// 시나리오가 함께 쓰는 모의 모델 단계와 패널 메시지(#257에서 모음).
+export const findC = { tool: "find_clickables", args: {} };
+// 패널에서 백그라운드로 런타임 메시지를 보내고 응답을 돌려받는다.
+export const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
+
 export class Fail extends Error {}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 실패 글에 붙일 지금 상태(detail). 읽다 실패해도 원래 실패 이유를 가리지 않게 한다.
+async function why(detail) {
+  if (!detail) return "";
+  try {
+    return ` (${await detail()})`;
+  } catch (e) {
+    return ` (상태 읽기 실패: ${e instanceof Error ? e.message : String(e)})`;
+  }
+}
+
+// 조건이 참이 될 때까지 기다린다(고정 대기 대신, #252). 한도(벽시계) 안에 안 되면 label·detail을 담아 실패한다.
+// 조건 함수가 마지막에 돌려준 참 값(불리언·배열·메시지 등)을 돌려준다(#262).
+export async function waitUntil(pred, { timeoutMs = 5000, intervalMs = 100, label = "조건", detail } = {}) {
+  const started = Date.now();
+  for (;;) {
+    const v = await pred();
+    if (v) return v;
+    if (Date.now() - started >= timeoutMs) throw new Fail(`${label}: ${timeoutMs}ms 안에 되지 않았습니다${await why(detail)}`);
+    await sleep(intervalMs);
+  }
+}
+
+// 시도 횟수로 기다린다(#262): 조건을 최대 tries번 보고(사이마다 intervalMs), 다 거짓이면 label·detail을 담아 실패한다.
+// `for (let i = 0; i < N && !cond; i++) wait(ms)` 반복과 확인 횟수·간격이 같다(조건 자체가 느려도 횟수는 줄지 않는다).
+export async function pollUntil(pred, { tries, intervalMs = 100, label = "조건", detail } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const v = await pred();
+    if (v) return v;
+    if (i < tries - 1) await sleep(intervalMs);
+  }
+  throw new Fail(`${label}: ${tries}번(${intervalMs}ms 간격) 확인해도 되지 않았습니다${await why(detail)}`);
+}
+
+// 도구 기록(__toolLog)에 그 도구가 나올 때까지 시도 횟수로 기다린다(기본 50번×100ms — 턴을 먼저 시작한 시나리오가 쓴다).
+export function waitToolCall(h, name, { tries = 50, intervalMs = 100 } = {}) {
+  return pollUntil(() => h.sw.evaluate((n) => (globalThis.__toolLog ?? []).some((t) => t.name === n), name), {
+    tries,
+    intervalMs,
+    label: `${name} 실행`,
+    detail: async () => `지금까지 도구: ${(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).map((t) => t.name))).join(",") || "없음"}`,
+  });
+}
+
+// 먼저 시작한 턴(h.turn Promise)이 도는 동안 fn을 한다(#262).
+// - 턴의 rejection은 들어오자마자 잡아 둔다(fn이 기다리는 사이 턴이 먼저 실패해도 처리 안 된 rejection으로 프로세스가 죽지 않게).
+// - fn이 실패하면 턴이 끝날 때까지 기다려 회수한 뒤 fn의 실패를 던진다(남은 턴이 다음 시나리오에 섞이지 않게).
+// - 턴이 먼저 실패하면 fn 결과를 더 기다리지 않고 턴의 실패(근본 원인)를 던진다. 다만 fn은 탭·패널을 만지므로
+//   끝날 때까지(fn 자신의 대기 한도 안) 기다린 뒤 던진다 — 다음 시나리오의 reset 중에 페이지를 바꾸지 않게.
+// fn이 성공하면 그 값을 돌려주고, 턴의 결과·실패는 호출처가 뒤에서 await turn으로 그대로 받는다.
+export async function duringTurn(turn, fn) {
+  let turnError = null;
+  const turnDone = turn.then(
+    () => {},
+    (e) => {
+      turnError = { e };
+    },
+  );
+  const work = Promise.resolve().then(fn);
+  const workDone = work.then(
+    () => {},
+    () => {},
+  );
+  await Promise.race([workDone, turnDone.then(() => (turnError ? undefined : new Promise(() => {})))]);
+  if (turnError) {
+    await workDone;
+    throw turnError.e;
+  }
+  try {
+    return await work;
+  } catch (e) {
+    await turnDone;
+    throw e;
+  }
+}
 
 export function expect(cond, message) {
   if (!cond) throw new Fail(message);

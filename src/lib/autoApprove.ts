@@ -29,7 +29,7 @@ export const DESTRUCTIVE_REASON = "되돌리기 어려운 동작(삭제·스팸)
 export const OPAQUE_REQUEST_REASON = "htmx 요청(GET 아님·확인할 수 없음)";
 
 // 클릭·입력이 되돌리기 어려운 동작인지(#62). 자동 실행·이번 요청 링크 이동 허락·이번 대화 허락 어느 것으로도 건너뛰지 않는다
-// (src/background/openrouter.ts가 ToolPreview.alwaysAsk로 받아 늘 카드를 띄운다).
+// (src/background/agent/chatAgent.ts가 ToolPreview.alwaysAsk로 받아 늘 카드를 띄운다).
 // 구조 선언 밖의 신호는 낱말·경로 단서라 더 묻는 쪽의 최선일 뿐 완전할 수 없다(글자·주소에 단서가 없는 삭제는 놓친다).
 // - 구조: 삭제 요청을 선언한 대상(deleteMethod — data-method="delete", hx-delete, 양식의 _method=DELETE).
 // - 실릴 값: 누른 제출 버튼·체크·라디오 자신의 name=value, 양식의 숨은 칸, htmx 요청 주소(deleteParam — content script가 본다).

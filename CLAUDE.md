@@ -1,6 +1,6 @@
 # 간편 브라우저 도우미 (simple-browser-plugin)
 
-Chrome MV3 사이드 패널 에이전트(OpenRouter·OpenAI·Gemini·Claude). 사용자 안내는 README.md, 구조·기능 상세·보안 규칙은
+Chrome MV3 사이드 패널 에이전트(OpenRouter·OpenAI·Gemini·Claude·로컬 호환 서버). 사용자 안내는 README.md, 구조·기능 상세·보안 규칙은
 `docs/architecture.md`·`docs/features.md`·`docs/security.md`, 기여 절차는 CONTRIBUTING.md 참고.
 README는 처음 쓰는 사람을 위한 안내로 두고, 기능을 더하면 구현 규칙은 docs/에 적는다.
 

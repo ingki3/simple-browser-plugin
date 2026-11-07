@@ -7,7 +7,7 @@
 ## 올릴 파일
 
 - 릴리스(`vX.X.XX` 태그)마다 `simple-browser-plugin-vX.X.XX-webstore.zip`이 함께 올라갑니다(`.github/workflows/release.yml`).
-  `manifest.json`이 ZIP 최상위에 있고, 소스 맵과 MCP 다리(`mcp/`)는 없습니다. 릴리스 워크플로가 `scripts/checkManifest.mjs`로
+  `manifest.json`이 ZIP 최상위에 있고 `LICENSE`가 함께 들어가며, 소스 맵과 MCP 다리(`mcp/`)는 없습니다. 릴리스 워크플로가 `scripts/checkManifest.mjs`로
   최상위 manifest, 버전, 권한(identity·activeTab 없음), 소스 맵 없음, `web_accessible_resources` 없음, content script가 다른 조각을 불러오지 않는
   한 파일(`content.js`)인지를 검사합니다(#215 — 웹 페이지가 확장 파일 주소를 불러 보아 설치 여부를 알 수 없게).
 - 대시보드 → 항목 → 패키지에 이 ZIP을 올립니다. manifest 버전이 지금 올라가 있는 것보다 높아야 합니다(릴리스마다 수정 번호를 올리므로 맞음).
@@ -31,7 +31,7 @@
 - **설명**(초안):
 
   > 지금 보는 웹 페이지를 사이드 패널에서 말로 시키는 도우미입니다. 페이지를 요약·번역하고, 입력칸을 채우고, 버튼을 누르고, PDF·한글·Office 파일을 읽고,
-  > 이미지와 첨부 파일을 저장합니다. AI 모델은 직접 고르고 자기 API 키를 넣습니다(OpenRouter, OpenAI, Google Gemini, Anthropic Claude).
+  > 이미지와 첨부 파일을 저장합니다. AI 모델은 직접 고르고 자기 API 키를 넣습니다(OpenRouter, OpenAI, Google Gemini, Anthropic Claude). 내 컴퓨터의 로컬 LLM 서버(Ollama·LM Studio 등)는 주소와 모델만 넣으면 됩니다.
   >
   > 페이지를 바꾸는 동작(이동·클릭·입력·저장)은 기본으로 실행 전에 승인 카드로 묻습니다. 실행 방식에서 위험한 동작만 묻거나 처음에 한 번만 묻게 바꿀 수 있습니다.
   >

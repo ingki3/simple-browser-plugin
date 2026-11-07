@@ -1,7 +1,6 @@
 // 실행 방식(#123): '처음에 승인 받고 끝까지 실행'은 작업 맡기기 카드로 한 번 묻고, 맡기면 이 대화 동안 승인 카드 없이 실행한다.
-import { expect, lastTool, okResult } from "../lib.mjs";
+import { expect, findC, lastTool, okResult } from "../lib.mjs";
 
-const findC = { tool: "find_clickables", args: {} };
 const confirm = { tool: "confirm_task", args: { summary: "필터를 적용하고 결제까지 진행", risks: ["결제 버튼을 누릅니다"] } };
 
 const modelSaw = (h, needle) =>

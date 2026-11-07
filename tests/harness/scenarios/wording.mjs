@@ -1,7 +1,5 @@
 // 평소 문구(#130): 카드의 쉬운 도구 이름, 사용자가 취소한 호출은 실패와 구분, 모델 제공자 오류는 원인·다음 행동·원문(자세히).
-import { expect } from "../lib.mjs";
-
-const findC = { tool: "find_clickables", args: {} };
+import { expect, findC } from "../lib.mjs";
 
 export default [
   {

@@ -1,15 +1,8 @@
 // 저장 링크(0.2.4·0.2.9): 이 페이지 기억하기 → 초안 자동 요청(요청·답·화면 글자 반영, 일반적인 템플릿) → 저장 → open_saved_link로 자리 값만 넣어 열기.
-import { expect, lastTool, okResult } from "../lib.mjs";
+import { expect, lastTool, okResult, waitUntil } from "../lib.mjs";
 
-// 조건이 참이 될 때까지 기다린다(#240 — 고정 대기 뒤 찾기 대신). 시간 안에 안 되면 실패.
-async function until(h, what, fn, ms = 5000) {
-  const end = Date.now() + ms;
-  for (;;) {
-    if (await fn().catch(() => false)) return;
-    if (Date.now() > end) throw new Error(`기다림 시간 초과: ${what}`);
-    await h.panel.waitForTimeout(100);
-  }
-}
+// 조건이 참이 될 때까지 기다린다(#240 — 고정 대기 뒤 찾기 대신). 조건이 던지면 아직 아닌 것으로 본다. 시간 안에 안 되면 실패.
+const until = (h, what, fn, ms = 5000) => waitUntil(() => fn().catch(() => false), { timeoutMs: ms, intervalMs: 100, label: `기다림 시간 초과: ${what}` });
 
 // 펼친 카드에 초안이 반영됐다(채우는 중이 아니고 이름 칸이 초안 이름).
 const draftShown = (h, name) =>

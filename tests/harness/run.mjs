@@ -34,9 +34,14 @@ if (!chosen.length) {
   process.exit(1);
 }
 
-const h = await startHarness();
+// 공용 하네스(브라우저·워커 하나)는 격리하지 않는 시나리오가 처음 필요할 때 띄운다.
+// isolate: true인 시나리오(#263 R6 — 모듈 캐시 등 워커 상태가 앞 시나리오에 물들면 안 되는 것)는 새 프로필·새 서비스 워커로 따로 돌리고 닫는다.
+// 그런 시나리오는 onWorker(sw)로 워커가 뜬 직후(시험 페이지를 열기 전) 대역을 건다.
+let shared = null;
 const rows = [];
 for (const s of chosen) {
+  const own = s.isolate ? await startHarness({ onWorker: s.onWorker }) : null;
+  const h = own ?? (shared ??= await startHarness());
   h.pages.clear();
   for (const [path, html] of Object.entries(s.pages ?? {})) h.pages.set(`1${path}`, html);
   for (const [path, html] of Object.entries(s.pages2 ?? {})) h.pages.set(`2${path}`, html);
@@ -52,11 +57,13 @@ for (const s of chosen) {
   } catch (err) {
     status = err instanceof Fail ? "FAIL" : "ERROR";
     detail = err instanceof Error ? err.message : String(err);
+  } finally {
+    if (own) await own.close().catch(() => {});
   }
   rows.push({ group: s.group, name: s.name, status, ms: Date.now() - t0, detail });
   console.log(`${status === "PASS" ? "✓" : "✗"} [${s.group}] ${s.name} (${Date.now() - t0}ms)${detail ? `\n    ${detail}` : ""}`);
 }
-await h.close();
+if (shared) await shared.close();
 
 const failed = rows.filter((r) => r.status !== "PASS");
 console.log(`\n${rows.length}개 중 ${rows.length - failed.length}개 통과${failed.length ? `, ${failed.length}개 실패` : ""}`);

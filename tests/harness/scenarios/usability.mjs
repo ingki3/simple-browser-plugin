@@ -1,5 +1,5 @@
 // 사용성 후속(#132): 승인 카드의 전체 보기, 진단 복사 전 가리기·미리보기, 저장 실패 때 직접 입력 상태, 연결 확인 오류의 원문.
-import { expect } from "../lib.mjs";
+import { ask, expect } from "../lib.mjs";
 
 const LONG = `긴메모-${"가나다라마바사".repeat(20)}-끝`;
 const FILL = `<title>메모</title>
@@ -9,8 +9,6 @@ const FILL = `<title>메모</title>
   <button>저장</button>
 </form>
 <div id="out"></div>`;
-
-const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
 
 export default [
   {

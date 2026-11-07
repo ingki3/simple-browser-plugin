@@ -200,11 +200,6 @@ export function nestedContainerScan(scope: Element | ShadowRoot): { containers: 
   return { containers: out, incomplete: out.length >= 220 };
 }
 
-// 범위 안의 열린 shadow root들(iframe 안 것 포함).
-export function openShadowRootsIn(scope: Element | ShadowRoot): ShadowRoot[] {
-  return nestedContainersIn(scope).filter((n): n is ShadowRoot => isShadowRoot(n));
-}
-
 // 칸의 지금 값 요약(승인 당시와 같은지 비교용). 체크·선택·파일은 상태로, 읽을 수 없는 커스텀 컨트롤은 빈 값.
 export function fieldValueSignature(el: Element): string {
   const f = el as HTMLInputElement;

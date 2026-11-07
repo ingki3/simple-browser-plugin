@@ -1,6 +1,6 @@
 // MCP 연동(#140): 로컬 다리(mcp/sbp-mcp.mjs)를 폴링해 다른 AI 도구의 요청을 원격 대화(channel "mcp")로 처리하고 최종 답을 돌려준다.
 // - 다리와는 설정의 비밀로 서로를 확인하고 본문을 암호화한다(src/lib/mcpProtocol.ts). 응답을 복호화하지 못하면 버린다.
-// - 원격 정책은 텔레그램과 같다(openrouter.ts의 원격 정책). 승인이 필요한 이동·클릭은 설정 "MCP 클라이언트에 승인 묻기"(기본 끔)를
+// - 원격 정책은 텔레그램과 같다(agent/chatAgent.ts의 원격 정책). 승인이 필요한 이동·클릭은 설정 "MCP 클라이언트에 승인 묻기"(기본 끔)를
 //   켜고 다리·클라이언트가 form elicitation을 지원할 때만 다리를 거쳐 클라이언트에 묻는다(#185 — 승인을 클라이언트 프로그램에 맡기는 것).
 // - 작업 계약: 실행 전에 작업 id를 저장하고 같은 작업은 다시 실행하지 않는다. 결과 전송만 다시 시도한다. 다리에 60초 넘게 닿지 않거나
 //   기한이 지나면 스스로 멈춘다. 서비스 워커가 다시 뜨면 진행 중이던 작업은 중단으로 보고한다(자동 재실행 없음).
@@ -24,6 +24,7 @@ import { remoteErrorText } from "@/lib/telegram";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { debugLog } from "./debug";
+import { createSerial } from "@/lib/async";
 import { finishJob, recoverJob } from "@/lib/mcpJobState";
 import { REMOTE_ASKS_PER_JOB } from "@/lib/remoteApproval";
 import { telegramAskDelegated, telegramCanDelegate } from "./telegram";
@@ -69,12 +70,7 @@ interface McpState {
 
 const EMPTY: McpState = { enabled: false, port: MCP_DEFAULT_PORT, secret: "", bridgeId: "", bridgeVersion: "", lastOkAt: 0, lastError: "", askApproval: false, job: null, pending: null, seen: [] };
 
-let queue: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(fn);
-  queue = run.catch(() => {});
-  return run;
-}
+const serial = createSerial();
 
 async function load(): Promise<McpState> {
   const raw = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY];

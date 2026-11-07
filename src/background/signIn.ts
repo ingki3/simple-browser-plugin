@@ -1,6 +1,6 @@
 // sign_in 도구(자동 로그인, docs/design/login-automation.md)의 백그라운드 쪽.
 // 1) prepareSignIn: 칸 둘레의 로그인 양식을 페이지에서 구조로 읽고(login_inspect), 브라우저가 정한 탭 주소로 출처를 확인한 뒤
-//    KeePassXC에서 그 주소의 항목을 받는다. 승인 판정(자동·카드·손 넘기기)은 부르는 쪽(openrouter.ts)이 signInDecision으로 한다.
+//    KeePassXC에서 그 주소의 항목을 받는다. 승인 판정(자동·카드·손 넘기기)은 부르는 쪽(agent/chatAgent.ts)이 signInDecision으로 한다.
 // 2) runSignIn: 고른 항목의 값을 가림 목록에 먼저 넣고, 같은 문서에 값을 넣고 제출한다(login_fill).
 // 값은 이 호출의 메모리에만 두고 결과·오류·로그에 싣지 않는다.
 import type { KpxEntry } from "@/lib/keepassxc";

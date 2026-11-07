@@ -36,11 +36,6 @@ export type HtmlExtractResult =
   | { ok: true; title: string; text: string; truncated: boolean }
   | { ok: false; kind: "failed" | "cancelled" | "timeout" | "closed"; message?: string };
 
-// 서비스 워커가 진행 중인 작업을 끝내 달라고 보낼 때 쓴다.
-export interface DocumentJobCancel {
-  kind: "cancel";
-}
-
 export type DocumentJobFailure =
   // zip 검사에서 거부(손상·미지원 형식). tooLarge면 크기 한도 초과.
   | { ok: false; kind: "rejected"; message: string; tooLarge: boolean }

@@ -2,7 +2,7 @@ import { keepassxcAssociate, keepassxcForget, keepassxcStatus } from "./keepassx
 import { PORT_NAME, SETTINGS_KEY, type BgToPanel, type PanelToBg, type Settings } from "@/lib/messages";
 import { PARK_TTL_MS, ParkedConversations, prevDisconnectDetail, type PanelClose, type ResumeMissing } from "@/lib/panelLink";
 import { normalizeSettings } from "@/lib/settings";
-import { ChatAgent } from "./openrouter";
+import { ChatAgent } from "./agent/chatAgent";
 import { applyLoginSiteOp, applyManualSiteOp, applyRemoteSiteOp, applySettingsPatch, getSettings, invalidateSettingsCache, migrateLoginGrantIds } from "./storage";
 import { parseLoginSiteOp, parseManualSiteOp, parseRemoteSiteOp } from "@/lib/settingsOps";
 import { openSettings } from "./settingsTab";

@@ -1,5 +1,5 @@
 // 텔레그램 연동(#139): 봇으로 받은 요청을 원격 대화(ChatAgent channel "telegram")로 처리하고 최종 답만 보낸다.
-// - 원격 대화는 승인 카드를 띄우지 않는다(openrouter.ts의 원격 정책). 승인이 필요한 이동·클릭은 설정에서 켜 두면(기본 켬)
+// - 원격 대화는 승인 카드를 띄우지 않는다(agent/chatAgent.ts의 원격 정책). 승인이 필요한 이동·클릭은 설정에서 켜 두면(기본 켬)
 //   원격용으로 만든 질문(remoteApproval.ts — 패널 카드 글이 아님)을 [승인][거절] 버튼으로 묻는다(#185). 그 밖은 거절.
 // - 허용 대상은 확인 코드로 연결한 개인 대화 하나(그 채팅의 그 사용자). 그 밖의 메시지는 답하지 않고 버린다.
 // - 받기는 1분 알람마다, 요청을 처리하는 동안에는 이어서(/stop을 빨리 받으려고). 수신 루프는 하나만 돈다.
@@ -25,6 +25,7 @@ import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { onRepeatTriggered } from "./repeatTasks";
 import { debugLog } from "./debug";
+import { createSerial } from "@/lib/async";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 
 const STORE_KEY = "telegram";
@@ -76,12 +77,7 @@ const EMPTY: TelegramState = {
 
 // ---- 저장(한 줄로) ----
 
-let queue: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(fn);
-  queue = run.catch(() => {});
-  return run;
-}
+const serial = createSerial();
 
 // 연결된 채팅이 있는지(위임 질문의 canAsk용 — 저장할 때와 시작할 때 맞춘다).
 let linkedChat = false;

@@ -1,5 +1,5 @@
 // find_clickables 항목 모드(#161)·문맥 검색(#159): 반복 항목마다 화면 글자와 그 안의 대상 id, 항목 결합 검사, 입력값 보호(#43).
-import { expect, lastTool, okResult } from "../lib.mjs";
+import { duringTurn, expect, lastTool, okResult, waitToolCall } from "../lib.mjs";
 
 const items = (args = {}) => ({ tool: "find_clickables", args: { mode: "items", ...args } });
 const product = (i, extra = "") =>
@@ -246,9 +246,11 @@ ${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style=
     async run(h) {
       await h.settings({ runMode: "auto" });
       const turn = h.turn([items({ limit: 60 }), { clickItem: "1005원", target: "찜", delayMs: 600 }, { repeatLastClick: true }, { text: "끝" }], { path: "/s" });
-      for (let i = 0; i < 50 && !(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).some((t) => t.name === "find_clickables"))); i++) await h.tab.waitForTimeout(100);
-      await h.tab.evaluate(() => {
-        for (const s of document.querySelectorAll("li span")) if (s.textContent === "1005원") s.textContent = "9999원";
+      await duringTurn(turn, async () => {
+        await waitToolCall(h, "find_clickables");
+        await h.tab.evaluate(() => {
+          for (const s of document.querySelectorAll("li span")) if (s.textContent === "1005원") s.textContent = "9999원";
+        });
       });
       const r = await turn;
       // 모델이 본 적 없는 항목 글자로 바뀌었으므로 첫 클릭부터 항목 검사가 막고(#233 — row_drift로 넘기지 않음), 같은 id로 다시 불러도 막는다.
@@ -281,9 +283,11 @@ ${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style=
     async run(h) {
       await h.settings({ runMode: "auto", trustedInput: true });
       const turn = h.turn([items({ limit: 60 }), { clickItem: "1004원", target: "찜", delayMs: 600 }, { text: "끝" }], { path: "/s" });
-      for (let i = 0; i < 50 && !(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).some((t) => t.name === "find_clickables"))); i++) await h.tab.waitForTimeout(100);
-      await h.tab.evaluate(() => {
-        for (const s of document.querySelectorAll("li span")) if (s.textContent === "1004원") s.textContent = "7777원";
+      await duringTurn(turn, async () => {
+        await waitToolCall(h, "find_clickables");
+        await h.tab.evaluate(() => {
+          for (const s of document.querySelectorAll("li span")) if (s.textContent === "1004원") s.textContent = "7777원";
+        });
       });
       const r = await turn;
       const c = lastTool(r, "click_element");
@@ -296,8 +300,10 @@ ${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style=
     async run(h) {
       await h.settings({ runMode: "auto" });
       const turn = h.turn([items({ limit: 60 }), { clickItem: "카테고리 A", delayMs: 600 }, { text: "끝" }], { path: "/s" });
-      for (let i = 0; i < 50 && !(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).some((t) => t.name === "find_clickables"))); i++) await h.tab.waitForTimeout(100);
-      await h.tab.evaluate(() => { document.getElementById("total-A").textContent = "합계 24000원"; });
+      await duringTurn(turn, async () => {
+        await waitToolCall(h, "find_clickables");
+        await h.tab.evaluate(() => { document.getElementById("total-A").textContent = "합계 24000원"; });
+      });
       const r = await turn;
       const c = lastTool(r, "click_element");
       expect(c && String(c.error ?? "").includes("다시 찾으세요"), `막힘(${JSON.stringify(c)})`);
@@ -433,8 +439,10 @@ ${Array.from({ length: 5 }, (_, i) => `<iframe src="${h.base2}/ad?t=${i}" style=
         });
       await h.settings({ runMode: "auto" });
       const turn = h.turn([{ tool: "find_clickables", args: {} }, { click: "긴이동", delayMs: 600 }, { text: "끝" }], { path: "/lh" });
-      for (let i = 0; i < 50 && !(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).some((t) => t.name === "find_clickables"))); i++) await h.tab.waitForTimeout(100);
-      await swap();
+      await duringTurn(turn, async () => {
+        await waitToolCall(h, "find_clickables");
+        await swap();
+      });
       let r = await turn;
       let c = lastTool(r, "click_element");
       expect(c && c.error && !r.url.includes("/go"), `찾은 뒤 바뀜(${JSON.stringify(c?.error)})`);

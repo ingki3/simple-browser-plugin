@@ -272,11 +272,6 @@ export function modelNameInfo(el: HTMLElement, max = 200): TextInfo {
   return { text: "", cut: skippedCut };
 }
 
-// 묶음(행·패널)의 접근성 이름: aria-labelledby → aria-label. 보호 영역 안이면 "".
-export function groupLabel(el: Element, max: number): string {
-  return groupLabelInfo(el, max).text;
-}
-
 export function groupLabelInfo(el: Element, max: number): TextInfo {
   if (inProtectedArea(el)) return { text: "", cut: false };
   const ref = refTextInfo(el, "aria-labelledby", max);

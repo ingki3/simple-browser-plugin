@@ -32,6 +32,126 @@ async function connect(h, { approve = true } = {}) {
 const modelSaw = (h, needle) =>
   h.sw.evaluate((n) => (globalThis.__modelReqs ?? []).some((r) => JSON.stringify(r.body).includes(n)), needle);
 
+// 가림 목록 읽기 실패 주입(#263 R6): chrome.storage.session.get이 loginSecrets 키를 읽을 때만 계속 던진다(__sessionGetFail을 끌 때까지).
+// 던지면 loginSecrets의 모듈 캐시가 채워지지 않으므로, 워커가 뜬 직후 걸어 두면 턴 전 다른 모듈의 읽기도 캐시를 채우지 못한다.
+async function failSecretReads(sw) {
+  await sw.evaluate(() => {
+    const area = chrome.storage.session;
+    const orig = area.get;
+    globalThis.__sessionGetOrig = orig;
+    globalThis.__sessionGetFails = 0;
+    globalThis.__sessionGetFail = true;
+    area.get = function (keys, ...rest) {
+      const list = keys == null ? [] : Array.isArray(keys) ? keys : typeof keys === "string" ? [keys] : Object.keys(keys);
+      if (globalThis.__sessionGetFail && list.includes("loginSecrets")) {
+        globalThis.__sessionGetFails += 1;
+        return Promise.reject(new Error("하네스 주입: 세션 저장소 읽기 실패"));
+      }
+      return orig.call(area, keys, ...rest);
+    };
+    globalThis.__sessionGetWrapped = area.get !== orig;
+  });
+}
+
+// 두 출처(서버 1·2)를 모두 자동 로그인 승인 사이트로 둔다(항목도 출처마다 하나).
+async function connectBoth(h) {
+  const UUID2 = "fedcba9876543210fedcba9876543210";
+  h.installKeePassXC({
+    entries: [
+      { url: `${h.base}/`, uuid: UUID, name: "Harness", login: USER, password: PW },
+      { url: `${h.base2}/`, uuid: UUID2, name: "Harness2", login: "bob@harness.test", password: "Harness-Pw2-5521!" },
+    ],
+    associations: { harness: "IDKEY" },
+    totp: "424242",
+  });
+  await h.sw.evaluate(async () => {
+    await chrome.storage.local.set({ keepassxcAssociation: { id: "harness", idKey: "IDKEY" } });
+  });
+  await h.settings({
+    loginSites: [
+      { origin: h.base, uuid: UUID, entryName: "Harness", totp: false },
+      { origin: h.base2, uuid: UUID2, entryName: "Harness2", totp: false },
+    ],
+  });
+}
+
+const chatAgentScenarios = [
+  {
+    name: "가림 목록을 읽지 못하면 요청을 보내지 않는다(새 워커, 주입이 이 턴에서 소비됨)",
+    // 앞 시나리오가 채운 loginSecrets 모듈 캐시가 있으면 주입한 실패가 불리지 않으므로 새 브라우저·새 워커에서 돈다.
+    isolate: true,
+    onWorker: failSecretReads,
+    async run(h) {
+      try {
+        expect(await h.sw.evaluate(() => globalThis.__sessionGetWrapped === true), "관측 실패: storage.session.get을 감싸지 못함");
+        const before = await h.sw.evaluate(() => globalThis.__sessionGetFails);
+        await h.turn([{ text: "보내면 안 됨" }], { text: "첫 요청" });
+        const after = await h.sw.evaluate(() => globalThis.__sessionGetFails);
+        // 이 턴의 warmSecrets가 실제로 저장소까지 갔어야 한다(캐시가 비어 있었다) — 아니면 시험이 아무것도 보지 않은 것.
+        expect(after > before, `관측 실패: 주입이 이 턴에서 소비되지 않음(전 ${before}, 후 ${after})`);
+        const reqs = await h.sw.evaluate(() => (globalThis.__modelReqs ?? []).length);
+        expect(reqs === 0, `요청을 보내지 않음(${reqs})`);
+        const text = await h.panel.locator("body").innerText();
+        expect(text.includes("자동 로그인 가림 목록을 읽지 못해 요청을 보내지 않았습니다"), `오류 안내(${text.slice(-300)})`);
+        expect(!text.includes("보내면 안 됨"), "답 없음");
+        // 원복한 뒤 다음 요청은 보낸다(실패가 캐시에 남지 않는다).
+        await h.sw.evaluate(() => {
+          globalThis.__sessionGetFail = false;
+        });
+        await h.turn([{ text: "이번엔 보냄" }], { noReload: true, text: "둘째 요청" });
+        const n = await h.sw.evaluate(() => (globalThis.__modelReqs ?? []).length);
+        expect(n === 1 && (await h.panel.locator("body").innerText()).includes("이번엔 보냄"), `원복 뒤 요청(${n})`);
+      } finally {
+        await h.sw.evaluate(() => {
+          globalThis.__sessionGetFail = false;
+          if (globalThis.__sessionGetOrig) chrome.storage.session.get = globalThis.__sessionGetOrig;
+        });
+      }
+    },
+  },
+  {
+    name: "사용자 글에 넣은 로그인 값이 있으면 기록에 넣기 전에 가리고 요청에도 보내지 않는다",
+    pages: { "/login": loginPage() },
+    async run(h) {
+      await connect(h);
+      const r1 = await h.turn([findF, { signIn: "password" }, { text: "로그인함" }], { path: "/login" });
+      expect(r1.out === `로그인됨 ${USER} / ${PW}`, `먼저 자동 로그인(out='${r1.out}')`);
+      const mark = h.logs.length;
+      await h.turn([{ text: "확인함" }], { noReload: true, text: `비밀번호가 ${PW} 맞는지 봐 줘` });
+      const turnLogs = h.logs.slice(mark);
+      // 기록에 넣는 자리(사용자 요청 문맥)에서 가렸다 — 마지막 거르기(모델 요청)가 대신 가린 것이 아니다.
+      expect(turnLogs.some((l) => l.includes("[SBP login:masked]") && l.includes("사용자 요청 문맥에서")), `기록에 넣기 전에 가림(${turnLogs.filter((l) => l.includes("login:")).join(" | ")})`);
+      expect(!turnLogs.some((l) => l.includes("[SBP login:masked]") && l.includes("모델 요청에서")), "기록에 원문이 남지 않아 마지막 거르기가 가릴 것이 없다");
+      const asked = await h.sw.evaluate(() => JSON.stringify(globalThis.__modelReqs.at(-1).body.messages.filter((m) => m.role === "user")));
+      expect(asked.includes("[가린 값]") && asked.includes("맞는지 봐 줘"), "요청 글은 가린 꼴로 간다");
+      await h.turn([{ text: "셋째" }], { noReload: true, text: "고마워" });
+      expect(!(await modelSaw(h, PW)), "비밀번호가 어느 모델 요청에도 없다(다음 요청의 기록 포함)");
+    },
+  },
+  {
+    name: "가린 적 있는 대화에서는 다른 승인 사이트도 자동 로그인하지 않고 묻는다",
+    pages: { "/login": loginPage() },
+    pages2: { "/login": loginPage() },
+    async run(h) {
+      await connectBoth(h);
+      const r1 = await h.turn([findF, { signIn: "password" }, describe], { path: "/login" });
+      const d = lastTool(r1, "describe_page");
+      expect(d && JSON.stringify(d).includes("[가린 값]"), "앞 턴 관측 결과에서 값을 가림(이 대화는 가린 적 있음)");
+      let summary = "";
+      const r2 = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        server: 2,
+        onCard: async (card) => {
+          summary = await card.locator(".tool-card-summary").innerText();
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(r2.cards === 1 && summary.includes("페이지가 넣은 로그인 정보를 화면에 다시 보여 줌"), `카드로 묻고 이유를 보인다(cards=${r2.cards}, '${summary}')`);
+      expect((await h.tab.locator("input[type=password]").inputValue()) === "", "둘째 사이트에는 넣지 않음");
+    },
+  },
+];
+
 export default [
   {
     name: "승인한 사이트: 카드 없이 넣고 제출하며, 화면에 다시 보인 값은 모델에 가지 않는다",
@@ -316,4 +436,5 @@ export default [
       expect(r.out === `로그인됨 ${USER} / ${PW}`, `값이 들어가 제출됨(out='${r.out}')`);
     },
   },
+  ...chatAgentScenarios,
 ];
