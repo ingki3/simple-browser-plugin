@@ -56,7 +56,7 @@ function startBridge(secret) {
 }
 
 // 승인 질문 시나리오의 준비: 켜기·질문 설정·다리·초기화(elicitation 지원 여부는 capabilities로).
-async function askReady(h, { askApproval = true, capabilities = { elicitation: {} }, version = "2025-11-25" } = {}) {
+export async function askReady(h, { askApproval = true, capabilities = { elicitation: {} }, version = "2025-11-25" } = {}) {
   await ask(h, { kind: "mcp_set", enabled: true });
   await ask(h, { kind: "mcp_set", askApproval });
   const secret = (await ask(h, { kind: "mcp_secret" })).data;
