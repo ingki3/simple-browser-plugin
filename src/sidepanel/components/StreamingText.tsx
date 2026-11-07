@@ -10,7 +10,8 @@ export function StreamingText({ text, streaming }: Props) {
   return (
     <div className="streaming-text markdown-body">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        // 물결표 하나(17~20억)는 글자 그대로, 두 개(~~취소~~)만 취소선(#254). remark-gfm 기본값은 하나도 취소선이다.
+        remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
         components={{
           // 외부 링크는 새 탭에서 열기.
           a: ({ href, children, ...rest }) => (
