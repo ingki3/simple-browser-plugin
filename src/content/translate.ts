@@ -11,6 +11,7 @@ import {
   isShadowRoot,
   type Root,
 } from "./docs";
+import { inProtectedArea } from "./modelText";
 
 // 조상 전체를 본다. 코드 블록은 <pre><span>…</span></pre>처럼 하이라이트 span 안에
 // 텍스트가 있어 부모 태그만 보면 걸러지지 않고, 블록 단위로 묶이면 수천 자짜리
@@ -82,6 +83,40 @@ function isAlreadyTranslated(node: Text): boolean {
   return applied !== undefined && applied === node.data;
 }
 
+// 이 Text가 #43 보호 영역(편집 호스트 안 전부 — contenteditable="false" 섬 포함 —, input·textarea·select, designMode 문서,
+// 숨김) 안인지(#256). 판정은 찾기·실행 도구와 같은 inProtectedArea 하나로 하고, Text에서 시작하는 두 경로를 모두 본다:
+// slot에 직접 배정된 Text는 그 slot(그림자 트리 쪽 조상), 그리고 DOM 부모(부모가 shadow root면 그 host). 하나라도 보호면 보호.
+// 부모를 찾지 못하면 보호로 본다(덜 보내는 쪽).
+function textProtected(text: Text): boolean {
+  const slot = text.assignedSlot;
+  if (slot && inProtectedArea(slot)) return true;
+  let parent: Element | null = text.parentElement;
+  if (!parent) {
+    const node = text.parentNode;
+    parent = node && isShadowRoot(node) ? node.host : null;
+  }
+  if (!parent) return true;
+  return inProtectedArea(parent);
+}
+
+// 번역해도 되는 Text인지. 처음 훑기와 관찰 큐 진입이 같은 판정을 쓴다(#256 — 예전엔 두 벌이라 관찰 쪽에 숨김 검사가 빠져 있었다).
+// 이미 번역했는지·같은 수집에서 본 노드인지는 부르는 쪽이 따로 본다.
+function translatable(text: Text): boolean {
+  if (!text.data.trim()) return false;
+  const parent = text.parentElement;
+  if (!parent) return false;
+  if (parent.closest(SKIP_SELECTOR)) return false;
+  if (parent.closest("[aria-hidden='true']")) return false;
+  if (!styleVisible(parent)) return false;
+  return !textProtected(text);
+}
+
+// 보낼·쓸 단위인지: 유닛의 노드가 하나라도 보호 영역이 됐으면 그 유닛은 통째로 보내지도 쓰지도 않는다(#256 — 응답·배치를
+// 기다리는 사이 편집 가능해진 경우. 일부만 보내면 편집 글자의 문맥이 섞이고, 유닛을 다시 짜지는 않는다).
+function unitUnprotected(unit: Unit): boolean {
+  return !unit.nodes.some(textProtected);
+}
+
 // 개별 노드는 한 글자(드롭캡)나 기호일 수 있으므로 의미 판정은 블록 단위에서 한다.
 function collectTextNodes(root: Node, seen = new Set<Text>()): Text[] {
   const results: Text[] = [];
@@ -91,13 +126,7 @@ function collectTextNodes(root: Node, seen = new Set<Text>()): Text[] {
       const text = node as Text;
       if (seen.has(text)) return NodeFilter.FILTER_REJECT;
       if (isAlreadyTranslated(text)) return NodeFilter.FILTER_REJECT;
-      if (!text.data.trim()) return NodeFilter.FILTER_REJECT;
-      const parent = text.parentElement;
-      if (!parent) return NodeFilter.FILTER_REJECT;
-      if (parent.closest(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
-      if (parent.closest("[aria-hidden='true']")) return NodeFilter.FILTER_REJECT;
-      if (!styleVisible(parent)) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
+      return translatable(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     },
   });
 
@@ -248,6 +277,8 @@ function markDone(unit: Unit): void {
 function applyUnit(unit: Unit, raw: string): boolean {
   // 수집 이후 페이지가 텍스트를 바꿨으면 건너뜀. 옵저버가 새 텍스트로 다시 큐잉한다.
   if (unit.nodes.some((node, i) => node.data !== unit.originals[i])) return false;
+  // 응답을 기다리는 사이 편집 영역이 됐으면 쓰지 않는다(#256 — 처리 완료로도 표시하지 않음).
+  if (!unitUnprotected(unit)) return false;
   if (!raw.trim()) {
     // 빈 응답: 원문 유지하되 "처리 완료"로 마킹해야 재큐잉/무한 재시도를 막음.
     markDone(unit);
@@ -287,6 +318,9 @@ async function translateBatchWithRetry(
   depth = 0,
 ): Promise<number> {
   if (!batch.length || gen !== generation) return 0;
+  // 보내기 직전(첫 배치·나머지 배치·반으로 나눈 재시도·다시 요청 모두 여기를 지난다)에 다시 본다(#256).
+  batch = batch.filter(unitUnprotected);
+  if (!batch.length) return 0;
   let translated: string[];
   try {
     translated = await requestTranslation(batch.map((u) => u.source), targetLang);
@@ -378,10 +412,7 @@ function scheduleObserver(targetLang: string): void {
 
   const enqueueText = (node: Text) => {
     if (isAlreadyTranslated(node) || queuedNodes.has(node)) return;
-    const parent = node.parentElement;
-    if (!parent || parent.closest(SKIP_SELECTOR)) return;
-    if (parent.closest("[aria-hidden='true']")) return;
-    if (!node.data.trim()) return;
+    if (!translatable(node)) return;
     queuedNodes.add(node);
     queue.push(node);
   };
