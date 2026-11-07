@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { FieldHelp } from "./FieldHelp";
-import { useSyncedDraft } from "../hooks/syncHelpers";
+import { useSyncedDraft } from "../../sidepanel/hooks/syncHelpers";
 import type { Settings, SettingsPatch } from "@/lib/messages";
 import {
   VOICE_DEFAULT_MODELS,

@@ -1,7 +1,7 @@
 import { FieldHelp } from "./FieldHelp";
 import { useEffect, useState } from "react";
 import { MAX_LINKS, MAX_PURPOSE, SAVED_PAGES_KEY, templateText, type SavedLink } from "@/lib/savedPages";
-import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
+import { useLatestGate, useStorageKeys } from "../../sidepanel/hooks/syncHelpers";
 
 interface Props {
   enabled: boolean;

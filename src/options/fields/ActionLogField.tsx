@@ -1,7 +1,7 @@
 import { FieldHelp } from "./FieldHelp";
 import { useEffect, useState } from "react";
 import { ACTION_LOG_KEY, READ_RECIPES_KEY } from "@/lib/messages";
-import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
+import { useLatestGate, useStorageKeys } from "../../sidepanel/hooks/syncHelpers";
 
 interface Props {
   enabled: boolean;
