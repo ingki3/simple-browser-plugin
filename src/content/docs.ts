@@ -102,11 +102,3 @@ export function describeRoot(root: Root): string {
   }
 }
 
-export function findElementByAttr(attr: string, value: string): HTMLElement | null {
-  const selector = `[${attr}="${CSS.escape(value)}"]`;
-  for (const root of getAccessibleRoots()) {
-    const el = root.querySelector<HTMLElement>(selector);
-    if (el) return el;
-  }
-  return null;
-}

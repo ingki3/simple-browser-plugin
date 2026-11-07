@@ -7,7 +7,6 @@ import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
 import type { ReadHint } from "./readRecipe";
 import type { LoginSite } from "./loginPolicy";
-import type { LoginSiteOp, ManualSiteOp } from "./settingsOps";
 
 export type ToolName =
   | "describe_page"
@@ -453,18 +452,6 @@ export interface ContentResponse<T = unknown> {
   // 대상 확인의 row_drift가 만든 대화별 기준(#233). 백그라운드가 그 오류를 본 대화에만 남긴다.
   rebase?: { id: string; nonce: string };
 }
-
-export type RuntimeMsg =
-  | { kind: "settings_updated" }
-  // 바꾼 필드만 최신 설정에 합쳐 저장(#99). 백그라운드가 차례로 처리해 겹친 저장이 서로 덮지 않는다.
-  | { kind: "settings_patch"; patch: SettingsPatch }
-  | { kind: "manual_site_op"; op: ManualSiteOp }
-  | { kind: "open_settings"; section?: string; windowId?: number }
-  | { kind: "login_site_op"; op: LoginSiteOp }
-  // 설정 화면의 동작 기록 개수 보기·지우기. 쓰기를 백그라운드 한곳으로 모은다.
-  | { kind: "action_log_count" }
-  | { kind: "action_log_clear" }
-  | { kind: "translate_text_batch"; texts: string[]; targetLang: string };
 
 export interface Settings {
   // 모델 제공자(#97). OpenRouter의 키·모델은 아래 openRouterApiKey·model(예전 설정 그대로), 다른 제공자는 apiKeys·providerModels.

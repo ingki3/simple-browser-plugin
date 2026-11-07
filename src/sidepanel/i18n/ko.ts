@@ -109,4 +109,3 @@ export const KO = {
   thinkingLabel: "생각 중…",
 };
 
-export type KoKey = keyof typeof KO;
