@@ -1,5 +1,5 @@
 // 모델 제공자(#97): 고른 제공자의 엔드포인트·키·요청 형식으로 보낸다.
-import { expect, okResult } from "../lib.mjs";
+import { expect, okResult, waitUntil } from "../lib.mjs";
 
 const scenarios = [
   {
@@ -153,15 +153,15 @@ const scenarios = [
 
 // 토큰 사용량(#126): 디버그 타임라인의 model:usage(호출마다)·turn:usage(턴 합계와 대화 누계) 줄.
 const USAGE = { prompt_tokens: 1200, completion_tokens: 34, prompt_tokens_details: { cached_tokens: 1000 }, completion_tokens_details: { reasoning_tokens: 5 } };
+// 턴 합계 줄이 n개 나올 때까지(3초) 기다린다. 안 되면 지금 줄 수를 담아 실패한다(호출처는 줄 내용을 다시 확인).
 async function usageLines(h, n = 1, ms = 3000) {
-  const until = Date.now() + ms;
-  let lines = [];
-  while (Date.now() < until) {
-    lines = h.logs.filter((l) => l.includes("[SBP turn:usage]"));
-    if (lines.length >= n) break;
-    await h.panel.waitForTimeout(100);
-  }
-  return { calls: h.logs.filter((l) => l.includes("[SBP model:usage]")), turns: lines };
+  const turnLines = () => h.logs.filter((l) => l.includes("[SBP turn:usage]"));
+  const turns = await waitUntil(() => turnLines().length >= n && turnLines(), {
+    timeoutMs: ms,
+    label: `턴 사용량 줄 ${n}개`,
+    detail: () => `지금 ${turnLines().length}개`,
+  });
+  return { calls: h.logs.filter((l) => l.includes("[SBP model:usage]")), turns };
 }
 usageScenarios();
 function usageScenarios() {

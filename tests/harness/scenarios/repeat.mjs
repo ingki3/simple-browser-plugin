@@ -1,6 +1,6 @@
 // 반복 작업(#138): 등록은 실행 방식과 관계없이 늘 카드, 확인 요청에는 화면 글자만(입력값·편집 영역 없음), 조건이 맞으면
 // 띠의 "이어서 진행"으로 새 대화를 저장된 작업 내용으로 시작(확인 결과의 이유는 모델에 보내지 않음), 막히면 멈춤.
-import { expect } from "../lib.mjs";
+import { expect, waitUntil } from "../lib.mjs";
 
 // src/lib/messages.ts의 PORT_NAME.
 const PORT = "chat";
@@ -25,14 +25,15 @@ async function tasks(h) {
   return h.panel.evaluate(async () => (await chrome.runtime.sendMessage({ kind: "repeat_list" })).data);
 }
 
-async function waitFor(h, pred, what, ms = 10_000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    const list = await tasks(h);
-    if (pred(list)) return list;
-    await h.panel.waitForTimeout(250);
-  }
-  throw new Error(`${what}: 시간 안에 되지 않았습니다(${JSON.stringify((await tasks(h)).map((t) => [t.status, t.lastCheck?.verdict]))})`);
+// 작업 목록이 pred를 만족할 때까지 기다려 그 목록을 돌려준다. 안 되면 작업 상태를 담아 실패한다.
+function waitFor(h, pred, what, ms = 10_000) {
+  return waitUntil(
+    async () => {
+      const list = await tasks(h);
+      return pred(list) && list;
+    },
+    { timeoutMs: ms, intervalMs: 250, label: what, detail: async () => JSON.stringify((await tasks(h)).map((t) => [t.status, t.lastCheck?.verdict])) },
+  );
 }
 
 async function register(h, opts = {}) {
