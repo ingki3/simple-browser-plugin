@@ -6,6 +6,8 @@
 // 이 모듈과 가드(content/trustedClick.ts)는 그 틈을 줄이고, 누른 결과가 승인한 대상이 아니면 막거나 실패로 알리는
 // 다중 방어다: 누르기 직전 같은 문서·같은 대상·같은 자리 확인, top 문서에서 다른 요소로 간 입력 차단, 다른 프레임의 입력 차단.
 
+import { clip } from "./actionTarget.ts";
+
 // 가드가 보고 막는 실제 입력 이벤트. 마우스·포인터의 누르기·떼기·클릭 계열만(hover 계열은 활성화를 일으키지 않는다).
 export const GUARDED_EVENTS = [
   "pointerdown",
@@ -186,10 +188,6 @@ export function describePressedFailure(what: string): string {
     `${what}.` +
     " 누르기 단계의 페이지 처리는 이미 일어났을 수 있습니다. 함께 보낸 effect와 지금 화면을 먼저 보고, 원하는 결과가 이미 있으면 다시 누르지 마세요. 끝나지 않았을 때만 다시 찾아 시도하세요."
   );
-}
-
-function clip(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
 // 막힘 진단 줄(디버그 로그 input:blocked). name은 모델에 준 대상 이름(modelName).
