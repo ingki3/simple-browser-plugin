@@ -1,7 +1,7 @@
 // 텔레그램 연동(#139): 서비스 워커의 fetch로 api.telegram.org를 흉내 낸다(받을 업데이트·보낸 메시지를 전역에 둔다).
 // 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 '처음에 승인 받고
 // 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만.
-import { ask, expect } from "../lib.mjs";
+import { ask, expect, waitUntil } from "../lib.mjs";
 
 const TOKEN = "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const CHAT = 7001;
@@ -89,28 +89,22 @@ export async function press(h, data, { chat = CHAT, from = chat, poll = true } =
 
 export const asks = (h) => h.sw.evaluate(() => (globalThis.__tg.asks ?? []).map((b) => ({ text: b.text, yes: b.reply_markup.inline_keyboard[0][0].callback_data, no: b.reply_markup.inline_keyboard[0][1].callback_data })));
 
-export async function waitAsk(h, n = 1, ms = 15_000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    const a = await asks(h);
-    if (a.length >= n) return a;
-    await h.panel.waitForTimeout(200);
-  }
-  return asks(h);
-}
+// read()가 n개 이상을 돌려줄 때까지 기다려 그 목록을 돌려준다(#262 — 예전엔 모자라도 그대로 돌려줬다). 안 되면 지금 개수를 담아 실패.
+const waitCount = (read, n, ms, intervalMs, what) =>
+  waitUntil(
+    async () => {
+      const list = await read();
+      return list.length >= n && list;
+    },
+    { timeoutMs: ms, intervalMs, label: `텔레그램 ${what} ${n}개`, detail: async () => `지금 ${(await read()).length}개` },
+  );
+
+export const waitAsk = (h, n = 1, ms = 15_000) => waitCount(() => asks(h), n, ms, 200, "승인 질문");
 
 // 텔레그램으로 보낸 글 중 승인 질문이 아닌 것(최종 답·안내).
 export const replies = (h) => h.sw.evaluate(() => globalThis.__tg.sent.filter((m) => !m.reply_markup).map((m) => m.text));
 
-async function waitReply(h, n = 1, ms = 20_000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    const r = await replies(h);
-    if (r.length >= n) return r;
-    await h.panel.waitForTimeout(250);
-  }
-  return replies(h);
-}
+const waitReply = (h, n = 1, ms = 20_000) => waitCount(() => replies(h), n, ms, 250, "답");
 
 const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
 
@@ -161,15 +155,7 @@ async function moveWorkTabs(h) {
 
 const tabTitles = (h) => h.sw.evaluate(async () => (await chrome.tabs.query({})).map((t) => t.title).join("|"));
 
-async function waitSent(h, n, ms = 15_000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    const s = await sent(h);
-    if (s.length >= n) return s;
-    await h.panel.waitForTimeout(250);
-  }
-  return sent(h);
-}
+const waitSent = (h, n, ms = 15_000) => waitCount(() => sent(h), n, ms, 250, "보낸 글");
 
 export default [
   {
@@ -208,9 +194,7 @@ export default [
         globalThis.__steps = [{ text: "붙잡은 답" }];
       });
       await deliver(h, "느린 답 요청");
-      const until = Date.now() + 15_000;
-      while (Date.now() < until && !(await h.sw.evaluate(() => globalThis.__tg.holding))) await h.panel.waitForTimeout(200);
-      expect(await h.sw.evaluate(() => globalThis.__tg.holding), "답을 보내는 중");
+      await waitUntil(() => h.sw.evaluate(() => globalThis.__tg.holding), { timeoutMs: 15_000, intervalMs: 200, label: "답을 보내는 중" });
       const during = await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")));
       expect(during, "보내는 동안 keepalive 알람");
       const pings = () => h.sw.evaluate(() => globalThis.__pings);
@@ -225,24 +209,12 @@ export default [
       });
       const r = await waitReply(h, 1);
       expect(r.includes("붙잡은 답"), `답(${JSON.stringify(r)})`);
-      let after = true;
-      const end = Date.now() + 5000;
-      while (Date.now() < end && after) {
-        after = await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")));
-        if (after) await h.panel.waitForTimeout(200);
-      }
-      expect(!after, "끝나면 keepalive를 놓음");
+      await waitUntil(async () => !(await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")))), { timeoutMs: 5000, intervalMs: 200, label: "끝나면 keepalive를 놓음" });
       const released = await pings();
       await h.panel.waitForTimeout(21_000);
       expect((await pings()) === released, "놓은 뒤에는 호출하지 않음");
       // 오래 열어 둔 설정 화면이 최근 요청(recent)을 다시 읽는다.
-      let shown = "";
-      const seen = Date.now() + 5000;
-      while (Date.now() < seen && !shown.includes("느린 답 요청")) {
-        shown = await opts.locator("body").innerText();
-        if (!shown.includes("느린 답 요청")) await h.panel.waitForTimeout(200);
-      }
-      expect(shown.includes("느린 답 요청"), "설정 화면의 최근 요청");
+      await waitUntil(async () => (await opts.locator("body").innerText()).includes("느린 답 요청"), { timeoutMs: 5000, intervalMs: 200, label: "설정 화면의 최근 요청" });
     },
   },
   {
@@ -523,11 +495,16 @@ export default [
       });
       await h.panel.waitForTimeout(300);
       await deliver(h, "다음 요청");
-      const next = await waitReply(h, 1, 5000);
-      await h.sw.evaluate(() => {
-        globalThis.__tg.holdAsk = null;
-        globalThis.__tg.releaseAsk();
-      });
+      let next;
+      try {
+        next = await waitReply(h, 1, 5000);
+      } finally {
+        // 기다림이 실패해도 붙잡은 질문 응답을 놓는다(#262 — 예전엔 기다림이 실패하지 않아 늘 여기까지 왔다).
+        await h.sw.evaluate(() => {
+          globalThis.__tg.holdAsk = null;
+          globalThis.__tg.releaseAsk();
+        });
+      }
       expect(next.includes("바로 받음"), `멈춘 뒤 바로 다음 요청(${JSON.stringify(next)})`);
 
       const off = await ask(h, { kind: "telegram_set_ask", on: false });
