@@ -157,6 +157,36 @@ const tabTitles = (h) => h.sw.evaluate(async () => (await chrome.tabs.query({}))
 
 const waitSent = (h, n, ms = 15_000) => waitCount(() => sent(h), n, ms, 250, "보낸 글");
 
+// 원격 요청에서 쓰지 않는 도구(#263 단계 0 — chatAgent.ts REMOTE_BLOCKED_TOOLS, remember_page는 위 시나리오가 따로 본다).
+// 인자는 해석을 통과하는 가짜 값이다(차단은 해석 뒤·승인 앞에서 한다). telegram·mcp 시나리오가 함께 쓴다.
+export const remoteBlockedCalls = (h) => [
+  { tool: "sign_in", args: { id: "f0-blocked" } },
+  { tool: "open_saved_link", args: { id: "saved-blocked" } },
+  {
+    tool: "schedule_repeat_task",
+    args: { title: "막힘 확인", url: `${h.base2}/watch`, check: "열렸는지", then: "알려 줘", intervalMinutes: 30 },
+  },
+];
+
+// 한 원격 요청(턴)의 결과를 본다: 차단 도구는 승인 경로(카드·원격 질문)에 닿기 전에 취소된다.
+// - 모델에 간 결과: remote_needs_approval(원격 안내 note 포함), 마지막 요청은 도구 없는 마무리(tool_choice none)
+// - 카드 대기 가로채기(remote:refuse)·반복 작업 대기(tool:awaiting_repeat)·로그인 정보 조회 로그가 없다(그 경로로 갔다면 같은 오류라도 이 줄이 남는다)
+// - 패널에 카드 없음, 반복 작업·이동 없음
+// from: 턴 전의 { logs, hits } 길이(h.logs·h.hits는 하네스가 시나리오 사이에 비우지 않으므로 이 턴 몫만 본다).
+export async function checkRemoteBlocked(h, tool, from) {
+  const t = await h.sw.evaluate((name) => [...globalThis.__toolLog].reverse().find((x) => x.name === name) ?? null, tool);
+  expect(t && t.error === "remote_needs_approval" && t.result === undefined && String(t.note ?? "").includes("원격(텔레그램·MCP)"), `${tool} 원격 차단 결과(${JSON.stringify(t)})`);
+  const last = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1)?.body?.tool_choice ?? null);
+  expect(last === "none", `${tool} 뒤 마무리 요청(${JSON.stringify(last)})`);
+  const lines = h.logs.slice(from.logs);
+  const bad = lines.filter((l) => /\[SBP (remote:refuse|remote:ask|remote:task_needed|tool:awaiting_[a-z]+|tool:auto_approved|tool:remote_approved|tool:task_run|tool:handoff|login:)/.test(l));
+  expect(!bad.length, `${tool}: 승인·실행 경로에 닿지 않음(${bad.join(" | ")})`);
+  expect((await h.panel.locator(".tool-pending").count()) === 0, `${tool}: 패널 카드 없음`);
+  const tasks = await h.sw.evaluate(async () => (await chrome.storage.local.get("repeatTasks")).repeatTasks ?? []);
+  expect(!tasks.length, `${tool}: 반복 작업 없음(${tasks.length})`);
+  expect(!h.hits.slice(from.hits).some((x) => x.includes("/watch")), `${tool}: 확인할 페이지를 열지 않음`);
+}
+
 export default [
   {
     name: "명령 응답(#145): 429로 기다리는 중 연결을 끊으면 다시 보내지 않는다",
@@ -352,6 +382,27 @@ export default [
       const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
       expect(log[0]?.startsWith("remember_page:") && !log[0].endsWith(":ok"), `거절(${log.join(", ")})`);
       expect((await h.panel.locator(".page-offer").count()) === 0, "패널에 저장 카드 없음");
+    },
+  },
+  {
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
+    pages2: { "/": `<title>shop</title><p>상품</p>` },
+    async run(h) {
+      await connect(h);
+      await startTabAt(h, `${h.base2}/?q=1`);
+      let n = 0;
+      for (const call of remoteBlockedCalls(h)) {
+        await h.sw.evaluate((c) => {
+          globalThis.__steps = [c, { text: "못 함" }];
+          globalThis.__toolLog = [];
+        }, call);
+        const from = { logs: h.logs.length, hits: h.hits.length };
+        await deliver(h, `${call.tool} 해 줘`);
+        n += 1;
+        await waitSent(h, n, 20_000);
+        await checkRemoteBlocked(h, call.tool, from);
+      }
+      expect((await asks(h)).length === 0, "텔레그램 승인 질문 없음");
     },
   },
   {

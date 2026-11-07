@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ask, expect, waitUntil } from "../lib.mjs";
-import { asks as tgAsks, connect as tgConnect, deliver as tgDeliver, press as tgPress, replies as tgReplies, waitAsk as tgWaitAsk } from "./telegram.mjs";
+import { asks as tgAsks, checkRemoteBlocked, connect as tgConnect, deliver as tgDeliver, press as tgPress, remoteBlockedCalls, replies as tgReplies, waitAsk as tgWaitAsk } from "./telegram.mjs";
 
 const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/sbp-mcp.mjs");
 
@@ -125,6 +125,31 @@ const FORM192 = `<title>신청</title>
 <div id="out"></div>`;
 
 export default [
+  {
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task를 쓰지 않는다(물을 수 있어도 elicitation·패널 카드 없음)",
+    async run(h) {
+      const bridge = await askReady(h);
+      try {
+        let id = 2;
+        for (const call of remoteBlockedCalls(h)) {
+          await h.sw.evaluate((c) => {
+            globalThis.__steps = [c, { text: "못 함" }];
+            globalThis.__toolLog = [];
+          }, call);
+          const from = { logs: h.logs.length, hits: h.hits.length };
+          bridge.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_task", arguments: { request: `${call.tool} 해 줘` } } });
+          const res = await bridge.reply(id, 30_000);
+          expect(res?.result && !res.result.isError, `${call.tool} 요청 답(${JSON.stringify(res).slice(0, 300)})`);
+          await checkRemoteBlocked(h, call.tool, from);
+          id += 1;
+        }
+        expect(!bridge.requests.some((r) => r.method === "elicitation/create"), `elicitation 없음(${bridge.requests.map((r) => r.method).join(",")})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
   {
     name: "원격 입력 질문(#192): 개인정보 칸 입력을 elicitation으로 묻고(페이지 출처·모델용 칸 이름·넣을 값, 사유는 고정 문구), 승인하면 입력한다",
     pages: { "/form192": FORM192 },
