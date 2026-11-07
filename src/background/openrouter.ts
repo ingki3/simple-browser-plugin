@@ -25,6 +25,7 @@ import { functionDeclarations } from "./tools/declarations";
 import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
 import { registerRepeatTask } from "./repeatTasks";
 import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
+import type { ToolPreview } from "./tools/dispatcher";
 import { takeRebaseOffers, type RebaseOffer } from "./tools/rowRebase";
 import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
 import { settlePopups, watchNewTabs } from "./popups";
@@ -93,8 +94,6 @@ type RecordRun = (
   summary: string,
   extra?: { changed?: boolean; cancelled?: boolean },
 ) => void;
-
-type ToolPreview = Awaited<ReturnType<typeof buildToolPreview>>;
 
 // 손 넘기기(클릭) 동안 지금 도구 탭이 여는 창 감시(#81).
 type HandoffPopups = { stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> };

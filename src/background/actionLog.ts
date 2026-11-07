@@ -12,6 +12,7 @@ import { getSettings } from "./storage";
 import type { TurnTab } from "./tools/handlers";
 import { debugLog } from "./debug";
 import { clearPendingReads, readRecipeCount } from "./readRecipes";
+import { enqueue, turnKey } from "./actionQueue";
 
 // 승인 카드를 띄울 때 정한 대상과 페이지를 실행 결과가 나올 때까지 들고 있는다.
 // callId는 모델이 정해 패널(대화)끼리 겹칠 수 있으므로, 턴마다 새로 만드는 TurnTab 객체와 함께 키로 쓴다.
@@ -25,17 +26,6 @@ interface Pending {
 
 const MAX_PENDING = 20;
 const pending = new Map<string, Pending>();
-const turnIds = new WeakMap<TurnTab, string>();
-
-// 턴마다 하나인 식별자(같은 TurnTab 객체면 같은 값). 읽기 레시피도 턴 단위로 모을 때 쓴다.
-export function turnKey(turnTab: TurnTab): string {
-  let id = turnIds.get(turnTab);
-  if (!id) {
-    id = crypto.randomUUID();
-    turnIds.set(turnTab, id);
-  }
-  return id;
-}
 
 function keyOf(turnTab: TurnTab, callId: string): string {
   return `${turnKey(turnTab)}:${callId}`;
@@ -57,16 +47,6 @@ export function notePendingAction(
     if (oldest === undefined) break;
     pending.delete(oldest);
   }
-}
-
-// 쓰기를 한 줄로 세운다(읽고-고쳐-쓰는 사이에 다른 쓰기가 끼면 항목이 사라진다).
-let writeChain: Promise<unknown> = Promise.resolve();
-
-// 동작 기록과 읽기 레시피가 같이 쓴다(지우기와 쓰기의 순서를 맞추려고).
-export function enqueue<T>(job: () => Promise<T>): Promise<T> {
-  const next = writeChain.then(job, job);
-  writeChain = next.catch(() => undefined);
-  return next;
 }
 
 export function finishAction(

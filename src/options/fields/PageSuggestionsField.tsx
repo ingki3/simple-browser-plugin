@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { displayPath, editablePath } from "@/lib/pageSuggest";
-import { useSuggestionRules } from "../hooks/useSuggestionRules";
-import { SuggestionForm } from "./SuggestionForm";
+import { useSuggestionRules } from "../../sidepanel/hooks/useSuggestionRules";
+import { SuggestionForm } from "../../sidepanel/components/SuggestionForm";
 
 interface Props {
   enabled: boolean;

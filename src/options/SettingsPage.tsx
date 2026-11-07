@@ -1,20 +1,20 @@
-import { McpField } from "../sidepanel/components/McpField";
-import { TelegramField } from "../sidepanel/components/TelegramField";
-import { RepeatTasksField } from "../sidepanel/components/RepeatTasksField";
+import { McpField } from "./fields/McpField";
+import { TelegramField } from "./fields/TelegramField";
+import { RepeatTasksField } from "./fields/RepeatTasksField";
 import { useEffect, useRef, useState } from "react";
 import { SETTINGS_SECTIONS, SETTINGS_SECTION_LABELS, settingsSectionOf, type SettingsSection } from "@/lib/settingsSections";
 import { useLatestGate, useStorageKeys, useSyncedDraft } from "../sidepanel/hooks/syncHelpers";
 import { GOOGLE_AUTH_VERSION_KEY } from "@/lib/googleAuthKey";
-import { ActionLogField } from "../sidepanel/components/ActionLogField";
-import { RunModeField } from "../sidepanel/components/RunModeField";
-import { RememberPagesField } from "../sidepanel/components/RememberPagesField";
-import { PageSuggestionsField } from "../sidepanel/components/PageSuggestionsField";
-import { TrustedInputField } from "../sidepanel/components/TrustedInputField";
-import { ManualSitesField } from "../sidepanel/components/ManualSitesField";
-import { LoginSitesField } from "../sidepanel/components/LoginSitesField";
-import { ShowThinkingField } from "../sidepanel/components/ShowThinkingField";
-import { QuickThinkingField } from "../sidepanel/components/QuickThinkingField";
-import { CsvMaxCharsField } from "../sidepanel/components/CsvMaxCharsField";
+import { ActionLogField } from "./fields/ActionLogField";
+import { RunModeField } from "./fields/RunModeField";
+import { RememberPagesField } from "./fields/RememberPagesField";
+import { PageSuggestionsField } from "./fields/PageSuggestionsField";
+import { TrustedInputField } from "./fields/TrustedInputField";
+import { ManualSitesField } from "./fields/ManualSitesField";
+import { LoginSitesField } from "./fields/LoginSitesField";
+import { ShowThinkingField } from "./fields/ShowThinkingField";
+import { QuickThinkingField } from "./fields/QuickThinkingField";
+import { CsvMaxCharsField } from "./fields/CsvMaxCharsField";
 import { MODEL_IDS, MODEL_LABELS } from "@/lib/models";
 import { PROVIDER_LINKS } from "@/lib/providerLinks";
 import { OPENAI_DEFAULT_MODEL, OPENAI_MODEL_SUGGESTIONS } from "@/lib/providers/openai";
@@ -59,10 +59,10 @@ import {
   type SettingsPatch,
 } from "@/lib/messages";
 import { useSettings } from "../sidepanel/hooks/useSettings";
-import { FieldHelp } from "../sidepanel/components/FieldHelp";
+import { FieldHelp } from "./fields/FieldHelp";
 import { activeModel, mergeSettingsPatch } from "@/lib/settings";
 import { mergeVoicePatch } from "@/lib/voice";
-import { VoiceInputField } from "../sidepanel/components/VoiceInputField";
+import { VoiceInputField } from "./fields/VoiceInputField";
 
 const SAVE_DELAY_MS = 600;
 const CUSTOM_MODEL = "__custom__";

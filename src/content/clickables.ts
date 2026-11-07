@@ -130,10 +130,6 @@ function enclosingLinkHref(el: HTMLElement): string {
 const CONTROL_SELECTOR =
   'a[href], area[href], button, input[type=submit], input[type=image], input[type=button], [role="button"], [role="link"]';
 
-function parentAcrossShadow(el: Element): Element | null {
-  return eventParent(el);
-}
-
 // aria-labelledby가 가리키는 요소들의 글자.
 function labelledByText(el: Element): string {
   const parts: string[] = [];
@@ -169,7 +165,7 @@ function accessibleNames(el: Element): string {
 function enclosingControlTexts(el: HTMLElement): string {
   // 대상에 연결된 모든 label의 전체 글자도 본다(바깥 label[for]의 200자 뒤 '구매 확정' — 보여 주는 이름은 잘려도 판정은 전체로).
   const texts: string[] = [accessibleNames(el), connectedLabelsText(el)];
-  for (let cur = parentAcrossShadow(el); cur; cur = parentAcrossShadow(cur)) {
+  for (let cur = eventParent(el); cur; cur = eventParent(cur)) {
     const c = closestAcross(cur, CONTROL_SELECTOR);
     if (!c) break;
     // 바깥 컨트롤도 전체 글자로 본다(clickText는 200자로 자른다).

@@ -1,7 +1,5 @@
 // 승인 규칙: 자동 실행 꺼짐·켜짐, 결제 단서, 요청한 사이트 밖 이동, 늘 묻는 동작(삭제).
-import { expect, okResult } from "../lib.mjs";
-
-const findC = { tool: "find_clickables", args: {} };
+import { expect, findC, okResult } from "../lib.mjs";
 
 export default [
   {

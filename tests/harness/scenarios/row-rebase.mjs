@@ -1,8 +1,7 @@
 // 같은 대상 연속 클릭(#233): 클릭이 바꾼 행·항목 글자를 결과로 보여 주고, 그 결과를 본 다음 응답부터만 그 상태를 기준으로 쓴다
 // (같은 응답의 뒤 호출·다른 대화·기록을 비운 대화는 쓰지 못한다). 공용 기준은 다시 찾을 때만 바뀐다.
-import { expect } from "../lib.mjs";
+import { expect, findC } from "../lib.mjs";
 
-const findC = { tool: "find_clickables", args: {} };
 const findF = { tool: "find_form_fields", args: {} };
 const items = { tool: "find_clickables", args: { mode: "items" } };
 

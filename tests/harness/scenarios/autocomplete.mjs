@@ -1,8 +1,7 @@
 // 자동완성 칸(네이버 지도 길찾기와 같은 구조): 칸마다 role=combobox(aria-controls 없음), 입력하면 그 칸 묶음 안에 목록을 그리고
 // aria-expanded=true. 목록은 아래 버튼을 덮는다. 한 번에 하나씩 채우기, 칸별 선택지(listFor·nearest), 뺀 선택지 안내, 덮개 진단.
-import { expect, lastTool, okResult } from "../lib.mjs";
+import { expect, findC, lastTool, okResult } from "../lib.mjs";
 
-const findC = { tool: "find_clickables", args: {} };
 const findF = { tool: "find_form_fields", args: {} };
 
 // portal: 목록을 칸 묶음이 아니라 body 끝 div에 붙인다(구조로 주인을 정할 수 없는 변형).

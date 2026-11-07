@@ -103,31 +103,3 @@ export async function exportFile(
   };
 }
 
-export function parseActiveDocIds(url: string): {
-  spreadsheetId?: string;
-  gid?: string;
-  range?: string;
-  driveFileId?: string;
-} {
-  try {
-    const u = new URL(url);
-    if (u.hostname === "docs.google.com" || u.hostname === "sheets.google.com") {
-      const sheetMatch = /\/spreadsheets\/d\/([^/]+)/.exec(u.pathname);
-      if (sheetMatch) {
-        const frag = new URLSearchParams(u.hash.replace(/^#/, ""));
-        return {
-          spreadsheetId: sheetMatch[1],
-          gid: frag.get("gid") ?? undefined,
-          range: frag.get("range") ?? undefined,
-        };
-      }
-    }
-    if (u.hostname === "drive.google.com") {
-      const m = /\/file\/d\/([^/]+)/.exec(u.pathname);
-      if (m) return { driveFileId: m[1] };
-    }
-  } catch {
-    /* ignore */
-  }
-  return {};
-}

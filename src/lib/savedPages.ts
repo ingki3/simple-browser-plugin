@@ -182,11 +182,6 @@ export function fillLink(link: SavedLink, values: Record<string, unknown> | unde
   return `${link.template.base}${q ? `?${q}` : ""}${link.template.hash}`;
 }
 
-// 자리 없는 링크의 주소(지난 저장 항목처럼 그대로 여는 링크). 자리가 있으면 null.
-export function fixedUrl(link: SavedLink): string | null {
-  return link.slots.length ? null : fillLink(link, {});
-}
-
 // 새 링크를 넣는다. 같은 템플릿은 새 것으로 바꾸고(사용 기록은 이어 받음), 개수가 넘치면 가장 오랫동안 쓰지 않은 링크를 뺀다.
 export function addLink(list: readonly SavedLink[], entry: SavedLink): { list: SavedLink[]; evicted: SavedLink | null } {
   const key = templateText(entry.template);

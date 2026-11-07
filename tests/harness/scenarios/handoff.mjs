@@ -1,7 +1,6 @@
 // 손 넘기기(0.2.2): '직접 조작할 사이트'에서는 확장이 누르지 않고 대상을 표시해 사용자가 직접 하게 한다.
-import { expect, lastTool, okResult } from "../lib.mjs";
+import { expect, findC, lastTool, okResult } from "../lib.mjs";
 
-const findC = { tool: "find_clickables", args: {} };
 const page = `<title>H</title><main><label>출발지 <input id=dep name=dep></label>
 <button id=b style="width:160px;height:50px" onclick="document.getElementById('out').textContent='눌림 '+event.isTrusted">조회하기</button><p id=out></p></main>`;
 

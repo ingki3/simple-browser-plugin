@@ -27,7 +27,7 @@ import { withTimeout } from "@/lib/async";
 import { sensitiveUrlReason } from "@/lib/autoApprove";
 import { siteOf } from "@/lib/siteTrust";
 import { getSettings } from "./storage";
-import { enqueue } from "./actionLog";
+import { enqueue } from "./actionQueue";
 import { debugLog } from "./debug";
 import { panelTarget } from "./panelTarget";
 import { INJECT_READY_DELAYS_MS, injectContentScriptInDocument, isMissingReceiver } from "./tools/handlers";

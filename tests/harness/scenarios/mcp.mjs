@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect } from "../lib.mjs";
+import { ask, expect } from "../lib.mjs";
 import { asks as tgAsks, connect as tgConnect, deliver as tgDeliver, press as tgPress, replies as tgReplies, waitAsk as tgWaitAsk } from "./telegram.mjs";
 
 const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/sbp-mcp.mjs");
@@ -53,8 +53,6 @@ function startBridge(secret) {
   };
   return { child, port, send, reply, request, requests, stop: () => child.kill() };
 }
-
-const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
 
 // 승인 질문 시나리오의 준비: 켜기·질문 설정·다리·초기화(elicitation 지원 여부는 capabilities로).
 async function askReady(h, { askApproval = true, capabilities = { elicitation: {} }, version = "2025-11-25" } = {}) {

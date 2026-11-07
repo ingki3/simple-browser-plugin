@@ -1,7 +1,7 @@
 // 텔레그램 연동(#139): 서비스 워커의 fetch로 api.telegram.org를 흉내 낸다(받을 업데이트·보낸 메시지를 전역에 둔다).
 // 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 '처음에 승인 받고
 // 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만.
-import { expect } from "../lib.mjs";
+import { ask, expect } from "../lib.mjs";
 
 const TOKEN = "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const CHAT = 7001;
@@ -115,7 +115,6 @@ async function waitReply(h, n = 1, ms = 20_000) {
 const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
 
 const sent = (h) => h.sw.evaluate(() => globalThis.__tg.sent.map((m) => m.text));
-const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
 
 export async function connect(h) {
   await installTelegram(h);

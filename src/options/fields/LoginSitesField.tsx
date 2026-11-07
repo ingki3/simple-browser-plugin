@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { LoginSiteOp } from "@/lib/settingsOps";
-import { useLatestGate, useStorageKeys } from "../hooks/syncHelpers";
+import { useLatestGate, useStorageKeys } from "../../sidepanel/hooks/syncHelpers";
 import { hostManifest, KEEPASSXC_HOST } from "@/lib/keepassxc";
 import type { LoginSite } from "@/lib/loginPolicy";
 import { FieldHelp } from "./FieldHelp";

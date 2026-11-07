@@ -1,5 +1,5 @@
 import { RUN_MODES, type RunMode } from "@/lib/messages";
-import { KO } from "../i18n/ko";
+import { KO } from "../../sidepanel/i18n/ko";
 import { FieldHelp } from "./FieldHelp";
 
 interface Props {

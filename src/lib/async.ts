@@ -23,3 +23,14 @@ export function withTimeout<T>(
     if (onAbort) signal?.removeEventListener("abort", onAbort);
   });
 }
+
+// 작업을 한 줄로 세우는 큐를 만든다(만들 때마다 독립된 큐). 앞 작업이 실패해도 다음 작업은 실행되고,
+// 실패는 그 작업을 부른 쪽에만 전해진다. MCP·텔레그램·반복 작업 저장이 각자 하나씩 쓴다(#257).
+export function createSerial(): <T>(fn: () => Promise<T>) => Promise<T> {
+  let queue: Promise<unknown> = Promise.resolve();
+  return function serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = queue.then(fn);
+    queue = run.catch(() => {});
+    return run;
+  };
+}

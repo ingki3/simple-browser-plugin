@@ -6,9 +6,6 @@
 
 export const MCP_PROTOCOL_VERSION = 1;
 export const MCP_DEFAULT_PORT = 47615;
-// 요청 시각 허용 범위.
-export const MCP_CLOCK_SKEW_MS = 60_000;
-
 export interface McpKeys {
   extEnc: CryptoKey;
   bridgeEnc: CryptoKey;

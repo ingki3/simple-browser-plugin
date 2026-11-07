@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLatestGate } from "../hooks/syncHelpers";
+import { useLatestGate } from "../../sidepanel/hooks/syncHelpers";
 
 interface Status {
   hasToken: boolean;

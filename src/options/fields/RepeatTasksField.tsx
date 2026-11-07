@@ -1,5 +1,5 @@
 import type { RepeatTask } from "@/lib/repeatTask";
-import { useRepeatTasks } from "../hooks/useRepeatTasks";
+import { useRepeatTasks } from "../../sidepanel/hooks/useRepeatTasks";
 
 const STATUS: Record<RepeatTask["status"], string> = {
   active: "확인 중",

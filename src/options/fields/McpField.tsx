@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLatestGate, useSyncedDraft } from "../hooks/syncHelpers";
+import { useLatestGate, useSyncedDraft } from "../../sidepanel/hooks/syncHelpers";
 import { LATEST_RELEASE_URL } from "@/lib/projectLinks";
 
 interface Status {
