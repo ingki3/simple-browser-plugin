@@ -95,8 +95,8 @@ function checkedLine(t: TargetInfo): string | null {
   return `지금 상태: ${c === "true" ? "체크됨" : c === "mixed" ? "일부 체크" : "체크 안 됨"} (누르면 바뀝니다)`;
 }
 
-// 이동·클릭 한 번을 원격 질문에 보일 줄(제목·내용). 승인 효과·묻는 이유는 넣지 않는다(질문마다 다르다).
-// 허용하는 도구는 이동·클릭뿐이고, 만들 수 없으면 null(그 밖의 도구, 잘린 대상, 다른 목적지가 섞인 클릭, 긴 주소).
+// 도구 호출 한 번을 원격 질문에 보일 줄(제목·내용). 승인 효과·묻는 이유는 넣지 않는다(질문마다 다르다).
+// 허용하는 도구는 이동·클릭과 #192의 입력·파일 읽기·캡처·이미지/파일 저장·링크 읽기이고, 만들 수 없으면 null(그 밖의 도구, 잘린 대상, 다른 목적지가 섞인 클릭, 긴 주소).
 export function remoteActionLines(input: RemoteToolInput): { title: string; lines: string[]; origin: string } | null {
   if (input.toolName === "fill_form_fields") {
     const fields = input.fields ?? [];
