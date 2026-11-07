@@ -679,13 +679,34 @@ export function waitToolCall(h, name, { tries = 50, intervalMs = 100 } = {}) {
   });
 }
 
-// 먼저 시작한 턴(h.turn Promise)이 도는 동안 fn을 한다(#262). fn이 실패하면 턴이 끝날 때까지 기다려 회수한 뒤
-// 그 실패를 다시 던진다 — 남은 턴이 다음 시나리오의 패널·로그에 섞이거나 처리 안 된 rejection이 남지 않게.
+// 먼저 시작한 턴(h.turn Promise)이 도는 동안 fn을 한다(#262).
+// - 턴의 rejection은 들어오자마자 잡아 둔다(fn이 기다리는 사이 턴이 먼저 실패해도 처리 안 된 rejection으로 프로세스가 죽지 않게).
+// - fn이 실패하면 턴이 끝날 때까지 기다려 회수한 뒤 fn의 실패를 던진다(남은 턴이 다음 시나리오에 섞이지 않게).
+// - 턴이 먼저 실패하면 fn 결과를 더 기다리지 않고 턴의 실패(근본 원인)를 던진다. 다만 fn은 탭·패널을 만지므로
+//   끝날 때까지(fn 자신의 대기 한도 안) 기다린 뒤 던진다 — 다음 시나리오의 reset 중에 페이지를 바꾸지 않게.
+// fn이 성공하면 그 값을 돌려주고, 턴의 결과·실패는 호출처가 뒤에서 await turn으로 그대로 받는다.
 export async function duringTurn(turn, fn) {
+  let turnError = null;
+  const turnDone = turn.then(
+    () => {},
+    (e) => {
+      turnError = { e };
+    },
+  );
+  const work = Promise.resolve().then(fn);
+  const workDone = work.then(
+    () => {},
+    () => {},
+  );
+  await Promise.race([workDone, turnDone.then(() => (turnError ? undefined : new Promise(() => {})))]);
+  if (turnError) {
+    await workDone;
+    throw turnError.e;
+  }
   try {
-    return await fn();
+    return await work;
   } catch (e) {
-    await turn.catch(() => {});
+    await turnDone;
     throw e;
   }
 }
