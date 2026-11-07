@@ -1,5 +1,5 @@
 // 클릭으로 열린 일반 새 탭 따라가기: 브라우저가 같은 창의 앞에 띄운 새 탭 하나면 이후 도구가 그 탭에서 동작한다.
-import { expect, findC, lastTool, okResult } from "../lib.mjs";
+import { duringTurn, expect, findC, lastTool, okResult, waitToolCall } from "../lib.mjs";
 
 const describe = { tool: "describe_page", args: {} };
 
@@ -108,8 +108,10 @@ export default [
         const turn = h.turn([findC, { click: "예약" }, { ...describe, delayMs: 2500 }], { path: "/shop" });
         const p = await opened;
         // 도우미가 새 탭을 따라가기로 정한 뒤(클릭 결과가 모델에 간 뒤)에 사용자가 탭을 옮긴다.
-        for (let i = 0; i < 50 && !(await h.sw.evaluate(() => globalThis.__toolLog.some((t) => t.name === "click_element"))); i++) await p.waitForTimeout(100);
-        await p.goto(h.base + "/other");
+        await duringTurn(turn, async () => {
+          await waitToolCall(h, "click_element");
+          await p.goto(h.base + "/other");
+        });
         const r = await turn;
         const res = lastTool(r, "describe_page");
         expect(res && String(res.error ?? "").includes("다른 문서로 바뀌어"), `막아야 한다(${JSON.stringify(res)})`);
@@ -146,8 +148,10 @@ export default [
         const opened = h.ctx.waitForEvent("page");
         const turn = h.turn([findC, { click: "예약" }, { tool: "remember_page", args: {}, delayMs: 2500 }, { text: "끝" }], { path: "/shop" });
         const p = await opened;
-        for (let i = 0; i < 50 && !(await h.sw.evaluate(() => globalThis.__toolLog.some((t) => t.name === "click_element"))); i++) await p.waitForTimeout(100);
-        await p.goto(h.base + "/other");
+        await duringTurn(turn, async () => {
+          await waitToolCall(h, "click_element");
+          await p.goto(h.base + "/other");
+        });
         const r = await turn;
         const res = lastTool(r, "remember_page");
         expect(res && String(res.error ?? "").includes("다른 문서로 바뀌어"), `거절(${JSON.stringify(res)})`);

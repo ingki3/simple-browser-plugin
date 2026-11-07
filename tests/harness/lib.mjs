@@ -669,6 +669,16 @@ export async function pollUntil(pred, { tries, intervalMs = 100, label = "조건
   throw new Fail(`${label}: ${tries}번(${intervalMs}ms 간격) 확인해도 되지 않았습니다${await why(detail)}`);
 }
 
+// 도구 기록(__toolLog)에 그 도구가 나올 때까지 시도 횟수로 기다린다(기본 50번×100ms — 턴을 먼저 시작한 시나리오가 쓴다).
+export function waitToolCall(h, name, { tries = 50, intervalMs = 100 } = {}) {
+  return pollUntil(() => h.sw.evaluate((n) => (globalThis.__toolLog ?? []).some((t) => t.name === n), name), {
+    tries,
+    intervalMs,
+    label: `${name} 실행`,
+    detail: async () => `지금까지 도구: ${(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).map((t) => t.name))).join(",") || "없음"}`,
+  });
+}
+
 // 먼저 시작한 턴(h.turn Promise)이 도는 동안 fn을 한다(#262). fn이 실패하면 턴이 끝날 때까지 기다려 회수한 뒤
 // 그 실패를 다시 던진다 — 남은 턴이 다음 시나리오의 패널·로그에 섞이거나 처리 안 된 rejection이 남지 않게.
 export async function duringTurn(turn, fn) {
