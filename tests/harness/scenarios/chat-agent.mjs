@@ -1,6 +1,6 @@
 // ChatAgent 분리(#263) 단계 0: 분리할 경로 중 기존 시나리오가 덮지 못하던 것 — 요청별 읽기 한도, 깨진 도구 인자, 한도 카드 "계속",
 // 길이 한도 재시도·잘림 안내, 팝업 창을 따라가는 턴의 머리말. 모두 제품 코드(src/background/agent/chatAgent.ts) 동작을 그대로 고정한다.
-import { expect, findC, okResult } from "../lib.mjs";
+import { expect, findC, okResult, waitUntil } from "../lib.mjs";
 
 const PAGE = `<title>가게</title><main><button>주문</button><p id=out></p></main>`;
 const describe = { tool: "describe_page", args: {} };
@@ -17,6 +17,64 @@ const sentResults = async (h, name) => {
 const cancelCards = async (card) => {
   await card.locator(".btn-cancel").first().click();
 };
+
+// 사용자 문맥(buildUserContent) 안의 chrome.tabs.get을 세고, holdAt번째를 붙잡는 게이트(#263 R4). 붙잡은 호출은 풀 때 실제
+// 탭을 읽고, title이 있으면 제목만 그 글로 바꿔 돌려준다(붙잡은 것이 탭 머리말 조회인지 확인하는 데 쓴다).
+// buildUserContent는 ChatAgent 메서드라 압축 빌드에서도 이름이 남고, 그 안에서 기다린 함수의 호출은 async 스택에 그 이름이 보인다.
+async function installTabsGetGate(h) {
+  await h.sw.evaluate(() => {
+    const real = chrome.tabs.get.bind(chrome.tabs);
+    globalThis.__realTabsGet = real;
+    globalThis.__tabsGetCount = 0;
+    globalThis.__tabsGetHoldAt = 0;
+    globalThis.__tabsGetHeld = false;
+    globalThis.__tabsGetTitle = null;
+    globalThis.__releaseTabsGet = null;
+    chrome.tabs.get = (id, ...rest) => {
+      if (rest.length || !String(new Error().stack ?? "").includes("buildUserContent")) return real(id, ...rest);
+      const n = ++globalThis.__tabsGetCount;
+      if (n !== globalThis.__tabsGetHoldAt) return real(id);
+      globalThis.__tabsGetHeld = true;
+      const title = globalThis.__tabsGetTitle;
+      return new Promise((resolve, reject) => {
+        globalThis.__releaseTabsGet = () => {
+          globalThis.__releaseTabsGet = null;
+          real(id).then((t) => resolve(title ? { ...t, title } : t), reject);
+        };
+      });
+    };
+  });
+}
+async function armTabsGetGate(h, holdAt, title = null) {
+  await h.sw.evaluate(
+    ([at, t]) => {
+      globalThis.__tabsGetCount = 0;
+      globalThis.__tabsGetHoldAt = at;
+      globalThis.__tabsGetHeld = false;
+      globalThis.__tabsGetTitle = t;
+    },
+    [holdAt, title],
+  );
+}
+async function removeTabsGetGate(h) {
+  await h.sw.evaluate(() => {
+    globalThis.__releaseTabsGet?.();
+    if (globalThis.__realTabsGet) chrome.tabs.get = globalThis.__realTabsGet;
+    globalThis.__realTabsGet = null;
+    globalThis.__tabsGetHoldAt = 0;
+  });
+}
+const waitHeld = (h) =>
+  waitUntil(() => h.sw.evaluate(() => globalThis.__tabsGetHeld && !!globalThis.__releaseTabsGet), { timeoutMs: 8000, label: "머리말 탭 조회 붙잡힘" });
+// 패널에서 요청을 보내기만 한다(h.turn은 턴이 끝나기를 기다린다 — 붙잡힌 턴은 끝나지 않는다).
+async function sendOnly(h, text, steps) {
+  await h.sw.evaluate((s) => {
+    globalThis.__steps = s;
+    globalThis.__toolLog = [];
+  }, steps);
+  await h.panel.fill("textarea.composer-input", text);
+  await h.panel.click("button.composer-btn.primary");
+}
 
 // 이 탭·패널 밖의 탭·창을 닫는다(팝업 창이 다음 시나리오에 남지 않게).
 async function closeExtraTabs(h) {
@@ -141,6 +199,63 @@ export default [
         expect(asked.length === 1 && s.includes(NOTE) && s.includes("제목: 달력"), `둘째 요청 머리말에 팝업 안내(${s.slice(0, 600)})`);
       } finally {
         await closeExtraTabs(h);
+      }
+    },
+  },
+  {
+    // #263 R4: 탭 머리말(fetchTabHeader)은 탭 조회를 기다린 뒤 지금 턴의 탭(this.turnTab)을 다시 읽는다 — 그 사이 새 턴이 시작되면
+    // 다른 턴의 값이 섞일 수 있지만, buildUserContent 뒤 stale 확인으로 옛 턴은 기록·모델 요청 없이 끝난다. 이 보장을 고정한다.
+    // 패널은 응답 중 보내기를 막으므로 "새 요청"은 중단(턴 번호를 올림) 뒤 보내기로 만든다.
+    name: "사용자 문맥을 읽는 사이 새 요청이 오면 옛 요청의 글은 기록·모델 요청에 들어가지 않는다",
+    pages: { "/ctx": `<title>문맥</title><main><p id=out></p></main>` },
+    async run(h) {
+      const agentUserTexts = async () => agentReqs(await reqs(h)).map((q) => JSON.stringify((q.body.messages ?? []).filter((m) => m.role === "user")));
+      const settled = () => waitUntil(async () => !(await h.panel.locator("button.composer-btn.danger").count()), { timeoutMs: 8000, label: "응답 끝" });
+      await installTabsGetGate(h);
+      try {
+        // 1) 문맥 안의 탭 조회 수를 센다(일반 웹 페이지 — 머리말 조회가 마지막이다).
+        await armTabsGetGate(h, 0);
+        await h.turn([{ text: "하나" }], { path: "/ctx", text: "세기" });
+        const n = await h.sw.evaluate(() => globalThis.__tabsGetCount);
+        expect(n >= 1, `문맥 안 탭 조회가 있음(${n})`);
+
+        // 2) 대조: n번째를 붙잡고 제목을 바꿔 풀면 머리말에 그 제목이 실린다 → 붙잡는 것이 머리말 조회다.
+        await armTabsGetGate(h, n, "붙잡은 제목");
+        await sendOnly(h, "확인 요청", [{ text: "확인 답" }]);
+        await waitHeld(h);
+        await h.sw.evaluate(() => globalThis.__releaseTabsGet());
+        await settled();
+        const probe = (await agentUserTexts()).find((t) => t.includes("확인 요청"));
+        expect(probe?.includes("제목: 붙잡은 제목"), `붙잡은 호출이 머리말 조회(${String(probe).slice(0, 300)})`);
+
+        // 3) 머리말 조회를 붙잡은 채 중단하고 새 요청을 보낸 뒤 푼다.
+        await h.sw.evaluate(() => {
+          globalThis.__modelReqs = [];
+        });
+        await armTabsGetGate(h, n);
+        await sendOnly(h, "첫 요청 글", [{ text: "보내면 안 됨" }]);
+        await waitHeld(h);
+        await h.panel.click("button.composer-btn.danger");
+        await settled();
+        const ends = h.logs.filter((l) => l.startsWith("[SBP turn:end]") && l.includes("aborted")).length;
+        await h.turn([{ text: "둘째 답" }], { noReload: true, text: "둘째 요청 글" });
+        expect(await h.sw.evaluate(() => !!globalThis.__releaseTabsGet), "둘째 요청 동안 첫 요청은 여전히 붙잡혀 있음");
+        await h.sw.evaluate(() => globalThis.__releaseTabsGet());
+        await waitUntil(() => h.logs.filter((l) => l.startsWith("[SBP turn:end]") && l.includes("aborted")).length > ends, {
+          timeoutMs: 5000,
+          label: "풀린 첫 요청이 중단으로 끝남",
+        });
+        // 기록에 옛 글이 남았는지는 다음 요청의 기록으로 본다.
+        await h.turn([{ text: "셋째 답" }], { noReload: true, text: "셋째 요청 글" });
+        const all = JSON.stringify(await reqs(h));
+        expect(!all.includes("첫 요청 글"), "옛 요청 글은 어느 모델 요청에도 없음");
+        const texts = await agentUserTexts();
+        expect(texts.length === 2, `에이전트 요청 2번(둘째·셋째)(${texts.length})`);
+        expect(texts[1].includes("둘째 요청 글") && texts[1].includes("셋째 요청 글"), `셋째 요청 기록에 둘째·셋째 글(${texts[1]?.slice(0, 400)})`);
+        const text = await panelText(h);
+        expect(!text.includes("보내면 안 됨") && text.includes("셋째 답"), "옛 요청의 답은 없음");
+      } finally {
+        await removeTabsGetGate(h);
       }
     },
   },
