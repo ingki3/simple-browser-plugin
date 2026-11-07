@@ -238,7 +238,8 @@ export default [
         expect((doc?.params?.message ?? "").includes("파일 읽기") && doc.params.message.includes("로그인 쿠키와 함께"), `파일 읽기 질문(${doc?.params?.message})`);
         h.hits.length = 0;
         bridge.send({ jsonrpc: "2.0", id: doc.id, result: { action: "decline" } });
-        const links = await bridge.request("elicitation/create", 3, 20_000);
+        // 링크 읽기 질문은 올 수도 안 올 수도 있다(없으면 아래 if를 건너뜀) — 성공 대기가 아니라 관찰(20초 그대로).
+        const links = await bridge.seenRequest("elicitation/create", 3, 20_000);
         expect(!h.hits.some((x) => x.includes("/files/a.pdf")), "거절한 파일은 요청 안 함");
         if (links) {
           expect(links.params.message.includes("링크 읽기") && links.params.message.includes("기본 선택 2개만"), `링크 질문(${links.params.message})`);
