@@ -2,7 +2,7 @@
   "name": "simple-browser-plugin",
   "version": "0.2.46",
   "private": true,
-  "description": "사이드 패널에서 말로 시키는 Chrome 브라우저 도우미 (OpenRouter·OpenAI·Gemini·Claude)",
+  "description": "사이드 패널에서 말로 시키는 Chrome 브라우저 도우미 (OpenRouter·OpenAI·Gemini·Claude·로컬 LLM)",
   "type": "module",
   "scripts": {
     "dev": "vite",
