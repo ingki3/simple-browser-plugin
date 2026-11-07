@@ -102,19 +102,16 @@ export async function startHarness() {
   // 설정 페이지(옵션 탭, #127). openOptions는 새 탭으로 연다. optionsPages는 지금 열린 설정 탭들(패널의 ⚙가 연 것 포함).
   const optionsUrl = `chrome-extension://${extId}/src/options/index.html`;
   const optionsPages = () => ctx.pages().filter((p) => p.url().startsWith(optionsUrl));
-  // 패널이 연 설정 탭을 기다린다(section이 있으면 그 묶음 해시까지). 없으면 null.
+  // 패널이 연 설정 탭을 기다린다(section이 있으면 그 묶음 해시까지). 한도 안에 없으면 열린 설정 탭 주소를 담아 실패한다.
   async function waitOptions(section, ms = 5000) {
-    const until = Date.now() + ms;
-    while (Date.now() < until) {
-      const p = optionsPages().find((x) => !section || x.url().endsWith(`#${section}`));
-      if (p) {
-        await p.waitForLoadState().catch(() => {});
-        await p.waitForTimeout(300);
-        return p;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    return null;
+    const p = await waitUntil(() => optionsPages().find((x) => !section || x.url().endsWith(`#${section}`)), {
+      timeoutMs: ms,
+      label: `설정 탭${section ? `(#${section})` : ""}`,
+      detail: () => `열린 설정 탭: ${JSON.stringify(optionsPages().map((x) => new URL(x.url()).hash))}`,
+    });
+    await p.waitForLoadState().catch(() => {});
+    await p.waitForTimeout(300);
+    return p;
   }
   async function openOptions(section = "model") {
     const p = await ctx.newPage();
@@ -638,13 +635,48 @@ export const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.send
 
 export class Fail extends Error {}
 
-// 조건이 참이 될 때까지 기다린다(고정 대기 대신, #252). 한도 안에 안 되면 label을 담아 실패한다.
-export async function waitUntil(pred, { timeoutMs = 5000, intervalMs = 100, label = "조건" } = {}) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 실패 글에 붙일 지금 상태(detail). 읽다 실패해도 원래 실패 이유를 가리지 않게 한다.
+async function why(detail) {
+  if (!detail) return "";
+  try {
+    return ` (${await detail()})`;
+  } catch (e) {
+    return ` (상태 읽기 실패: ${e instanceof Error ? e.message : String(e)})`;
+  }
+}
+
+// 조건이 참이 될 때까지 기다린다(고정 대기 대신, #252). 한도(벽시계) 안에 안 되면 label·detail을 담아 실패한다.
+// 조건 함수가 마지막에 돌려준 참 값(불리언·배열·메시지 등)을 돌려준다(#262).
+export async function waitUntil(pred, { timeoutMs = 5000, intervalMs = 100, label = "조건", detail } = {}) {
   const started = Date.now();
   for (;;) {
-    if (await pred()) return;
-    if (Date.now() - started >= timeoutMs) throw new Fail(`${label}: ${timeoutMs}ms 안에 되지 않았습니다`);
-    await new Promise((r) => setTimeout(r, intervalMs));
+    const v = await pred();
+    if (v) return v;
+    if (Date.now() - started >= timeoutMs) throw new Fail(`${label}: ${timeoutMs}ms 안에 되지 않았습니다${await why(detail)}`);
+    await sleep(intervalMs);
+  }
+}
+
+// 시도 횟수로 기다린다(#262): 조건을 최대 tries번 보고(사이마다 intervalMs), 다 거짓이면 label·detail을 담아 실패한다.
+// `for (let i = 0; i < N && !cond; i++) wait(ms)` 반복과 확인 횟수·간격이 같다(조건 자체가 느려도 횟수는 줄지 않는다).
+export async function pollUntil(pred, { tries, intervalMs = 100, label = "조건", detail } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const v = await pred();
+    if (v) return v;
+    if (i < tries - 1) await sleep(intervalMs);
+  }
+  throw new Fail(`${label}: ${tries}번(${intervalMs}ms 간격) 확인해도 되지 않았습니다${await why(detail)}`);
+}
+
+// 먼저 시작한 턴(h.turn Promise)이 도는 동안 fn을 한다(#262). fn이 실패하면 턴이 끝날 때까지 기다려 회수한 뒤
+// 그 실패를 다시 던진다 — 남은 턴이 다음 시나리오의 패널·로그에 섞이거나 처리 안 된 rejection이 남지 않게.
+export async function duringTurn(turn, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    await turn.catch(() => {});
+    throw e;
   }
 }
 
