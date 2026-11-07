@@ -1,10 +1,10 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type RunMode, type Settings, type ToolName } from "@/lib/messages";
 import { MissingKeyError, friendlyError } from "@/lib/friendlyError";
 import { nowNote } from "@/lib/systemPrompt";
-import { describePopup, popupWhere } from "@/lib/actionTarget";
+import { describePopup } from "@/lib/actionTarget";
 import { remoteActionLines, remoteHopQuestion, remoteRefusal, remoteTaskQuestion, remoteToolQuestion, withPrefix, type RemoteApprover, type RemoteAskResult, type RemoteQuestion } from "@/lib/remoteApproval";
 import type { ModelId } from "@/lib/models";
-import { internalNavigateAutoBlock, isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
+import { internalNavigateAutoBlock, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "../otherTabs";
@@ -40,6 +40,8 @@ import {
   remoteTurnNote,
   spinStopNote,
 } from "./prompts";
+import { fetchTabHeader, loadedPage, requestTabId, tabLoaded, toolTabUrl, turnTabOf } from "./tabContext";
+import { answerSince, closeDanglingToolCalls, confirmRebases, lastAnswerText } from "./history";
 
 // 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 페이지가 기록한 클릭 시각보다 앞서
 // 본 창도 그 클릭의 것으로 보는 작은 여유(같은 시계지만 기록 순서가 어긋날 수 있다). 그보다 먼저 열린 창(기다리는 동안
@@ -69,7 +71,6 @@ import {
   type TurnTab,
 } from "../tools/handlers";
 import { commitReads } from "../readRecipes";
-import { youtubeVideoId } from "@/lib/youtubeUrl";
 import { addUsage, emptyUsageTotal, formatTurnUsage, formatUsage, usageFromChunk, type ModelUsage, type UsageTotal } from "@/lib/usage";
 import {
   canonicalJson,
@@ -168,38 +169,6 @@ export interface AgentSink {
 }
 const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page"]);
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
-
-// 정해진 탭으로 턴 탭을 만든다(반복 작업의 이어서 진행). 탭이 없으면 오류 턴 탭 — 활성 탭으로 대신하지 않는다.
-// 기억하기 제안(#240): 탭이 로딩 중이면 최대 3초 기다린다(이동 직후 끝난 턴·도구가 옛 주소와 글자로 제안하지 않게).
-// 다 떴으면 true, 그때도 로딩 중이거나 탭이 없으면 false.
-const OFFER_LOAD_WAIT_MS = 3_000;
-async function tabLoaded(tabId: number): Promise<boolean> {
-  const until = Date.now() + OFFER_LOAD_WAIT_MS;
-  for (;;) {
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab) return false;
-    if (tab.status !== "loading") return true;
-    if (Date.now() >= until) return false;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-}
-
-// 다 뜬 최상위 문서와 주소(턴 끝 제안이 이것으로 고정한다). 제때 뜨지 않았으면 null.
-async function loadedPage(tabId: number): Promise<{ documentId: string | null; url: string } | null> {
-  if (!(await tabLoaded(tabId))) return null;
-  const documentId = await topDocumentId(tabId);
-  const url = (await chrome.tabs.get(tabId).catch(() => null))?.url ?? "";
-  return { documentId, url };
-}
-
-async function turnTabOf(tabId: number): Promise<TurnTab> {
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    return { tabId, internal: isBrowserInternalUrl(tab.url) };
-  } catch {
-    return { error: "작업 탭을 찾을 수 없습니다." };
-  }
-}
 
 // 턴 시작 옵션. tabId·site: 반복 작업의 이어서 진행(#138). expect: 페이지 제안 실행(#173) — 확인한 탭·주소·문서.
 export interface TurnExpect {
@@ -449,55 +418,9 @@ export class ChatAgent {
     this.rebasePending.push(...takeRebaseOffers(callId));
   }
 
-  // 요청에 실었던 결과의 기준 중 아직 pending인 것을 응답이 온 뒤 확정한다. 그 사이 기록을 비웠으면(새 pending 배열) 확정하지 않는다.
-  private confirmRebases(sent: readonly RebaseOffer[]): void {
-    for (const offer of sent) {
-      const at = this.rebasePending.indexOf(offer);
-      if (at < 0) continue;
-      this.rebasePending.splice(at, 1);
-      const list = (this.rebaseConfirmed.get(offer.id) ?? []).filter((n) => n !== offer.nonce);
-      list.push(offer.nonce);
-      if (list.length > 8) list.shift();
-      this.rebaseConfirmed.delete(offer.id);
-      this.rebaseConfirmed.set(offer.id, list);
-      while (this.rebaseConfirmed.size > 200) {
-        const oldest = this.rebaseConfirmed.keys().next().value;
-        if (oldest === undefined) break;
-        this.rebaseConfirmed.delete(oldest);
-      }
-    }
-  }
-
   private clearRebases(): void {
     this.rebasePending = [];
     this.rebaseConfirmed = new Map();
-  }
-
-  // 중단된 턴이 tool_calls만 남기고 결과를 못 채웠으면 다음 요청이 API에서 거부된다.
-  // 빠진 결과를 "중단됨"으로 채워 기록을 유효하게 만든다.
-  private closeDanglingToolCalls(): void {
-    let at = -1;
-    for (let i = this.history.length - 1; i >= 0; i--) {
-      if (this.history[i].role === "assistant") {
-        at = i;
-        break;
-      }
-    }
-    const last = this.history[at];
-    if (!last || last.role !== "assistant" || !last.tool_calls?.length) return;
-    // 그 호출 블록 뒤의 결과만 센다 — 모델이 앞 턴의 id(call_0 등)를 다시 쓰면 앞 결과를 이번 호출의 답으로 보지 않게(#221).
-    const answered = new Set(
-      this.history.slice(at + 1).flatMap((m) => (m.role === "tool" ? [m.tool_call_id] : [])),
-    );
-    for (const call of last.tool_calls) {
-      if (answered.has(call.id)) continue;
-      this.history.push({
-        role: "tool",
-        tool_call_id: call.id,
-        name: call.function.name,
-        content: JSON.stringify({ error: "interrupted" }),
-      });
-    }
   }
 
   // 백그라운드 번역 배치와 동적 재번역 옵저버를 멈춘다. 멈추지 않으면 사용자가
@@ -627,17 +550,6 @@ export class ChatAgent {
     });
   }
 
-  // 지금 도구가 동작하는 탭(따라가는 팝업 창이 있으면 그 창)의 주소.
-  private async toolTabUrl(turnTab: TurnTab): Promise<string | undefined> {
-    const current = await currentToolTab(turnTab);
-    if (!current) return undefined;
-    try {
-      return (await chrome.tabs.get(current.tabId)).url;
-    } catch {
-      return undefined;
-    }
-  }
-
   private send(msg: BgToPanel): void {
     if (msg.kind === "error") this.turnErrors.push({ action: msg.action });
     // 원격 대화: 승인 카드·한도 카드를 보내지 않고 거절로 푼다. 모든 대기 지점은 카드를 보낸 직후 같은 흐름에서 대기를 등록하므로
@@ -759,57 +671,6 @@ export class ChatAgent {
     }
   }
 
-  // 대화 기록의 마지막 답(글자). 저장 카드 초안의 맥락으로 쓴다.
-  private lastAnswerText(): string {
-    for (let i = this.history.length - 1; i >= 0; i--) {
-      const m = this.history[i];
-      if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) return m.content;
-    }
-    return "";
-  }
-
-  // 이번 요청의 도구가 동작할 탭(앞 턴에서 이어 따라가는 팝업 창이 있으면 그 창).
-  private async requestTabId(): Promise<number | null> {
-    return (await currentToolTab(this.turnTab))?.tabId ?? null;
-  }
-
-  private async fetchTabHeader(): Promise<string> {
-    const tabId = await this.requestTabId();
-    if (tabId === null) return "";
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      const url = tab.url ?? "";
-      const title = tab.title ?? "";
-      if (!url && !title) return "";
-      // 가벼운 모델은 시스템 프롬프트 뒤쪽의 YouTube 모드보다 이 머리말을 따르므로 여기서 도구를 안내한다.
-      const guide = isBrowserInternalUrl(url)
-        ? "브라우저 내부 페이지(새 탭·설정 등) — 관측·조작 도구를 쓸 수 없으니 describe_page 없이 navigate_to_url로 사용자가 가려는 사이트로 바로 이동하세요"
-        : youtubeVideoId(url)
-          ? "YouTube 영상 페이지 — 영상 내용(요약·질문 등)은 describe_page·get_page_content 대신 get_youtube_transcript로 먼저 확인하세요"
-          : "상세 내용은 describe_page로 관측하세요";
-      const popup = await this.popupHeader();
-      return `[탭 메타데이터 — ${guide}]\nURL: ${url}\n제목: ${title}${popup}`;
-    } catch {
-      return "";
-    }
-  }
-
-  // 앞 턴에서 따라가던 팝업 창을 이어 따라가면 머리말에 알린다(주소는 줄인 꼴만).
-  private async popupHeader(): Promise<string> {
-    const current = await currentToolTab(this.turnTab);
-    if (!current?.popup) return "";
-    let where = "";
-    try {
-      where = popupWhere((await chrome.tabs.get(current.tabId)).url ?? "");
-    } catch {
-      return "";
-    }
-    if (current.asTab) {
-      return `\n[클릭으로 열린 탭을 따라가는 중 — 위 URL·제목은 앞에서 누른 버튼·링크가 연 탭(새 탭, 또는 브라우저가 팝업을 탭으로 연 것 — ${where})입니다. 그 탭이 앞에 보여 도구는 그 탭에서 동작합니다. 탭이 닫히면 원래 탭으로 돌아갑니다.]`;
-    }
-    return `\n[팝업 창을 따라가는 중 — 위 URL·제목은 앞에서 누른 버튼이 연 팝업 창(${where})입니다. 아직 열려 있어 도구는 그 창에서 동작합니다. 창이 닫히면 원래 탭으로 돌아갑니다.]`;
-  }
-
   private async maybeShowPdfGuidance(): Promise<void> {
     const flags = await readFlags();
     if (flags.pdfGuidanceShown) return;
@@ -875,7 +736,7 @@ export class ChatAgent {
     expect?: TurnExpect,
     attached: { pdfUrl: string | null } = { pdfUrl: null },
   ): Promise<string | OpenRouterContentPart[] | typeof EXPECT_MISMATCH> {
-    const pdfTabId = await this.requestTabId();
+    const pdfTabId = await requestTabId(() => this.turnTab);
     // 제안 턴: 따라가는 탭이 확인한 탭이어야 한다(팝업을 잇지 않으므로 같아야 정상).
     if (expect && pdfTabId !== expect.tabId) return EXPECT_MISMATCH;
     const pdfInfo = pdfTabId !== null ? await detectPdfAtTab(pdfTabId) : null;
@@ -935,7 +796,7 @@ export class ChatAgent {
     }
 
     // Normal web page
-    const header = await this.fetchTabHeader();
+    const header = await fetchTabHeader(() => this.turnTab);
     const composed = header ? `${header}\n\n[사용자 요청]\n${userText}` : userText;
     return composed;
   }
@@ -954,20 +815,10 @@ export class ChatAgent {
       this.runningTurns -= 1;
     }
     if (this.isStale(turn)) return { outcome: "aborted", finalText: "" };
-    const finalText = this.turnStart?.turn === turn ? this.answerSince(this.turnStart.index) : "";
+    const finalText = this.turnStart?.turn === turn ? answerSince(this.history, this.turnStart.index) : "";
     if (finalText) return { outcome: "ok", finalText };
     const err = this.turnErrors[0];
     return err ? { outcome: "error", finalText: "", action: err.action } : { outcome: "ok", finalText: "" };
-  }
-
-  // 기록의 start(이번 요청의 사용자 메시지) 뒤에서 도구 호출이 없는 마지막 답.
-  private answerSince(start: number): string {
-    for (let i = this.history.length - 1; i > start; i--) {
-      const m = this.history[i];
-      if (m.role === "user") break;
-      if (m.role === "assistant" && !m.tool_calls?.length && typeof m.content === "string" && m.content.trim()) return m.content;
-    }
-    return "";
   }
 
   // tabId: 반복 작업의 "이어서 진행"(#138)처럼 백그라운드가 정한 탭에서 시작할 때. 없으면 지금 활성 탭.
@@ -1074,7 +925,7 @@ export class ChatAgent {
       }
       // 이제 기록에 넣는다 — 붙인 PDF를 첨부한 것으로 확정한다.
       if (attached.pdfUrl) this.lastAttachedPdfUrl = attached.pdfUrl;
-      this.closeDanglingToolCalls();
+      this.history.push(...closeDanglingToolCalls(this.history));
       // 사용자 글·탭 문맥(제목 등)도 기록에 넣기 전에 가린다(탭을 닫아 가림 목록이 지워진 뒤에도 원문이 남지 않게).
       const maskedUser = maskSyncMessages<OpenRouterMessage>([{ role: "user", content: userContent }]);
       if (maskedUser.masked) {
@@ -1092,7 +943,7 @@ export class ChatAgent {
       commitReads(turnTab, completed && !this.isStale(turn) && !this.externalContent);
       // 답을 마친 턴에서 탭이 다른 화면에 있으면 "이 페이지 기억하기"를 제안한다(시크릿·꺼짐·같은 주소는 제안 없음).
       if (completed && !this.isStale(turn) && "tabId" in turnTab) {
-        const context = { query: userText, answer: this.lastAnswerText() };
+        const context = { query: userText, answer: lastAnswerText(this.history) };
         let offer: Awaited<ReturnType<typeof makeOffer>> = null;
         if (this.remote) offer = await makeOffer(turnTab.tabId, startUrl, context).catch(() => null);
         else {
@@ -1365,7 +1216,7 @@ export class ChatAgent {
       `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
     );
     if (this.isStale(turn)) return null;
-    this.confirmRebases(sentRebases);
+    this.rebasePending = confirmRebases(this.rebasePending, this.rebaseConfirmed, sentRebases);
     return { sentNotes, sentCandidates: afterToolResult ? null : candidatesNote, assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, thoughtChars };
   }
 
@@ -1577,7 +1428,7 @@ export class ChatAgent {
     if (toolName === "click_element" || toolName === "fill_form_fields" || toolName === "sign_in") {
       try {
         // 팝업 창을 따라가는 중이면 그 창의 주소로 사이트 경계를 본다(다른 사이트의 팝업은 이동과 같게 묻는다).
-        pageUrl = await this.toolTabUrl(turnTab);
+        pageUrl = await toolTabUrl(turnTab);
       } catch {
         pageUrl = undefined;
       }
@@ -2519,7 +2370,7 @@ export class ChatAgent {
         if (this.remoteRefusedTurn === turn) break;
       }
       if (this.remoteRefusedTurn === turn && !this.isStale(turn)) {
-        this.closeDanglingToolCalls();
+        this.history.push(...closeDanglingToolCalls(this.history));
         const stopNote = this.remoteStopReason === "unavailable" ? REMOTE_STOP_NOTE : `${remoteRefusal(this.remoteStopReason).note} 도구를 더 부르지 마라.`;
         await this.finishWithoutTools(apiKey, model, systemPrompt, turn, stopNote);
         return false;
