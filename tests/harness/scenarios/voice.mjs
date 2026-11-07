@@ -1,6 +1,6 @@
 // 음성 입력(#184): 가짜 마이크(--use-fake-device-for-media-stream)로 녹음하고, 서비스 워커 fetch로 음성 변환 응답을 흉내 낸다.
 // 받아쓴 글자는 입력창에만 들어가고 보내지 않는다. 녹음을 시작할 때 고정한 제공자로만 보내고, 설정이 바뀌면 보내지 않거나 멈춘다.
-import { expect } from "../lib.mjs";
+import { expect, waitUntil } from "../lib.mjs";
 
 // 기존 시나리오는 입력창에만 넣는 동작(autoSend 끔)을 본다. 바로 보내기는 아래 SEND 시나리오들.
 const OPENAI = { voiceInput: { provider: "openai", models: {}, language: "ko", autoSend: false }, apiKeys: { openai: "sk-voice-test" } };
@@ -15,21 +15,15 @@ const voiceReqs = (h) => h.sw.evaluate(() => globalThis.__voiceReqs ?? []);
 const chatReqs = (h) => h.sw.evaluate(() => (globalThis.__modelReqs ?? []).length);
 const input = (h) => h.panel.locator("textarea.composer-input");
 
-async function waitFor(h, fn, ms = 8000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    if (await fn()) return true;
-    await h.panel.waitForTimeout(100);
-  }
-  return false;
-}
+// 조건이 참이 될 때까지 기다린다(8초). 안 되면 label(과 detail)을 담아 실패한다(#262 — 예전엔 false를 돌려 호출처가 expect).
+const waitFor = (h, fn, label, { ms = 8000, detail } = {}) => waitUntil(fn, { timeoutMs: ms, intervalMs: 100, label, detail });
 
-const recording = (h) => waitFor(h, async () => (await h.panel.locator(".voice-live").count()) > 0);
+const recording = (h, label) => waitFor(h, async () => (await h.panel.locator(".voice-live").count()) > 0, label);
 
 // 녹음 → 1.2초 → 멈춤.
 async function speak(h) {
   await mic(h).click();
-  expect(await recording(h), "녹음 중 표시");
+  await recording(h, "녹음 중 표시");
   await h.panel.waitForTimeout(1200);
   await mic(h).click();
 }
@@ -47,7 +41,7 @@ export default [
     name: "음성 입력(#184): 꺼져 있으면 녹음하지 않고 설정 안내",
     async run(h) {
       await mic(h).click();
-      expect(await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0), "안내");
+      await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0, "안내");
       const t = await h.panel.locator(".voice-error").innerText();
       expect(t.includes("음성 입력") && t.includes("설정 열기"), `설정 안내(${t})`);
       expect((await voiceReqs(h)).length === 0 && (await h.panel.locator(".voice-live").count()) === 0, "녹음·전송 없음");
@@ -61,7 +55,7 @@ export default [
       await input(h).fill("기존");
       await h.panel.locator("body").click({ position: { x: 5, y: 5 } });
       await speak(h);
-      expect(await waitFor(h, async () => (await input(h).inputValue()) === "기존 음성 글자"), `입력창(${await input(h).inputValue()})`);
+      await waitFor(h, async () => (await input(h).inputValue()) === "기존 음성 글자", "입력창", { detail: () => input(h).inputValue() });
       const reqs = await voiceReqs(h);
       expect(reqs.length === 1 && reqs[0].url === "https://api.openai.com/v1/audio/transcriptions", `OpenAI로만(${JSON.stringify(reqs.map((r) => r.url))})`);
       expect(reqs[0].form.model === "gpt-4o-mini-transcribe" && reqs[0].form.language === "ko" && reqs[0].form.fileType === "audio/wav" && reqs[0].form.fileSize > 16000, `요청(${JSON.stringify(reqs[0].form)})`);
@@ -75,7 +69,7 @@ export default [
       await h.settings({ voiceInput: { provider: "gemini", models: { gemini: "gemini-x", openai: "whisper-1" }, language: "en", autoSend: false }, apiKeys: { gemini: "g-key" } });
       await h.panel.waitForTimeout(300);
       await speak(h);
-      expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), "Gemini 글자");
+      await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자", "Gemini 글자");
       let reqs = await voiceReqs(h);
       expect(reqs[0].url.endsWith("/models/gemini-x:generateContent") && reqs[0].headers["x-goog-api-key"] === "g-key", `Gemini(${reqs[0].url})`);
       expect(reqs[0].json.contents[0].parts[0].inline_data.mime_type === "audio/wav" && reqs[0].json.contents[0].parts[1].text.includes("영어"), "Gemini 본문");
@@ -83,7 +77,7 @@ export default [
       await h.settings({ voiceInput: { provider: "openrouter", models: { gemini: "gemini-x", openai: "whisper-1" }, language: "", autoSend: false } });
       await h.panel.waitForTimeout(300);
       await speak(h);
-      expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), "OpenRouter 글자");
+      await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자", "OpenRouter 글자");
       reqs = await voiceReqs(h);
       const or = reqs[1];
       expect(or.url === "https://openrouter.ai/api/v1/audio/transcriptions" && or.json.model === "openai/gpt-4o-transcribe" && or.json.input_audio.format === "wav" && !("language" in or.json), `OpenRouter(${JSON.stringify({ ...or.json, input_audio: undefined })})`);
@@ -96,9 +90,9 @@ export default [
       await h.settings({ ...OPENAI, apiKeys: { openai: "sk-voice-test", gemini: "g" } });
       await h.panel.waitForTimeout(300);
       await mic(h).click();
-      expect(await recording(h), "녹음 중");
+      await recording(h, "녹음 중");
       await patchVoice(h, { provider: "gemini" });
-      expect(await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0), "안내");
+      await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0, "안내");
       expect((await h.panel.locator(".voice-error").innerText()).includes("설정이 바뀌어"), "설정 바뀜 안내");
       await h.panel.waitForTimeout(1500);
       expect((await voiceReqs(h)).length === 0 && (await h.panel.locator(".voice-live").count()) === 0, "보내지 않음");
@@ -113,10 +107,10 @@ export default [
       });
       await h.panel.waitForTimeout(300);
       await speak(h);
-      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 1), "요청 시작");
+      await waitFor(h, async () => (await voiceReqs(h)).length === 1, "요청 시작");
       await patchVoice(h, { models: { openai: "whisper-1" } });
-      expect(await waitFor(h, async () => (await voiceReqs(h))[0]?.aborted === true), "요청 중단");
-      expect(await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0), "안내");
+      await waitFor(h, async () => (await voiceReqs(h))[0]?.aborted === true, "요청 중단");
+      await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0, "안내");
       await h.panel.waitForTimeout(500);
       expect((await input(h).inputValue()) === "", "입력창 그대로");
     },
@@ -130,23 +124,23 @@ export default [
       });
       await h.panel.waitForTimeout(300);
       await speak(h);
-      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 1), "요청 시작");
+      await waitFor(h, async () => (await voiceReqs(h)).length === 1, "요청 시작");
       await mic(h).click(); // 변환 중 누르면 취소
-      expect(await waitFor(h, async () => (await voiceReqs(h))[0]?.aborted === true), "취소하면 요청 중단");
+      await waitFor(h, async () => (await voiceReqs(h))[0]?.aborted === true, "취소하면 요청 중단");
       await h.sw.evaluate(() => {
         globalThis.__voiceDelayMs = 3000;
       });
       await speak(h);
-      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 2), "다시 녹음해 보냄");
+      await waitFor(h, async () => (await voiceReqs(h)).length === 2, "다시 녹음해 보냄");
       await h.panel.locator('button.icon-btn[title="새 대화"]').click();
-      expect(await waitFor(h, async () => (await voiceReqs(h))[1]?.aborted === true), "새 대화면 요청 중단");
+      await waitFor(h, async () => (await voiceReqs(h))[1]?.aborted === true, "새 대화면 요청 중단");
       await h.panel.waitForTimeout(3500);
       expect((await input(h).inputValue()) === "", `늦은 결과를 넣지 않음(${await input(h).inputValue()})`);
       await h.sw.evaluate(() => {
         globalThis.__voiceDelayMs = 0;
       });
       await speak(h);
-      expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), "새 대화에서 다시 됨");
+      await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자", "새 대화에서 다시 됨");
     },
   },
   {
@@ -163,10 +157,10 @@ export default [
       await other.locator("button.composer-btn.mic").click();
       await other.waitForTimeout(1200);
       await other.locator("button.composer-btn.mic").click();
-      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 2), "두 요청");
+      await waitFor(h, async () => (await voiceReqs(h)).length === 2, "두 요청");
       await other.close();
-      expect(await waitFor(h, async () => (await voiceReqs(h))[1]?.aborted === true), "닫은 패널의 요청만 중단");
-      expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), "남은 패널은 받음");
+      await waitFor(h, async () => (await voiceReqs(h))[1]?.aborted === true, "닫은 패널의 요청만 중단");
+      await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자", "남은 패널은 받음");
       expect((await voiceReqs(h))[0].aborted === false, "첫 요청은 그대로");
     },
   },
@@ -179,7 +173,7 @@ export default [
       });
       await h.panel.waitForTimeout(300);
       await speak(h);
-      expect(await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0), "오류 안내");
+      await waitFor(h, async () => (await h.panel.locator(".voice-error").count()) > 0, "오류 안내");
       const t = await h.panel.locator(".voice-error").innerText();
       expect(t.includes("401") && t.includes("bad key") && !t.includes("sk-voice-test"), `오류(${t})`);
     },
@@ -213,7 +207,7 @@ export default [
         el.setSelectionRange(1, 1);
       });
       await speak(h);
-      expect(await waitFor(h, async () => (await input(h).inputValue()) === "앞 음성 글자뒤"), `커서 자리(${await input(h).inputValue()})`);
+      await waitFor(h, async () => (await input(h).inputValue()) === "앞 음성 글자뒤", "커서 자리", { detail: () => input(h).inputValue() });
     },
   },
   {
@@ -227,10 +221,10 @@ export default [
       await input(h).fill("앞말");
       await h.panel.locator("body").click({ position: { x: 5, y: 5 } });
       await speak(h);
-      expect(await waitFor(h, async () => (await userBubbles(h)).length === 1), "사용자 말풍선");
+      await waitFor(h, async () => (await userBubbles(h)).length === 1, "사용자 말풍선");
       const b = await userBubbles(h);
       expect(b[0].includes("앞말 음성 글자"), `합친 글을 보냄(${b[0]})`);
-      expect(await waitFor(h, async () => (await chatTexts(h)).some((t) => t.includes("앞말 음성 글자"))), "모델 요청에 그 글");
+      await waitFor(h, async () => (await chatTexts(h)).some((t) => t.includes("앞말 음성 글자")), "모델 요청에 그 글");
       expect((await input(h).inputValue()) === "", "입력창 비움");
     },
   },
@@ -247,7 +241,7 @@ export default [
       await h.panel.click("button.composer-btn.primary");
       await h.panel.waitForFunction(() => !!document.querySelector("button.composer-btn.danger"), null, { timeout: 5000 });
       await speak(h);
-      expect(await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자"), `입력창에(${await input(h).inputValue()})`);
+      await waitFor(h, async () => (await input(h).inputValue()) === "음성 글자", "입력창에", { detail: () => input(h).inputValue() });
       expect((await userBubbles(h)).length === 1, "보내지 않음");
       expect((await h.panel.locator(".composer-hint").allInnerTexts()).some((t) => t.includes("응답을 받는 중")), "안내");
       await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 30000 });
@@ -256,7 +250,7 @@ export default [
         globalThis.__voiceReply = "가".repeat(2100);
       });
       await speak(h);
-      expect(await waitFor(h, async () => (await input(h).inputValue()).length === 2000), "잘린 글은 입력창에");
+      await waitFor(h, async () => (await input(h).inputValue()).length === 2000, "잘린 글은 입력창에");
       expect((await userBubbles(h)).length === 1, "잘린 글은 보내지 않음");
     },
   },
@@ -270,10 +264,10 @@ export default [
       });
       await h.panel.waitForTimeout(300);
       await speak(h);
-      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 1), "요청 시작");
+      await waitFor(h, async () => (await voiceReqs(h)).length === 1, "요청 시작");
       await mic(h).click();
       await speak(h);
-      expect(await waitFor(h, async () => (await voiceReqs(h)).length === 2), "다시");
+      await waitFor(h, async () => (await voiceReqs(h)).length === 2, "다시");
       await h.panel.locator('button.icon-btn[title="새 대화"]').click();
       await h.panel.waitForTimeout(3500);
       expect((await userBubbles(h)).length === 0 && (await chatReqs(h)) === 0, `보내지 않음(${(await userBubbles(h)).length}/${await chatReqs(h)})`);
@@ -292,14 +286,14 @@ export default [
       await speak(h);
       await input(h).fill("고친글");
       await h.panel.locator("body").click({ position: { x: 5, y: 5 } });
-      expect(await waitFor(h, async () => (await userBubbles(h)).length === 1), "보냄");
+      await waitFor(h, async () => (await userBubbles(h)).length === 1, "보냄");
       expect((await userBubbles(h))[0].includes("고친글 음성 글자"), `최근 편집 유지(${(await userBubbles(h))[0]})`);
       await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 10000 });
       // 2) 변환 중 초안을 직접 보내면, 도착한 받아쓰기는 그 초안 없이 보낸다(초안 재전송 없음).
       await speak(h);
       await input(h).fill("직접보냄");
       await h.panel.click("button.composer-btn.primary");
-      expect(await waitFor(h, async () => (await userBubbles(h)).length === 2), "직접 보냄");
+      await waitFor(h, async () => (await userBubbles(h)).length === 2, "직접 보냄");
       await h.panel.waitForFunction(() => !document.querySelector("button.composer-btn.danger"), null, { timeout: 10000 });
       await h.panel.waitForTimeout(2500);
       const b = await userBubbles(h);
@@ -308,7 +302,7 @@ export default [
       const n = (await userBubbles(h)).length;
       await speak(h);
       await patchVoice(h, { autoSend: false });
-      expect(await waitFor(h, async () => (await input(h).inputValue()).includes("음성 글자")), "입력창에");
+      await waitFor(h, async () => (await input(h).inputValue()).includes("음성 글자"), "입력창에");
       expect((await userBubbles(h)).length === n, "끄면 보내지 않음");
     },
   },

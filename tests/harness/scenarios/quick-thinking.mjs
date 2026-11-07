@@ -1,5 +1,5 @@
 // 빠르게 생각(#160): 켜면 모든 요청을 낮은 추론으로, Thought 지침을 한 문장으로. 턴 시작에 고정. 길이 초과 재시도는 한 번.
-import { expect, okResult } from "../lib.mjs";
+import { duringTurn, expect, okResult, pollUntil } from "../lib.mjs";
 
 const PAGE = `<title>가게</title><main><button>주문</button><p id=out></p></main>`;
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs ?? []);
@@ -33,8 +33,10 @@ export default [
       await clear(h);
       const turn = h.turn([{ tool: "describe_page", args: {}, delayMs: 800 }, { text: "끝" }], { path: "/p" });
       // 첫 모델 요청이 나간 뒤(턴이 시작된 뒤)에 바꾼다.
-      for (let i = 0; i < 50 && !(await reqs(h)).length; i++) await h.tab.waitForTimeout(100);
-      await h.settings({ quickThinking: true });
+      await duringTurn(turn, async () => {
+        await pollUntil(async () => (await reqs(h)).length, { tries: 50, label: "첫 모델 요청" });
+        await h.settings({ quickThinking: true });
+      });
       await turn;
       const list = agentReqs(await reqs(h));
       expect(list.length >= 2 && list.every((q) => JSON.stringify(q.body.reasoning) === JSON.stringify({ max_tokens: 4096 })), `턴 동안 고정(${JSON.stringify(list.map((q) => q.body.reasoning))})`);

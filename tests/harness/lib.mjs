@@ -102,19 +102,16 @@ export async function startHarness() {
   // 설정 페이지(옵션 탭, #127). openOptions는 새 탭으로 연다. optionsPages는 지금 열린 설정 탭들(패널의 ⚙가 연 것 포함).
   const optionsUrl = `chrome-extension://${extId}/src/options/index.html`;
   const optionsPages = () => ctx.pages().filter((p) => p.url().startsWith(optionsUrl));
-  // 패널이 연 설정 탭을 기다린다(section이 있으면 그 묶음 해시까지). 없으면 null.
+  // 패널이 연 설정 탭을 기다린다(section이 있으면 그 묶음 해시까지). 한도 안에 없으면 열린 설정 탭 주소를 담아 실패한다.
   async function waitOptions(section, ms = 5000) {
-    const until = Date.now() + ms;
-    while (Date.now() < until) {
-      const p = optionsPages().find((x) => !section || x.url().endsWith(`#${section}`));
-      if (p) {
-        await p.waitForLoadState().catch(() => {});
-        await p.waitForTimeout(300);
-        return p;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    return null;
+    const p = await waitUntil(() => optionsPages().find((x) => !section || x.url().endsWith(`#${section}`)), {
+      timeoutMs: ms,
+      label: `설정 탭${section ? `(#${section})` : ""}`,
+      detail: () => `열린 설정 탭: ${JSON.stringify(optionsPages().map((x) => new URL(x.url()).hash))}`,
+    });
+    await p.waitForLoadState().catch(() => {});
+    await p.waitForTimeout(300);
+    return p;
   }
   async function openOptions(section = "model") {
     const p = await ctx.newPage();
@@ -638,13 +635,79 @@ export const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.send
 
 export class Fail extends Error {}
 
-// 조건이 참이 될 때까지 기다린다(고정 대기 대신, #252). 한도 안에 안 되면 label을 담아 실패한다.
-export async function waitUntil(pred, { timeoutMs = 5000, intervalMs = 100, label = "조건" } = {}) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 실패 글에 붙일 지금 상태(detail). 읽다 실패해도 원래 실패 이유를 가리지 않게 한다.
+async function why(detail) {
+  if (!detail) return "";
+  try {
+    return ` (${await detail()})`;
+  } catch (e) {
+    return ` (상태 읽기 실패: ${e instanceof Error ? e.message : String(e)})`;
+  }
+}
+
+// 조건이 참이 될 때까지 기다린다(고정 대기 대신, #252). 한도(벽시계) 안에 안 되면 label·detail을 담아 실패한다.
+// 조건 함수가 마지막에 돌려준 참 값(불리언·배열·메시지 등)을 돌려준다(#262).
+export async function waitUntil(pred, { timeoutMs = 5000, intervalMs = 100, label = "조건", detail } = {}) {
   const started = Date.now();
   for (;;) {
-    if (await pred()) return;
-    if (Date.now() - started >= timeoutMs) throw new Fail(`${label}: ${timeoutMs}ms 안에 되지 않았습니다`);
-    await new Promise((r) => setTimeout(r, intervalMs));
+    const v = await pred();
+    if (v) return v;
+    if (Date.now() - started >= timeoutMs) throw new Fail(`${label}: ${timeoutMs}ms 안에 되지 않았습니다${await why(detail)}`);
+    await sleep(intervalMs);
+  }
+}
+
+// 시도 횟수로 기다린다(#262): 조건을 최대 tries번 보고(사이마다 intervalMs), 다 거짓이면 label·detail을 담아 실패한다.
+// `for (let i = 0; i < N && !cond; i++) wait(ms)` 반복과 확인 횟수·간격이 같다(조건 자체가 느려도 횟수는 줄지 않는다).
+export async function pollUntil(pred, { tries, intervalMs = 100, label = "조건", detail } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const v = await pred();
+    if (v) return v;
+    if (i < tries - 1) await sleep(intervalMs);
+  }
+  throw new Fail(`${label}: ${tries}번(${intervalMs}ms 간격) 확인해도 되지 않았습니다${await why(detail)}`);
+}
+
+// 도구 기록(__toolLog)에 그 도구가 나올 때까지 시도 횟수로 기다린다(기본 50번×100ms — 턴을 먼저 시작한 시나리오가 쓴다).
+export function waitToolCall(h, name, { tries = 50, intervalMs = 100 } = {}) {
+  return pollUntil(() => h.sw.evaluate((n) => (globalThis.__toolLog ?? []).some((t) => t.name === n), name), {
+    tries,
+    intervalMs,
+    label: `${name} 실행`,
+    detail: async () => `지금까지 도구: ${(await h.sw.evaluate(() => (globalThis.__toolLog ?? []).map((t) => t.name))).join(",") || "없음"}`,
+  });
+}
+
+// 먼저 시작한 턴(h.turn Promise)이 도는 동안 fn을 한다(#262).
+// - 턴의 rejection은 들어오자마자 잡아 둔다(fn이 기다리는 사이 턴이 먼저 실패해도 처리 안 된 rejection으로 프로세스가 죽지 않게).
+// - fn이 실패하면 턴이 끝날 때까지 기다려 회수한 뒤 fn의 실패를 던진다(남은 턴이 다음 시나리오에 섞이지 않게).
+// - 턴이 먼저 실패하면 fn 결과를 더 기다리지 않고 턴의 실패(근본 원인)를 던진다. 다만 fn은 탭·패널을 만지므로
+//   끝날 때까지(fn 자신의 대기 한도 안) 기다린 뒤 던진다 — 다음 시나리오의 reset 중에 페이지를 바꾸지 않게.
+// fn이 성공하면 그 값을 돌려주고, 턴의 결과·실패는 호출처가 뒤에서 await turn으로 그대로 받는다.
+export async function duringTurn(turn, fn) {
+  let turnError = null;
+  const turnDone = turn.then(
+    () => {},
+    (e) => {
+      turnError = { e };
+    },
+  );
+  const work = Promise.resolve().then(fn);
+  const workDone = work.then(
+    () => {},
+    () => {},
+  );
+  await Promise.race([workDone, turnDone.then(() => (turnError ? undefined : new Promise(() => {})))]);
+  if (turnError) {
+    await workDone;
+    throw turnError.e;
+  }
+  try {
+    return await work;
+  } catch (e) {
+    await turnDone;
+    throw e;
   }
 }
 

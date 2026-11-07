@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ask, expect } from "../lib.mjs";
+import { ask, expect, waitUntil } from "../lib.mjs";
 import { asks as tgAsks, connect as tgConnect, deliver as tgDeliver, press as tgPress, replies as tgReplies, waitAsk as tgWaitAsk } from "./telegram.mjs";
 
 const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/sbp-mcp.mjs");
@@ -34,24 +34,25 @@ function startBridge(secret) {
     child.on("exit", () => reject(new Error(`다리가 끝났습니다: ${err}`)));
   });
   const send = (m) => child.stdin.write(`${JSON.stringify(m)}\n`);
-  const reply = async (id, ms = 20_000) => {
+  // 성공 대기(#262): 응답·요청이 올 때까지 기다려 돌려주고, 한도 안에 안 오면 받은 것의 id·method를 담아 실패한다.
+  const reply = (id, ms = 20_000) =>
+    waitUntil(() => replies.has(id) && replies.get(id), { timeoutMs: ms, label: `MCP 응답(id ${id})`, detail: () => `받은 응답 id: ${JSON.stringify([...replies.keys()])}` });
+  const nth = (method, n) => requests.filter((r) => r.method === method)[n - 1];
+  const request = (method, n = 1, ms = 20_000) =>
+    waitUntil(() => nth(method, n), { timeoutMs: ms, label: `MCP 요청 ${method} ${n}번째`, detail: () => `받은 요청: ${requests.map((r) => r.method).join(",") || "없음"}` });
+  // 부정 확인용(#262): ms 동안 지켜보고 나타나면 그것을, 끝까지 없으면 null을 돌려준다(호출처가 "없어야 함"을 expect). 던지지 않는다.
+  const watch = async (get, ms) => {
     const until = Date.now() + ms;
     while (Date.now() < until) {
-      if (replies.has(id)) return replies.get(id);
+      const v = get();
+      if (v) return v;
       await new Promise((r) => setTimeout(r, 100));
     }
     return null;
   };
-  const request = async (method, n = 1, ms = 20_000) => {
-    const until = Date.now() + ms;
-    while (Date.now() < until) {
-      const got = requests.filter((r) => r.method === method);
-      if (got.length >= n) return got[n - 1];
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    return null;
-  };
-  return { child, port, send, reply, request, requests, stop: () => child.kill() };
+  const seenReply = (id, ms) => watch(() => replies.get(id), ms);
+  const seenRequest = (method, n, ms) => watch(() => nth(method, n), ms);
+  return { child, port, send, reply, request, seenReply, seenRequest, requests, stop: () => child.kill() };
 }
 
 // 승인 질문 시나리오의 준비: 켜기·질문 설정·다리·초기화(elicitation 지원 여부는 capabilities로).
@@ -63,7 +64,11 @@ async function askReady(h, { askApproval = true, capabilities = { elicitation: {
   const port = await bridge.port;
   await ask(h, { kind: "mcp_set", port });
   bridge.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: version, capabilities, clientInfo: { name: "harness", version: "1" } } });
-  await bridge.reply(1);
+  // 초기화 응답이 안 오면 실패한다 — 호출처의 try/finally 밖이라 여기서 다리를 끈다.
+  await bridge.reply(1).catch((e) => {
+    bridge.stop();
+    throw e;
+  });
   bridge.send({ jsonrpc: "2.0", method: "notifications/initialized" });
   return bridge;
 }
@@ -88,19 +93,23 @@ async function panelCard(h, steps, text) {
   await card.waitFor({ timeout: 15_000 });
   return card;
 }
-async function panelIdle(h, ms = 20_000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    if (!(await h.panel.locator("button.composer-btn.danger").count())) return true;
-    await h.panel.waitForTimeout(200);
-  }
-  return false;
-}
+// 패널 턴이 끝날 때까지(중단 버튼이 사라질 때까지) 기다린다. 안 되면 label을 담아 실패한다.
+const panelIdle = (h, label, ms = 20_000) =>
+  waitUntil(async () => !(await h.panel.locator("button.composer-btn.danger").count()), { timeoutMs: ms, intervalMs: 200, label });
+const mcpState = (h) => h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp);
+// 저장소의 MCP 작업 기록(job)·보낼 결과(pending)가 비워질 때까지 기다린다.
+const mcpCleared = (h, label, ms, intervalMs) =>
+  waitUntil(
+    async () => {
+      const st = await mcpState(h);
+      return !st.pending && !st.job;
+    },
+    { timeoutMs: ms, intervalMs, label, detail: async () => { const st = await mcpState(h); return JSON.stringify({ job: st.job, pending: st.pending }); } },
+  );
 // MCP 질문 중 링크 읽기 질문을 기다린다(그 앞의 이동 질문은 승인 — 앞 시나리오에서 같은 사이트를 승인했으면 이동 질문이 없을 수 있다).
 async function linkQuestion(bridge) {
   for (let n = 1; n <= 3; n++) {
     const q = await bridge.request("elicitation/create", n);
-    if (!q) return null;
     if (q.params?.message?.includes("링크 읽기")) return q;
     bridge.send({ jsonrpc: "2.0", id: q.id, result: { action: "accept", content: { approve: true } } });
   }
@@ -163,15 +172,14 @@ export default [
         }, { a: `${h.base}/a`, b: `${h.base}/b` });
         bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "페이지 a와 b를 봐 줘" } } });
         // 첫 이동이 끝나면 목록에서 뺀다(다음 모델 응답은 2.5초 뒤).
-        const until = Date.now() + 15_000;
-        while (Date.now() < until && !(await h.sw.evaluate(() => globalThis.__toolLog.some((t) => t.name === "navigate_to_url")))) await h.panel.waitForTimeout(100);
+        await waitUntil(() => h.sw.evaluate(() => globalThis.__toolLog.some((t) => t.name === "navigate_to_url")), { timeoutMs: 15_000, label: "첫 이동(navigate_to_url)" });
         await ask(h, { kind: "remote_site_op", op: { op: "remove", site } });
         const res = await bridge.reply(2, 30_000);
         expect(!!res?.result, `답(${JSON.stringify(res)})`);
         const log = await h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.name}:${t.error ?? "ok"}`));
         expect(log[0] === "navigate_to_url:ok", `허용 사이트로 이동(${log.join(",")})`);
         expect(log[1] && log[1] !== "navigate_to_url:ok", `빼고 난 뒤 이동은 안 함(${log.join(",")})`);
-        expect(!(await bridge.request("elicitation/create", 1, 500)), "묻지 못하는 클라이언트에는 질문 없음");
+        expect(!(await bridge.seenRequest("elicitation/create", 1, 500)), "묻지 못하는 클라이언트에는 질문 없음");
       } finally {
         bridge.stop();
         await ask(h, { kind: "mcp_set", enabled: false });
@@ -230,7 +238,8 @@ export default [
         expect((doc?.params?.message ?? "").includes("파일 읽기") && doc.params.message.includes("로그인 쿠키와 함께"), `파일 읽기 질문(${doc?.params?.message})`);
         h.hits.length = 0;
         bridge.send({ jsonrpc: "2.0", id: doc.id, result: { action: "decline" } });
-        const links = await bridge.request("elicitation/create", 3, 20_000);
+        // 링크 읽기 질문은 올 수도 안 올 수도 있다(없으면 아래 if를 건너뜀) — 성공 대기가 아니라 관찰(20초 그대로).
+        const links = await bridge.seenRequest("elicitation/create", 3, 20_000);
         expect(!h.hits.some((x) => x.includes("/files/a.pdf")), "거절한 파일은 요청 안 함");
         if (links) {
           expect(links.params.message.includes("링크 읽기") && links.params.message.includes("기본 선택 2개만"), `링크 질문(${links.params.message})`);
@@ -261,7 +270,7 @@ export default [
         bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "오늘 경제 뉴스 정리해 줘" } } });
         const a = await tgWaitAsk(h, 1, 20_000);
         expect(a.length === 1 && a[0].text.includes("[MCP 요청]") && a[0].text.includes("요청: 오늘 경제 뉴스 정리해 줘") && a[0].text.includes(`${h.base}/news`), `텔레그램 질문(${JSON.stringify(a)})`);
-        expect(!(await bridge.request("elicitation/create", 1, 300)), "클라이언트에는 묻지 않음");
+        expect(!(await bridge.seenRequest("elicitation/create", 1, 300)), "클라이언트에는 묻지 않음");
         // 질문 중 새 텔레그램 요청은 받지 않는다.
         await tgDeliver(h, "다른 요청");
         const r = await tgReplies(h);
@@ -308,7 +317,7 @@ export default [
           globalThis.__steps = [{ text: "패널 끝" }];
         });
         await card.locator(".btn-approve").first().click();
-        expect(await panelIdle(h), "패널 턴이 끝남");
+        await panelIdle(h, "패널 턴이 끝남");
         expect(h.hits.some((x) => x.includes("/l1")), `패널이 고른 링크를 읽음(${JSON.stringify(h.hits)})`);
         const reads = await linkReads(h);
         expect(reads.some((r) => r.callId === "call_0" && r.error === null), `패널 결과는 모델 id 그대로·성공(${JSON.stringify(reads)})`);
@@ -342,7 +351,7 @@ export default [
           globalThis.__steps = [{ text: "끝" }, { text: "끝" }];
         });
         await card.locator(".btn-cancel").first().click();
-        expect(await panelIdle(h), "패널 턴이 끝남");
+        await panelIdle(h, "패널 턴이 끝남");
         h.hits.length = 0;
         bridge.send({ jsonrpc: "2.0", id: links.id, result: { action: "accept", content: { approve: true } } });
         const res = await bridge.reply(2, 30_000);
@@ -367,7 +376,7 @@ export default [
       // 2턴: 같은 id로 call_0(완료) → call_1(승인 카드에서 멈춤).
       await panelCard(h, [{ calls: [{ tool: "describe_page", args: {}, callId: "call_0" }, { tool: "read_linked_pages", args: { urls: [l1] }, callId: "call_1" }] }], "다시 봐 줘");
       await h.panel.click("button.composer-btn.danger");
-      expect(await panelIdle(h), "멈춤");
+      await panelIdle(h, "멈춤");
       // 3턴: 보낸 기록의 마지막 호출 블록 뒤에 이번 블록의 결과가 하나씩 있다.
       await h.sw.evaluate(() => {
         globalThis.__modelReqs = [];
@@ -438,14 +447,7 @@ export default [
         const res = await bridge.reply(2, 45_000);
         expect(res?.result?.content?.[0]?.text === "늦은 답", `다시 보낸 최종 답(${JSON.stringify(res)})`);
         expect((await h.sw.evaluate(() => globalThis.__failResults)) === 0, "실패를 거친 뒤 보냄");
-        const until = Date.now() + 5000;
-        let st = null;
-        while (Date.now() < until) {
-          st = await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp);
-          if (!st.pending && !st.job) break;
-          await h.panel.waitForTimeout(200);
-        }
-        expect(!st.pending && !st.job, `보낸 뒤 기록 정리(${JSON.stringify({ job: st.job, pending: st.pending })})`);
+        await mcpCleared(h, "보낸 뒤 기록 정리", 5000, 200);
       } finally {
         bridge.stop();
         await ask(h, { kind: "mcp_set", enabled: false });
@@ -458,26 +460,13 @@ export default [
       const bridge = await askReady(h, { askApproval: false, capabilities: {} });
       try {
         // 다리는 할 일이 없으면 첫 폴링을 20초까지 붙잡는다 — 그 응답에서 다리 id를 저장한다.
-        let bridgeId = "";
-        const until = Date.now() + 30_000;
-        while (!bridgeId && Date.now() < until) {
-          bridgeId = (await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp?.bridgeId)) ?? "";
-          if (!bridgeId) await h.panel.waitForTimeout(200);
-        }
-        expect(!!bridgeId, "다리 연결");
+        const bridgeId = await waitUntil(async () => (await mcpState(h))?.bridgeId, { timeoutMs: 30_000, intervalMs: 200, label: "다리 연결" });
         // 서비스 워커가 실행 중에 내려갔다가 다시 뜬 것처럼, 맡지 않은 작업 기록을 저장소에 둔다.
         await h.sw.evaluate(async (id) => {
           const s = (await chrome.storage.local.get("mcp")).mcp;
           await chrome.storage.local.set({ mcp: { ...s, job: { bridgeId: id, jobId: "j-old" } } });
         }, bridgeId);
-        const end = Date.now() + 30_000;
-        let st = null;
-        while (Date.now() < end) {
-          st = await h.sw.evaluate(async () => (await chrome.storage.local.get("mcp")).mcp);
-          if (!st.job && !st.pending) break;
-          await h.panel.waitForTimeout(300);
-        }
-        expect(!st.job && !st.pending, `중단 보고 뒤 정리(${JSON.stringify({ job: st.job, pending: st.pending })})`);
+        await mcpCleared(h, "중단 보고 뒤 정리", 30_000, 300);
       } finally {
         bridge.stop();
         await ask(h, { kind: "mcp_set", enabled: false });
@@ -648,7 +637,7 @@ export default [
         await wrong.reply(1);
         wrong.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "몰래" } } });
         await h.panel.waitForTimeout(4000);
-        expect(!(await wrong.reply(2, 100)), "비밀이 다르면 가져가지 않음");
+        expect(!(await wrong.seenReply(2, 100)), "비밀이 다르면 가져가지 않음");
         const st = await ask(h, { kind: "mcp_status" });
         expect(/인증/.test(st.data.lastError), `인증 실패 표시(${st.data.lastError})`);
       } finally {
