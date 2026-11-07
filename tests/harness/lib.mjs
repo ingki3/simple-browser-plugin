@@ -36,7 +36,8 @@ const DEFAULT_PAGE = `<title>shop</title><body><main>
 <p id=out></p></main>`;
 
 
-export async function startHarness() {
+// onWorker(sw): 서비스 워커를 잡은 직후, 시험 페이지·패널을 열기 전에 부른다(격리 시나리오가 워커 전역 대역을 먼저 걸 때, #263 R6).
+export async function startHarness({ onWorker } = {}) {
   const { chromium } = await import("playwright-core");
   const chrome = findChrome();
   if (!chrome) throw new Error("Chrome for Testing을 찾지 못했습니다(HARNESS_CHROME).");
@@ -90,6 +91,7 @@ export async function startHarness() {
   const extId = sw.url().split("/")[2];
   const logs = [];
   sw.on("console", (m) => logs.push(m.text()));
+  if (onWorker) await onWorker(sw);
   const tab = ctx.pages()[0] ?? (await ctx.newPage());
   await tab.goto(base + "/");
   await installMockModel(sw);
@@ -559,6 +561,19 @@ async function installMockModel(sw) {
         if (anthropic) return anthropicSse([{ type: "message_delta", delta: { stop_reason: "max_tokens" } }, { type: "message_stop" }]);
         return sse([{ choices: [{ delta: {}, finish_reason: "length" }] }]);
       }
+      // lengthText: 글자가 있는 채로 응답 상한에 걸린 답(잘린 답 안내 시험, #263).
+      if (step?.lengthText) {
+        if (anthropic) {
+          return anthropicSse([
+            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: step.lengthText } },
+            { type: "content_block_stop", index: 0 },
+            { type: "message_delta", delta: { stop_reason: "max_tokens" } },
+            { type: "message_stop" },
+          ]);
+        }
+        return sse([{ choices: [{ delta: { content: step.lengthText } }] }, { choices: [{ delta: {}, finish_reason: "length" }] }]);
+      }
       if (anthropic) {
         const ev = [];
         // 생각 블록(서명 포함)을 먼저 보낸다 — 다음 요청에 그대로 돌아오는지 본다.
@@ -618,9 +633,10 @@ async function installMockModel(sw) {
         return new Response(stream, { headers: { "content-type": "text/event-stream" } });
       }
       // calls: 한 응답에 도구 호출 여러 개([{ tool, args, callId }], #221 시험). callId: 모델이 줄 호출 id(없으면 call<n>).
-      const calls = out.calls ?? (out.tool ? [{ tool: out.tool, args: out.args, callId: out.callId, extra: out.extra }] : []);
+      // rawArgs(#263): args 대신 이 글자를 인자 원문으로 그대로 보낸다(깨진 JSON 인자 시험 — OpenAI 형식 제공자만).
+      const calls = out.calls ?? (out.tool ? [{ tool: out.tool, args: out.args, rawArgs: out.rawArgs, callId: out.callId, extra: out.extra }] : []);
       const chunks = calls.length
-        ? [{ choices: [{ delta: { tool_calls: calls.map((c, index) => ({ index, id: c.callId ?? "call" + ++globalThis.__n, type: "function", function: { name: c.tool, arguments: JSON.stringify(c.args ?? {}) }, ...(c.extra ? { extra_content: c.extra } : {}) })) } }] }]
+        ? [{ choices: [{ delta: { tool_calls: calls.map((c, index) => ({ index, id: c.callId ?? "call" + ++globalThis.__n, type: "function", function: { name: c.tool, arguments: typeof c.rawArgs === "string" ? c.rawArgs : JSON.stringify(c.args ?? {}) }, ...(c.extra ? { extra_content: c.extra } : {}) })) } }] }]
         : [{ choices: [{ delta: { content: out.text } }] }];
       chunks.push({ choices: [{ delta: {}, finish_reason: calls.length ? "tool_calls" : "stop" }] });
       return sse(chunks);
