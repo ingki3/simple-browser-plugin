@@ -161,6 +161,11 @@ export async function startHarness() {
       globalThis.__localModelReqs = [];
       globalThis.__translateDelayMs = 0;
       globalThis.__translateReqs = [];
+      // 번역 응답 게이트(#256): 앞 시나리오가 붙잡아 둔 응답은 풀고 비운다.
+      globalThis.__releaseTranslate?.();
+      globalThis.__translateHold = false;
+      globalThis.__translateHeld = 0;
+      globalThis.__translateEcho = undefined;
       // 스트림 게이트(textParts holdAfter, #252): 앞 시나리오가 남긴 붙잡힌 스트림은 풀고 비운다.
       globalThis.__releaseStream?.();
       globalThis.__streamGate = null;
@@ -379,9 +384,25 @@ async function installMockModel(sw) {
         });
       }
       // 번역 배치(#193 시험): 입력 배열을 받아 같은 수의 "번역:원문"을 돌려준다. __translateDelayMs만큼 늦추고 중단 신호를 따른다.
+      // 기록에는 실제로 보낸 입력 글자 배열(texts)을 남긴다(#256 — 편집 영역 글자가 요청에 실리지 않는지 본문으로 검사).
+      // __translateEcho(#256): 이 글자가 든 입력은 원문 그대로 돌려준다(쓸 수 없는 번역 → 그 단위만 다시 요청하는 경로 시험).
+      // __translateHold(#256): 켜져 있으면 응답을 붙잡고 __translateHeld를 센다. __releaseTranslate()로 붙잡힌 응답을 모두 풀고 끈다.
       const userText = typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : "";
       if (body.response_format && userText.includes("translations 배열")) {
-        (globalThis.__translateReqs ??= []).push({ url: String(url) });
+        const input = JSON.parse(userText.slice(userText.lastIndexOf("입력:\n") + "입력:\n".length));
+        (globalThis.__translateReqs ??= []).push({ url: String(url), texts: input });
+        if (globalThis.__translateHold) {
+          globalThis.__translateGate ??= new Promise((resolve) => {
+            globalThis.__releaseTranslate = () => {
+              globalThis.__translateHold = false;
+              globalThis.__translateGate = null;
+              globalThis.__releaseTranslate = null;
+              resolve();
+            };
+          });
+          globalThis.__translateHeld = (globalThis.__translateHeld ?? 0) + 1;
+          await globalThis.__translateGate;
+        }
         if (globalThis.__translateDelayMs) {
           await new Promise((resolve, reject) => {
             const t = setTimeout(resolve, globalThis.__translateDelayMs);
@@ -391,8 +412,7 @@ async function installMockModel(sw) {
             }, { once: true });
           });
         }
-        const input = JSON.parse(userText.slice(userText.lastIndexOf("입력:\n") + "입력:\n".length));
-        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: input.map((t) => `번역:${t}`) }) } }] }), {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: input.map((t) => (globalThis.__translateEcho && t.includes(globalThis.__translateEcho) ? t : `번역:${t}`)) }) } }] }), {
           headers: { "content-type": "application/json" },
         });
       }
