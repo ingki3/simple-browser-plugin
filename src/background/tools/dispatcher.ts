@@ -149,7 +149,7 @@ export interface ToolPreview {
   autoBlockIfUrlsAllowed?: string | null;
   // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
   execArgs?: unknown;
-  // sign_in: 로그인 양식 모양·출처·비밀번호 관리자 항목(이름·아이디만, 값 없음). 승인 판정은 openrouter.ts가 한다.
+  // sign_in: 로그인 양식 모양·출처·비밀번호 관리자 항목(이름·아이디만, 값 없음). 승인 판정은 agent/chatAgent.ts가 한다.
   signIn?: SignInPreview;
 }
 

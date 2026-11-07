@@ -1,5 +1,5 @@
 // 반복 작업(#138): 저장·알람·확인용 탭·확인(모델 판단)·이어서 진행. 상태 전이는 src/lib/repeatTask.ts.
-// - 등록은 늘 승인 카드(openrouter.ts의 scheduleRepeat). 여기서는 승인된 작업만 받는다.
+// - 등록은 늘 승인 카드(agent/chatAgent.ts의 scheduleRepeat). 여기서는 승인된 작업만 받는다.
 // - 확인은 패널 없이도 알람으로 돈다. 페이지 글자는 content의 watch_snapshot(modelText·findClickables — 입력값·편집 영역 제외,
 //   #43)만 쓰고, 보내기 전에 자동 로그인 값을 가린다(가림 목록을 못 읽으면 보내지 않는다).
 // - 조건이 맞으면 알리기만 한다. 다음 일은 사용자가 패널에서 "이어서 진행"을 눌러 새 대화로 시작한다(한 번만).
