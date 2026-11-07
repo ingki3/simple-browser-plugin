@@ -3,7 +3,7 @@
 import { SETTINGS_KEY, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import type { RemoteApprover } from "@/lib/remoteApproval";
-import { ChatAgent, type AgentChannel, type AgentSink, type TurnOutcome } from "./openrouter";
+import { ChatAgent, type AgentChannel, type AgentSink, type TurnOutcome } from "./agent/chatAgent";
 
 // 이 시간 동안 요청이 없으면 다음 요청은 새 대화로 시작한다.
 const IDLE_RESET_MS = 60 * 60_000;

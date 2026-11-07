@@ -7,28 +7,28 @@ import type { ModelId } from "@/lib/models";
 import { internalNavigateAutoBlock, isBrowserInternalUrl, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
-import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "./otherTabs";
-import { discardLinkCall, setChosenLinks } from "./linkedPages";
-import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "./downloadChoices";
-import { candidatesMessage, makeOffer, makeOfferResult, OFFER_REFUSAL_TEXT } from "./savedPagesStore";
+import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "../otherTabs";
+import { discardLinkCall, setChosenLinks } from "../linkedPages";
+import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "../downloadChoices";
+import { candidatesMessage, makeOffer, makeOfferResult, OFFER_REFUSAL_TEXT } from "../savedPagesStore";
 import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
 import { providerAdapter, providerTimeout, type ChatStream, type ProviderId } from "@/lib/providers";
 import { activeModel, targetKey } from "@/lib/settings";
-import { beginTranslationSession, endTranslationSession } from "./translator";
+import { beginTranslationSession, endTranslationSession } from "../translator";
 import {
   type OpenRouterContentPart,
   type OpenRouterMessage,
   type OpenRouterToolCall,
 } from "@/lib/openrouter";
-import { functionDeclarations } from "./tools/declarations";
+import { functionDeclarations } from "../tools/declarations";
 import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
-import { registerRepeatTask } from "./repeatTasks";
-import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "./tools/dispatcher";
-import type { ToolPreview } from "./tools/dispatcher";
-import { takeRebaseOffers, type RebaseOffer } from "./tools/rowRebase";
-import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "./handoff";
-import { settlePopups, watchNewTabs } from "./popups";
+import { registerRepeatTask } from "../repeatTasks";
+import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "../tools/dispatcher";
+import type { ToolPreview } from "../tools/dispatcher";
+import { takeRebaseOffers, type RebaseOffer } from "../tools/rowRebase";
+import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "../handoff";
+import { settlePopups, watchNewTabs } from "../popups";
 
 // 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 페이지가 기록한 클릭 시각보다 앞서
 // 본 창도 그 클릭의 것으로 보는 작은 여유(같은 시계지만 기록 순서가 어긋날 수 있다). 그보다 먼저 열린 창(기다리는 동안
@@ -38,14 +38,14 @@ const HANDOFF_POPUP_LEAD_MS = 200;
 import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
 import { loginSiteFor, newGrantId, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
-import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "./signIn";
-import { allSecrets, containsSecret, maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "./loginSecrets";
-import { detachSession, InputSession } from "./trustedInput";
-import { prepareGrantImages } from "./tools/grantImages";
-import { applySettingsUpdate, getSettings, readFlags, setFlag } from "./storage";
-import { beginKeepalive, endKeepalive } from "./keepalive";
-import { debugLog, timeSpan } from "./debug";
-import { detectPdfAtTab, fetchPdfAsBase64 } from "./pdf";
+import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "../signIn";
+import { allSecrets, containsSecret, maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "../loginSecrets";
+import { detachSession, InputSession } from "../trustedInput";
+import { prepareGrantImages } from "../tools/grantImages";
+import { applySettingsUpdate, getSettings, readFlags, setFlag } from "../storage";
+import { beginKeepalive, endKeepalive } from "../keepalive";
+import { debugLog, timeSpan } from "../debug";
+import { detectPdfAtTab, fetchPdfAsBase64 } from "../pdf";
 import {
   resolveTurnTab,
   recheckTabPopup,
@@ -56,9 +56,9 @@ import {
   takeTabNote,
   turnTabIsInternal,
   type TurnTab,
-} from "./tools/handlers";
-import { commitReads } from "./readRecipes";
-import { isGoogleConfigured } from "./google/auth";
+} from "../tools/handlers";
+import { commitReads } from "../readRecipes";
+import { isGoogleConfigured } from "../google/auth";
 import { youtubeVideoId } from "@/lib/youtubeUrl";
 import { addUsage, emptyUsageTotal, formatTurnUsage, formatUsage, usageFromChunk, type ModelUsage, type UsageTotal } from "@/lib/usage";
 import {
