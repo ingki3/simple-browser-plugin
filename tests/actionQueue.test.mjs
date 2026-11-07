@@ -1,25 +1,8 @@
 // 동작 기록(background/actionLog.ts)과 읽기 레시피(background/readRecipes.ts)의 공유 쓰기 큐·대기 상태·턴 키(#257).
-// 두 모듈은 확장자 없는 import와 `@/` 별칭을 쓰므로, 이 파일 안에서 resolve 훅을 걸고 chrome.storage 대역을 둔 뒤 불러온다.
+// 두 모듈은 확장자 없는 import와 `@/` 별칭을 쓰므로, 공용 해석 훅(helpers/tsLoader.mjs)을 걸고 chrome.storage 대역을 둔 뒤 불러온다.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { register } from "node:module";
-
-const SRC = new URL("../src/", import.meta.url).href;
-const hooks = `
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-const SRC = ${JSON.stringify(SRC)};
-const EXTS = [".ts", ".tsx", "/index.ts"];
-export async function resolve(spec, ctx, next) {
-  let url = null;
-  if (spec.startsWith("@/")) url = new URL(spec.slice(2), SRC).href;
-  else if ((spec.startsWith("./") || spec.startsWith("../")) && ctx.parentURL?.startsWith(SRC)) url = new URL(spec, ctx.parentURL).href;
-  if (url && !/\\.(ts|tsx|mjs|js|json)$/.test(url)) {
-    for (const e of EXTS) if (existsSync(fileURLToPath(url + e))) { url = url + e; break; }
-  }
-  return next(url ?? spec, ctx);
-}`;
-register(`data:text/javascript,${encodeURIComponent(hooks)}`, import.meta.url);
+import "./helpers/tsLoader.mjs";
 
 // chrome.storage 대역: 메모리 저장, 쓰기 기록, 키별 get 지연·실패 주입.
 const local = new Map();
