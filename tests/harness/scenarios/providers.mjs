@@ -128,6 +128,25 @@ const scenarios = [
     },
   },
   {
+    name: "Claude: 저장 링크 후보가 그대로면 다음 요청에 다시 싣지 않는다(기록에 한 번만)",
+    async run(h) {
+      await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" } });
+      await h.sw.evaluate(async () => {
+        await chrome.storage.local.set({ savedPages: [{ name: "주문 조회", url: "https://shop.example/orders", site: "https://shop.example", savedAt: 1, uses: 0 }] });
+      });
+      const MARK = "저장한 링크 후보 데이터";
+      const count = (b) => JSON.stringify(b.messages).split(MARK).length - 1;
+      await h.turn([{ text: "첫 답" }], { text: "첫 요청" });
+      const first = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1).body);
+      expect(count(first) === 1, `첫 요청에 후보 1번(${count(first)})`);
+      await h.turn([{ text: "둘째 답" }], { noReload: true, text: "둘째 요청" });
+      const second = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1).body);
+      // 같은 대화(앞 턴 기록이 실림)인데 후보는 앞 턴 기록에 남은 1번뿐이다.
+      expect(JSON.stringify(second.messages).includes("첫 요청") && JSON.stringify(second.messages).includes("둘째 요청"), "같은 대화로 이어 감");
+      expect(count(second) === 1, `둘째 요청에 후보를 다시 싣지 않음(${count(second)})`);
+    },
+  },
+  {
     name: "Claude: 마무리 요청은 후보를 싣지 않아도 저장 링크 삭제로 보지 않는다",
     async run(h) {
       await h.settings({ provider: "anthropic", apiKeys: { anthropic: "sk-ant-test" }, maxToolHops: 1, maxToolHopsVersion: 2 });
