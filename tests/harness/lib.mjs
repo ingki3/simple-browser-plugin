@@ -161,6 +161,11 @@ export async function startHarness() {
       globalThis.__localModelReqs = [];
       globalThis.__translateDelayMs = 0;
       globalThis.__translateReqs = [];
+      // 스트림 게이트(textParts holdAfter, #252): 앞 시나리오가 남긴 붙잡힌 스트림은 풀고 비운다.
+      globalThis.__releaseStream?.();
+      globalThis.__streamGate = null;
+      globalThis.__releaseStream = null;
+      globalThis.__streamHeld = false;
     });
     logs.length = 0;
     panelLogs.length = 0;
@@ -345,6 +350,15 @@ async function installMockModel(sw) {
         (globalThis.__localModelReqs ??= []).push({ headers: init?.headers ?? {} });
         if (globalThis.__localModelsDelayMs) await new Promise((r) => setTimeout(r, globalThis.__localModelsDelayMs));
         return new Response(JSON.stringify({ data: (globalThis.__localModels ?? []).map((id) => ({ id })) }), { headers: { "content-type": "application/json" } });
+      }
+      // 바꾼 뒤 주소(127.0.0.1:59998, 서버 없음 #252): 요청을 주소와 함께 남긴 뒤 실제처럼 연결 거부로 끝낸다(시나리오가 주소별로 센다).
+      if (String(url).startsWith("http://127.0.0.1:59998/")) {
+        let body = null;
+        try {
+          body = init?.body ? JSON.parse(init.body) : null;
+        } catch {}
+        (globalThis.__modelReqs ??= []).push({ url: String(url), body, headers: init?.headers, at: Date.now() });
+        throw new TypeError("Failed to fetch");
       }
       if (!/openrouter\.ai|api\.openai\.com|generativelanguage\.googleapis\.com|api\.anthropic\.com|127\.0\.0\.1:59999/.test(String(url))) return realFetch(url, init);
       const body = JSON.parse(init.body);
@@ -559,17 +573,29 @@ async function installMockModel(sw) {
         return anthropicSse(ev);
       }
       // textParts + gapMs: 답 글자를 여러 조각으로 나눠 사이를 띄워 보낸다(응답을 받는 중의 패널 동작 시험).
+      // holdAfter: k — k번째 조각을 보낸 뒤 __streamGate가 풀릴 때까지 멈춘다(그동안 __streamHeld = true, #252).
+      //   시나리오는 __streamHeld를 조건 대기로 확인하고 개입한 뒤 __releaseStream()으로 푼다(시간 간격에 기대지 않는다).
       if (step?.textParts && !anthropic) {
         const parts = [...step.textParts.map((t) => ({ choices: [{ delta: { content: t } }] })), { choices: [{ delta: {}, finish_reason: "stop" }] }];
         const enc = new TextEncoder();
         const stream = new ReadableStream({
           async start(c) {
-            for (let k = 0; k < parts.length; k++) {
-              if (k > 0 && k < parts.length - 1) await new Promise((r) => setTimeout(r, step.gapMs ?? 1000));
-              c.enqueue(enc.encode(`data: ${JSON.stringify(parts[k])}\n\n`));
+            try {
+              for (let k = 0; k < parts.length; k++) {
+                if (k > 0 && k < parts.length - 1) await new Promise((r) => setTimeout(r, step.gapMs ?? 1000));
+                c.enqueue(enc.encode(`data: ${JSON.stringify(parts[k])}\n\n`));
+                if (step.holdAfter === k + 1) {
+                  globalThis.__streamGate ??= new Promise((r) => (globalThis.__releaseStream = r));
+                  globalThis.__streamHeld = true;
+                  await globalThis.__streamGate;
+                  globalThis.__streamHeld = false;
+                }
+              }
+              c.enqueue(enc.encode("data: [DONE]\n\n"));
+              c.close();
+            } catch {
+              // 붙잡힌 사이 읽는 쪽이 끊었으면(중단) 더 보내지 않는다.
             }
-            c.enqueue(enc.encode("data: [DONE]\n\n"));
-            c.close();
           },
         });
         return new Response(stream, { headers: { "content-type": "text/event-stream" } });
@@ -586,6 +612,16 @@ async function installMockModel(sw) {
 }
 
 export class Fail extends Error {}
+
+// 조건이 참이 될 때까지 기다린다(고정 대기 대신, #252). 한도 안에 안 되면 label을 담아 실패한다.
+export async function waitUntil(pred, { timeoutMs = 5000, intervalMs = 100, label = "조건" } = {}) {
+  const started = Date.now();
+  for (;;) {
+    if (await pred()) return;
+    if (Date.now() - started >= timeoutMs) throw new Fail(`${label}: ${timeoutMs}ms 안에 되지 않았습니다`);
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
 
 export function expect(cond, message) {
   if (!cond) throw new Fail(message);
