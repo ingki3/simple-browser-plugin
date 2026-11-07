@@ -989,9 +989,14 @@ export class ChatAgent {
     this.activeRequest = controller;
     // 설정에서 보낼 대상이 바뀌었는지(이 턴에서 멈춤 표시가 됐거나, 지금 설정의 대상이 이 대화의 대상과 다름).
     const targetMoved = (now: Parameters<typeof targetKey>[0]) => this.targetChangedTurn === turn || targetKey(now) !== this.conversationTarget();
-    const stopForTarget = () => {
+    // 준비 단계(연결 try 전)에서 끝날 때의 정리(#266): 연결 타이머를 지우고, 이 요청이 아직 진행 중 요청이면 비운다
+    // (늦게 끝난 옛 요청이 새 요청의 표시를 지우지 않게 소유를 확인). 던짐·null 반환 모두 여기를 거친다.
+    const releasePrep = () => {
       clearTimeout(connectTimer);
       if (this.activeRequest === controller) this.activeRequest = null;
+    };
+    const stopForTarget = () => {
+      releasePrep();
       this.targetChangedTurn = turn;
       return new Error(TARGET_CHANGED_NOTE);
     };
@@ -1002,73 +1007,85 @@ export class ChatAgent {
       connectTimedOut = true;
       controller.abort();
     }, CONNECT_TIMEOUT_MS);
-    // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
-    // 마무리 요청(wrapUpNote)에는 붙이지 않는다(이동 후보가 필요 없음).
-    // 지금 저장 링크 후보(마무리 요청에도 읽는다 — 기록에 남긴 후보가 지워졌는지 검사용). 실을지는 아래에서 정한다.
-    // 후보를 붙였는지는 턴마다 첫 요청에서만 로그에 남긴다(#156).
-    const logCandidates = this.candidatesLoggedTurn !== turn;
-    this.candidatesLoggedTurn = turn;
-    const currentCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null, logCandidates).catch(() => null);
-    const savedCandidates = opts.wrapUpNote ? null : currentCandidates;
-    if (this.isStale(turn)) {
-      clearTimeout(connectTimer);
-      return null;
-    }
-    // 턴 도중 설정에서 제공자·키·모델을 바꿨으면 이 턴의 내용을 새 설정으로도, 이전 제공자로도 보내지 않고 멈춘다
-    // (고른 제공자로만 보낸다는 약속). 모든 준비(후보 조회 등)가 끝난 뒤, 요청을 열기 바로 앞에서 본다 — 이 확인과 요청
-    // 사이에는 기다림이 없다. 다음 요청에서 새 설정으로 대화를 새로 시작한다.
-    const now = activeModel(await getSettings());
-    if (this.isStale(turn)) {
-      clearTimeout(connectTimer);
-      return null;
-    }
-    if (targetMoved(now)) throw stopForTarget();
-    // 문맥을 서명하는 제공자: 기록에 남긴 후보를 지웠거나 껐으면 거둘 수 없으니 멈추고 새 대화로, 바뀌지 않았으면 다시 싣지 않는다.
-    let candidatesNote = savedCandidates;
-    // 그런 제공자(Anthropic)는 도구 결과 바로 뒤에 글자 안내를 붙이면 빈 응답으로 끝낼 수 있어, 도구 결과 다음 요청에는
-    // 현재 시각·후보 안내를 붙이지 않는다(사용자 요청 직후 요청에만). 마무리 안내는 그대로 붙인다.
-    const signs = providerAdapter(this.provider).signsContext;
-    const afterToolResult = signs && this.history[this.history.length - 1]?.role === "tool";
-    if (providerAdapter(this.provider).signsContext && this.committedCandidates) {
-      const now = new Set(currentCandidates ? candidateIdsOf(currentCandidates) : []);
-      if ([...this.committedCandidates.ids].some((id) => !now.has(id))) {
-        clearTimeout(connectTimer);
-        if (this.activeRequest === controller) this.activeRequest = null;
-        this.forceNewConversation = true;
-        throw new Error("저장 링크를 지우거나 꺼서 이 대화에 이미 보낸 후보를 거둘 수 없어 멈췄습니다. 다시 요청하면 새 대화로 시작합니다.");
+    // 아래 값은 연결 뒤에도 쓴다(준비 구간을 try로 감싸려고 밖에 둔다).
+    let candidatesNote: string | null;
+    let afterToolResult: boolean;
+    let sentNotes: OpenRouterMessage[];
+    let sentRebases: typeof this.rebasePending;
+    let outgoing: { value: OpenRouterMessage[]; masked: boolean };
+    // 준비 중 예외(설정 읽기·가림 등)에도 타이머·진행 중 요청을 남기지 않는다(#266). 마지막 대상 확인까지 이 안에 있고,
+    // 그 확인과 아래 연결 try의 openStream 호출 사이에는 기다림이 없다.
+    try {
+      // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
+      // 마무리 요청(wrapUpNote)에는 붙이지 않는다(이동 후보가 필요 없음).
+      // 지금 저장 링크 후보(마무리 요청에도 읽는다 — 기록에 남긴 후보가 지워졌는지 검사용). 실을지는 아래에서 정한다.
+      // 후보를 붙였는지는 턴마다 첫 요청에서만 로그에 남긴다(#156).
+      const logCandidates = this.candidatesLoggedTurn !== turn;
+      this.candidatesLoggedTurn = turn;
+      const currentCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null, logCandidates).catch(() => null);
+      const savedCandidates = opts.wrapUpNote ? null : currentCandidates;
+      if (this.isStale(turn)) {
+        releasePrep();
+        return null;
       }
-      if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
+      // 턴 도중 설정에서 제공자·키·모델을 바꿨으면 이 턴의 내용을 새 설정으로도, 이전 제공자로도 보내지 않고 멈춘다
+      // (고른 제공자로만 보낸다는 약속). 모든 준비(후보 조회 등)가 끝난 뒤, 요청을 열기 바로 앞에서 본다 — 이 확인과 요청
+      // 사이에는 기다림이 없다. 다음 요청에서 새 설정으로 대화를 새로 시작한다.
+      const now = activeModel(await getSettings());
+      if (this.isStale(turn)) {
+        releasePrep();
+        return null;
+      }
+      if (targetMoved(now)) throw stopForTarget();
+      // 문맥을 서명하는 제공자: 기록에 남긴 후보를 지웠거나 껐으면 거둘 수 없으니 멈추고 새 대화로, 바뀌지 않았으면 다시 싣지 않는다.
+      candidatesNote = savedCandidates;
+      // 그런 제공자(Anthropic)는 도구 결과 바로 뒤에 글자 안내를 붙이면 빈 응답으로 끝낼 수 있어, 도구 결과 다음 요청에는
+      // 현재 시각·후보 안내를 붙이지 않는다(사용자 요청 직후 요청에만). 마무리 안내는 그대로 붙인다.
+      const signs = providerAdapter(this.provider).signsContext;
+      afterToolResult = signs && this.history[this.history.length - 1]?.role === "tool";
+      if (providerAdapter(this.provider).signsContext && this.committedCandidates) {
+        const now = new Set(currentCandidates ? candidateIdsOf(currentCandidates) : []);
+        if ([...this.committedCandidates.ids].some((id) => !now.has(id))) {
+          releasePrep();
+          this.forceNewConversation = true;
+          throw new Error("저장 링크를 지우거나 꺼서 이 대화에 이미 보낸 후보를 거둘 수 없어 멈췄습니다. 다시 요청하면 새 대화로 시작합니다.");
+        }
+        if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
+      }
+      const runMode = this.effectiveRunMode((await getSettings()).runMode);
+      const taskNote = runMode === "task" && !this.taskApproved && !afterToolResult ? TASK_MODE_NOTE : null;
+      sentNotes = maskSyncMessages<OpenRouterMessage>([
+        ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
+        ...(taskNote ? [{ role: "user" as const, content: taskNote }] : []),
+        ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
+        ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
+        // 문맥을 서명하는 제공자는 이 안내를 기록에 남기므로 남기기 전에 가린다.
+      ]).value;
+      // 이 요청 기록에 실린 결과가 낸 대화별 기준(#233). 응답을 끝까지 받으면 확정한다(아래 return 앞).
+      sentRebases = [...this.rebasePending];
+      // 자동 로그인으로 넣은 값은 어디서 왔든(기록·메모·안내) 모델로 보내지 않는다(기록에 넣을 때 이미 가렸고, 여기는 마지막 거르기).
+      outgoing = await maskMessagesForModel<OpenRouterMessage>([
+        { role: "system", content: systemPrompt },
+        ...this.history,
+        // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).
+        ...sentNotes,
+      ]);
+      if (outgoing.masked) {
+        this.secretsMasked = true;
+        debugLog("login:masked", "모델 요청에서 넣은 로그인 값을 가림", "warn");
+      }
+      // 가림 처리 등을 기다리는 사이 대상이 바뀌었을 수 있다 — 모든 준비가 끝난 뒤 한 번 더 보고, 이 확인 다음 줄에서 바로 요청을 연다
+      // (어댑터는 첫 await 전에 fetch를 시작한다, #193).
+      const latest = activeModel(await getSettings());
+      if (this.isStale(turn)) {
+        releasePrep();
+        return null;
+      }
+      if (targetMoved(latest)) throw stopForTarget();
+    } catch (err) {
+      releasePrep();
+      throw err;
     }
-    const runMode = this.effectiveRunMode((await getSettings()).runMode);
-    const taskNote = runMode === "task" && !this.taskApproved && !afterToolResult ? TASK_MODE_NOTE : null;
-    const sentNotes: OpenRouterMessage[] = maskSyncMessages<OpenRouterMessage>([
-      ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
-      ...(taskNote ? [{ role: "user" as const, content: taskNote }] : []),
-      ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
-      ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
-      // 문맥을 서명하는 제공자는 이 안내를 기록에 남기므로 남기기 전에 가린다.
-    ]).value;
-    // 이 요청 기록에 실린 결과가 낸 대화별 기준(#233). 응답을 끝까지 받으면 확정한다(아래 return 앞).
-    const sentRebases = [...this.rebasePending];
-    // 자동 로그인으로 넣은 값은 어디서 왔든(기록·메모·안내) 모델로 보내지 않는다(기록에 넣을 때 이미 가렸고, 여기는 마지막 거르기).
-    const outgoing = await maskMessagesForModel<OpenRouterMessage>([
-      { role: "system", content: systemPrompt },
-      ...this.history,
-      // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).
-      ...sentNotes,
-    ]);
-    if (outgoing.masked) {
-      this.secretsMasked = true;
-      debugLog("login:masked", "모델 요청에서 넣은 로그인 값을 가림", "warn");
-    }
-    // 가림 처리 등을 기다리는 사이 대상이 바뀌었을 수 있다 — 모든 준비가 끝난 뒤 한 번 더 보고, 이 확인 다음 줄에서 바로 요청을 연다
-    // (어댑터는 첫 await 전에 fetch를 시작한다, #193).
-    const latest = activeModel(await getSettings());
-    if (this.isStale(turn)) {
-      clearTimeout(connectTimer);
-      return null;
-    }
-    if (targetMoved(latest)) throw stopForTarget();
     let stream: ChatStream;
     try {
       openedAt = Date.now();
@@ -1092,6 +1109,8 @@ export class ChatAgent {
     } catch (err) {
       // 연결 단계에서 실패한 호출도 한 번으로 센다(사용량은 모름).
       this.recordUsage(turn, null, Date.now() - openedAt, this.isStale(turn) ? "중단" : "오류");
+      // 스트림 읽기의 finally에 닿지 않으므로 여기서 비운다(#266, 새 요청의 표시는 건드리지 않음).
+      if (this.activeRequest === controller) this.activeRequest = null;
       if (this.targetChangedTurn === turn && !this.isStale(turn)) throw new Error(TARGET_CHANGED_NOTE);
       if (connectTimedOut) {
         throw new Error(
