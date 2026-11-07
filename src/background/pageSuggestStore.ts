@@ -3,7 +3,7 @@
 import { MAX_RULES, matchesRule, normalizeRuleInput, parseRules, type SuggestionRule } from "@/lib/pageSuggest";
 import { containsSecret } from "./loginSecrets";
 import { getSettings } from "./storage";
-import { enqueue } from "./actionLog";
+import { enqueue } from "./actionQueue";
 import { panelTarget } from "./panelTarget";
 import { topDocumentId } from "./tools/handlers";
 

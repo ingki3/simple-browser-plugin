@@ -11,7 +11,7 @@ import {
 import { getSettings } from "./storage";
 import { debugLog } from "./debug";
 import { containsSecret, maskSyncDeep } from "./loginSecrets";
-import { enqueue, turnKey } from "./actionLog";
+import { enqueue, turnKey } from "./actionQueue";
 import type { TurnTab } from "./tools/handlers";
 
 // 한 턴에서 본 읽기 도구 호출을 모아 두었다가, 턴이 정상으로 끝나면 한꺼번에 레시피에 반영한다.

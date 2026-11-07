@@ -66,7 +66,7 @@ globalThis.chrome = {
 
 const actionLog = await import("../src/background/actionLog.ts");
 const readRecipes = await import("../src/background/readRecipes.ts");
-const { turnKey } = await import("../src/background/actionLog.ts");
+const { turnKey } = await import("../src/background/actionQueue.ts");
 
 const ACTION_LOG_KEY = "actionLog";
 const READ_RECIPES_KEY = "readRecipesV2";
