@@ -172,18 +172,19 @@ export const remoteBlockedCalls = (h) => [
 // - 모델에 간 결과: remote_needs_approval(원격 안내 note 포함), 마지막 요청은 도구 없는 마무리(tool_choice none)
 // - 카드 대기 가로채기(remote:refuse)·반복 작업 대기(tool:awaiting_repeat)·로그인 정보 조회 로그가 없다(그 경로로 갔다면 같은 오류라도 이 줄이 남는다)
 // - 패널에 카드 없음, 반복 작업·이동 없음
-export async function checkRemoteBlocked(h, tool, logsFrom) {
+// from: 턴 전의 { logs, hits } 길이(h.logs·h.hits는 하네스가 시나리오 사이에 비우지 않으므로 이 턴 몫만 본다).
+export async function checkRemoteBlocked(h, tool, from) {
   const t = await h.sw.evaluate((name) => [...globalThis.__toolLog].reverse().find((x) => x.name === name) ?? null, tool);
   expect(t && t.error === "remote_needs_approval" && t.result === undefined && String(t.note ?? "").includes("원격(텔레그램·MCP)"), `${tool} 원격 차단 결과(${JSON.stringify(t)})`);
   const last = await h.sw.evaluate(() => globalThis.__modelReqs.at(-1)?.body?.tool_choice ?? null);
   expect(last === "none", `${tool} 뒤 마무리 요청(${JSON.stringify(last)})`);
-  const lines = h.logs.slice(logsFrom);
+  const lines = h.logs.slice(from.logs);
   const bad = lines.filter((l) => /\[SBP (remote:refuse|remote:ask|remote:task_needed|tool:awaiting_[a-z]+|tool:auto_approved|tool:remote_approved|tool:task_run|tool:handoff|login:)/.test(l));
   expect(!bad.length, `${tool}: 승인·실행 경로에 닿지 않음(${bad.join(" | ")})`);
   expect((await h.panel.locator(".tool-pending").count()) === 0, `${tool}: 패널 카드 없음`);
   const tasks = await h.sw.evaluate(async () => (await chrome.storage.local.get("repeatTasks")).repeatTasks ?? []);
   expect(!tasks.length, `${tool}: 반복 작업 없음(${tasks.length})`);
-  expect(!h.hits.some((x) => x.includes("/watch")), `${tool}: 확인할 페이지를 열지 않음`);
+  expect(!h.hits.slice(from.hits).some((x) => x.includes("/watch")), `${tool}: 확인할 페이지를 열지 않음`);
 }
 
 export default [
@@ -395,7 +396,7 @@ export default [
           globalThis.__steps = [c, { text: "못 함" }];
           globalThis.__toolLog = [];
         }, call);
-        const from = h.logs.length;
+        const from = { logs: h.logs.length, hits: h.hits.length };
         await deliver(h, `${call.tool} 해 줘`);
         n += 1;
         await waitSent(h, n, 20_000);

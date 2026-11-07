@@ -136,7 +136,7 @@ export default [
             globalThis.__steps = [c, { text: "못 함" }];
             globalThis.__toolLog = [];
           }, call);
-          const from = h.logs.length;
+          const from = { logs: h.logs.length, hits: h.hits.length };
           bridge.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_task", arguments: { request: `${call.tool} 해 줘` } } });
           const res = await bridge.reply(id, 30_000);
           expect(res?.result && !res.result.isError, `${call.tool} 요청 답(${JSON.stringify(res).slice(0, 300)})`);
