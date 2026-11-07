@@ -1,7 +1,11 @@
 // 로컬·호환 서버 제공자(#193): 사용자가 적은 주소로만, 선택 필드 거부 재시도, 리다이렉트 거절, 대상 변경 경합, 모델 목록, 첫 화면, #43.
-import { expect } from "../lib.mjs";
+import { expect, waitUntil } from "../lib.mjs";
 
 const LOCAL = "http://127.0.0.1:59999/v1";
+// 바꾼 뒤 주소: 서버가 없다. 하네스 모의 fetch가 요청을 __modelReqs에 남기고 연결 거부로 끝낸다(#252).
+const MOVED = "http://127.0.0.1:59998/v1";
+// 주소별 요청 수(옛 서버·새 서버를 따로 센다).
+const at = (sent, baseUrl) => sent.filter((q) => q.url.startsWith(`${baseUrl}/`)).length;
 const local = (h, over = {}) => h.settings({ provider: "local", localServer: { baseUrl: LOCAL, model: "qwen3:8b" }, ...over });
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs);
 const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
@@ -79,14 +83,14 @@ export default [
         path: "/form",
         onCard: async (card, n) => {
           if (n > 1) return;
-          await h.settings({ localServer: { baseUrl: "http://127.0.0.1:59998/v1", model: "qwen3:8b" } });
+          await h.settings({ localServer: { baseUrl: MOVED, model: "qwen3:8b" } });
           await h.panel.waitForTimeout(200);
           before = (await reqs(h)).length;
           await card.locator(".btn-approve").click();
         },
       });
       const sent = await reqs(h);
-      expect(before === 2 && sent.length === before, `바꾼 뒤 요청 없음(${before} → ${sent.length})`);
+      expect(before === 2 && at(sent, LOCAL) === 2 && at(sent, MOVED) === 0, `바꾼 뒤 요청 없음(${before} → 옛 ${at(sent, LOCAL)}·새 ${at(sent, MOVED)})`);
       expect((await h.panel.locator("body").innerText()).includes("이 요청을 멈췄습니다"), "멈춤 안내");
     },
   },
@@ -100,7 +104,7 @@ export default [
         path: "/form",
         onCard: async (card, n) => {
           if (n > 1) return;
-          await h.settings({ localServer: { baseUrl: "http://127.0.0.1:59998/v1", model: "qwen3:8b" } });
+          await h.settings({ localServer: { baseUrl: MOVED, model: "qwen3:8b" } });
           await h.panel.waitForTimeout(200);
           await h.settings({ localServer: { baseUrl: LOCAL, model: "qwen3:8b" } });
           await h.panel.waitForTimeout(200);
@@ -109,7 +113,7 @@ export default [
         },
       });
       const sent = await reqs(h);
-      expect(before === 2 && sent.length === before, `되돌려도 요청 없음(${before} → ${sent.length})`);
+      expect(before === 2 && at(sent, LOCAL) === 2 && at(sent, MOVED) === 0, `되돌려도 요청 없음(${before} → 옛 ${at(sent, LOCAL)}·새 ${at(sent, MOVED)})`);
       expect((await h.panel.locator("body").innerText()).includes("이 요청을 멈췄습니다"), "멈춤 안내");
     },
   },
@@ -117,13 +121,32 @@ export default [
     name: "로컬 서버(#193): 답을 받는 중 서버 주소를 바꾸면 그 답을 거두고 멈춘다",
     async run(h) {
       await local(h);
-      const pending = h.turn([{ textParts: ["받는 중인 ", "긴 답"], gapMs: 1500 }], { maxWaitMs: 8000 });
-      await h.panel.waitForTimeout(700);
-      await h.settings({ localServer: { baseUrl: "http://127.0.0.1:59998/v1", model: "qwen3:8b" } });
+      // 첫 조각 뒤 모의 스트림을 붙잡아 "받는 중"을 확실히 만든다(#252 — 고정 대기는 느린 환경에서 첫 요청 전에 바꿀 수 있었다).
+      const pending = h.turn([{ textParts: ["받는 중인 ", "긴 답"], gapMs: 0, holdAfter: 1 }], { maxWaitMs: 20_000 });
+      pending.catch(() => {});
+      let heldAtChange = false;
+      let ready = false;
+      try {
+        await waitUntil(
+          async () =>
+            at(await reqs(h), LOCAL) >= 1 &&
+            (await h.sw.evaluate(() => globalThis.__streamHeld === true)) &&
+            (await h.panel.locator("body").innerText()).includes("받는 중인"),
+          { timeoutMs: 15_000, label: "옛 서버 요청·첫 조각 표시·스트림 붙잡힘" },
+        );
+        await h.settings({ localServer: { baseUrl: MOVED, model: "qwen3:8b" } });
+        heldAtChange = await h.sw.evaluate(() => globalThis.__streamHeld === true);
+        ready = true;
+      } finally {
+        await h.sw.evaluate(() => globalThis.__releaseStream?.());
+        if (!ready) await pending.catch(() => {});
+      }
       await pending;
+      expect(heldAtChange, "바꿀 때 스트림이 받는 중(붙잡힘)이어야 한다");
       const text = await h.panel.locator("body").innerText();
       expect(!text.includes("받는 중인") && text.includes("이 요청을 멈췄습니다"), `답을 거둠(${text.slice(-120)})`);
-      expect((await reqs(h)).length === 1, "더 보내지 않음");
+      const sent = await reqs(h);
+      expect(at(sent, LOCAL) === 1 && at(sent, MOVED) === 0, `더 보내지 않음(옛 ${at(sent, LOCAL)}·새 ${at(sent, MOVED)})`);
     },
   },
   {
@@ -134,12 +157,13 @@ export default [
       await h.sw.evaluate(() => (globalThis.__translateDelayMs = 400));
       await h.turn([{ tool: "translate_page", args: { targetLang: "ko" } }, { text: "번역 시작" }], { path: "/article", approve: true, maxWaitMs: 30_000 });
       const first = await h.sw.evaluate(() => globalThis.__translateReqs.length);
-      await h.settings({ localServer: { baseUrl: "http://127.0.0.1:59998/v1", model: "qwen3:8b" } });
+      await h.settings({ localServer: { baseUrl: MOVED, model: "qwen3:8b" } });
       await h.panel.waitForTimeout(2500);
       const after = await h.sw.evaluate(() => globalThis.__translateReqs.map((r) => r.url));
       expect(first >= 1, `첫 배치(${first})`);
       expect(after.length <= first + 1, `바꾼 뒤 새 배치 없음(${first} → ${after.length})`);
       expect(after.every((u) => u.startsWith(LOCAL)), "옛 서버로만(바꾼 뒤 새 서버로는 없음)");
+      expect(at(await reqs(h), MOVED) === 0, "새 서버로 간 요청 없음");
       // 세션이 없거나 끝난 배치(옛 content script·멈춘 번역)는 보내지 않는다.
       const before = (await h.sw.evaluate(() => globalThis.__translateReqs.length));
       const noSession = await ask(h, { kind: "translate_text_batch", texts: ["hello"], targetLang: "ko" });
@@ -173,32 +197,25 @@ export default [
     },
   },
   {
-    name: "로컬 서버(#193): 가림 목록을 읽는 사이 서버 주소를 바꾸면 두 서버 어디에도 보내지 않는다",
+    // #252: 예전에는 "가림 목록을 읽는 사이"(세션 저장소 읽기를 붙잡아) 바꾼다고 했지만, 같은 턴에서는 가림 목록 캐시를 대상 고정 전에
+    // 채우고 설정도 캐시라 대상 고정 뒤 붙잡을 지점이 없었다(붙잡지 못해도 통과하는 거짓 통과). 그래서 이 시나리오는 "보내기 전(대상 고정 전)에
+    // 바꾸면 새 주소로만 보낸다"를 결정적으로 본다 — 앞 턴으로 옛 주소 설정·가림 목록을 캐시에 올린 뒤 바꿔도 옛 서버로 가지 않는다.
+    // 검증 공백: 요청을 열기 바로 전 마지막 대상 확인(openrouter.ts의 targetMoved(latest))은 하네스로 결정적으로 시험하지 못한다 —
+    // 대상 고정 뒤 그 확인 전까지의 await(가림·설정 읽기)가 캐시로 바로 끝나 붙잡을 지점이 없다. 승인 카드 중 변경(위)은 앞선 확인에서,
+    // 받는 중 변경(위)은 전송 뒤 경로에서 멈춘다. 제품 시험 훅을 넣을지는 별도 결정.
+    name: "로컬 서버(#193): 보내기 전에 서버 주소를 바꾸면 새 주소로만 보내고 옛 서버로는 보내지 않는다(연결 안내)",
     async run(h) {
       await local(h);
-      // 서비스 워커의 세션 저장소 읽기(자동 로그인 가림 목록)를 붙잡아 가림 처리를 멈춘다.
-      await h.sw.evaluate(() => {
-        const real = chrome.storage.session.get.bind(chrome.storage.session);
-        globalThis.__holdSession = new Promise((r) => (globalThis.__releaseSession = r));
-        chrome.storage.session.get = async (...a) => {
-          if (globalThis.__holdSession) await globalThis.__holdSession;
-          return real(...a);
-        };
-      });
-      const pending = h.turn([{ text: "보내면 안 됨" }], { maxWaitMs: 10_000 });
-      await h.panel.waitForTimeout(800);
-      // 가림 목록이 이미 캐시돼 있으면 붙잡지 못하고 바꾸기 전에 보낼 수 있다 — 어느 쪽이든 "바꾼 뒤에는 옛 서버로 보내지 않음"이 지켜져야 한다.
-      const changeAt = await h.sw.evaluate(() => Date.now());
-      await h.settings({ localServer: { baseUrl: "http://127.0.0.1:59998/v1", model: "qwen3:8b" } });
-      await h.panel.waitForTimeout(300);
-      await h.sw.evaluate(() => {
-        globalThis.__holdSession = null;
-        globalThis.__releaseSession();
-      });
-      await pending;
+      await h.turn([{ text: "옛 서버 답" }]);
+      expect(at(await reqs(h), LOCAL) >= 1, "앞 턴은 옛 서버로");
+      await h.sw.evaluate(() => (globalThis.__modelReqs = []));
+      await h.settings({ localServer: { baseUrl: MOVED, model: "qwen3:8b" } });
+      await h.turn([{ text: "보내면 안 됨" }], { maxWaitMs: 15_000 });
       const sent = await reqs(h);
-      const late = sent.filter((q) => q.url.startsWith(LOCAL) && q.at >= changeAt);
-      expect(late.length === 0, `바꾼 뒤 옛 서버 요청 없음(${late.map((q) => q.url).join(",")})`);
+      expect(at(sent, LOCAL) === 0, `옛 서버 요청 없음(${at(sent, LOCAL)})`);
+      expect(at(sent, MOVED) >= 1, `새 주소로 보냄(${at(sent, MOVED)})`);
+      const text = await h.panel.locator("body").innerText();
+      expect(text.includes("로컬 서버에 연결하지 못했습니다") && !text.includes("보내면 안 됨"), `연결 안내(${text.slice(-160)})`);
     },
   },
 ];
