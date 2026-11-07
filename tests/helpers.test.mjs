@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withTimeout } from "../src/lib/async.ts";
+import { createSerial, withTimeout } from "../src/lib/async.ts";
 import { httpOrigin, originLabel } from "../src/lib/url.ts";
 
 test("withTimeout: 제때 끝나면 값, 늦으면 시간 초과 문구로 거부", async () => {
@@ -37,4 +37,32 @@ test("originLabel: 해석되면 출처(scheme 무관), 아니면 앞 40자", () 
   assert.equal(originLabel("https://a.example/p"), "https://a.example");
   assert.equal(originLabel("about:blank"), "null");
   assert.equal(originLabel("x".repeat(50)), "x".repeat(40));
+});
+
+test("createSerial: 차례대로 실행, 앞 작업 실패는 부른 쪽에만 전하고 다음 작업은 실행, 큐끼리는 독립", async () => {
+  const serial = createSerial();
+  const other = createSerial();
+  const order = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const a = serial(async () => {
+    await gate;
+    order.push("a");
+    return 1;
+  });
+  const b = serial(async () => {
+    order.push("b");
+    throw new Error("b 실패");
+  });
+  const c = serial(async () => {
+    order.push("c");
+    return 3;
+  });
+  // 다른 큐는 막힌 a를 기다리지 않는다.
+  assert.equal(await other(async () => (order.push("x"), "x")), "x");
+  release();
+  assert.equal(await a, 1);
+  await assert.rejects(b, /b 실패/);
+  assert.equal(await c, 3);
+  assert.deepEqual(order, ["x", "a", "b", "c"]);
 });

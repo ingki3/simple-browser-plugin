@@ -25,6 +25,7 @@ import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { onRepeatTriggered } from "./repeatTasks";
 import { debugLog } from "./debug";
+import { createSerial } from "@/lib/async";
 import { beginKeepalive, endKeepalive } from "./keepalive";
 
 const STORE_KEY = "telegram";
@@ -76,12 +77,7 @@ const EMPTY: TelegramState = {
 
 // ---- 저장(한 줄로) ----
 
-let queue: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(fn);
-  queue = run.catch(() => {});
-  return run;
-}
+const serial = createSerial();
 
 // 연결된 채팅이 있는지(위임 질문의 canAsk용 — 저장할 때와 시작할 때 맞춘다).
 let linkedChat = false;

@@ -26,7 +26,7 @@ import { httpOrigin } from "@/lib/url";
 import { activeModel } from "@/lib/settings";
 import { providerAdapter, providerTimeout } from "@/lib/providers";
 import { beginTargetGuard } from "./modelTarget";
-import { withTimeout } from "@/lib/async";
+import { createSerial, withTimeout } from "@/lib/async";
 import { runContinue } from "@/lib/repeatContinue";
 import { getSettings } from "./storage";
 import { maskMessagesForModel, maskStringForModel } from "./loginSecrets";
@@ -44,12 +44,7 @@ const SNAPSHOT_CLICKABLES = 80;
 
 // ---- 저장(모든 변경은 한 줄로) ----
 
-let queue: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(fn);
-  queue = run.catch(() => {});
-  return run;
-}
+const serial = createSerial();
 
 async function load(): Promise<RepeatTask[]> {
   const raw = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY];

@@ -24,6 +24,7 @@ import { remoteErrorText } from "@/lib/telegram";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { debugLog } from "./debug";
+import { createSerial } from "@/lib/async";
 import { finishJob, recoverJob } from "@/lib/mcpJobState";
 import { REMOTE_ASKS_PER_JOB } from "@/lib/remoteApproval";
 import { telegramAskDelegated, telegramCanDelegate } from "./telegram";
@@ -69,12 +70,7 @@ interface McpState {
 
 const EMPTY: McpState = { enabled: false, port: MCP_DEFAULT_PORT, secret: "", bridgeId: "", bridgeVersion: "", lastOkAt: 0, lastError: "", askApproval: false, job: null, pending: null, seen: [] };
 
-let queue: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(fn);
-  queue = run.catch(() => {});
-  return run;
-}
+const serial = createSerial();
 
 async function load(): Promise<McpState> {
   const raw = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY];
