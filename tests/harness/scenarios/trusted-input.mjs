@@ -1,9 +1,8 @@
 // 실제 마우스 입력 클릭(0.2.0)과 덮인 대상(#89): 설정을 켜면 디버거로 누르고(isTrusted), 가운데가 덮이면 다른 점을,
 // 모두 덮이면 스크립트 클릭으로 대체하고 이유를 남긴다.
-import { expect, okResult, resultLog } from "../lib.mjs";
+import { expect, findC, okResult, resultLog } from "../lib.mjs";
 import { routePage } from "./autocomplete.mjs";
 
-const findC = { tool: "find_clickables", args: {} };
 const rec = "document.getElementById('out').textContent='눌림 '+event.isTrusted";
 
 export default [

@@ -631,6 +631,11 @@ async function installMockModel(sw) {
   });
 }
 
+// 시나리오가 함께 쓰는 모의 모델 단계와 패널 메시지(#257에서 모음).
+export const findC = { tool: "find_clickables", args: {} };
+// 패널에서 백그라운드로 런타임 메시지를 보내고 응답을 돌려받는다.
+export const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
+
 export class Fail extends Error {}
 
 // 조건이 참이 될 때까지 기다린다(고정 대기 대신, #252). 한도 안에 안 되면 label을 담아 실패한다.

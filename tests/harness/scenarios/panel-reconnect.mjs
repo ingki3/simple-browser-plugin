@@ -4,14 +4,13 @@
 // - 즉석 재연결(끊긴 직후 보낸 요청)도 리스너·heartbeat·resume을 설치한 하나의 연결로 간다(고치기 전에는 리스너 없는 임시 포트로 가
 //   승인 카드가 패널에 뜨지 않았다 — 이 파일의 첫 시나리오로 확인).
 // - 잇지 못하면 안내(새 요청 전 반복 유실은 한 번), 진행 중 끊김이면 패널의 응답 중 표시·미결 카드를 정리한다.
-import { expect, Fail } from "../lib.mjs";
+import { expect, Fail, findC } from "../lib.mjs";
 
 const PAGE = `<title>T</title><main><article><p>번역할 문단입니다. 이 글은 시험용입니다.</p></article>
 <button style="width:200px;height:60px" onclick="document.getElementById('out').textContent='눌림'">확인</button>
 <a href="/doc">문서</a><p id=out></p></main>`;
 const DOC = `<title>문서</title><main><p>외부 문서 본문</p></main>`;
 const pages = { "/t": PAGE, "/doc": DOC };
-const findC = { tool: "find_clickables", args: {} };
 const clickOk = [findC, { click: "확인" }];
 const LOST = "앞 대화를 이어 가지 못했습니다";
 

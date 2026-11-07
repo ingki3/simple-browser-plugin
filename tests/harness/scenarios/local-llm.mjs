@@ -1,5 +1,5 @@
 // 로컬·호환 서버 제공자(#193): 사용자가 적은 주소로만, 선택 필드 거부 재시도, 리다이렉트 거절, 대상 변경 경합, 모델 목록, 첫 화면, #43.
-import { expect, waitUntil } from "../lib.mjs";
+import { ask, expect, waitUntil } from "../lib.mjs";
 
 const LOCAL = "http://127.0.0.1:59999/v1";
 // 바꾼 뒤 주소: 서버가 없다. 하네스 모의 fetch가 요청을 __modelReqs에 남기고 연결 거부로 끝낸다(#252).
@@ -8,7 +8,6 @@ const MOVED = "http://127.0.0.1:59998/v1";
 const at = (sent, baseUrl) => sent.filter((q) => q.url.startsWith(`${baseUrl}/`)).length;
 const local = (h, over = {}) => h.settings({ provider: "local", localServer: { baseUrl: LOCAL, model: "qwen3:8b" }, ...over });
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs);
-const ask = (h, msg) => h.panel.evaluate(async (m) => chrome.runtime.sendMessage(m), msg);
 
 const FORM = `<title>신청</title>
 <label>이름 <input name="name" value="LOCAL_TYPED_VALUE"></label>

@@ -1,7 +1,6 @@
 // 클릭으로 열린 일반 새 탭 따라가기: 브라우저가 같은 창의 앞에 띄운 새 탭 하나면 이후 도구가 그 탭에서 동작한다.
-import { expect, lastTool, okResult } from "../lib.mjs";
+import { expect, findC, lastTool, okResult } from "../lib.mjs";
 
-const findC = { tool: "find_clickables", args: {} };
 const describe = { tool: "describe_page", args: {} };
 
 const LINK_PAGE = `<title>가게</title><main><a href="/booking" target="_blank">예약</a><p id=out></p></main>`;
