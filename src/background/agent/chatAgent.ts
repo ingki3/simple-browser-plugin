@@ -42,6 +42,7 @@ import {
 } from "./prompts";
 import { fetchTabHeader, loadedPage, requestTabId, tabLoaded, toolTabUrl, turnTabOf } from "./tabContext";
 import { answerSince, closeDanglingToolCalls, confirmRebases, lastAnswerText } from "./history";
+import { createReplyAccumulator } from "./streamReply";
 
 // 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 페이지가 기록한 클릭 시각보다 앞서
 // 본 창도 그 클릭의 것으로 보는 작은 여유(같은 시계지만 기록 순서가 어긋날 수 있다). 그보다 먼저 열린 창(기다리는 동안
@@ -71,7 +72,7 @@ import {
   type TurnTab,
 } from "../tools/handlers";
 import { commitReads } from "../readRecipes";
-import { addUsage, emptyUsageTotal, formatTurnUsage, formatUsage, usageFromChunk, type ModelUsage, type UsageTotal } from "@/lib/usage";
+import { addUsage, emptyUsageTotal, formatTurnUsage, formatUsage, type ModelUsage, type UsageTotal } from "@/lib/usage";
 import {
   canonicalJson,
   clickChangedForSpin,
@@ -1011,7 +1012,6 @@ export class ChatAgent {
     };
     // 이 호출의 걸린 시간·사용량(#126). 요청을 연 뒤 끝날 때(정상·오류·중단) 한 번 남긴다.
     let openedAt = 0;
-    let usage: ModelUsage | null = null;
     let connectTimedOut = false;
     const connectTimer = setTimeout(() => {
       connectTimedOut = true;
@@ -1120,72 +1120,16 @@ export class ChatAgent {
     }
 
     debugLog("stream:connected");
-    let assistantText = "";
-    let assistantReasoning = "";
-    const reasoningDetails: unknown[] = [];
-    const functionCallParts = new Map<number, OpenRouterToolCall>();
-    let chunkCount = 0;
-    let textChars = 0;
-    let thoughtChars = 0;
-    let finishReason: string | undefined;
+    const reply = createReplyAccumulator({
+      onText: (text) => this.send({ kind: "assistant_chunk", text }),
+      onThought: (text) => this.send({ kind: "thought_chunk", text }),
+    });
     try {
-      await stream.read(
-        (chunk) => {
-          chunkCount += 1;
-          // 사용량은 마지막에 받은 값(누적)을 쓴다.
-          if (chunk.usage) usage = usageFromChunk(chunk.usage) ?? usage;
-          const choice = chunk.choices?.[0];
-          const delta = choice?.delta;
-          if (typeof delta?.content === "string" && delta.content) {
-            assistantText += delta.content;
-            textChars += delta.content.length;
-            this.send({ kind: "assistant_chunk", text: delta.content });
-          }
-          if (typeof delta?.reasoning === "string" && delta.reasoning) {
-            assistantReasoning += delta.reasoning;
-            if (!delta.reasoning_details?.length) {
-              thoughtChars += delta.reasoning.length;
-              this.send({ kind: "thought_chunk", text: delta.reasoning });
-            }
-          }
-          for (const detail of delta?.reasoning_details ?? []) {
-            reasoningDetails.push(detail);
-            if (!detail || typeof detail !== "object") continue;
-            const item = detail as { text?: unknown; summary?: unknown };
-            const visible =
-              typeof item.text === "string"
-                ? item.text
-                : typeof item.summary === "string"
-                  ? item.summary
-                  : "";
-            if (visible) {
-              thoughtChars += visible.length;
-              this.send({ kind: "thought_chunk", text: visible });
-            }
-          }
-          for (const part of delta?.tool_calls ?? []) {
-            const current = functionCallParts.get(part.index) ?? {
-              id: "",
-              type: "function" as const,
-              function: { name: "", arguments: "" },
-            };
-            if (part.id) current.id += part.id;
-            if (part.function?.name) current.function.name += part.function.name;
-            if (part.function?.arguments) {
-              current.function.arguments += part.function.arguments;
-            }
-            // 다음 요청에 돌려줘야 하는 제공자 값(Gemini thought_signature)은 그대로 둔다.
-            if (part.extra_content !== undefined) current.extra_content = part.extra_content;
-            functionCallParts.set(part.index, current);
-          }
-          if (choice?.finish_reason) finishReason = choice.finish_reason;
-        },
-        INACTIVITY_MS,
-      );
+      await stream.read((chunk) => reply.onChunk(chunk), INACTIVITY_MS);
     } catch (err) {
       controller.abort();
       // 끊기기 전에 받은 사용량도 남긴다(요금은 이미 나갔다).
-      this.recordUsage(turn, usage, Date.now() - openedAt, this.isStale(turn) ? "중단" : "오류");
+      this.recordUsage(turn, reply.usage(), Date.now() - openedAt, this.isStale(turn) ? "중단" : "오류");
       if (this.isStale(turn)) return null;
       // 설정에서 대상이 바뀌어 멈췄으면 받은 조각은 기록에 넣지 않고 화면에서도 거둔다(#193).
       if (this.targetChangedTurn === turn) {
@@ -1196,7 +1140,7 @@ export class ChatAgent {
     } finally {
       if (this.activeRequest === controller) this.activeRequest = null;
     }
-    this.recordUsage(turn, usage, Date.now() - openedAt);
+    this.recordUsage(turn, reply.usage(), Date.now() - openedAt);
     // 다 받은 직후에도 대상이 그대로인지 본다(끝나는 순간에 바뀌었으면 그 답을 쓰지 않는다).
     const after = activeModel(await getSettings());
     if (this.isStale(turn)) return null;
@@ -1205,12 +1149,7 @@ export class ChatAgent {
       this.send({ kind: "assistant_retract" });
       throw new Error(TARGET_CHANGED_NOTE);
     }
-    const functionCalls = [...functionCallParts.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([, call]) => ({
-        ...call,
-        id: call.id || crypto.randomUUID(),
-      }));
+    const { assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, chunkCount, textChars, thoughtChars } = reply.result();
     debugLog(
       "stream:done",
       `chunks=${chunkCount} text=${textChars} thought=${thoughtChars} fn=${functionCalls.length} finish=${finishReason ?? "?"}`,
