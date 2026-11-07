@@ -355,7 +355,10 @@ export class ChatAgent {
   // 대화 허락·맡긴 작업·이동 허락 사이트·링크 허락·개인정보 주소 허락·자동 로그인 선택·행 기준(#233). 남기는 것: 기록, 더 묻게
   // 만드는 보호 상태(외부 본문 보호·로그인 값 가림·자동 로그인 시도), 기록 형식 상태(제공자·모델·지침·저장 링크 후보·호출 키),
   // 사용량 누계, 디버거 세션(사용자의 디버깅 취소 선택 canceledByUser를 지키려고 — 연결은 abort가 뗀다).
-  // 새 상태를 더하면 reset()과 이 함수 중 어느 쪽에서 지울지 정할 것(넓히는 상태면 여기서도 지운다).
+  // 새 상태를 더하면 어디서 지울지 정할 것. 새 대화는 새 ChatAgent라 저절로 비워진다. 같은 대화 안에서 지우는 곳:
+  // cancelInFlight(턴 시작·abort — 진행 중 요청·도구·원격 질문, 승인 대기, 허락 제안), abort(턴 세대·번역·디버거 연결),
+  // 이 함수(허용을 넓히는 상태 — 넓히는 상태면 여기서도 지운다), 새 기록(ensureCredentials — 대상·지침·빠르게 생각이 바뀜:
+  // 기록·행 기준·사용량·첨부 PDF·저장 링크 후보·맡긴 작업. 허락·외부 본문 보호는 남긴다).
   suspendForReconnect(): void {
     this.abort();
     this.chatGrants.clear();
@@ -512,24 +515,6 @@ export class ChatAgent {
 
   private sendTaskState(): void {
     this.send({ kind: "task_state", active: this.taskApproved });
-  }
-
-  reset(): void {
-    this.history = [];
-    this.clearRebases();
-    this.conversationUsage = emptyUsageTotal();
-    this.lastAttachedPdfUrl = null;
-    this.committedCandidates = null;
-    this.forceNewConversation = false;
-    this.approvedSites.clear();
-    this.linkGrant = null;
-    this.chatGrants.clear();
-    this.allowedPersonalUrls.clear();
-    this.taskApproved = false;
-    this.taskEpoch += 1;
-    this.externalContent = false;
-    void detachSession(this.inputSession);
-    this.inputSession = new InputSession();
   }
 
   // 도구 결과 메시지 내용. 팝업 창이 닫혀 원래 탭으로 돌아간 것처럼 도구가 동작하는 탭이 바뀌었으면 그 안내(tab)를
