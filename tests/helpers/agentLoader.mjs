@@ -18,6 +18,11 @@ const WRAP = {
   "background/debug.ts": ["debugLog"],
   "lib/providers/index.ts": ["providerAdapter", "providerTimeout"],
   "lib/settings.ts": ["targetKey"],
+  // 특수 도구·손 넘기기(#263 단계 5): 페이지 표시·감시·팝업 감시·탭 확인·반복 작업 저장.
+  "background/handoff.ts": ["showHandoff", "watchHandoff", "endHandoff"],
+  "background/popups.ts": ["watchNewTabs"],
+  "background/tools/handlers.ts": ["resolveTurnTab"],
+  "background/repeatTasks.ts": ["registerRepeatTask"],
 };
 
 const hooks = `
