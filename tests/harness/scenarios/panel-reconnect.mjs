@@ -13,6 +13,16 @@ const DOC = `<title>문서</title><main><p>외부 문서 본문</p></main>`;
 const pages = { "/t": PAGE, "/doc": DOC };
 const clickOk = [findC, { click: "확인" }];
 const LOST = "앞 대화를 이어 가지 못했습니다";
+// #263 단계 6: 이동 사이트 허락·개인정보 주소 허락 확인용.
+// 이동 대상(서버 2). turn()이 끝에 #out을 읽으므로 둔다.
+const OTHER = { "/x": `<title>다른 사이트</title><p id=out>다른 사이트</p>` };
+const navOther = (h) => [{ tool: "navigate_to_url", args: { url: `${h.base2}/x` } }, { text: "이동" }];
+const PFORM = `<title>메모</title><form action="/save?email=me%40corp.test" method="get" onsubmit="event.preventDefault()">
+<label>메모 <input name="memo"></label><button>저장</button></form><p id=out></p>`;
+const fillMemo = [{ tool: "find_form_fields", args: {} }, { fill: "메모", value: "안녕" }, { text: "끝" }];
+const memo = (h) => h.tab.locator("input[name=memo]").inputValue();
+const DEL = `<title>메일</title><main><button onclick="document.getElementById('out').textContent='삭제됨'">삭제</button><p id=out></p></main>`;
+const clickDel = [findC, { click: "삭제" }];
 
 // 패널의 예약 재연결(500ms 타이머)을 늦춘다 — 즉석 전송을 예약 재연결 전에 확실히 하려고(패널 코드는 그대로).
 async function slowReconnect(h, ms = 8000) {
@@ -145,6 +155,83 @@ export default [
       expect(seen.length === 1 && seen[0].includes("작업 맡기기"), `맡기기 카드가 다시 뜬다(${seen[0]?.slice(0, 60)})`);
       expect((await h.tab.locator("#out").innerText()) === "", "승인 전 클릭 없음");
       await h.panel.locator(".tool-pending:not(.resolved) .btn-cancel").click();
+    },
+  },
+  {
+    name: "다시 붙으면 카드로 허락한 이동 사이트(approvedSites)는 지워져 그 사이트로의 이동을 다시 묻는다(#263 단계 6)",
+    pages,
+    pages2: OTHER,
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r1 = await h.turn(navOther(h), { path: "/t", approve: true });
+      expect(r1.cards === 1 && r1.url.startsWith(h.base2), `다른 사이트 이동은 카드로 허락(cards=${r1.cards}, url=${r1.url})`);
+      const r1b = await h.turn(navOther(h), { path: "/t" });
+      expect(r1b.cards === 0 && !r1b.stoppedAtCard && r1b.url.startsWith(h.base2), `허락한 사이트로는 카드 없이 이동(기준 확인, url=${r1b.url})`);
+      await h.tab.goto(`${h.base}/t`);
+      await drop(h);
+      expect(h.logs.some((l) => l.includes("conversation:resumed")), "기록은 이음");
+      const r2 = await h.turn(navOther(h), { noReload: true });
+      expect(r2.stoppedAtCard && r2.url.startsWith(h.base), `허락이 지워져 이동 카드가 다시 뜨고 이동하지 않음(url=${r2.url})`);
+    },
+  },
+  {
+    name: "다시 붙으면 개인정보 주소 허락(allowedPersonalUrls)은 지워져 같은 주소로 보내는 입력을 다시 묻는다(#263 단계 6)",
+    pages: { "/f": PFORM },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      let offered = false;
+      const r1 = await h.turn(fillMemo, {
+        path: "/f",
+        onCard: async (c) => {
+          offered = (await c.locator(".btn-approve-urls").count()) === 1;
+          await c.locator(".btn-approve-urls").click();
+        },
+      });
+      expect(r1.cards === 1 && offered, `주소 허락 선택이 있는 카드(cards=${r1.cards})`);
+      expect((await memo(h)) === "안녕", "허락하며 승인하면 입력");
+      const r1b = await h.turn(fillMemo, { path: "/f" });
+      expect(r1b.cards === 0 && !r1b.stoppedAtCard && (await memo(h)) === "안녕", "허락한 주소는 카드 없이 입력(기준 확인)");
+      await h.tab.goto(`${h.base}/f`);
+      await drop(h);
+      expect(h.logs.some((l) => l.includes("conversation:resumed")), "기록은 이음");
+      const r2 = await h.turn(fillMemo, { noReload: true });
+      expect(r2.stoppedAtCard && (await memo(h)) === "", `허락이 지워져 카드가 다시 뜨고 입력하지 않음(memo='${await memo(h)}')`);
+    },
+  },
+  {
+    name: "대조: 다시 붙지 않고 중단 뒤 새 요청만 하면 받은 이동 사이트·주소 허락은 남는다(#263 단계 6)",
+    pages: { "/t": PAGE, "/f": PFORM, "/del": DEL },
+    pages2: OTHER,
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r1 = await h.turn(navOther(h), { path: "/t", approve: true });
+      expect(r1.cards === 1 && r1.url.startsWith(h.base2), "이동 사이트 허락");
+      const r2 = await h.turn(fillMemo, { path: "/f", onCard: (c) => c.locator(".btn-approve-urls").click() });
+      expect(r2.cards === 1 && (await memo(h)) === "안녕", "주소 허락");
+      // 카드에서 멈춘 채 중단(cancelInFlight) — turn()이 카드에서 멈추면 중단 버튼을 누른다.
+      const ends = count(h.logs, "[SBP turn:end]");
+      const r3 = await h.turn(clickDel, { path: "/del" });
+      expect(r3.stoppedAtCard, "삭제는 카드에서 멈춤");
+      await waitFor(async () => count(h.logs, "[SBP turn:end]") > ends, 3000, "중단이 닿음");
+      const r4 = await h.turn(navOther(h), { path: "/t" });
+      expect(r4.cards === 0 && !r4.stoppedAtCard && r4.url.startsWith(h.base2), `중단 뒤에도 이동 사이트 허락이 남음(url=${r4.url})`);
+      const r5 = await h.turn(fillMemo, { path: "/f" });
+      expect(r5.cards === 0 && !r5.stoppedAtCard && (await memo(h)) === "안녕", "중단 뒤에도 주소 허락이 남음");
+    },
+  },
+  {
+    name: "대조: 다시 붙지 않고 중단 뒤 새 요청만 하면 대화 허락은 남는다(#263 단계 6)",
+    pages,
+    async run(h) {
+      await h.settings({ runMode: "ask" });
+      const rl = [{ tool: "read_linked_pages", args: { urls: [`${h.base}/doc`] } }, { text: "읽음" }];
+      const r1 = await h.turn(rl, { path: "/t", onCard: (c) => c.locator(".btn-approve-chat").click() });
+      expect(r1.cards === 1, `허락 선택(cards=${r1.cards})`);
+      const r2 = await h.turn(clickOk, { noReload: true });
+      expect(r2.stoppedAtCard, "클릭 카드에서 멈춘 채 중단");
+      const r3 = await h.turn(rl, { noReload: true });
+      expect(r3.cards === 0 && !r3.stoppedAtCard, "중단 뒤에도 대화 허락이 남아 묻지 않음");
+      expect((await h.panel.locator(".chat-grant-bar").count()) === 1, "패널 허락 표시 유지");
     },
   },
   {
