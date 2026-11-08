@@ -1,6 +1,5 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type RunMode, type Settings, type ToolName } from "@/lib/messages";
 import { MissingKeyError, friendlyError } from "@/lib/friendlyError";
-import { nowNote } from "@/lib/systemPrompt";
 import { describePopup } from "@/lib/actionTarget";
 import { remoteActionLines, remoteHopQuestion, remoteRefusal, remoteTaskQuestion, remoteToolQuestion, withPrefix, type RemoteApprover, type RemoteAskResult, type RemoteQuestion } from "@/lib/remoteApproval";
 import type { ModelId } from "@/lib/models";
@@ -10,7 +9,7 @@ import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "../otherTabs";
 import { discardLinkCall, setChosenLinks } from "../linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "../downloadChoices";
-import { candidatesMessage, makeOffer, makeOfferResult, OFFER_REFUSAL_TEXT } from "../savedPagesStore";
+import { makeOffer, makeOfferResult, OFFER_REFUSAL_TEXT } from "../savedPagesStore";
 import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
 import { providerAdapter, providerTimeout, type ChatStream, type ProviderId } from "@/lib/providers";
@@ -34,7 +33,6 @@ import {
   REMOTE_REFUSED_NOTE,
   REMOTE_STOP_NOTE,
   TARGET_CHANGED_NOTE,
-  TASK_MODE_NOTE,
   availableTools,
   composeSystemPrompt,
   remoteTurnNote,
@@ -43,6 +41,7 @@ import {
 import { fetchTabHeader, loadedPage, requestTabId, tabLoaded, toolTabUrl, turnTabOf } from "./tabContext";
 import { answerSince, closeDanglingToolCalls, confirmRebases, lastAnswerText } from "./history";
 import { createReplyAccumulator } from "./streamReply";
+import { prepareRequest, type PreparedRequest } from "./requestPrep";
 
 // 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 페이지가 기록한 클릭 시각보다 앞서
 // 본 창도 그 클릭의 것으로 보는 작은 여유(같은 시계지만 기록 순서가 어긋날 수 있다). 그보다 먼저 열린 창(기다리는 동안
@@ -53,7 +52,7 @@ import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } 
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
 import { loginSiteFor, newGrantId, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
 import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "../signIn";
-import { allSecrets, containsSecret, maskMessagesForModel, maskSyncDeep, maskSyncMessages, warmSecrets } from "../loginSecrets";
+import { allSecrets, containsSecret, maskSyncDeep, maskSyncMessages, warmSecrets } from "../loginSecrets";
 import { detachSession, InputSession } from "../trustedInput";
 import { prepareGrantImages } from "../tools/grantImages";
 import { applySettingsUpdate, getSettings, readFlags, setFlag } from "../storage";
@@ -1018,75 +1017,41 @@ export class ChatAgent {
       connectTimedOut = true;
       controller.abort();
     }, CONNECT_TIMEOUT_MS);
-    // 아래 값은 연결 뒤에도 쓴다(준비 구간을 try로 감싸려고 밖에 둔다).
-    let candidatesNote: string | null;
-    let afterToolResult: boolean;
-    let sentNotes: OpenRouterMessage[];
-    let sentRebases: typeof this.rebasePending;
-    let outgoing: { value: OpenRouterMessage[]; masked: boolean };
+    // 준비(후보·안내·마지막 가림·그 사이의 대상 확인)는 agent/requestPrep.ts가 한다. 준비 결과는 연결 뒤에도 쓴다(준비 구간을 try로 감싸려고 밖에 둔다).
+    let prepared: PreparedRequest;
     // 준비 중 예외(설정 읽기·가림 등)에도 타이머·진행 중 요청을 남기지 않는다(#266). 마지막 대상 확인까지 이 안에 있고,
     // 그 확인과 아래 연결 try의 openStream 호출 사이에는 기다림이 없다.
     try {
-      // 저장한 페이지 후보: 매 요청 직전에 새로 만들고 대화 기록(history)에는 넣지 않는다(지우기·끄기가 다음 요청부터 반영).
-      // 마무리 요청(wrapUpNote)에는 붙이지 않는다(이동 후보가 필요 없음).
-      // 지금 저장 링크 후보(마무리 요청에도 읽는다 — 기록에 남긴 후보가 지워졌는지 검사용). 실을지는 아래에서 정한다.
       // 후보를 붙였는지는 턴마다 첫 요청에서만 로그에 남긴다(#156).
       const logCandidates = this.candidatesLoggedTurn !== turn;
       this.candidatesLoggedTurn = turn;
-      const currentCandidates = await candidatesMessage("tabId" in this.turnTab ? this.turnTab.tabId : null, logCandidates).catch(() => null);
-      const savedCandidates = opts.wrapUpNote ? null : currentCandidates;
-      if (this.isStale(turn)) {
-        releasePrep();
-        return null;
-      }
-      // 턴 도중 설정에서 제공자·키·모델을 바꿨으면 이 턴의 내용을 새 설정으로도, 이전 제공자로도 보내지 않고 멈춘다
-      // (고른 제공자로만 보낸다는 약속). 모든 준비(후보 조회 등)가 끝난 뒤, 요청을 열기 바로 앞에서 본다 — 이 확인과 요청
-      // 사이에는 기다림이 없다. 다음 요청에서 새 설정으로 대화를 새로 시작한다.
-      const now = activeModel(await getSettings());
-      if (this.isStale(turn)) {
-        releasePrep();
-        return null;
-      }
-      if (targetMoved(now)) throw stopForTarget();
-      // 문맥을 서명하는 제공자: 기록에 남긴 후보를 지웠거나 껐으면 거둘 수 없으니 멈추고 새 대화로, 바뀌지 않았으면 다시 싣지 않는다.
-      candidatesNote = savedCandidates;
-      // 그런 제공자(Anthropic)는 도구 결과 바로 뒤에 글자 안내를 붙이면 빈 응답으로 끝낼 수 있어, 도구 결과 다음 요청에는
-      // 현재 시각·후보 안내를 붙이지 않는다(사용자 요청 직후 요청에만). 마무리 안내는 그대로 붙인다.
-      const signs = providerAdapter(this.provider).signsContext;
-      afterToolResult = signs && this.history[this.history.length - 1]?.role === "tool";
-      if (providerAdapter(this.provider).signsContext && this.committedCandidates) {
-        const now = new Set(currentCandidates ? candidateIdsOf(currentCandidates) : []);
-        if ([...this.committedCandidates.ids].some((id) => !now.has(id))) {
-          releasePrep();
+      const ready = await prepareRequest({
+        systemPrompt,
+        wrapUpNote: opts.wrapUpNote,
+        logCandidates,
+        candidateTabId: "tabId" in this.turnTab ? this.turnTab.tabId : null,
+        isStale: () => this.isStale(turn),
+        targetMoved,
+        stopForTarget,
+        releasePrep,
+        forceNewConversation: () => {
           this.forceNewConversation = true;
-          throw new Error("저장 링크를 지우거나 꺼서 이 대화에 이미 보낸 후보를 거둘 수 없어 멈췄습니다. 다시 요청하면 새 대화로 시작합니다.");
-        }
-        if (savedCandidates === this.committedCandidates.text) candidatesNote = null;
-      }
-      const runMode = this.effectiveRunMode((await getSettings()).runMode);
-      const taskNote = runMode === "task" && !this.taskApproved && !afterToolResult ? TASK_MODE_NOTE : null;
-      sentNotes = maskSyncMessages<OpenRouterMessage>([
-        ...(afterToolResult ? [] : [{ role: "user" as const, content: nowNote() }]),
-        ...(taskNote ? [{ role: "user" as const, content: taskNote }] : []),
-        ...(candidatesNote && !afterToolResult ? [{ role: "user" as const, content: candidatesNote }] : []),
-        ...(opts.wrapUpNote ? [{ role: "user" as const, content: opts.wrapUpNote }] : []),
-        // 문맥을 서명하는 제공자는 이 안내를 기록에 남기므로 남기기 전에 가린다.
-      ]).value;
-      // 이 요청 기록에 실린 결과가 낸 대화별 기준(#233). 응답을 끝까지 받으면 확정한다(아래 return 앞).
-      sentRebases = [...this.rebasePending];
-      // 자동 로그인으로 넣은 값은 어디서 왔든(기록·메모·안내) 모델로 보내지 않는다(기록에 넣을 때 이미 가렸고, 여기는 마지막 거르기).
-      outgoing = await maskMessagesForModel<OpenRouterMessage>([
-        { role: "system", content: systemPrompt },
-        ...this.history,
-        // 현재 시각·저장 링크 후보·마무리 안내는 이 요청에만 붙인다(문맥을 서명하는 제공자는 응답과 함께 기록에 남김).
-        ...sentNotes,
-      ]);
-      if (outgoing.masked) {
-        this.secretsMasked = true;
-        debugLog("login:masked", "모델 요청에서 넣은 로그인 값을 가림", "warn");
-      }
+        },
+        markMasked: () => {
+          this.secretsMasked = true;
+        },
+        signsContext: () => providerAdapter(this.provider).signsContext,
+        history: () => this.history,
+        committedCandidates: () => this.committedCandidates,
+        effectiveRunMode: (stored) => this.effectiveRunMode(stored),
+        taskApproved: () => this.taskApproved,
+        rebasePending: () => this.rebasePending,
+      });
+      // 새 턴에 밀림(준비가 이미 정리함).
+      if (!ready) return null;
+      prepared = ready;
       // 가림 처리 등을 기다리는 사이 대상이 바뀌었을 수 있다 — 모든 준비가 끝난 뒤 한 번 더 보고, 이 확인 다음 줄에서 바로 요청을 연다
-      // (어댑터는 첫 await 전에 fetch를 시작한다, #193).
+      // (어댑터는 첫 await 전에 fetch를 시작한다, #193). 이 확인과 openStream 호출 사이에 await를 두지 않는다(tests/agentRequestModel.test.mjs R2).
       const latest = activeModel(await getSettings());
       if (this.isStale(turn)) {
         releasePrep();
@@ -1097,6 +1062,7 @@ export class ChatAgent {
       releasePrep();
       throw err;
     }
+    const { candidatesNote, afterToolResult, sentNotes, sentRebases, outgoing } = prepared;
     let stream: ChatStream;
     try {
       openedAt = Date.now();
