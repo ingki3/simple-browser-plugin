@@ -1,6 +1,5 @@
 import { SENSITIVE_TOOLS, type BgToPanel, type RunMode, type Settings, type ToolName } from "@/lib/messages";
 import { MissingKeyError, friendlyError } from "@/lib/friendlyError";
-import { describePopup } from "@/lib/actionTarget";
 import { remoteActionLines, remoteHopQuestion, remoteRefusal, remoteTaskQuestion, remoteToolQuestion, withPrefix, type RemoteApprover, type RemoteAskResult, type RemoteQuestion } from "@/lib/remoteApproval";
 import type { ModelId } from "@/lib/models";
 import { internalNavigateAutoBlock, siteOf, userNamedSites } from "@/lib/siteTrust";
@@ -9,7 +8,7 @@ import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "../otherTabs";
 import { discardLinkCall, setChosenLinks } from "../linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "../downloadChoices";
-import { makeOffer, makeOfferResult, OFFER_REFUSAL_TEXT } from "../savedPagesStore";
+import { makeOffer, makeOfferResult } from "../savedPagesStore";
 import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
 import { providerAdapter, providerTimeout, type ChatStream, type ProviderId } from "@/lib/providers";
@@ -20,13 +19,9 @@ import {
   type OpenRouterMessage,
   type OpenRouterToolCall,
 } from "@/lib/openrouter";
-import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
-import { registerRepeatTask } from "../repeatTasks";
-import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction, recordHandedOffAction } from "../tools/dispatcher";
+import { buildToolPreview, clearOfferedHints, executeTool, parseToolArgs, recordCancelledAction } from "../tools/dispatcher";
 import type { ToolPreview } from "../tools/dispatcher";
 import { takeRebaseOffers, type RebaseOffer } from "../tools/rowRebase";
-import { endHandoff, showHandoff, watchHandoff, type HandoffSession } from "../handoff";
-import { settlePopups, watchNewTabs } from "../popups";
 import {
   LIMIT_NO_ANSWER_NOTE,
   LIMIT_STOP_NOTE,
@@ -38,17 +33,15 @@ import {
   remoteTurnNote,
   spinStopNote,
 } from "./prompts";
-import { fetchTabHeader, loadedPage, requestTabId, tabLoaded, toolTabUrl, turnTabOf } from "./tabContext";
+import { fetchTabHeader, loadedPage, requestTabId, toolTabUrl, turnTabOf } from "./tabContext";
 import { answerSince, closeDanglingToolCalls, confirmRebases, lastAnswerText } from "./history";
 import { createReplyAccumulator } from "./streamReply";
 import { prepareRequest, type PreparedRequest } from "./requestPrep";
+import { DONE, STALE, logToolFail, type RecordRun, type ToolCallContext } from "./toolCall";
+import { rememberPage, scheduleRepeat, type SpecialToolDeps } from "./specialTools";
+import { finishHandoff, handOff, type HandedOff, type HandoffDeps } from "./handoffFlow";
 
-// 손 넘기기 클릭이 연 팝업 창(#81): 클릭을 안 뒤 창이 만들어지기를 기다리는 시간, 페이지가 기록한 클릭 시각보다 앞서
-// 본 창도 그 클릭의 것으로 보는 작은 여유(같은 시계지만 기록 순서가 어긋날 수 있다). 그보다 먼저 열린 창(기다리는 동안
-// 사용자가 다른 곳을 눌러 연 창)은 따라가지 않는다.
-const HANDOFF_POPUP_SETTLE_MS = 800;
-const HANDOFF_POPUP_LEAD_MS = 200;
-import { HANDOFF_LABELS, handoffResultText, isManualSite, type HandoffOutcome } from "@/lib/manualSites";
+import { isManualSite } from "@/lib/manualSites";
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
 import { loginSiteFor, newGrantId, signInDecision, MAX_LOGIN_SITES } from "@/lib/loginPolicy";
 import { chooseSignInEntry, chosenSignInEntry, discardSignIn } from "../signIn";
@@ -60,8 +53,6 @@ import { beginKeepalive, endKeepalive } from "../keepalive";
 import { debugLog, timeSpan } from "../debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "../pdf";
 import {
-  resolveTurnTab,
-  recheckTabPopup,
   topDocumentId,
   captureTurnTab,
   currentToolTab,
@@ -96,49 +87,6 @@ interface ModelReply {
   thoughtChars: number;
 }
 
-// 이번 요청의 실행 기록에 호출 하나를 더한다(헛돌기 판정과 이어 가기 카드의 요약).
-type RecordRun = (
-  tool: string,
-  argsKey: string,
-  ok: boolean,
-  result: string,
-  summary: string,
-  extra?: { changed?: boolean; cancelled?: boolean },
-) => void;
-
-// 손 넘기기(클릭) 동안 지금 도구 탭이 여는 창 감시(#81).
-type HandoffPopups = { stop(): void; settle(clickedAt: number, stale: () => boolean): Promise<string | null> };
-
-// 도구 호출 하나를 처리하는 동안 함께 쓰는 값.
-interface ToolCallContext {
-  turn: number;
-  // 이 요청의 탭(this.turnTab은 새 요청이 바꿀 수 있다).
-  turnTab: TurnTab;
-  // 이 대화 안에서 호출마다 유일한 내부 키(#221). 패널 카드·선택 저장소·content 대상 레지스트리·작업 기록의 키로 쓴다.
-  callId: string;
-  // 모델이 준 호출 id. 대화 기록(tool_call_id)에만 쓴다 — 모델마다 단순하거나(call_0) 대화끼리 겹칠 수 있어 키로 쓰지 않는다.
-  modelCallId: string;
-  toolName: ToolName;
-  parsedArgs: unknown;
-  argsKey: string;
-  // 이 호출을 실패로 끝낸다(패널 결과 줄·대화 기록·헛돌기 기록).
-  failCall(msg: string, key: string, panelSummary?: string): void;
-  record: RecordRun;
-}
-
-// 승인 단계의 결론. stale: 이 요청이 끝났다(중단·새 요청). done: 결과를 이미 남겼다(실패·취소).
-const STALE = { kind: "stale" } as const;
-const DONE = { kind: "done" } as const;
-// 사용자가 직접 조작해 마쳤다(실행하지 않는다).
-interface HandedOff {
-  kind: "handoff";
-  outcome: HandoffOutcome;
-  // sign_in 준비의 열쇠(받은 값을 버린다).
-  signInToken: string | null;
-  // 사용자가 대상을 누른 것으로 끝났을 때만 남긴 창 감시와 그 클릭 시각.
-  popups: HandoffPopups | null;
-  clickedAt: number;
-}
 // 실행한다. via: 카드 없이 실행한 이유(이번 대화 허락·자동 실행·맡긴 작업). 카드로 승인했거나 승인 대상이 아니면 null.
 interface AuthorizedRun {
   kind: "run";
@@ -152,11 +100,6 @@ interface AuthorizedRun {
   internalNavSite: string | null;
 }
 type CallAuthorization = typeof STALE | typeof DONE | HandedOff | AuthorizedRun;
-
-// 실패한 도구 호출도 실행 결과와 같은 형식의 디버그 줄로 남긴다.
-function logToolFail(toolName: ToolName, msg: string): void {
-  debugLog("tool:result", `${toolName} fail · ${msg.slice(0, 140)}`);
-}
 
 const MAX_DOCUMENT_READS_PER_TURN = 5;
 
@@ -535,6 +478,54 @@ export class ChatAgent {
     });
   }
 
+  // 카드 답 대기(#263 단계 5 — 특수 도구·손 넘기기): 대기 등록(pendingApprovals.set)을 이 호출 안에서 동기로 한다. 원격 대화의 send는
+  // 카드 대신 거절을 setTimeout(0)으로 예약하므로, 등록이 그 타이머보다 늦으면 대기가 풀리지 않는다(1.2 메모). async로 감싸지 않고
+  // 그 Promise를 그대로 돌려준다 — 부르는 쪽이 옮기기 전처럼 그것을 바로 기다리고, 풀린 뒤 clearApproval을 제자리에서 부른다.
+  private waitApproval(callId: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.pendingApprovals.set(callId, resolve);
+    });
+  }
+
+  private clearApproval(callId: string): void {
+    this.pendingApprovals.delete(callId);
+  }
+
+  // 떼어낸 처리 모듈에 넘기는 읽기(getter)·쓰기(콜백). 값은 부르는 시점에 다시 읽는다(옮기기 전에 this를 읽던 자리 그대로).
+  private readonly specialToolDeps: SpecialToolDeps = {
+    isStale: (turn) => this.isStale(turn),
+    send: (msg) => this.send(msg),
+    toolContent: (turnTab, payload) => this.toolContent(turnTab, payload),
+    pushHistory: (msg) => {
+      this.history.push(msg);
+    },
+    waitApproval: (callId) => this.waitApproval(callId),
+    clearApproval: (callId) => this.clearApproval(callId),
+    cancelCall: (call) => {
+      this.cancelCall(call, null);
+    },
+    turnRequest: () => this.turnRequest,
+    externalContent: () => this.externalContent,
+    rememberUrl: (turn, url) => {
+      if (this.rememberedUrls.turn !== turn) this.rememberedUrls = { turn, urls: new Set() };
+      this.rememberedUrls.urls.add(url);
+    },
+  };
+
+  private readonly handoffDeps: HandoffDeps = {
+    isStale: (turn) => this.isStale(turn),
+    send: (msg) => this.send(msg),
+    toolContent: (turnTab, payload) => this.toolContent(turnTab, payload),
+    pushHistory: (msg) => {
+      this.history.push(msg);
+    },
+    waitApproval: (callId) => this.waitApproval(callId),
+    clearApproval: (callId) => this.clearApproval(callId),
+    resolveApproval: (callId, approved) => {
+      this.pendingApprovals.get(callId)?.(approved);
+    },
+  };
+
   private send(msg: BgToPanel): void {
     if (msg.kind === "error") this.turnErrors.push({ action: msg.action });
     // 원격 대화: 승인 카드·한도 카드를 보내지 않고 거절로 푼다. 모든 대기 지점은 카드를 보낸 직후 같은 흐름에서 대기를 등록하므로
@@ -601,46 +592,6 @@ export class ChatAgent {
       apiKey: active.apiKey,
       model: active.model,
       systemPrompt: composeSystemPrompt(settings.systemPrompt, { quickThinking: settings.quickThinking }),
-    };
-  }
-
-  // 손 넘기기(클릭) 동안 지금 도구 탭이 여는 새 탭·창을 지켜본다(#81). settle(clickedAt): 사용자가 대상을 누른 즈음
-  // (clickedAt 앞 HANDOFF_POPUP_LEAD_MS부터) 열린 창만 클릭과 같은 규칙(settlePopups)으로 따라가고 안내 문구를 돌려준다.
-  // 손 넘기기는 window.open을 감싸지 않으므로(오래 기다림) 따로 뜬 팝업 창만 따라간다 — 같은 창의 탭으로 열린 것은 그
-  // 기록이 없어 따라가지 않는다.
-  private async watchHandoffPopups(
-    turnTab: TurnTab,
-  ): Promise<HandoffPopups | null> {
-    let tabId: number;
-    try {
-      tabId = await resolveTurnTab(turnTab);
-    } catch {
-      return null;
-    }
-    const before = (await chrome.tabs.get(tabId).catch(() => null))?.url ?? "";
-    const sourceWindowId = await chrome.tabs.get(tabId).then((t) => t.windowId, () => null);
-    const watch = watchNewTabs(tabId);
-    let stopped = false;
-    const stop = () => {
-      if (stopped) return [];
-      stopped = true;
-      return watch.stop();
-    };
-    return {
-      stop: () => void stop(),
-      settle: async (clickedAt, stale) => {
-        // 클릭이 연 창이 만들어질 시간을 잠깐 준다.
-        await new Promise((r) => setTimeout(r, HANDOFF_POPUP_SETTLE_MS));
-        const created = stop().filter((t) => clickedAt > 0 && (t.at ?? 0) >= clickedAt - HANDOFF_POPUP_LEAD_MS);
-        if (!created.length || stale() || "error" in turnTab) return null;
-        // 따라갈 창은 사본에서 정하고, 그 사이 중단·새 요청이 없을 때만 이 턴에 반영한다(중단된 턴이 팝업을 남기지 않게).
-        const scratch = { ...turnTab, popups: [...(turnTab.popups ?? [])] };
-        const popup = await settlePopups(scratch, before, created, { calls: [], complete: false }, tabId, sourceWindowId);
-        if (stale()) return null;
-        turnTab.popups = scratch.popups;
-        turnTab.originDocumentId = scratch.originDocumentId;
-        return popup ? describePopup(popup).join(" ") : null;
-      },
     };
   }
 
@@ -1291,12 +1242,12 @@ export class ChatAgent {
       return true;
     }
     if (toolName === "confirm_task") return this.confirmTask(call);
-    if (toolName === "schedule_repeat_task") return this.scheduleRepeat(call);
-    if (toolName === "remember_page") return this.rememberPage(call);
+    if (toolName === "schedule_repeat_task") return scheduleRepeat(call, this.specialToolDeps);
+    if (toolName === "remember_page") return rememberPage(call, this.specialToolDeps);
     const auth = await this.authorizeCall(call);
     if (auth.kind === "stale") return false;
     if (auth.kind === "done") return true;
-    if (auth.kind === "handoff") return this.finishHandoff(call, auth);
+    if (auth.kind === "handoff") return finishHandoff(call, auth, this.handoffDeps);
     return this.runAuthorized(call, auth);
   }
 
@@ -1418,7 +1369,7 @@ export class ChatAgent {
     }
 
     if (decision.mode === "handoff") {
-      const handed = await this.handOff(call, preview, signInToken, signInHandoffWhy);
+      const handed = await handOff(call, preview, signInToken, signInHandoffWhy, this.handoffDeps);
       if (handed.kind !== "cancelled") return handed;
       return this.cancelCall(call, signInToken);
     }
@@ -1665,217 +1616,6 @@ export class ChatAgent {
     return true;
   }
 
-  // 반복 작업 등록(#138): 실행 방식·맡긴 작업·이번 대화 허락과 관계없이 늘 카드로 묻는다(브라우저에 남아 페이지를 다시 여는
-  // 활동을 새로 만든다). 승인은 이 등록에만 쓰고 맡긴 작업·대화 허락을 주지 않는다. false: 이 요청이 끝났다.
-  private async scheduleRepeat(call: ToolCallContext): Promise<boolean> {
-    const { turn, turnTab, callId, toolName, argsKey, failCall } = call;
-    let args: Required<RepeatArgs>;
-    try {
-      args = normalizeRepeatArgs(call.parsedArgs as RepeatArgs);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logToolFail(toolName, msg);
-      failCall(msg, argsKey);
-      return true;
-    }
-    const { provider } = activeModel(await getSettings());
-    if (this.isStale(turn)) return false;
-    const timeOf = (ms: number) => new Date(ms).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    const details = [
-      `요청: ${this.turnRequest.slice(0, 500)}`,
-      `확인할 페이지: ${args.url}`,
-      `조건: ${args.check}`,
-      `조건이 맞으면: ${args.then}`,
-      `간격: ${args.intervalMinutes}분마다 · 승인한 때부터 ${args.endsInHours}시간 · 최대 ${args.maxRuns}번`,
-      "",
-      `· 확인할 때마다 그 페이지를 새로고침하고 화면 글자를 ${providerAdapter(provider).label}로 보내 모델을 한 번 부릅니다(최대 ${args.maxRuns}번, 요금이 듭니다). 입력 칸에 쓴 값은 보내지 않습니다.`,
-      "· 조건이 맞으면 알려 드립니다. 다음 일은 '이어서 진행'을 직접 눌러야 새 대화로 시작합니다.",
-      "· 이어서 진행한 대화는 지금 실행 방식을 따릅니다('처음에 승인 받고 끝까지 실행'이면 그 대화에서 맡긴 뒤로는 결제·삭제도 묻지 않습니다).",
-      "· 설정 → 반복 작업에서 언제든 멈추거나 지울 수 있습니다.",
-    ].join("\n");
-    debugLog("tool:awaiting_repeat", args.title);
-    this.send({ kind: "tool_pending", callId, toolName, args: call.parsedArgs, previewSummary: "이 반복 작업을 등록할까요?", previewDetails: details });
-    const approved = await new Promise<boolean>((resolve) => {
-      this.pendingApprovals.set(callId, resolve);
-    });
-    this.pendingApprovals.delete(callId);
-    if (this.isStale(turn)) return false;
-    if (!approved) {
-      this.cancelCall(call, null);
-      return true;
-    }
-    let task: RepeatTask;
-    try {
-      task = await registerRepeatTask(args, this.turnRequest);
-    } catch (err) {
-      if (this.isStale(turn)) return false;
-      const msg = err instanceof Error ? err.message : String(err);
-      logToolFail(toolName, msg);
-      failCall(msg, argsKey);
-      return true;
-    }
-    if (this.isStale(turn)) return false;
-    // 끝나는 시각은 승인한 때부터 센다(실제로 저장한 값으로 알린다).
-    const until = timeOf(task.endsAt);
-    const summary = `반복 작업 등록: ${task.title} · ${task.intervalMinutes}분마다 · ${until}까지`;
-    this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
-    this.history.push({
-      role: "tool",
-      tool_call_id: call.modelCallId,
-      name: toolName,
-      content: this.toolContent(turnTab, {
-        result: {
-          registered: true,
-          intervalMinutes: task.intervalMinutes,
-          until,
-          maxRuns: task.maxRuns,
-          note: "등록했습니다. 지금 대화에서는 다음 일을 하지 않습니다. 조건이 맞으면 사용자가 '이어서 진행'으로 새 대화를 시작합니다. 무엇을 언제까지 확인하는지 짧게 알려 주세요.",
-        },
-      }),
-    });
-    call.record(toolName, argsKey, true, `repeat:${task.id}`, summary);
-    return true;
-  }
-
-  // "이 페이지 기억해줘": 지금 도구가 동작하는 탭(팝업·새 탭을 따라가는 중이면 그 탭)의 저장 카드를 펼친 채 띄운다.
-  // 저장은 사용자가 카드에서 저장을 누를 때만 된다(페이지 글의 지시로 모델이 불러도 저장되지 않는다). 외부 본문 보호가 켜진
-  // 대화면 초안을 자동으로 묻지 않는다(사용자가 "다시 채우기"를 누를 때만 보낸다).
-  private async rememberPage(call: ToolCallContext): Promise<boolean> {
-    const { turn, turnTab, callId, toolName, argsKey, failCall } = call;
-    // 다른 도구와 같은 탭 검사(따라가는 탭이 앞에 보이는지, 첫 도구 전이면 따라가기 시작한 문서 그대로인지)를 거친다.
-    let tabId: number;
-    let expectDoc: string | null;
-    let expectUrl: string;
-    try {
-      tabId = await resolveTurnTab(turnTab);
-      // 이동 직후 불렸으면 페이지가 뜬 뒤의 문서로 만든다(#240 — 아직 커밋되지 않은 이동이면 이전 페이지의 카드가 뜬다).
-      if (!(await tabLoaded(tabId))) throw new Error("페이지가 아직 뜨는 중이라 기억하지 않았습니다. 페이지가 다 뜬 뒤 다시 요청하세요.");
-      // 따라가는 탭 팝업이면 확인한 문서에 고정한다(그 사이 바뀌면 만들지 않음). 아니면 지금 문서. 확인하지 못하면(null) 만들지 않는다.
-      expectDoc = (await recheckTabPopup(turnTab, tabId)) ?? (await topDocumentId(tabId));
-      // 문서를 고정한 뒤의 주소(같은 문서 안 주소 이동도 막는다).
-      expectUrl = (await chrome.tabs.get(tabId)).url ?? "";
-    } catch (err) {
-      if (this.isStale(turn)) return false;
-      const msg = err instanceof Error ? err.message : String(err);
-      logToolFail(toolName, msg);
-      failCall(msg, argsKey);
-      return true;
-    }
-    if (this.isStale(turn)) return false;
-    const res = await makeOfferResult(tabId, null, { query: this.turnRequest, answer: "" }, expectDoc, expectUrl).catch(() => ({ reason: "tab_gone" as const }));
-    if (this.isStale(turn)) return false;
-    if ("reason" in res) {
-      const msg = OFFER_REFUSAL_TEXT[res.reason];
-      logToolFail(toolName, msg);
-      failCall(msg, argsKey);
-      return true;
-    }
-    if (this.rememberedUrls.turn !== turn) this.rememberedUrls = { turn, urls: new Set() };
-    this.rememberedUrls.urls.add(res.offer.url);
-    const autoDraft = !this.externalContent;
-    this.send({ kind: "page_save_offer", offer: res.offer, open: true, autoDraft });
-    const summary = "이 페이지의 저장 카드를 띄움(사용자가 저장을 눌러야 저장)";
-    this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
-    this.history.push({
-      role: "tool",
-      tool_call_id: call.modelCallId,
-      name: toolName,
-      content: this.toolContent(turnTab, {
-        result: {
-          shown: true,
-          note: `저장 카드를 띄웠습니다${autoDraft ? "(이름·용도·입력 자리는 자동으로 채워집니다)" : ""}. 아직 저장되지 않았습니다. 사용자가 카드에서 내용을 확인하고 저장을 눌러야 저장된다고 알려 주세요.`,
-        },
-      }),
-    });
-    call.record(toolName, argsKey, true, "remember:shown", summary);
-    return true;
-  }
-
-  // 손 넘기기: 페이지에 대상을 표시하고 사용자가 직접 조작(클릭·입력·로그인)하기를 기다린다.
-  private async handOff(
-    call: ToolCallContext,
-    preview: ToolPreview,
-    signInToken: string | null,
-    signInHandoffWhy: string | null,
-  ): Promise<typeof STALE | typeof DONE | { kind: "cancelled" } | HandedOff> {
-    const { turn, turnTab, callId, toolName, parsedArgs, argsKey, failCall } = call;
-    const ids =
-      toolName === "click_element" || toolName === "sign_in"
-        ? [(parsedArgs as { id: string }).id]
-        : (parsedArgs as { fills: Array<{ id: string }> }).fills.map((f) => f.id);
-    // 사용자가 표시한 대상을 눌러 팝업 창을 열면 그 창을 따라간다(#81). 넘기는 동안 이 탭이 여는 창을 지켜보고,
-    // 사용자가 대상을 누른 것(clicked)으로 끝났을 때만 그 즈음 열린 창을 클릭과 같은 규칙으로 따라간다.
-    const popups = toolName === "click_element" ? await this.watchHandoffPopups(turnTab) : null;
-    let shown: HandoffSession;
-    try {
-      // sign_in은 칸을 준비 열쇠(token)로 승인 대상에 남겼다.
-      shown = await showHandoff(turnTab, (toolName === "sign_in" && signInToken) || callId, toolName === "click_element" ? "c" : "f", ids);
-    } catch (err) {
-      popups?.stop();
-      if (this.isStale(turn)) return STALE;
-      const msg = err instanceof Error ? err.message : String(err);
-      logToolFail(toolName, msg);
-      recordCancelledAction(callId, turnTab);
-      failCall(msg, argsKey);
-      return DONE;
-    }
-    if (this.isStale(turn)) {
-      void endHandoff(shown);
-      popups?.stop();
-      return STALE;
-    }
-    debugLog("tool:handoff", toolName);
-    this.send({
-      kind: "tool_pending",
-      callId,
-      toolName,
-      args: parsedArgs,
-      previewSummary:
-        toolName === "click_element"
-          ? "페이지에 표시한 대상을 직접 눌러 주세요. 누르면 이어서 진행합니다."
-          : toolName === "sign_in"
-            ? `페이지에 표시한 로그인 칸에서 직접 로그인해 주세요(브라우저·비밀번호 관리자의 자동 채우기를 써도 됩니다). 로그인을 마치면 "했어요"를 눌러 주세요.`
-            : `페이지에 표시한 칸에 아래 값을 직접 입력하고 "했어요"를 눌러 주세요.`,
-      // 사용자가 직접 입력하므로 값을 자르지 않은 전체 목록을 보인다(승인 카드 요약은 10칸·80자까지).
-      previewDetails: toolName === "sign_in" ? (signInHandoffWhy ?? "") : (preview.handoffDetails ?? preview.details),
-      handoff: true,
-    });
-    let by: HandoffOutcome = "confirmed";
-    let expired = false;
-    // 페이지가 기록한 실제 클릭 시각(확인은 0.5초 간격이라 늦다). 없으면 0 — 어느 창이 그 클릭의 것인지 몰라
-    // 따라가지 않는다.
-    let clickedAt = 0;
-    const stopWatch = watchHandoff(shown, (outcome, at) => {
-      // 로그인은 문서가 바뀌어도(2단계 인증 화면 등) 끝난 것이 아니다. 사용자가 "했어요"를 누를 때까지 기다린다.
-      if (toolName === "sign_in" && outcome !== "expired") return;
-      if (outcome === "expired") expired = true;
-      else by = outcome;
-      if (outcome === "clicked") clickedAt = at ?? 0;
-      this.pendingApprovals.get(callId)?.(!expired);
-    });
-    const approved = await new Promise<boolean>((resolve) => {
-      this.pendingApprovals.set(callId, resolve);
-    });
-    stopWatch();
-    this.pendingApprovals.delete(callId);
-    void endHandoff(shown);
-    if (this.isStale(turn)) {
-      popups?.stop();
-      return STALE;
-    }
-    debugLog("tool:handoff_result", `${toolName} ${approved ? by : expired ? "expired" : "cancelled"}`);
-    const keepPopups = approved && by === ("clicked" as HandoffOutcome) && clickedAt > 0;
-    if (!keepPopups) popups?.stop();
-    if (expired) {
-      const msg = "사용자가 표시한 대상을 오래 조작하지 않아 직접 조작 안내를 끝냈습니다. 사용자에게 계속할지 물으세요.";
-      recordCancelledAction(callId, turnTab);
-      failCall(msg, argsKey);
-      return DONE;
-    }
-    if (!approved) return { kind: "cancelled" };
-    return { kind: "handoff", outcome: by, signInToken, popups: keepPopups ? popups : null, clickedAt };
-  }
-
   // 승인 카드로 묻고 답을 기다린다. 카드에 함께 보인 제안(링크 허락·개인정보 주소·자동 로그인·이번 대화 허락)은
   // 사용자가 고른 것을 각 처리기가 기록하고, 여기서는 기다린 뒤 정리한다.
   private async askByCard(
@@ -2046,39 +1786,6 @@ export class ChatAgent {
     });
     call.record(toolName, argsKey, false, "user_cancelled", "사용자가 취소했습니다.", { cancelled: true });
     return DONE;
-  }
-
-  // 사용자가 직접 조작해 마친 호출(실행하지 않는다)의 결과를 남긴다. false: 이 요청이 끝났다.
-  private async finishHandoff(call: ToolCallContext, handed: HandedOff): Promise<boolean> {
-    const { turn, turnTab, callId, toolName, argsKey } = call;
-    const { outcome } = handed;
-    let note: string;
-    let summary: string;
-    if (toolName === "sign_in") {
-      discardSignIn(handed.signInToken);
-      note = "사용자가 직접 로그인을 마쳤다고 알렸습니다. 결과는 페이지를 다시 관측해 확인하세요.";
-      summary = "직접 로그인 · 사용자가 마쳤다고 알림";
-    } else {
-      recordHandedOffAction(callId, turnTab);
-      // 사용자의 클릭이 팝업 창을 열었으면 따라가고 그 안내를 붙인다(클릭 결과와 같은 문구).
-      const popupNote = handed.popups
-        ? await handed.popups.settle(handed.clickedAt, () => this.isStale(turn)).catch(() => null)
-        : null;
-      if (this.isStale(turn)) return false;
-      // 손 넘기기는 클릭·입력·로그인에만 한다(decideApproval의 isPageAction, signInApproval).
-      note = `${handoffResultText(toolName as "click_element" | "fill_form_fields", outcome)}${popupNote ? ` ${popupNote}` : ""}`;
-      summary = `직접 조작 · ${HANDOFF_LABELS[outcome]}`;
-    }
-    this.send({ kind: "tool_result", callId, toolName, ok: true, summary });
-    this.history.push({
-      role: "tool",
-      tool_call_id: call.modelCallId,
-      name: toolName,
-      content: this.toolContent(turnTab, { result: { handedOff: true, outcome, note } }),
-    });
-    // 사용자가 한 일이라 같은 대상을 다시 넘겨도 헛돌기로 세지 않는다.
-    call.record(toolName, argsKey, true, `handoff:${outcome}`, note, { changed: true });
-    return true;
   }
 
   // 승인된(또는 승인 대상이 아닌) 호출을 실행하고 결과를 남긴다. false: 이 요청이 끝났다.
