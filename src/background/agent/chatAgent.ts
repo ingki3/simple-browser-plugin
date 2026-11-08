@@ -828,28 +828,39 @@ export class ChatAgent {
       if (u && u.total.calls > 0) debugLog("turn:usage", formatTurnUsage(u.total, Date.now() - u.start, u.conversation ?? this.conversationUsage));
       endSpan(extra);
     };
+    // 턴 시작 구간(탭 잡기·가림 목록 읽기)을 기다리는 사이 중단·새 요청이 있으면 이 턴은 아무것도 바꾸지 않고 조용히 끝난다(#267):
+    // 새 턴의 탭(this.turnTab·팝업)을 건드리지 않고, 패널에 오류·답 끝을 보내지 않는다(중단·새 턴이 패널 상태를 맡는다).
+    const quietStale = (): boolean => {
+      if (!this.isStale(turn)) return false;
+      endTurn("aborted");
+      endKeepalive();
+      return true;
+    };
     const prevTurnTab = this.turnTab;
-    this.turnTab = opts.tabId !== undefined ? await turnTabOf(opts.tabId) : await captureTurnTab();
-    clearOfferedHints(this.turnTab);
+    // 이 턴의 탭은 기다리기 전에 지역 값으로 고정한다(다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게).
+    const turnTab = opts.tabId !== undefined ? await turnTabOf(opts.tabId) : await captureTurnTab();
+    if (quietStale()) return;
+    this.turnTab = turnTab;
+    clearOfferedHints(turnTab);
     // 기록에 넣을 때 쓰는 가림 목록을 미리 읽어 둔다(서비스 워커가 다시 시작된 뒤 첫 결과도 가리게). 읽지 못하면 이 요청을
     // 보내지 않는다(가릴 값을 모른 채 페이지 글자를 보내지 않게).
     try {
       await warmSecrets();
     } catch (err) {
+      if (quietStale()) return;
       this.send({ kind: "error", message: `자동 로그인 가림 목록을 읽지 못해 요청을 보내지 않았습니다(${err instanceof Error ? err.message : String(err)}). 다시 시도해 주세요.` });
       this.send({ kind: "assistant_done" });
       endTurn("fail");
       endKeepalive();
       return;
     }
-    // 다음 턴이 this.turnTab을 바꿔도 이 턴의 읽기 관찰을 정리할 수 있게 붙잡아 둔다.
-    const turnTab = this.turnTab;
+    if (quietStale()) return;
     // 앞 턴에서 우리 클릭으로 열려 따라가던 팝업 창이 아직 열려 있으면 같은 탭에서 시작한 이번 턴도 그 창에서 이어 간다.
     if (!this.remote && !opts.expect && (await inheritPopups(prevTurnTab, turnTab))) debugLog("turn:popup", "앞 턴의 팝업 창을 이어 따라감");
-    if ("tabId" in this.turnTab) {
-      debugLog("turn:tab", `tab ${this.turnTab.tabId}${this.turnTab.internal ? " (내부 페이지)" : ""}`);
+    if ("tabId" in turnTab) {
+      debugLog("turn:tab", `tab ${turnTab.tabId}${turnTab.internal ? " (내부 페이지)" : ""}`);
     } else {
-      debugLog("turn:tab", `fail · ${this.turnTab.error}`, "warn");
+      debugLog("turn:tab", `fail · ${turnTab.error}`, "warn");
     }
     // 탭 조회를 기다리는 사이 새 턴이 시작됐으면 그 턴의 신뢰 사이트를 덮어쓰지 않는다.
     let site: string | null = null;
