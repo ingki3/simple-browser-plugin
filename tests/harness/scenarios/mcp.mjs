@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ask, expect, waitUntil } from "../lib.mjs";
+import { checkRemoteHandoffRefused, installHandoffObserver, markTurnStart, remoteTabAt, restoreHandoffObserver } from "../handoffObserve.mjs";
 import { asks as tgAsks, checkRemoteBlocked, connect as tgConnect, deliver as tgDeliver, press as tgPress, remoteBlockedCalls, replies as tgReplies, waitAsk as tgWaitAsk } from "./telegram.mjs";
 
 const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/sbp-mcp.mjs");
@@ -125,6 +126,37 @@ const FORM192 = `<title>신청</title>
 <div id="out"></div>`;
 
 export default [
+  {
+    name: "원격 요청이 직접 조작할 사이트에서 클릭하면 손 넘기기 카드 대신 거절로 풀리고 표시·감시를 거둔다(MCP, 물을 수 있어도 — #263 단계 5)",
+    pages2: { "/m": `<title>예매</title><main><button style="width:160px;height:50px" onclick="document.getElementById('out').textContent='눌림'">조회하기</button><p id=out></p></main>` },
+    async run(h) {
+      await h.settings({ manualSites: [h.base2] });
+      const url = `${h.base2}/m`;
+      const bridge = await askReady(h);
+      const unTab = await remoteTabAt(h, url);
+      try {
+        await installHandoffObserver(h);
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "조회하기" }, { text: "못 함" }];
+          globalThis.__toolLog = [];
+          globalThis.__modelReqs = [];
+        });
+        const from = h.logs.length;
+        await markTurnStart(h);
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "조회하기 눌러 줘" } } });
+        // 대기 등록이 거절 타이머 뒤로 밀리면 거절이 닿지 않아 손 넘기기가 끝나지 않는다(만료는 이 한도보다 길다).
+        const res = await bridge.reply(2, 8_000);
+        expect(!!res?.result, `답(${JSON.stringify(res).slice(0, 200)})`);
+        expect(!bridge.requests.some((r) => r.method === "elicitation/create"), `elicitation 없음(${bridge.requests.map((r) => r.method).join(",")})`);
+        await checkRemoteHandoffRefused(h, { from, url });
+      } finally {
+        await restoreHandoffObserver(h);
+        await unTab();
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
   {
     name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task를 쓰지 않는다(물을 수 있어도 elicitation·패널 카드 없음)",
     async run(h) {

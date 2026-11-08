@@ -2,6 +2,7 @@
 // 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 '처음에 승인 받고
 // 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만.
 import { ask, expect, waitUntil } from "../lib.mjs";
+import { checkRemoteHandoffRefused, installHandoffObserver, markTurnStart, remoteTabAt, restoreHandoffObserver } from "../handoffObserve.mjs";
 
 const TOKEN = "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const CHAT = 7001;
@@ -188,6 +189,36 @@ export async function checkRemoteBlocked(h, tool, from) {
 }
 
 export default [
+  {
+    name: "원격 요청이 직접 조작할 사이트에서 클릭하면 손 넘기기 카드 대신 거절로 풀리고 표시·감시를 거둔다(텔레그램, 묻기 끔 — #263 단계 5)",
+    pages2: { "/m": `<title>예매</title><main><button style="width:160px;height:50px" onclick="document.getElementById('out').textContent='눌림'">조회하기</button><p id=out></p></main>` },
+    async run(h) {
+      await connect(h);
+      expect((await ask(h, { kind: "telegram_set_ask", on: false })).ok, "묻기 끔");
+      await h.settings({ manualSites: [h.base2] });
+      const url = `${h.base2}/m`;
+      const unTab = await remoteTabAt(h, url);
+      await installHandoffObserver(h);
+      try {
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "조회하기" }, { text: "못 함" }];
+          globalThis.__toolLog = [];
+          globalThis.__modelReqs = [];
+          globalThis.__tg.asks = [];
+        });
+        const from = h.logs.length;
+        await markTurnStart(h);
+        await deliver(h, "조회하기 눌러 줘");
+        // 대기 등록이 거절 타이머 뒤로 밀리면 거절이 닿지 않아 손 넘기기가 끝나지 않는다(만료는 이 한도보다 길다).
+        await waitReply(h, 1, 8_000);
+        expect((await asks(h)).length === 0, "텔레그램 승인 질문 없음");
+        await checkRemoteHandoffRefused(h, { from, url });
+      } finally {
+        await restoreHandoffObserver(h);
+        await unTab();
+      }
+    },
+  },
   {
     name: "명령 응답(#145): 429로 기다리는 중 연결을 끊으면 다시 보내지 않는다",
     async run(h) {

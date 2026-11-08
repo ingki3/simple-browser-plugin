@@ -1,5 +1,6 @@
 // 손 넘기기(0.2.2): '직접 조작할 사이트'에서는 확장이 누르지 않고 대상을 표시해 사용자가 직접 하게 한다.
 import { expect, findC, lastTool, okResult } from "../lib.mjs";
+import { checkHandoffReleased, handoffBoxes, installHandoffObserver, markTurnStart, restoreHandoffObserver } from "../handoffObserve.mjs";
 
 const page = `<title>H</title><main><label>출발지 <input id=dep name=dep></label>
 <button id=b style="width:160px;height:50px" onclick="document.getElementById('out').textContent='눌림 '+event.isTrusted">조회하기</button><p id=out></p></main>`;
@@ -54,18 +55,67 @@ export default [
     async run(h) {
       await h.settings({ autoApprove: true, manualSites: [h.base] });
       let cancelled = false;
-      const r = await h.turn([findC, { click: "조회하기" }], {
-        path: "/h",
-        onCard: async (card, n) => {
-          if (n > 1) return;
-          await card.locator(".btn-cancel").click();
-          cancelled = true;
-        },
+      // 패널 취소도 원격 거절과 같은 해제 경로를 지난다(#263 단계 5 — 표시·폴링·팝업 감시를 거둔다).
+      await installHandoffObserver(h);
+      try {
+        await markTurnStart(h);
+        const r = await h.turn([findC, { click: "조회하기" }], {
+          path: "/h",
+          onCard: async (card, n) => {
+            if (n > 1) return;
+            await card.locator(".btn-cancel").click();
+            cancelled = true;
+          },
+        });
+        expect(cancelled, "손 넘기기 카드가 떠서 취소를 눌러야 한다");
+        expect(r.out === "", `눌리면 안 된다(out='${r.out}')`);
+        const t = lastTool(r, "click_element");
+        expect(!t?.result && t?.error === "user_cancelled", `취소 오류 결과(${JSON.stringify(t)})`);
+        // 카드가 떠 있는 동안에는 폴링이 돌았을 수 있다 — 해제 뒤로 더 돌지 않는지만 본다.
+        await checkHandoffReleased(h, { statusFree: false, noStatusAfterEnd: true });
+        expect((await handoffBoxes(h.tab)) === 0, "페이지에 표시가 남지 않음");
+      } finally {
+        await restoreHandoffObserver(h);
+      }
+    },
+  },
+  {
+    name: "손 넘기기 중 중단하면 표시를 거두고 기록에 남기지 않는다(#263 단계 5)",
+    pages: { "/h": page },
+    async run(h) {
+      await h.settings({ autoApprove: true, manualSites: [h.base] });
+      let stopped = false;
+      let boxesAtCard = -1;
+      await installHandoffObserver(h);
+      try {
+        await markTurnStart(h);
+        const r = await h.turn([findC, { click: "조회하기" }], {
+          path: "/h",
+          onCard: async (_card, n) => {
+            if (n > 1) return;
+            await h.tab.waitForTimeout(300);
+            boxesAtCard = await handoffBoxes(h.tab);
+            await h.panel.click("button.composer-btn.danger");
+            stopped = true;
+          },
+        });
+        expect(stopped && boxesAtCard >= 1, `손 넘기기 표시가 뜬 뒤 중단(표시 ${boxesAtCard})`);
+        expect(r.out === "", `눌리면 안 된다(out='${r.out}')`);
+        expect(!lastTool(r, "click_element"), `중단한 턴은 손 넘기기 결과를 모델에 보내지 않음(${JSON.stringify(lastTool(r, "click_element"))})`);
+        await checkHandoffReleased(h, { statusFree: false, noStatusAfterEnd: true });
+        expect((await handoffBoxes(h.tab)) === 0, "페이지에 표시가 남지 않음");
+      } finally {
+        await restoreHandoffObserver(h);
+      }
+      // 다음 요청의 기록: 중단한 호출은 끊긴 호출(interrupted)로만 채워지고 손 넘기기 결과·취소 결과가 없다.
+      await h.sw.evaluate(() => {
+        globalThis.__modelReqs = [];
       });
-      expect(cancelled, "손 넘기기 카드가 떠서 취소를 눌러야 한다");
-      expect(r.out === "", `눌리면 안 된다(out='${r.out}')`);
-      const t = lastTool(r, "click_element");
-      expect(!t?.result && t?.error === "user_cancelled", `취소 오류 결과(${JSON.stringify(t)})`);
+      await h.turn([{ text: "다음" }], { path: "/h", noReload: true, text: "다음" });
+      const tools = await h.sw.evaluate(() => (globalThis.__modelReqs[0]?.body.messages ?? []).filter((m) => m.role === "tool").map((m) => String(m.content)));
+      expect(tools.length === 2, `기록의 도구 결과 2개(찾기·끊긴 클릭)(${tools.length})`);
+      expect(JSON.parse(tools[1]).error === "interrupted", `끊긴 호출로만 남음(${tools[1]})`);
+      expect(!tools.some((c) => c.includes("handedOff") || c.includes("user_cancelled")), `손 넘기기·취소 결과 없음(${tools.join(" | ").slice(0, 300)})`);
     },
   },
   {
