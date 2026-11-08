@@ -1,4 +1,4 @@
-// 평소 문구(#130): 카드의 쉬운 도구 이름, 사용자가 취소한 호출은 실패와 구분, 모델 제공자 오류는 원인·다음 행동·원문(자세히).
+// 평소 문구(#130): 카드의 쉬운 도구 이름, 사용자가 취소한 호출은 실패와 구분, 모델 제공자 오류는 원인·다음 행동·원문(자세히). 답의 물결표 하나는 글자 그대로(#254).
 import { expect, findC } from "../lib.mjs";
 
 export default [
@@ -44,6 +44,17 @@ export default [
           globalThis.fetch = globalThis.__realMockFetch;
         });
       }
+    },
+  },
+  {
+    name: "답의 물결표 하나(17~20억)는 글자 그대로, 두 개(~~취소~~)만 취소선이다(#254)",
+    async run(h) {
+      await h.turn([{ text: "매매는 17~20억 구간, 전세는 7.3~8억. ~~취소~~" }]);
+      const bubble = h.panel.locator(".bubble-assistant").last();
+      const text = await bubble.innerText();
+      expect(text.includes("매매는 17~20억 구간, 전세는 7.3~8억"), `물결표가 글자 그대로(${text})`);
+      const dels = await bubble.locator("del, s").allInnerTexts();
+      expect(dels.length === 1 && dels[0] === "취소", `취소선은 ~~취소~~ 하나만(${JSON.stringify(dels)})`);
     },
   },
 ];

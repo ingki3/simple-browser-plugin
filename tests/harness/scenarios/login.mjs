@@ -314,6 +314,50 @@ export default [
     },
   },
   {
+    name: "승인하지 않은 사이트: 카드에서 고른 항목으로 그냥 승인하면 로그인하되 자동 로그인 사이트로 묶지 않는다(#263 단계 6)",
+    pages: { "/login": loginPage() },
+    async run(h) {
+      await connect(h, { approve: false });
+      const r = await h.turn([findF, { signIn: "password" }], {
+        path: "/login",
+        onCard: async (card) => {
+          expect((await card.locator(".btn-approve-login-site").count()) === 1, "자동 로그인 묶기 선택이 보임");
+          await card.locator(".tool-card-choices input").check();
+          await card.locator(".btn-approve").click();
+        },
+      });
+      expect(r.cards === 1 && r.out === `로그인됨 ${USER} / ${PW}`, `고른 항목으로 로그인(out='${r.out}')`);
+      const sites = await h.sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings.loginSites);
+      expect((sites ?? []).length === 0, `묶기를 고르지 않았으니 저장하지 않음(${JSON.stringify(sites)})`);
+    },
+  },
+  {
+    name: "승인하지 않은 사이트: 취소·중단한 카드는 아무것도 묶지 않고, 다음 카드에서 묶기를 고르면 그때 묶는다(#263 단계 6)",
+    pages: { "/login": loginPage() },
+    async run(h) {
+      await connect(h, { approve: false });
+      const loginSites = () => h.sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings.loginSites ?? []);
+      const steps = [findF, { signIn: "password" }];
+      const r1 = await h.turn(steps, { path: "/login", onCard: (card) => card.locator(".btn-cancel").click() });
+      expect(r1.cards === 1 && r1.out === "", `취소하면 넣지 않음(out='${r1.out}')`);
+      expect((await loginSites()).length === 0, "취소한 카드는 묶지 않음");
+      // 카드가 열린 채 중단(턴이 끝나 대기가 stale로 끝남).
+      const r2 = await h.turn(steps, { path: "/login" });
+      expect(r2.stoppedAtCard && r2.out === "", "중단하면 넣지 않음");
+      expect((await loginSites()).length === 0, "중단한 카드는 묶지 않음");
+      const r3 = await h.turn(steps, {
+        path: "/login",
+        onCard: async (card) => {
+          await card.locator(".tool-card-choices input").check();
+          await card.locator(".btn-approve-login-site").click();
+        },
+      });
+      expect(r3.cards === 1 && r3.out === `로그인됨 ${USER} / ${PW}`, `세 번째 카드에서 로그인(out='${r3.out}')`);
+      const sites = await loginSites();
+      expect(sites.length === 1 && sites[0].origin === h.base && sites[0].uuid === UUID, `그 카드의 선택으로 묶음(${JSON.stringify(sites)})`);
+    },
+  },
+  {
     name: "공백이 붙은 method(' post ')는 브라우저가 GET으로 보므로 묻는다",
     pages: { "/login": loginPage({ method: " post " }) },
     async run(h) {
