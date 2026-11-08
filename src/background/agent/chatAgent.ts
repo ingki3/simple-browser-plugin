@@ -4,7 +4,6 @@ import { remoteActionLines, remoteHopQuestion, remoteRefusal, remoteTaskQuestion
 import type { ModelId } from "@/lib/models";
 import { internalNavigateAutoBlock, siteOf, userNamedSites } from "@/lib/siteTrust";
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
-import { isChatGrantTool, type ChatGrantTool } from "@/lib/chatGrant";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "../otherTabs";
 import { discardLinkCall, setChosenLinks } from "../linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "../downloadChoices";
@@ -40,6 +39,7 @@ import { prepareRequest, type PreparedRequest } from "./requestPrep";
 import { DONE, STALE, logToolFail, type RecordRun, type ToolCallContext } from "./toolCall";
 import { rememberPage, scheduleRepeat, type SpecialToolDeps } from "./specialTools";
 import { finishHandoff, handOff, type HandedOff, type HandoffDeps } from "./handoffFlow";
+import { ConversationGrants } from "./grants";
 
 import { isManualSite } from "@/lib/manualSites";
 import { decideApproval, withoutChatGrant, type ApprovalDecision } from "@/lib/approvalDecision";
@@ -157,21 +157,12 @@ export class ChatAgent {
   // 백그라운드에서 직접 네트워크를 쓰는 도구(read_document)를 중단 시 함께 끊는다.
   private activeTool: AbortController | null = null;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
-  // 자동 실행해도 되는 사이트: 이 턴을 시작한 탭의 사이트와, 이 대화에서 승인 카드로 이동을 허락한 사이트.
+  // 자동 실행해도 되는 사이트: 이 턴을 시작한 탭의 사이트와, 이 대화에서 승인 카드로 이동을 허락한 사이트(grants.approvedSiteSet).
   private turnSite: string | null = null;
-  private approvedSites = new Set<string>();
+  // 승인·허락 상태(이동 허락 사이트·링크 허락·대화 허락·개인정보 주소 허락·자동 로그인 선택과 그 제안, #263 단계 6 — agent/grants.ts).
+  private grants = new ConversationGrants();
   // 이번 요청 글에 사용자가 적은 웹 주소·도메인의 출처(#54). 턴 탭이 내부 페이지(새 탭·설정)일 때의 이동에만 쓴다.
   private turnNamedSites: string[] = [];
-  // 승인 카드에서 "이번 요청 동안 링크 이동 묻지 않기"를 고른 턴과 그 카드의 페이지 사이트. 턴 번호는 새 요청·중단마다
-  // 바뀌므로 그 요청이 끝나면 저절로 쓰이지 않고, 대화 전체의 신뢰 사이트와 달리 그 사이트 안의 링크에만 쓴다.
-  // 그 선택지를 보여 준 카드(callId → 턴·사이트)만 받아들인다.
-  private linkGrant: { turn: number; site: string } | null = null;
-  private linkGrantOffers = new Map<string, { turn: number; site: string }>();
-  // "이번 대화 동안 이 도구 묻지 않기"(#53): 허락한 도구 → 범위(download_images는 저장 폴더). 이 객체는 대화마다 새로
-  // 만들어지고(새 대화·패널 닫힘·서비스 워커 재시작) 저장소에 남기지 않으므로 그 대화가 끝나면 함께 사라진다.
-  // 링크 이동 허락(linkGrant)과는 대상 도구가 겹치지 않는다: 그쪽은 페이지 상태를 바꾸는 클릭이라 한 요청에만 쓴다.
-  // 그 선택지를 보여 준 카드(callId → 도구·범위)만 받아들인다.
-  private chatGrants = new Map<ChatGrantTool, string>();
   // 이 대화에서 사용자가 작업을 맡겼는지(#123, 실행 방식 task). 새 대화·다른 실행 방식·패널의 해제로 풀린다.
   // 저장소에 남기지 않으므로 패널을 닫거나 서비스 워커가 다시 뜨면(새 대화 객체) 다시 묻는다.
   private taskApproved = false;
@@ -188,19 +179,8 @@ export class ChatAgent {
   // 같은 응답의 뒤 호출은 그 응답보다 늦게 난 결과를 볼 수 없으므로 pending을 쓰지 못한다. 기록을 비우면 함께 비운다.
   private rebasePending: RebaseOffer[] = [];
   private rebaseConfirmed = new Map<string, string[]>();
-  // 승인 카드에서 "이 주소는 이번 대화에서 다시 묻지 않기"로 허용한 주소의 열쇠(personalUrlKey — 주소 글자 그대로,
-  // 양식 제출 주소는 그 action).
-  // 클릭·입력의 자동 실행 판정에서 이 주소들의 개인정보 주소 신호만 면제한다(사이트 경계·다른 신호는 그대로).
-  // 대화 객체 메모리에만 두고 저장하지 않는다. 그 선택지를 보여 준 카드(callId → 턴·주소)만 받아들인다.
-  private allowedPersonalUrls = new Set<string>();
-  private personalUrlOffers = new Map<string, { turn: number; keys: string[] }>();
-  private chatGrantOffers = new Map<string, { tool: ChatGrantTool; scope: string }>();
-  // 자동 로그인(sign_in): 카드가 제안한 출처(호출별), 사용자가 그 제안을 고른 호출, 이 대화에서 이미 시도한 출처·단계
-  // (다시 자동으로 하지 않는다), 페이지가 넣은 값을 다시 보여 가린 적이 있는지(그러면 이 대화에서는 자동 로그인하지 않는다).
-  private loginSiteOffers = new Map<string, string>();
-  // 카드를 띄운 sign_in 호출의 준비 열쇠(signIn.ts의 token).
-  private signInTokens = new Map<string, string>();
-  private rememberLogin = new Set<string>();
+  // 자동 로그인(sign_in): 이 대화에서 이미 시도한 출처·단계(다시 자동으로 하지 않는다), 페이지가 넣은 값을 다시 보여 가린 적이
+  // 있는지(그러면 이 대화에서는 자동 로그인하지 않는다). 카드가 제안한 출처·사용자가 고른 호출은 grants.
   private loginAttempts = new Set<string>();
   private secretsMasked = false;
   // 외부 본문 보호: 파일·Google 문서·PDF처럼 외부 유래 데이터가 이 대화의 모델 문맥에 들어오면 켠다(새 대화까지).
@@ -294,27 +274,22 @@ export class ChatAgent {
   }
 
   // 패널 연결이 끊겨 기록만 잠깐 보관할 때(#243). 진행 중인 것을 멈추고(디버거도 뗌), 허용을 넓히는 상태는 모두 지운다 —
-  // 대화 허락·맡긴 작업·이동 허락 사이트·링크 허락·개인정보 주소 허락·자동 로그인 선택·행 기준(#233). 남기는 것: 기록, 더 묻게
-  // 만드는 보호 상태(외부 본문 보호·로그인 값 가림·자동 로그인 시도), 기록 형식 상태(제공자·모델·지침·저장 링크 후보·호출 키),
-  // 사용량 누계, 디버거 세션(사용자의 디버깅 취소 선택 canceledByUser를 지키려고 — 연결은 abort가 뗀다).
-  // 새 상태를 더하면 어디서 지울지 정할 것. 새 대화는 새 ChatAgent라 저절로 비워진다. 같은 대화 안에서 지우는 곳:
-  // cancelInFlight(턴 시작·abort — 진행 중 요청·도구·원격 질문, 승인 대기, 허락 제안), abort(턴 세대·번역·디버거 연결),
+  // 승인·허락 상태 전부(grants.clearForReconnect: 대화 허락·이동 허락 사이트·링크 허락·개인정보 주소 허락·자동 로그인 선택과 그 제안),
+  // 맡긴 작업, 행 기준(#233). 남기는 것: 기록, 더 묻게 만드는 보호 상태(외부 본문 보호·로그인 값 가림·자동 로그인 시도),
+  // 기록 형식 상태(제공자·모델·지침·저장 링크 후보·호출 키), 사용량 누계, 디버거 세션(사용자의 디버깅 취소 선택 canceledByUser를
+  // 지키려고 — 연결은 abort가 뗀다).
+  // 새 상태를 더하면 어디서 지울지 정할 것. 승인·허락 상태는 ConversationGrants(agent/grants.ts)에 더하고 그 clearFor* 메서드에서
+  // 지운다(단위 시험 tests/agentGrants.test.mjs의 표도 함께 고친다). 새 대화는 새 ChatAgent라 저절로 비워진다. 같은 대화 안에서 지우는 곳:
+  // cancelInFlight(턴 시작·abort — 진행 중 요청·도구·원격 질문, 승인 대기, 허락 제안 grants.clearForCancel), abort(턴 세대·번역·디버거 연결),
+  // 카드 대기 끝(askByCard — 그 callId의 제안 grants.takeCallOffers),
   // 이 함수(허용을 넓히는 상태 — 넓히는 상태면 여기서도 지운다), 새 기록(ensureCredentials — 대상·지침·빠르게 생각이 바뀜:
   // 기록·행 기준·사용량·첨부 PDF·저장 링크 후보·맡긴 작업. 허락·외부 본문 보호는 남긴다).
   suspendForReconnect(): void {
     this.abort();
-    this.chatGrants.clear();
-    this.chatGrantOffers.clear();
+    // withdrawTask는 허락 상태를 읽지 않으므로(맡기기 세대·카드·표시만) 허락은 한 번에 지운다.
+    this.grants.clearForReconnect();
     this.withdrawTask();
     this.pendingTaskCall = null;
-    this.approvedSites.clear();
-    this.linkGrant = null;
-    this.linkGrantOffers.clear();
-    this.allowedPersonalUrls.clear();
-    this.personalUrlOffers.clear();
-    this.rememberLogin.clear();
-    this.loginSiteOffers.clear();
-    this.signInTokens.clear();
     this.clearRebases();
   }
 
@@ -350,9 +325,7 @@ export class ChatAgent {
     this.pendingApprovals.clear();
     this.remoteAskAbort?.abort();
     this.remoteAskAbort = null;
-    this.linkGrantOffers.clear();
-    this.chatGrantOffers.clear();
-    this.personalUrlOffers.clear();
+    this.grants.clearForCancel();
   }
 
   private isStale(turn: number): boolean {
@@ -396,28 +369,16 @@ export class ChatAgent {
       setChosenTabs(callId, choiceIds);
       setChosenLinks(callId, choiceIds);
       setChosenDownloads(callId, choiceIds);
-      const token = this.signInTokens.get(callId);
+      const token = this.grants.signInToken(callId);
       if (token) chooseSignInEntry(token, choiceIds);
     }
-    if (rememberLoginSite && this.pendingApprovals.has(callId) && this.loginSiteOffers.has(callId)) {
-      this.rememberLogin.add(callId);
-    }
-    const offer = this.linkGrantOffers.get(callId);
-    if (allowLinksThisTurn && this.pendingApprovals.has(callId) && offer?.turn === this.currentTurn) {
-      this.linkGrant = offer;
-      debugLog("tool:link_grant", `turn ${offer.turn}`);
-    }
-    const urlOffer = this.personalUrlOffers.get(callId);
-    if (allowUrlsThisChat && this.pendingApprovals.has(callId) && urlOffer?.turn === this.currentTurn) {
-      for (const k of urlOffer.keys) this.allowedPersonalUrls.add(k);
-      debugLog("tool:url_allow", `${urlOffer.keys.length}개 주소`);
-    }
-    const chatOffer = this.chatGrantOffers.get(callId);
-    if (allowToolThisChat && this.pendingApprovals.has(callId) && chatOffer) {
-      this.chatGrants.set(chatOffer.tool, chatOffer.scope);
-      debugLog("tool:chat_grant", `${chatOffer.tool}${chatOffer.scope ? ` · ${chatOffer.scope}` : ""}`);
-      this.sendChatGrants();
-    }
+    // 허락 선택(자동 로그인 묶기 → 링크 → 주소 → 대화 허락 순서, grants.acceptOffers). 대화 허락이면 패널 표시를 보낸 뒤 승인한다.
+    const { chatGrantAccepted } = this.grants.acceptOffers(
+      callId,
+      { allowLinksThisTurn, allowToolThisChat, allowUrlsThisChat, rememberLoginSite },
+      { pending: this.pendingApprovals.has(callId), currentTurn: this.currentTurn },
+    );
+    if (chatGrantAccepted) this.sendChatGrants();
     this.pendingApprovals.get(callId)?.(true);
   }
 
@@ -427,13 +388,13 @@ export class ChatAgent {
 
   // 패널에서 허락을 취소한다. 다음 호출부터 다시 카드로 묻는다.
   revokeChatGrant(tool: string): void {
-    if (!isChatGrantTool(tool) || !this.chatGrants.delete(tool)) return;
+    if (!this.grants.revokeChatGrant(tool)) return;
     debugLog("tool:chat_grant_revoked", tool);
     this.sendChatGrants();
   }
 
   private sendChatGrants(): void {
-    this.send({ kind: "chat_grants", grants: [...this.chatGrants].map(([tool, scope]) => ({ tool, scope })) });
+    this.send({ kind: "chat_grants", grants: this.grants.chatGrantList() });
   }
 
   // 패널에서 맡긴 작업을 거둔다(#123). 다음 동작부터 다시 맡길지 묻는다.
@@ -1282,7 +1243,7 @@ export class ChatAgent {
     const autoApprove = runMode === "auto";
     // 다른 실행 방식으로 바꿨으면 맡긴 작업을 거둔다(다시 task로 바꾸면 새로 묻는다).
     if (runMode !== "task") this.setTaskApproved(false);
-    const trusted = new Set(this.approvedSites);
+    const trusted = this.grants.approvedSiteSet();
     if (this.turnSite) trusted.add(this.turnSite);
     // 원격 요청에서 묻지 않을 사이트(#192): 원격 대화면 호출마다 지금 설정에서 읽어 더한다(대화에 쌓지 않음 — 목록에서 빼면 다음 호출부터 빠짐).
     const remoteTrusted = new Set<string>();
@@ -1320,11 +1281,11 @@ export class ChatAgent {
       manualSite: isManualSite(manualSites, pageUrl),
       trusted,
       turn,
-      linkGrant: this.linkGrant,
+      linkGrant: this.grants.linkGrant,
       fromInternal,
       namedSites: this.turnNamedSites,
-      allowedPersonalUrls: this.allowedPersonalUrls,
-      chatGrants: this.chatGrants,
+      allowedPersonalUrls: this.grants.allowedPersonalUrls,
+      chatGrants: this.grants.chatGrants,
     });
     // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
     let signInAttempt: string | null = null;
@@ -1431,7 +1392,7 @@ export class ChatAgent {
       // 판정은 자동 이동과 같은 경계(withinTrusted — 같은 등록 도메인 포함)로: 허용 사이트를 빼고도 자동이었을 때만 올린다.
       const navTarget = String(preview.details ?? "");
       const navSite = fromInternal && !this.turnSite ? siteOf(navTarget) : null;
-      const withoutRemote = new Set(this.approvedSites);
+      const withoutRemote = this.grants.approvedSiteSet();
       const onlyRemote = !!navSite && remoteTrusted.size > 0 && internalNavigateAutoBlock(withoutRemote, this.turnNamedSites, navTarget) !== null;
       const internalNavSite = onlyRemote ? null : navSite;
       return { kind: "run", execArgs, via: "auto", signInAttempt, internalNavSite };
@@ -1447,7 +1408,7 @@ export class ChatAgent {
       // 원격으로 허락한 이동의 출처도 카드로 허락한 것과 같게 이 대화의 자동 이동 범위에 둔다.
       if (toolName === "navigate_to_url") {
         const site = siteOf(String(preview.details ?? ""));
-        if (site) this.approvedSites.add(site);
+        if (site) this.grants.addApprovedSite(site);
       }
       // 선택 카드는 원격에서 고를 수 없어 질문에 보인 기본 선택만 실행한다(#192).
       if (preview.choices) {
@@ -1657,24 +1618,23 @@ export class ChatAgent {
         ? { choices: preview.choices, choiceLimit: preview.choiceLimit, choiceDefaults: preview.choiceDefaults }
         : {}),
     });
-    if (linkOffer && pageSite) this.linkGrantOffers.set(callId, { turn, site: pageSite });
-    if (urlOffer) this.personalUrlOffers.set(callId, { turn, keys: personalUrlKeys });
-    if (loginOffer) this.loginSiteOffers.set(callId, loginOffer);
-    if (toolName === "sign_in" && preview.signIn) this.signInTokens.set(callId, preview.signIn.token);
-    if (chatGrant.offer && isChatGrantTool(toolName)) {
-      this.chatGrantOffers.set(callId, { tool: toolName, scope: preview.grantScope ?? "" });
-    }
+    this.grants.recordOffers(callId, {
+      turn,
+      toolName,
+      linkOffer,
+      pageSite,
+      urlOffer,
+      personalUrlKeys,
+      loginOffer,
+      signIn: preview.signIn,
+      chatGrantOffer: chatGrant.offer,
+      grantScope: preview.grantScope,
+    });
     const approved = await new Promise<boolean>((resolve) => {
       this.pendingApprovals.set(callId, resolve);
     });
     this.pendingApprovals.delete(callId);
-    this.linkGrantOffers.delete(callId);
-    this.chatGrantOffers.delete(callId);
-    this.personalUrlOffers.delete(callId);
-    const rememberOrigin = this.rememberLogin.has(callId) ? this.loginSiteOffers.get(callId) : undefined;
-    this.loginSiteOffers.delete(callId);
-    this.rememberLogin.delete(callId);
-    this.signInTokens.delete(callId);
+    const { rememberOrigin } = this.grants.takeCallOffers(callId);
     if (this.isStale(turn)) {
       discardSignIn(preview.signIn?.token);
       return STALE;
@@ -1715,7 +1675,7 @@ export class ChatAgent {
     if (toolName === "navigate_to_url") {
       try {
         const site = siteOf(String(preview.details));
-        if (site) this.approvedSites.add(site);
+        if (site) this.grants.addApprovedSite(site);
       } catch {
         /* ignore */
       }
@@ -1885,7 +1845,7 @@ export class ChatAgent {
       // (카드로 허락한 navigate_to_url과 같은 범위 — 이후 클릭·입력의 자동 실행 경계).
       if (toolName === "open_saved_link" && result.ok) {
         const site = siteOf(String((execArgs as { url?: unknown }).url ?? ""));
-        if (site) this.approvedSites.add(site);
+        if (site) this.grants.addApprovedSite(site);
       }
     } catch (err) {
       // 번역이 실패하면(시간 초과 포함) 그 탭의 번역을 멈추고 세션을 끝낸다 — 늦게 온 배치 응답은 content의 번역 세대가 바뀌어 적용되지 않고,
