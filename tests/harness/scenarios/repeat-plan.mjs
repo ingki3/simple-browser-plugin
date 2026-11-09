@@ -371,6 +371,56 @@ export default [
     },
   },
   {
+    // 리뷰 3차(P1): shadow 영역의 slot에 호스트의 같은 출처 iframe이 배치되면 그 iframe도 영역 안이다(합성 트리) → 작전으로 받지 않음.
+    name: "shadow 영역의 slot에 배치된 같은 출처 iframe도 영역 안으로 보아 작전으로 받지 않고, iframe 안 버튼이 열리면 전체 판단",
+    pages: {
+      [PATH]: page({
+        tickets: `<div id="host"><iframe slot="seat" src="/pl-seat" style="width:300px;height:120px"></iframe></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<section id="inner"><h2>예매 현황</h2><p>좌석은 아래에서</p><slot name="seat"></slot></section>';</script>`,
+      }),
+      "/pl-seat": `<title>좌석</title><button disabled>예매하기</button>`,
+    },
+    async run(h) {
+      await setModel(h, { plan: { ...PLAN, region: { ...PLAN.region, selector: "section#inner" } } });
+      const id = await seed(h);
+      const first = await runNow(h, id);
+      expect(first.plan.state !== "ready", `slot에 iframe이 배치된 영역은 작전으로 받지 않음(${JSON.stringify(first.plan)})`);
+      h.pages.set("1/pl-seat", `<title>좌석</title><button>예매하기</button>`);
+      await setModel(h, { plan: { ...PLAN, region: { ...PLAN.region, selector: "section#inner" } }, draftFor: { region: UNMET, full: MET } });
+      const t = await runNow(h, id);
+      expect(t.status === "triggered" && t.lastCheck.mode !== "region", `영역만으로 unmet을 확정하지 않음(${t.status}, ${JSON.stringify(t.lastCheck)})`);
+    },
+  },
+  {
+    // 리뷰 3차(P1): slot에 배치된 호스트의 버튼은 영역의 글자·버튼·모양 모두에 같게 들어간다(배치되지 않은 호스트 자식은 어디에도 없음).
+    name: "shadow 영역의 slot에 배치된 버튼은 글자·버튼 목록·모양에 모두 들고, 배치된 구조가 바뀌면 전체 판단",
+    pages: {
+      [PATH]: page({
+        tickets: `<div id="host"><button slot="seat" disabled>슬롯버튼</button><button>미배치버튼</button></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<section id="inner"><h2>예매 현황</h2><p>오픈 예정</p><slot name="seat"></slot></section>';</script>`,
+      }),
+    },
+    async run(h) {
+      const plan = { ...PLAN, region: { ...PLAN.region, selector: "section#inner" } };
+      const id = await withPlan(h, plan);
+      await runNow(h, id);
+      let region = (await users(h, "__regionReqs")).at(-1) ?? "";
+      expect(region.includes("[button] 슬롯버튼 (disabled=true)"), `배치된 버튼이 버튼 목록에(${region.slice(-200)})`);
+      expect(!region.includes("미배치버튼"), "배치되지 않은 호스트 자식은 없음");
+      // 같은 모양(버튼 하나)에서 상태만 바뀌면 영역 판단 그대로.
+      const html = (seat) =>
+        page({
+          tickets: `<div id="host">${seat}<button>미배치버튼</button></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<section id="inner"><h2>예매 현황</h2><p>오픈 예정</p><slot name="seat"></slot></section>';</script>`,
+        });
+      h.pages.set(`1${PATH}`, html(`<button slot="seat">슬롯버튼</button>`));
+      let t = await runNow(h, id);
+      region = (await users(h, "__regionReqs")).at(-1) ?? "";
+      expect(t.lastCheck.mode === "region" && region.includes("[button] 슬롯버튼") && !region.includes("슬롯버튼 (disabled"), `열린 버튼이 영역 요청에(${t.lastCheck.mode})`);
+      // 배치된 구조가 바뀌면(slot에 목록이 더 배치됨) 모양이 달라 전체 판단.
+      h.pages.set(`1${PATH}`, html(`<button slot="seat">슬롯버튼</button><ul slot="seat"><li>R석</li><li>S석</li></ul>`));
+      t = await runNow(h, id);
+      expect(t.lastCheck.mode === "full", `배치 구조가 바뀌면 전체 판단(${t.lastCheck.mode})`);
+    },
+  },
+  {
     name: "작전을 확인해 읽는 사이 문서가 바뀌면 작전을 버리고 판정만 남긴다",
     pages: { [PATH]: page() },
     async run(h) {
