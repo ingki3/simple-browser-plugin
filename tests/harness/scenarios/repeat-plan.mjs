@@ -487,6 +487,42 @@ export default [
     },
   },
   {
+    // 리뷰 6차(P1): 기준점(앞 형제 제목·이름표)도 화면에 그려진 것이어야 한다. 제목과 영역이 호스트의 light 자식이 되고 영역만
+    // slot에 배치되면, 그려지지 않는 옛 제목으로 기준점을 맞추지 않는다 → 전체 판단.
+    name: "기준점 제목이 그려지지 않으면(영역만 slot에 배치) 기준점이 맞지 않아 전체 판단",
+    pages: { [PATH]: page({ tickets: `<h2>예매 현황</h2><section id="tickets"><p>오픈 예정</p><button disabled>예매하기</button></section>` }) },
+    async run(h) {
+      const id = await withPlan(h);
+      h.pages.set(
+        `1${PATH}`,
+        page({
+          tickets: `<div id="host"><h2>예매 현황</h2><section id="tickets" slot="r"><p>오픈 예정</p><button disabled>예매하기</button></section></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<h2>다른 공연</h2><slot name="r"></slot>';</script>`,
+        }),
+      );
+      await setModel(h, { draftFor: { region: UNMET, full: MET } });
+      const t = await runNow(h, id);
+      expect(t.status === "triggered" && t.lastCheck.mode !== "region", `그려지지 않는 제목으로 기준점을 맞추지 않음(${t.status}, ${JSON.stringify(t.lastCheck)})`);
+    },
+  },
+  {
+    // 리뷰 6차(P1) 이름표 변형: aria-labelledby가 가리키는 이름표가 그려지지 않으면(배치되지 않은 호스트 자식) 기준점이 맞지 않는다.
+    name: "기준점 이름표(aria-labelledby)가 그려지지 않으면 기준점이 맞지 않아 전체 판단",
+    pages: { [PATH]: page({ tickets: `<span id="lbl">예매 현황</span><section id="tickets" aria-labelledby="lbl"><p>오픈 예정</p><button disabled>예매하기</button></section>` }) },
+    async run(h) {
+      const plan = { ...PLAN, region: { ...PLAN.region, anchor: { text: "예매 현황", where: "label" } } };
+      const id = await withPlan(h, plan);
+      h.pages.set(
+        `1${PATH}`,
+        page({
+          tickets: `<div id="host"><span id="lbl">예매 현황</span></div><section id="tickets" aria-labelledby="lbl"><p>오픈 예정</p><button disabled>예매하기</button></section><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<b>다른 공연</b>';</script>`,
+        }),
+      );
+      await setModel(h, { plan, draftFor: { region: UNMET, full: MET } });
+      const t = await runNow(h, id);
+      expect(t.status === "triggered" && t.lastCheck.mode !== "region", `그려지지 않는 이름표로 기준점을 맞추지 않음(${t.status}, ${JSON.stringify(t.lastCheck)})`);
+    },
+  },
+  {
     name: "작전을 확인해 읽는 사이 문서가 바뀌면 작전을 버리고 판정만 남긴다",
     pages: { [PATH]: page() },
     async run(h) {
