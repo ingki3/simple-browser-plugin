@@ -63,7 +63,7 @@ async function seed(h, over = {}, path = PATH) {
       failures: 0,
       triggeredAt: null,
       lastManualAt: 0,
-      plan: { state: "pending", tries: 0 },
+      plan: { state: "pending", tries: 0, gen: crypto.randomUUID() },
       planBuilds: 0,
       ...over,
     };

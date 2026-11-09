@@ -39,6 +39,7 @@ import { TargetChangedError } from "./modelTarget";
 import { raceSignal } from "@/lib/async";
 import type { ActiveModel } from "@/lib/settings";
 import {
+  capClickables,
   OUTLINE_MAX,
   REGION_CLICKABLES,
   REGION_MISSES,
@@ -182,7 +183,7 @@ export async function registerRepeatTask(a: Required<RepeatArgs>, request: strin
   const task = await serial(async () => {
     const all = await load();
     if (activeCount(all) >= MAX_ACTIVE_REPEAT_TASKS) throw new Error(`확인 중인 반복 작업은 ${MAX_ACTIVE_REPEAT_TASKS}개까지입니다. 설정의 반복 작업에서 멈추거나 지운 뒤 다시 등록하세요.`);
-    const t = newRepeatTask(a, { id: crypto.randomUUID(), now: Date.now(), request });
+    const t = newRepeatTask(a, { id: crypto.randomUUID(), now: Date.now(), request, planGen: crypto.randomUUID() });
     all.push(t);
     await save(all);
     return t;
@@ -254,7 +255,7 @@ export async function clearRepeatPlan(id: string): Promise<RepeatTask[]> {
 // 설정의 "작전 만들기(다음 확인 때)"(#284): 작전이 없는 작업(옛 작업·만들기 실패·지움)을 다음 unmet 확인 때 만들게 한다.
 export async function makeRepeatPlan(id: string): Promise<RepeatTask[]> {
   await recovered;
-  const t = await update(id, (t) => requestPlan(t));
+  const t = await update(id, (t) => requestPlan(t, crypto.randomUUID()));
   if (!t) throw new Error("이미 작전이 있거나 만드는 중입니다.");
   debugLog("repeat:plan", `${t.title} · requested`);
   await announce();
@@ -602,12 +603,14 @@ function readProbe(raw: unknown): RegionProbe | undefined {
   }
   if (typeof r.text !== "string" || !r.shape || typeof r.shape !== "object") return { found: false, why: "empty" };
   const sh = r.shape as Record<string, unknown>;
+  // 버튼 목록이 상한을 넘었으면 글자 잘림과 같게 잘린 영역으로 본다(content도 상한 + 1개로 알린다).
+  const buttons = capClickables(readClickables(r.clickables, REGION_CLICKABLES + 1), REGION_CLICKABLES);
   return {
     found: true,
     text: r.text.slice(0, REGION_TEXT_MAX),
-    cut: r.cut === true || r.text.length > REGION_TEXT_MAX,
+    cut: r.cut === true || r.text.length > REGION_TEXT_MAX || buttons.cut,
     shape: { tag: str(sh.tag, 40), role: str(sh.role, 40), skeleton: str(sh.skeleton, 40) },
-    clickables: readClickables(r.clickables, REGION_CLICKABLES),
+    clickables: buttons.clickables,
   };
 }
 

@@ -9,7 +9,7 @@ import { findClickables } from "./clickables";
 import { selectorBlock } from "@/lib/selectorPolicy";
 import { plainWord } from "@/lib/actionLog";
 import { snapshotRole } from "@/lib/repeatTask";
-import { OUTLINE_MAX, REGION_MATCH_MAX, SHAPE_DEPTH, type OutlineItem, type RegionProbe, type RegionSpec } from "@/lib/repeatPlan";
+import { capClickables, OUTLINE_MAX, REGION_MATCH_MAX, SHAPE_DEPTH, type OutlineItem, type RegionProbe, type RegionSpec } from "@/lib/repeatPlan";
 
 const OUTLINE_SELECTOR =
   "main, article, section, aside, nav, form, table, ul, ol, dl, [role=main], [role=region], [role=list], [role=grid], [role=table], [role=feed], [role=tabpanel]";
@@ -163,15 +163,19 @@ export function readRegion(spec: RegionSpec): RegionProbe {
   if (inProtectedArea(el)) return { found: false, why: "protected" };
   const info = modelTextInfo(el, spec.maxText);
   if (!info.text) return { found: false, why: "empty" };
-  const clickables = findClickables({ limit: spec.limit }, { within: el }).map((c) => ({
+  // 상한 + 1개를 찾아 넘쳤는지 본다. 버튼 목록이 잘린 영역은 글자가 잘린 것과 같게 cut(작전으로 받지 않고, 확인 회차엔
+  // 전체 판단 — 잘린 목록 밖의 버튼만 바뀌면 영역 요청이 같아 잘못 unmet을 확정할 수 있다).
+  const limit = Math.max(0, Math.floor(spec.limit));
+  const found = findClickables({ limit: limit + 1 }, { within: el }).map((c) => ({
     text: c.text,
     role: snapshotRole(c.tag, c.role),
     ...(c.states ? { states: c.states } : {}),
   }));
+  const { clickables, cut: buttonsCut } = capClickables(found, limit);
   return {
     found: true,
     text: info.text,
-    cut: info.cut,
+    cut: info.cut || buttonsCut,
     shape: { tag: el.localName, role: el.getAttribute("role") ?? "", skeleton: skeletonOf(el, SHAPE_DEPTH) },
     clickables,
   };

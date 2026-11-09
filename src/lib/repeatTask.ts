@@ -98,7 +98,7 @@ export function normalizeRepeatArgs(a: RepeatArgs): Required<RepeatArgs> {
   };
 }
 
-export function newRepeatTask(a: Required<RepeatArgs>, o: { id: string; now: number; request: string }): RepeatTask {
+export function newRepeatTask(a: Required<RepeatArgs>, o: { id: string; now: number; request: string; planGen?: string }): RepeatTask {
   return {
     id: o.id,
     title: a.title,
@@ -121,7 +121,7 @@ export function newRepeatTask(a: Required<RepeatArgs>, o: { id: string; now: num
     triggeredAt: null,
     lastManualAt: 0,
     // 첫 확인 때(그 회차 판정이 unmet이면) 작전을 만든다.
-    plan: { state: "pending", tries: 0 },
+    plan: { state: "pending", tries: 0, gen: o.planGen ?? `new:${o.id}` },
     planBuilds: 0,
   };
 }

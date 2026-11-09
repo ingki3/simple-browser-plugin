@@ -145,7 +145,7 @@ test("이어서 진행 글은 저장된 작업 내용으로만 만든다", () =>
 
 test("작전(#284): 새 작업은 pending, 옛 작업(plan 없음)은 정규화 때 none(legacy), id 없는 값은 버린다", () => {
   const t = task();
-  assert.deepEqual(t.plan, { state: "pending", tries: 0 });
+  assert.deepEqual(t.plan, { state: "pending", tries: 0, gen: "new:r1" });
   assert.equal(t.planBuilds, 0);
   const { plan, planBuilds, ...old } = t;
   const n = normalizeTask(old);

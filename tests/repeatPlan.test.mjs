@@ -109,7 +109,7 @@ test("normalizePlanState: 옛 작업은 none(legacy), 망가진 ready·다른 �
   const legacy = normalizePlanState(undefined, true);
   assert.equal(legacy.state, "none");
   assert.match(legacy.why, /이 기능 전에 등록한 작업/);
-  assert.deepEqual(normalizePlanState({ state: "pending", tries: 1 }, false), { state: "pending", tries: 1 });
+  assert.deepEqual(normalizePlanState({ state: "pending", tries: 1, gen: "g" }, false), { state: "pending", tries: 1, gen: "g" });
   assert.deepEqual(normalizePlanState({ state: "cleared", at: 9 }, false), { state: "cleared", at: 9 });
   const p = plan();
   assert.deepEqual(normalizePlanState({ state: "ready", plan: p }, false), { state: "ready", plan: p });
@@ -204,7 +204,7 @@ test("followUpText: 작전이 있는 작업이어도 이어서 진행 글에 작
 
 test("planEffect: 시작 때와 작전 상태가 다르면(지움·다른 작전) 결과를 버리고, 판정 반영은 그대로", () => {
   const t0 = task();
-  assert.deepEqual(t0.plan, { state: "pending", tries: 0 });
+  assert.deepEqual(t0.plan, { state: "pending", tries: 0, gen: "new:r1" });
   assert.equal(t0.planBuilds, 0);
   const startKey = planKey(t0.plan);
   const run = beginRun(t0, "tok", 10).task;
@@ -232,7 +232,7 @@ test("planEffect: 만들기 실패는 tries를 올리고 한도면 none, {none} 
   assert.equal(t.plan.state, "none");
   assert.match(t.plan.why, /작전을 만들지 못해/);
   const once = planEffect(task(), planKey(task().plan), { kind: "plan_failed", why: "timeout" }, 1);
-  assert.deepEqual(once.plan, { state: "pending", tries: 1 });
+  assert.deepEqual(once.plan, { state: "pending", tries: 1, gen: "new:r1" });
   const none = planEffect(task(), planKey(task().plan), { kind: "plan_none", why: "흩어져 있음" }, 1);
   assert.equal(none.plan.state, "none");
   assert.ok(none.plan.why.includes("흩어져 있음"));
@@ -254,13 +254,13 @@ test("clearPlan·requestPlan: 지우면 cleared(revision 그대로), 만들기�
   assert.equal(c.revision, ready.revision);
   assert.equal(clearPlan(task({ plan: { state: "none", why: "x", at: 1 } }), 7), null, "none은 지울 것이 없음");
   assert.equal(clearPlan(task(), 7).plan.state, "cleared", "pending도 지울 수 있다");
-  const m = requestPlan(c);
-  assert.deepEqual(m.plan, { state: "pending", tries: 0 });
+  const m = requestPlan(c, "g2");
+  assert.deepEqual(m.plan, { state: "pending", tries: 0, gen: "g2" });
   assert.equal(m.planBuilds, 0);
   assert.equal(m.revision, c.revision);
-  assert.equal(requestPlan(task({ plan: { state: "none", why: "legacy", at: 1 } })).plan.state, "pending");
-  assert.equal(requestPlan(ready), null, "작전이 있으면 그대로");
-  assert.equal(requestPlan(task()), null, "이미 만드는 중");
+  assert.equal(requestPlan(task({ plan: { state: "none", why: "legacy", at: 1 } }), "g3").plan.state, "pending");
+  assert.equal(requestPlan(ready, "g4"), null, "작전이 있으면 그대로");
+  assert.equal(requestPlan(task(), "g5"), null, "이미 만드는 중");
 });
 
 test("maskDraft: 가림으로 선택자나 기준점 글자가 바뀌면 거부, 나머지 글은 가린 값으로", async () => {

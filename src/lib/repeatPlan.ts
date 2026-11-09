@@ -67,8 +67,10 @@ export interface RepeatPlan extends PlanDraft {
   regionChars: number;
 }
 // 2단계는 ready에 misses·lastUnmetHash·sinceFull·lastFullAt 등을 더한다(없으면 기본값으로 읽는다).
+// pending.gen: 작전 만들기 요청의 세대. 사용자가 "작전 만들기"를 누를 때마다 새로 정하고, 같은 세대 안의 자동 재시도는
+// 세대를 유지한다. 확인 결과를 반영할 때 세대가 다르면(만드는 사이 지우기 → 만들기) 옛 결과를 버린다.
 export type PlanState =
-  | { state: "pending"; tries: number }
+  | { state: "pending"; tries: number; gen: string }
   | { state: "ready"; plan: RepeatPlan }
   | { state: "none"; why: string; at: number }
   | { state: "cleared"; at: number };
@@ -84,7 +86,14 @@ export interface OutlineItem {
   preview: string;
 }
 
+// 영역 버튼 목록을 상한으로 자른다. 넘쳤으면 cut(글자 잘림과 같게 — 잘린 목록은 마지막 버튼만 바뀌어도 같은 요청이 된다).
+// content는 상한 + 1개를 찾아 넘겼는지 알리고, 백그라운드도 받은 목록에 같은 검사를 한다.
+export function capClickables<T>(list: T[], limit: number): { clickables: T[]; cut: boolean } {
+  return list.length > limit ? { clickables: list.slice(0, limit), cut: true } : { clickables: list, cut: false };
+}
+
 export type RegionMiss = "blocked_selector" | "no_match" | "too_many" | "anchor_missing" | "protected" | "empty";
+// cut: 글자(REGION_TEXT_MAX)나 버튼 목록(REGION_CLICKABLES)이 상한을 넘어 잘렸다.
 export type RegionProbe =
   | { found: true; text: string; cut: boolean; shape: RegionShape; clickables: RepeatSnapshot["clickables"] }
   | { found: false; why: RegionMiss };
@@ -214,7 +223,9 @@ export function normalizePlanState(raw: unknown, legacy: boolean): PlanState {
   switch (r.state) {
     case "pending": {
       const tries = isNum(r.tries) && r.tries >= 0 ? Math.min(Math.floor(r.tries), PLAN_MAX_TRIES) : 0;
-      return { state: "pending", tries };
+      // 세대가 없는(또는 형태가 틀린) 저장 값은 고정값으로 채운다. 사용자가 다시 만들기를 누르면 새 세대가 되므로 겹치지 않는다.
+      const gen = typeof r.gen === "string" && r.gen && r.gen.length <= 64 ? r.gen : "stored";
+      return { state: "pending", tries, gen };
     }
     case "ready": {
       const plan = readyPlan(r.plan);
@@ -229,10 +240,10 @@ export function normalizePlanState(raw: unknown, legacy: boolean): PlanState {
   }
 }
 
-// 작전 상태의 동일성(시작 때와 반영 때를 비교). ready는 작전 id, pending은 시도 수까지 본다.
+// 작전 상태의 동일성(시작 때와 반영 때를 비교). ready는 작전 id, pending은 요청 세대와 시도 수까지 본다.
 export function planKey(st: PlanState): string {
   if (st.state === "ready") return `ready:${st.plan.id}`;
-  if (st.state === "pending") return `pending:${st.tries}`;
+  if (st.state === "pending") return `pending:${st.gen}:${st.tries}`;
   return st.state;
 }
 
@@ -415,7 +426,7 @@ export function planEffect(t: RepeatTask, startedKey: string, outcome: PlanOutco
       if (tries >= PLAN_MAX_TRIES) {
         return { ...t, plan: { state: "none", why: `작전을 만들지 못해 전체 화면으로 확인합니다(${FAIL_WHY[outcome.why] ?? FAIL_WHY.error}).`, at: now } };
       }
-      return { ...t, plan: { state: "pending", tries } };
+      return { ...t, plan: { state: "pending", tries, gen: st.gen } };
     }
     default:
       return t;
@@ -428,10 +439,11 @@ export function clearPlan(t: RepeatTask, now: number): RepeatTask | null {
   return { ...t, plan: { state: "cleared", at: now } };
 }
 
-// 설정의 "작전 만들기(다음 확인 때)": 작전이 없을 때(none·cleared)만 pending으로. 자동으로 만든 횟수를 0으로 돌린다.
-export function requestPlan(t: RepeatTask): RepeatTask | null {
+// 설정의 "작전 만들기(다음 확인 때)": 작전이 없을 때(none·cleared)만 pending으로. gen: 새 요청 세대(부르는 쪽이 무작위로).
+// 자동으로 만든 횟수를 0으로 돌린다.
+export function requestPlan(t: RepeatTask, gen: string): RepeatTask | null {
   if (t.plan.state !== "none" && t.plan.state !== "cleared") return null;
-  return { ...t, plan: { state: "pending", tries: 0 }, planBuilds: 0 };
+  return { ...t, plan: { state: "pending", tries: 0, gen }, planBuilds: 0 };
 }
 
 // ---- 회차 마감 ----
