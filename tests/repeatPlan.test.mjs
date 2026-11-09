@@ -353,3 +353,39 @@ test("planEffect: 만드는 중 지우기 → 만들기면 새 요청 세대라 
   assert.ok(n.gen.length > 0);
   assert.equal(normalizePlanState({ state: "pending", tries: 0, gen: "g1" }, false).gen, "g1");
 });
+
+// 리뷰 2차(P1): 영역 뿌리 안에 iframe·frame이 있으면 그 안의 글자·버튼·모양이 영역 관측에 다 들지 않으므로 잘린 영역처럼
+// 다룬다(만들 때 거부, 확인 회차엔 전체 판단).
+test("영역 안 iframe: content가 frame으로 알리면 작전으로 받지 않고 확인 회차엔 안 맞음", async () => {
+  const { REGION_MISSES } = await import("../src/lib/repeatPlan.ts");
+  assert.ok(REGION_MISSES.includes("frame"), "frame 사유");
+  assert.deepEqual(regionFit(plan(), { found: false, why: "frame" }), { ok: false, why: "frame" });
+  assert.deepEqual(acceptProbe(ok(draftObj()), { found: false, why: "frame" }, 5000), { ok: false, why: "frame" });
+});
+
+// 리뷰 2차(P2): 이미 끊긴 신호여도 원래 기다림의 거부를 받아 둔다(unhandledRejection이 나지 않게).
+test("raceSignal: 이미 끊긴 신호면 원래 기다림의 거부가 처리되지 않은 채 남지 않는다", async () => {
+  const seen = [];
+  const on = (reason) => seen.push(reason);
+  process.on("unhandledRejection", on);
+  try {
+    const c = new AbortController();
+    c.abort();
+    let rejectLater;
+    const later = new Promise((_, rej) => (rejectLater = rej));
+    await assert.rejects(raceSignal(Promise.reject(new Error("원래 실패")), c.signal, () => new Error("끊김")), /끊김/);
+    await assert.rejects(raceSignal(later, c.signal, () => new Error("끊김")), /끊김/);
+    rejectLater(new Error("늦은 실패"));
+    // 끊긴 뒤에 원래 기다림이 실패해도 마찬가지.
+    const c2 = new AbortController();
+    let rej2;
+    const p2 = raceSignal(new Promise((_, r) => (rej2 = r)), c2.signal, () => new Error("끊김2"));
+    c2.abort();
+    await assert.rejects(p2, /끊김2/);
+    rej2(new Error("끊긴 뒤 실패"));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(seen.map((e) => e?.message), [], "처리되지 않은 거부 없음");
+  } finally {
+    process.off("unhandledRejection", on);
+  }
+});

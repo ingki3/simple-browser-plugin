@@ -353,6 +353,24 @@ export default [
     },
   },
   {
+    // 리뷰 2차(P1): 영역이 같은 출처 iframe을 감싸면 그 안의 버튼은 영역 관측에 들지 않는다 → 작전으로 받지 않고 전체 판단.
+    name: "영역이 같은 출처 iframe을 감싸면 작전으로 받지 않아, iframe 안 버튼이 열리면 전체 판단으로 알아챈다",
+    pages: {
+      [PATH]: page({ tickets: `<section id="tickets"><h2>예매 현황</h2><p>좌석은 아래에서</p><iframe src="/pl-seat" style="width:300px;height:120px"></iframe></section>` }),
+      "/pl-seat": `<title>좌석</title><button disabled>예매하기</button>`,
+    },
+    async run(h) {
+      await setModel(h);
+      const id = await seed(h);
+      const first = await runNow(h, id);
+      expect(first.plan.state !== "ready", `iframe을 감싼 영역은 작전으로 받지 않음(${JSON.stringify(first.plan)})`);
+      h.pages.set("1/pl-seat", `<title>좌석</title><button>예매하기</button>`);
+      await setModel(h, { draftFor: { region: UNMET, full: MET } });
+      const t = await runNow(h, id);
+      expect(t.status === "triggered" && t.lastCheck.mode !== "region", `영역만으로 unmet을 확정하지 않음(${t.status}, ${JSON.stringify(t.lastCheck)})`);
+    },
+  },
+  {
     name: "작전을 확인해 읽는 사이 문서가 바뀌면 작전을 버리고 판정만 남긴다",
     pages: { [PATH]: page() },
     async run(h) {
