@@ -112,7 +112,8 @@ test("normalizePlanState: 옛 작업은 none(legacy), 망가진 ready·다른 �
   assert.deepEqual(normalizePlanState({ state: "pending", tries: 1, gen: "g" }, false), { state: "pending", tries: 1, gen: "g" });
   assert.deepEqual(normalizePlanState({ state: "cleared", at: 9 }, false), { state: "cleared", at: 9 });
   const p = plan();
-  assert.deepEqual(normalizePlanState({ state: "ready", plan: p }, false), { state: "ready", plan: p });
+  // 2단계: 1단계에 저장된 ready는 기본값(안 맞음 0·해시 없음·sinceFull 0·lastFullAt = 만든 때·생략 0)으로 읽는다.
+  assert.deepEqual(normalizePlanState({ state: "ready", plan: p }, false), { state: "ready", plan: p, misses: 0, lastUnmetHash: null, sinceFull: 0, lastFullAt: p.createdAt, skips: 0 });
   assert.equal(normalizePlanState({ state: "ready", plan: { ...p, v: 2 } }, false).state, "none", "버전이 다름");
   assert.equal(normalizePlanState({ state: "ready", plan: { ...p, region: { ...p.region, selector: "input[value]" } } }, false).state, "none", "저장소에서 고친 선택자");
   assert.equal(normalizePlanState({ state: "ready", plan: { ...p, then: "결제" } }, false).state, "none", "모르는 키");
@@ -236,13 +237,10 @@ test("planEffect: 만들기 실패는 tries를 올리고 한도면 none, {none} 
   const none = planEffect(task(), planKey(task().plan), { kind: "plan_none", why: "흩어져 있음" }, 1);
   assert.equal(none.plan.state, "none");
   assert.ok(none.plan.why.includes("흩어져 있음"));
-  for (const kind of ["keep", "region", "region_error", "budget"]) {
-    const t1 = task({ plan: { state: "ready", plan: plan() } });
-    assert.deepEqual(planEffect(t1, planKey(t1.plan), { kind }, 1), t1, kind);
-  }
-  const t2 = task({ plan: { state: "ready", plan: plan() } });
-  assert.deepEqual(planEffect(t2, planKey(t2.plan), { kind: "mismatch", why: "shape" }, 1), t2, "1단계: 안 맞음은 기록만(다시 만들기는 2단계)");
-  assert.deepEqual(planEffect(t2, planKey(t2.plan), { kind: "confirm", region: "met", full: "unmet" }, 1), t2);
+  const t1 = task({ plan: normalizePlanState({ state: "ready", plan: plan() }, false) });
+  assert.deepEqual(planEffect(t1, planKey(t1.plan), { kind: "keep" }, 1), t1, "keep");
+  // 2단계: 안 맞음·확인 불일치는 tests/repeatPlan2.test.mjs가 본다(안 맞음 누적·다시 만들기).
+  const t2 = task({ plan: normalizePlanState({ state: "ready", plan: plan() }, false) });
   // ready 상태에 made가 와도(시작이 pending이 아니면) 바꾸지 않는다.
   assert.deepEqual(planEffect(t2, planKey(t2.plan), { kind: "made", plan: plan({ id: "p9" }) }, 1), t2);
 });

@@ -1,6 +1,8 @@
 // 반복 작업 확인 작전(#284 1단계): 첫 unmet 확인 때 작전을 만들고 그 뒤로는 영역 글자만 보낸다. 영역이 안 맞으면(사라짐·기준점·
 // 모양·잘림) 전체 판단, 영역 판단은 unmet만 확정(그 밖·호출 실패는 같은 회차에 전체 판단), 작전 글은 판정·할 일·이어서 진행을
 // 넓히지 못한다. 지우기·만들기, 잘못된 선택자, 영역 밖 버튼 제외(일반·shadow·같은 출처 iframe), 비동기 단계 사이의 불변식.
+// 2단계: 변화 없으면 생략(관측 전체 — 글자·버튼 상태·제목), pageOnly false는 생략 안 함, 검산 회차(같음·다름), 연속 안 맞음 뒤
+// 다시 만들기, 다시 만들기 한도(포기 뒤 전체 판단).
 import { Fail, expect, waitUntil } from "../lib.mjs";
 
 const SECRET = "비밀메모123";
@@ -9,7 +11,7 @@ const DRAFT = "편집초안456";
 const FILLER = "채움글 공연 안내 문단입니다. ".repeat(300);
 
 const TICKETS = `<section id="tickets"><h2>예매 현황</h2><p>오픈 예정</p><button disabled>예매하기</button></section>`;
-const page = ({ tickets = TICKETS, extra = "" } = {}) => `<title>공연 예매</title>
+const page = ({ tickets = TICKETS, extra = "", title = "공연 예매" } = {}) => `<title>${title}</title>
 <main><article id="notice"><h2>공지</h2><p>${FILLER}</p></article>
 ${tickets}
 ${extra}
@@ -128,6 +130,19 @@ async function withPlan(h, plan = PLAN, path = PATH) {
 
 const tabCount = (h) => h.sw.evaluate(async () => (await chrome.tabs.query({})).length);
 
+// 저장된 작업의 작전 상태·작업 필드를 바로 고친다(검산 회차·한도 시험용). plan: ready 상태에 덮어쓸 필드.
+async function patchTask(h, id, { plan = {}, task = {} } = {}) {
+  await h.sw.evaluate(
+    async ({ id, plan, task }) => {
+      const all = (await chrome.storage.local.get("repeatTasks")).repeatTasks;
+      for (const t of all) if (t.id === id) Object.assign(t, task, { plan: { ...t.plan, ...plan } });
+      await chrome.storage.local.set({ repeatTasks: all });
+    },
+    { id, plan, task },
+  );
+}
+const eventKinds = (t) => (t.planEvents ?? []).map((e) => e.kind);
+
 export default [
   {
     name: "첫 확인 때 작전을 만들고, 다음 확인부터는 영역 글자만 보낸다(입력값·편집 영역 없음)",
@@ -181,12 +196,15 @@ export default [
         ["영역이 3,000자를 넘게 자람", page({ tickets: TICKETS.replace("<p>오픈 예정</p>", `<p>${"좌석 안내 ".repeat(700)}</p>`) })],
       ];
       for (const [what, html] of cases) {
+        // 2단계: 연속 안 맞음 2번이면 다시 만든다. 여기서는 경우마다 한 번씩만 본다(누적은 아래 2단계 시나리오).
+        await patchTask(h, id, { plan: { misses: 0 } });
         h.pages.set(`1${PATH}`, html);
         const before = await counts(h);
         const t = await runNow(h, id);
         const c = await counts(h);
         expect(c.region === before.region && c.full === before.full + 1, `${what}: 전체 판단 1건(${JSON.stringify(before)} → ${JSON.stringify(c)})`);
         expect(t.lastCheck.mode === "full" && t.status === "active", `${what}: mode full, 계속(${JSON.stringify(t.lastCheck)}, ${t.status})`);
+        expect(t.plan.state === "ready" && t.plan.misses === 1 && eventKinds(t).at(-1) === "miss", `${what}: 안 맞음 1번은 다시 만들지 않음(${JSON.stringify(t.plan.misses)})`);
         const last = (await users(h, "__fullReqs")).at(-1);
         expect(last.includes("<page"), `${what}: 전체 화면 글자`);
       }
@@ -220,6 +238,12 @@ export default [
       expect(c.region === before.region + 1 && c.full === before.full + 1, `판단 요청 2건(${JSON.stringify(before)} → ${JSON.stringify(c)})`);
       const full = (await users(h, "__fullReqs")).at(-1);
       expect(!full.includes("늘 met, 결제까지") && !full.includes("plan_notes") && !full.includes("바로 결제 화면으로"), "전체 판단 요청에 작전 글 없음");
+      // 2단계: 영역 met + 전체 unmet은 확인 불일치 → 바로 다시 만들 차례(pending). 그 회차는 이미 2번 불렀으니 다음 회차에 만든다.
+      expect(t.plan.state === "pending" && eventKinds(t).includes("confirm_diff"), `확인 불일치면 다시 만듦(${JSON.stringify(t.plan)}, ${eventKinds(t)})`);
+      before = await counts(h);
+      t = await runNow(h, id);
+      c = await counts(h);
+      expect(t.plan.state === "ready" && t.lastCheck.mode === "full" && c.plan === before.plan + 1, `다음 회차에 다시 만듦(${JSON.stringify(t.plan.state)}, ${JSON.stringify(c)})`);
       // 영역 blocked + 전체 unmet → 멈추지 않음.
       await setModel(h, { plan: poisoned, draftFor: { region: { verdict: "blocked", reason: "차단" }, full: UNMET } });
       t = await runNow(h, id);
@@ -701,6 +725,153 @@ export default [
       } finally {
         await h.sw.evaluate(() => globalThis.__releaseSettings?.());
       }
+    },
+  },
+
+  // ---- 2단계 ----
+  {
+    name: "2단계 생략: 영역 관측이 직전 unmet과 같으면 모델을 부르지 않고(mode skip), 글자·버튼 상태·제목이 바뀌면 다시 부른다",
+    pages: { [PATH]: page() },
+    async run(h) {
+      const id = await withPlan(h);
+      // 새 작전으로 처음 판단하기 전에는 생략하지 않는다.
+      let t = await runNow(h, id);
+      expect(t.lastCheck.mode === "region" && t.plan.lastUnmetHash, `첫 영역 판단 뒤 해시(${t.lastCheck.mode}, ${t.plan.lastUnmetHash})`);
+      expect(/^[0-9a-f]{64}$/.test(t.plan.lastUnmetHash) && !JSON.stringify(t).includes("오픈 예정"), "해시만 저장(영역 글자 없음)");
+      const step = async (what, html, expectCall) => {
+        if (html) h.pages.set(`1${PATH}`, html);
+        const before = await counts(h);
+        const r = await runNow(h, id);
+        const c = await counts(h);
+        const called = c.region + c.full + c.plan - (before.region + before.full + before.plan);
+        if (expectCall) {
+          expect(called === 1 && c.region === before.region + 1 && r.lastCheck.mode === "region", `${what}: 영역 판단을 부름(${JSON.stringify(before)} → ${JSON.stringify(c)}, ${r.lastCheck.mode})`);
+        } else {
+          expect(called === 0 && r.lastCheck.mode === "skip" && r.lastCheck.sent === 0 && r.lastCheck.verdict === "unmet", `${what}: 판단 요청 0건·skip(${JSON.stringify(before)} → ${JSON.stringify(c)}, ${JSON.stringify(r.lastCheck)})`);
+          expect(eventKinds(r).at(-1) === "skip", `${what}: 이벤트 skip(${eventKinds(r)})`);
+        }
+        return r;
+      };
+      t = await step("그대로", null, false);
+      const attempts = t.attempts;
+      t = await step("또 그대로", null, false);
+      expect(t.attempts === attempts + 1 && t.plan.skips === 2, `생략도 회차로 셈(${t.attempts}, 생략 ${t.plan.skips})`);
+      await step("영역 글자 바뀜", page({ tickets: TICKETS.replace("오픈 예정", "오픈 임박") }), true);
+      await step("바뀐 글자 그대로", null, false);
+      await step("버튼 disabled만 풀림", page({ tickets: TICKETS.replace("오픈 예정", "오픈 임박").replace("<button disabled>", "<button>") }), true);
+      await step("제목만 바뀜", page({ tickets: TICKETS.replace("오픈 예정", "오픈 임박").replace("<button disabled>", "<button>"), title: "공연 예매(열림)" }), true);
+      // 설정: 생략 수와 검산까지 남은 회차, 이벤트.
+      const opt = await h.openOptions("behavior");
+      await opt.getByText("작전 자세히").click();
+      const details = await opt.locator(".repeat-plan").innerText();
+      expect(details.includes("생략 3회") && details.includes("검산까지"), `생략·검산 표시(${details})`);
+      expect(details.includes("변화 없어 생략") && details.includes("작전 만듦"), `이벤트 표시(${details})`);
+    },
+  },
+  {
+    name: "2단계 생략: 시간·페이지 밖 정보에 달린 작전(pageOnly false)은 같은 글자여도 모델을 부른다",
+    pages: { [PATH]: page() },
+    async run(h) {
+      const id = await withPlan(h, { ...PLAN, pageOnly: false });
+      for (let i = 0; i < 2; i++) {
+        const before = await counts(h);
+        const t = await runNow(h, id);
+        const c = await counts(h);
+        expect(c.region === before.region + 1 && t.lastCheck.mode === "region", `${i + 1}번째: 영역 판단을 부름(${JSON.stringify(c)}, ${t.lastCheck.mode})`);
+      }
+    },
+  },
+  {
+    name: "2단계 검산: 10회차째(sinceFull 9)는 영역·전체 둘 다 묻고, 같으면 verify_same, 다르면 verify_diff 뒤 다시 만든다",
+    pages: { [PATH]: page() },
+    async run(h) {
+      const id = await withPlan(h);
+      await runNow(h, id); // 영역 unmet → 해시(다음 회차는 생략할 수 있는 상태)
+      await patchTask(h, id, { plan: { sinceFull: 9 } });
+      let before = await counts(h);
+      let t = await runNow(h, id);
+      let c = await counts(h);
+      expect(c.region === before.region + 1 && c.full === before.full + 1, `검산은 영역·전체 2건(생략하지 않음)(${JSON.stringify(before)} → ${JSON.stringify(c)})`);
+      expect(t.lastCheck.mode === "verify" && eventKinds(t).at(-1) === "verify_same", `verify_same(${t.lastCheck.mode}, ${eventKinds(t)})`);
+      expect(t.plan.state === "ready" && t.plan.sinceFull === 0 && t.plan.lastUnmetHash === null, `검산 뒤 sinceFull 0·해시 없음(${JSON.stringify(t.plan.sinceFull)})`);
+      const region = (await users(h, "__regionReqs")).at(-1);
+      const full = (await users(h, "__fullReqs")).at(-1);
+      expect(region.includes("<region") && full.includes("<page") && !full.includes("plan_notes"), "영역 요청·전체 요청");
+      // 6시간이 지나도 검산 회차다.
+      await patchTask(h, id, { plan: { sinceFull: 0, lastFullAt: Date.now() - 6 * 3_600_000 - 1000 } });
+      before = await counts(h);
+      t = await runNow(h, id);
+      c = await counts(h);
+      expect(t.lastCheck.mode === "verify" && c.full === before.full + 1, `6시간 지나면 검산(${t.lastCheck.mode})`);
+      // 영역은 unmet, 전체는 met → 전체 판단을 쓰고(조건 맞음) 작전은 다시 만들 차례.
+      await patchTask(h, id, { plan: { sinceFull: 9 } });
+      await setModel(h, { draftFor: { region: UNMET, full: MET } });
+      t = await runNow(h, id);
+      expect(t.status === "triggered" && t.lastCheck.verdict === "met" && t.lastCheck.mode === "verify", `전체 판단이 이김(${t.status}, ${JSON.stringify(t.lastCheck)})`);
+      expect(t.plan.state === "pending" && eventKinds(t).includes("verify_diff"), `verify_diff → pending(${JSON.stringify(t.plan)}, ${eventKinds(t)})`);
+      // 다시 확인을 시작하면 다음 회차(unmet)에 작전 만들기 요청이 1건 는다.
+      await setModel(h);
+      const plans = (await counts(h)).plan;
+      const r = await act(h, "repeat_resume", id);
+      expect(r.ok, `다시 시작(${JSON.stringify(r.error)})`);
+      t = await waitUntil(async () => {
+        const x = await taskOf(h, id);
+        return x.plan.state === "ready" && x;
+      }, { timeoutMs: 20_000, label: "다시 만든 작전", detail: async () => JSON.stringify((await taskOf(h, id)).plan) });
+      expect((await counts(h)).plan === plans + 1 && t.planBuilds === 2, `다음 회차에 다시 만듦(${(await counts(h)).plan - plans}, builds ${t.planBuilds})`);
+    },
+  },
+  {
+    name: "2단계 다시 만들기: 한 번 안 맞으면 그대로, 두 번 연속 안 맞으면 다시 만들고(전체 1번뿐인 회차라 바로) 새 작전으로 판단한다",
+    pages: { [PATH]: page() },
+    async run(h) {
+      const id = await withPlan(h);
+      const renamed = page({ tickets: TICKETS.replace("예매 현황", "판매 안내") });
+      h.pages.set(`1${PATH}`, renamed);
+      const before = await counts(h);
+      let t = await runNow(h, id);
+      let c = await counts(h);
+      expect(t.plan.state === "ready" && t.plan.misses === 1 && c.plan === before.plan && t.lastCheck.mode === "full", `한 번은 다시 만들지 않음(${JSON.stringify(t.plan.misses)}, ${JSON.stringify(c)})`);
+      // 두 번째: 다시 만들 차례. 새 작전은 바뀐 기준점으로.
+      await setModel(h, { plan: { ...PLAN, region: { ...PLAN.region, anchor: { text: "판매 안내", where: "heading" } } } });
+      const oldId = t.plan.plan.id;
+      t = await runNow(h, id);
+      c = await counts(h);
+      expect(c.plan === before.plan + 1 && c.full === before.full + 2, `같은 회차에 다시 만듦(${JSON.stringify(before)} → ${JSON.stringify(c)})`);
+      expect(t.plan.state === "ready" && t.plan.plan.id !== oldId && t.planBuilds === 2, `새 작전(${JSON.stringify(t.plan.state)}, builds ${t.planBuilds})`);
+      expect(eventKinds(t).slice(-3).join() === "miss,regen,made", `이벤트(${eventKinds(t)})`);
+      const r = await runNow(h, id);
+      expect(r.lastCheck.mode === "region" && (await users(h, "__regionReqs")).at(-1).includes("판매 안내"), `새 작전으로 영역 판단(${r.lastCheck.mode})`);
+    },
+  },
+  {
+    name: "2단계 한도: 자동으로 3번 만든 뒤 또 안 맞으면 포기(gave_up)하고 그 뒤로는 전체 판단만, 작전 만들기를 누르면 다시 시도",
+    pages: { [PATH]: page() },
+    async run(h) {
+      const id = await withPlan(h);
+      await patchTask(h, id, { plan: { misses: 1 }, task: { planBuilds: 3 } });
+      h.pages.set(`1${PATH}`, page({ tickets: "" }));
+      let before = await counts(h);
+      let t = await runNow(h, id);
+      expect(t.plan.state === "none" && /여러 번 다시 만들어도/.test(t.plan.why) && eventKinds(t).at(-1) === "gave_up", `포기(${JSON.stringify(t.plan)}, ${eventKinds(t)})`);
+      expect((await counts(h)).plan === before.plan, "포기한 회차에는 만들지 않음");
+      h.pages.set(`1${PATH}`, page());
+      before = await counts(h);
+      for (let i = 0; i < 2; i++) {
+        t = await runNow(h, id);
+        expect(t.lastCheck.mode === "full" && t.plan.state === "none", `포기 뒤 전체 판단(${t.lastCheck.mode})`);
+      }
+      let c = await counts(h);
+      expect(c.plan === before.plan && c.region === before.region && c.full === before.full + 2, `포기 뒤 만들기·영역 요청 없음(${JSON.stringify(before)} → ${JSON.stringify(c)})`);
+      const opt = await h.openOptions("behavior");
+      const body = await opt.locator("body").innerText();
+      expect(body.includes("여러 번 다시 만들어도") && body.includes("작전 만들기(다음 확인 때)"), `설정에 포기 이유·만들기 버튼(${body.slice(0, 400)})`);
+      const made = await act(h, "repeat_make_plan", id);
+      const m = made.data.find((x) => x.id === id);
+      expect(m.plan.state === "pending" && m.planBuilds === 0, `작전 만들기 → pending, 한도 0(${JSON.stringify(m.plan)}, ${m.planBuilds})`);
+      t = await runNow(h, id);
+      c = await counts(h);
+      expect(t.plan.state === "ready" && c.plan === before.plan + 1 && t.planBuilds === 1, `다시 만듦(${t.plan.state}, builds ${t.planBuilds})`);
     },
   },
 ];

@@ -221,7 +221,9 @@ test("scheduleRepeat: 실행 방식과 무관하게 늘 카드로 묻는다 — 
     assert.deepEqual(log, ["send:tool_pending", "set"], "카드를 보내고 기다린다");
     // 카드 안내(#284): 회차당 호출 수와 확인 작전(첫 확인 때 만들고, 설정에서 보고 지울 수 있음).
     const details = sent[0].previewDetails;
-    assert.ok(details.includes("최대 ") && details.includes("회차, 회차마다 1~2번"), details);
+    // 2단계: 변화가 없으면 부르지 않으므로 0~2번(작전 만들기·다시 만들기 포함).
+    assert.ok(details.includes("최대 ") && details.includes("회차, 회차마다 0~2번"), details);
+    assert.ok(details.includes("영역 글자가 직전과 같으면 모델을 부르지 않습니다") && details.includes("10회차 또는 6시간마다") && details.includes("자동으로 다시 만듭니다"), details);
     assert.ok(details.includes("작전") && details.includes("그 영역 글자만 보냅니다") && details.includes("전체 화면 글자로 다시 확인") && details.includes("설정 → 반복 작업에서 보고 지울 수 있습니다"), details);
     pending.get(`r-${approve}`)(approve);
     assert.equal(await p, true);
