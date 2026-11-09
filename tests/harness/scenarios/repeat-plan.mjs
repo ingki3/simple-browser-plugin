@@ -443,6 +443,50 @@ export default [
     },
   },
   {
+    // 리뷰 5차(P1): 영역은 전체 화면 글자가 보는 자리에 있을 때만 본다. 호스트의 배치되지 않은 light 자식이 된 영역은
+    // 화면에 그려지지 않는다(옛 글자 그대로) → 전체 판단.
+    name: "영역이 배치되지 않은 호스트 자식이 되면(화면에 안 그려짐) 옛 글자로 판단하지 않고 전체 판단",
+    pages: { [PATH]: page() },
+    async run(h) {
+      const id = await withPlan(h);
+      h.pages.set(
+        `1${PATH}`,
+        page({
+          tickets: `<div id="host">${TICKETS}</div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<section><h2>예매 안내</h2><p>예매 시작</p><button>예매하기</button></section>';</script>`,
+        }),
+      );
+      await setModel(h, { draftFor: { region: UNMET, full: MET } });
+      const t = await runNow(h, id);
+      expect(t.status === "triggered" && t.lastCheck.mode !== "region", `화면에 없는 영역으로 unmet을 확정하지 않음(${t.status}, ${JSON.stringify(t.lastCheck)})`);
+      const full = (await users(h, "__fullReqs")).at(-1);
+      expect(full.includes("예매 시작") && !full.includes("오픈 예정"), "전체 화면 글자는 그려진 것만");
+    },
+  },
+  {
+    // 리뷰 5차(P1): 전체 화면 글자(modelText)가 건너뛰는 조상(display:none·visibility:hidden·hidden·aria-hidden) 아래 영역과
+    // 배치된 노드가 있는 slot의 기본 내용 속 영역은 "hidden"으로 작전에 받지 않는다.
+    name: "숨김 조상 아래·가려진 slot 기본 내용 속 영역은 hidden으로 작전에 받지 않는다",
+    pages: {
+      "/pl-h-display": page({ tickets: `<div style="display:none">${TICKETS}</div><p>다른 글</p>` }),
+      "/pl-h-visibility": page({ tickets: `<div style="visibility:hidden">${TICKETS}</div><p>다른 글</p>` }),
+      "/pl-h-attr": page({ tickets: `<div hidden>${TICKETS}</div><p>다른 글</p>` }),
+      "/pl-h-aria": page({ tickets: `<div aria-hidden="true">${TICKETS}</div><p>다른 글</p>` }),
+      "/pl-h-fallback": page({
+        tickets: `<div id="host"><p slot="s">배치된 글</p></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<div><slot name="s">${TICKETS.replace(/"/g, "&quot;")}</slot></div>';</script>`,
+      }),
+    },
+    async run(h) {
+      for (const path of ["/pl-h-display", "/pl-h-visibility", "/pl-h-attr", "/pl-h-aria", "/pl-h-fallback"]) {
+        await setModel(h);
+        const id = await seed(h, {}, path);
+        const t = await runNow(h, id);
+        expect(t.plan.state !== "ready", `${path}: 작전으로 받지 않음(${JSON.stringify(t.plan)})`);
+        const line = h.logs.filter((l) => l.includes("repeat:plan")).at(-1) ?? "";
+        expect(line.includes("plan_failed · hidden"), `${path}: 사유 hidden(${line})`);
+      }
+    },
+  },
+  {
     name: "작전을 확인해 읽는 사이 문서가 바뀌면 작전을 버리고 판정만 남긴다",
     pages: { [PATH]: page() },
     async run(h) {
