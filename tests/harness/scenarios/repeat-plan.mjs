@@ -342,7 +342,8 @@ export default [
       await h.sw.evaluate((url) => {
         globalThis.__planHookReloaded = false;
         globalThis.__onPlanReq = async () => {
-          const tab = (await chrome.tabs.query({})).find((t) => t.url === url && !t.active);
+          // 이 확인이 연 탭만(앞 시나리오가 남긴 같은 주소의 탭은 빼고).
+          const tab = (await chrome.tabs.query({})).find((t) => t.url === url && !t.active && !globalThis.__preTabs.includes(t.id));
           if (!tab) return;
           const docOf = async () => (await chrome.webNavigation.getFrame({ tabId: tab.id, frameId: 0 }).catch(() => null))?.documentId;
           const old = await docOf();
@@ -358,6 +359,9 @@ export default [
           }
         };
       }, h.base + PATH);
+      await h.sw.evaluate(async () => {
+        globalThis.__preTabs = (await chrome.tabs.query({})).map((t) => t.id);
+      });
       const id = await seed(h);
       const t = await runNow(h, id);
       expect(t.lastCheck.verdict === "unmet" && t.lastCheck.mode === "full", `판정은 남김(${JSON.stringify(t.lastCheck)})`);
