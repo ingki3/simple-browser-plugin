@@ -83,6 +83,24 @@ function selectorFor(el: Element, roots: Root[]): string | null {
   return null;
 }
 
+// 영역 뿌리 안(열린 shadow 트리 포함)에 iframe·frame이 있는지. 끝까지 보지 못하면 있는 것으로 본다(덜 믿는 쪽).
+// 프레임 안의 글자·버튼·모양은 영역 글자(modelText)·버튼 목록(합성 포함은 프레임 문서 경계에서 멈춤)·뼈대 해시에 들지 않는다.
+function containsFrame(el: Element): boolean {
+  const stack: Array<Element | ShadowRoot> = [el];
+  let visited = 0;
+  while (stack.length) {
+    const root = stack.pop()!;
+    if (root.querySelector("iframe, frame")) return true;
+    const all = root.querySelectorAll("*");
+    visited += all.length;
+    if (visited > 20_000) return true;
+    // 같은 출처 iframe 문서의 요소는 다른 realm이라 instanceof 대신 nodeType으로 본다.
+    if (root.nodeType === 1 && (root as Element).shadowRoot) stack.push((root as Element).shadowRoot!);
+    for (const n of Array.from(all)) if (n.shadowRoot) stack.push(n.shadowRoot);
+  }
+  return false;
+}
+
 function firstHeadingText(el: Element): string {
   const h = el.querySelector(HEADING_SELECTOR);
   return h ? modelText(h, SHORT) : "";
@@ -113,7 +131,7 @@ export function regionOutline(max = OUTLINE_MAX): OutlineItem[] {
   // 글자 수를 먼저 재고 많은 순서로 정렬한 뒤, 앞에서부터 선택자를 만들 수 있는 것만 max개(선택자 만들기가 비싸다).
   const sized: Array<{ el: Element; chars: number }> = [];
   for (const el of cands) {
-    if (inProtectedArea(el)) continue;
+    if (inProtectedArea(el) || containsFrame(el)) continue;
     const chars = modelTextInfo(el, OUTLINE_COUNT_MAX).text.length;
     if (chars) sized.push({ el, chars });
   }
@@ -161,6 +179,8 @@ export function readRegion(spec: RegionSpec): RegionProbe {
   if (!el) return { found: false, why: "anchor_missing" };
   // 값 컨트롤·편집 영역·숨김 영역이 뿌리면(그 안이면) 읽지 않는다.
   if (inProtectedArea(el)) return { found: false, why: "protected" };
+  // 프레임을 감싼 영역은 관측이 다 들지 않는다(만들 때 거부, 확인 회차엔 전체 판단).
+  if (containsFrame(el)) return { found: false, why: "frame" };
   const info = modelTextInfo(el, spec.maxText);
   if (!info.text) return { found: false, why: "empty" };
   // 상한 + 1개를 찾아 넘쳤는지 본다. 버튼 목록이 잘린 영역은 글자가 잘린 것과 같게 cut(작전으로 받지 않고, 확인 회차엔
