@@ -317,3 +317,39 @@ test("raceSignal: 끝나지 않는 준비 대기도 신호가 끊으면 바로 �
   await assert.rejects(raceSignal(never, AbortSignal.timeout(10), () => new Error("시간")), /시간/);
   clearTimeout(keep);
 });
+
+// 리뷰 1차(P1): 영역 버튼 목록이 상한에서 잘리면 글자 잘림처럼 본다(마지막 버튼만 바뀌어도 영역 요청이 같아지지 않게).
+test("capClickables: 상한을 넘으면 잘라서 cut=true, 상한 이하면 그대로 cut=false", async () => {
+  const { capClickables, REGION_CLICKABLES } = await import("../src/lib/repeatPlan.ts");
+  const list = (n) => Array.from({ length: n }, (_, i) => ({ text: `좌석${i + 1}`, role: "button" }));
+  const over = capClickables(list(REGION_CLICKABLES + 1), REGION_CLICKABLES);
+  assert.equal(over.cut, true);
+  assert.equal(over.clickables.length, REGION_CLICKABLES);
+  const exact = capClickables(list(REGION_CLICKABLES), REGION_CLICKABLES);
+  assert.equal(exact.cut, false);
+  assert.equal(exact.clickables.length, REGION_CLICKABLES);
+  // 버튼이 잘린 영역은 확인 회차에 안 맞음(전체 판단), 만들 때는 거부.
+  assert.deepEqual(regionFit(plan(), probe({ cut: over.cut, clickables: over.clickables })), { ok: false, why: "cut" });
+  assert.equal(acceptProbe(ok(draftObj()), probe({ cut: over.cut }), 5000).why, "region_cut");
+});
+
+// 리뷰 1차(P2): 만드는 사이 "지우기 → 만들기"를 눌렀으면(둘 다 tries 0) 옛 요청의 결과를 반영하지 않는다.
+test("planEffect: 만드는 중 지우기 → 만들기면 새 요청 세대라 옛 결과(made·실패)를 버린다", () => {
+  const t0 = task();
+  const startKey = planKey(t0.plan);
+  const remade = requestPlan(clearPlan(t0, 5), "gen-new");
+  assert.equal(remade.plan.state, "pending");
+  assert.equal(remade.plan.tries, 0);
+  assert.notEqual(planKey(remade.plan), startKey, "새 세대");
+  assert.deepEqual(planEffect(remade, startKey, { kind: "made", plan: plan() }, 6), remade, "옛 작전 버림");
+  assert.deepEqual(planEffect(remade, startKey, { kind: "plan_failed", why: "schema" }, 6), remade, "옛 실패도 버림");
+  // 같은 세대 안의 자동 재시도(실패 → tries+1)는 세대를 유지한다.
+  const failed = planEffect(remade, planKey(remade.plan), { kind: "plan_failed", why: "schema" }, 7);
+  assert.equal(failed.plan.tries, 1);
+  assert.equal(failed.plan.gen, remade.plan.gen);
+  // 저장소의 세대 없는 pending은 정규화 때 채운다.
+  const n = normalizePlanState({ state: "pending", tries: 1 }, false);
+  assert.equal(typeof n.gen, "string");
+  assert.ok(n.gen.length > 0);
+  assert.equal(normalizePlanState({ state: "pending", tries: 0, gen: "g1" }, false).gen, "g1");
+});

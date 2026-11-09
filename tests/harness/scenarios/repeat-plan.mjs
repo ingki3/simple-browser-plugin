@@ -17,6 +17,10 @@ ${extra}
 <div contenteditable="true">${DRAFT}</div>
 </main><div id="out"></div>`;
 
+// 좌석 버튼 n개(모두 같은 모양 — 뼈대 해시는 개수와 관계없이 같다). lastOpen이면 마지막 버튼만 열림.
+const seats = (n, lastOpen) =>
+  `<section id="tickets"><h2>예매 현황</h2><p>좌석</p>${Array.from({ length: n }, (_, i) => `<button${lastOpen && i === n - 1 ? "" : " disabled"}>좌석${i + 1}</button>`).join("")}</section>`;
+
 const PLAN = {
   region: { selector: "section#tickets", anchor: { text: "예매 현황", where: "heading" }, shape: "제목·문단·버튼 하나" },
   criteria: "예매하기 버튼이 disabled가 아니면 조건 맞음",
@@ -331,6 +335,21 @@ export default [
         expect(buttons.includes(inside), `${path}: 영역 안 버튼(${buttons})`);
         for (const o of outside) expect(!buttons.includes(o), `${path}: 영역 밖 버튼 ${o} 없음(${buttons})`);
       }
+    },
+  },
+  {
+    // 리뷰 1차(P1): 영역 버튼이 상한(30)을 넘으면 잘린 영역이라 영역만으로 unmet을 확정하지 않는다.
+    name: "영역 버튼이 30개를 넘게 늘면(마지막 버튼만 열림) 그 회차는 전체 판단으로 확인한다",
+    pages: { [PATH]: page({ tickets: seats(30, false) }) },
+    async run(h) {
+      const id = await withPlan(h);
+      h.pages.set(`1${PATH}`, page({ tickets: seats(31, true) }));
+      await setModel(h, { draftFor: { region: UNMET, full: MET } });
+      const before = await counts(h);
+      const t = await runNow(h, id);
+      const c = await counts(h);
+      expect(c.full === before.full + 1, `전체 판단 1건(${JSON.stringify(before)} → ${JSON.stringify(c)})`);
+      expect(t.status === "triggered" && t.lastCheck.mode !== "region", `영역만으로 unmet을 확정하지 않음(${t.status}, ${JSON.stringify(t.lastCheck)})`);
     },
   },
   {
