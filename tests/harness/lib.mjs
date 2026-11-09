@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { repeatRequestKind, requestParts } from "./requestParts.mjs";
 
 export const EXT = resolve(process.env.HARNESS_EXT ?? "dist");
 
@@ -146,6 +147,16 @@ export async function startHarness({ onWorker } = {}) {
       globalThis.__draftReqs = [];
       globalThis.__draftReplies = 0;
       globalThis.__draft = null;
+      // 반복 작업 작전(#284): 작전 만들기 응답·요청, 판단 요청별 응답 함수, 영역/전체 판단 요청, 만들기 요청 훅·붙잡기.
+      globalThis.__planDraft = null;
+      globalThis.__planReqs = [];
+      globalThis.__draftFor = null;
+      globalThis.__regionReqs = [];
+      globalThis.__fullReqs = [];
+      globalThis.__onPlanReq = null;
+      globalThis.__releasePlan?.();
+      globalThis.__planHold = false;
+      globalThis.__releasePlan = null;
       globalThis.__realWindowQuery = false;
       globalThis.__modelReqs = [];
       globalThis.__badToolIds = [];
@@ -258,7 +269,14 @@ export async function startHarness({ onWorker } = {}) {
 
 // 모의 모델: 단계마다 직전 도구 결과를 보고 다음 호출을 만든다. 도구 결과(모델에 간 그대로)는 __toolLog에 남긴다.
 // 저장 카드 초안 요청(response_format)에는 __draft를 JSON으로 답하고 요청을 __draftReqs에 남긴다.
+// 반복 작업 요청(#284): system 표지로 작전 만들기(plan)·영역 판단(region)·전체 판단(full)을 가린다(tests/harness/requestParts.mjs —
+// 실제 제공자 요청 구조, 단위 시험과 같은 함수). plan은 __planReqs에 남기고 __planDraft(없으면 {} — 형식 오류라 작전 없이 지금처럼
+// 동작)로 답한다. __onPlanReq(body): 답하기 전에 부르는 훅(문서 바꾸기 등). __planHold: 켜져 있으면 __releasePlan()까지 붙잡는다.
+// region·full은 __regionReqs·__fullReqs와 __draftReqs에 남기고 __draftFor(user, kind)가 있으면 그 값, 없으면 __draft로 답한다
+// (값이 {__httpStatus: n}이면 그 HTTP 오류로 답한다).
 async function installMockModel(sw) {
+  // 서비스 워커에 분류 함수를 넣는다(소스 그대로 — 바깥 이름에 기대지 않는 함수).
+  await sw.evaluate(`globalThis.__requestParts = ${requestParts.toString()}; globalThis.__repeatRequestKind = ${repeatRequestKind.toString()};`);
   await sw.evaluate(() => {
     globalThis.__steps = [];
     globalThis.__toolLog = [];
@@ -375,6 +393,35 @@ async function installMockModel(sw) {
         return new Response(JSON.stringify(c.body), { status: c.status ?? 200, headers: { "content-type": "application/json" } });
       }
       const anthropic = String(url).includes("api.anthropic.com");
+      const repeatKind = body.stream ? null : globalThis.__repeatRequestKind(body);
+      if (repeatKind) {
+        const reply = (obj) =>
+          new Response(JSON.stringify(anthropic ? { content: [{ type: "text", text: JSON.stringify(obj) }] } : { choices: [{ message: { content: JSON.stringify(obj) } }] }), {
+            headers: { "content-type": "application/json" },
+          });
+        const { user } = globalThis.__requestParts(body);
+        if (repeatKind === "plan") {
+          (globalThis.__planReqs ??= []).push(body);
+          if (globalThis.__onPlanReq) await globalThis.__onPlanReq(body);
+          if (globalThis.__planHold) {
+            await new Promise((resolve) => {
+              globalThis.__releasePlan = () => {
+                globalThis.__planHold = false;
+                globalThis.__releasePlan = null;
+                resolve();
+              };
+            });
+          }
+          return reply(globalThis.__planDraft ?? {});
+        }
+        (globalThis[repeatKind === "region" ? "__regionReqs" : "__fullReqs"] ??= []).push(body);
+        (globalThis.__draftReqs ??= []).push(body);
+        globalThis.__draftReplies = (globalThis.__draftReplies ?? 0) + 1;
+        const out = globalThis.__draftFor?.(user, repeatKind) ?? globalThis.__draft ?? {};
+        // {__httpStatus}: 그 요청을 HTTP 오류로 끝낸다(영역 판단 호출 실패 시험).
+        if (out && out.__httpStatus) return new Response(JSON.stringify({ error: { message: "모의 오류" } }), { status: out.__httpStatus, headers: { "content-type": "application/json" } });
+        return reply(out);
+      }
       // Anthropic: 응답은 Messages 형식, 스트림은 content_block 이벤트(아래 anthropicSse).
       if (anthropic && !body.stream) {
         (globalThis.__draftReqs ??= []).push(body);
