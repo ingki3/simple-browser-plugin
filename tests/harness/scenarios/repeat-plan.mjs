@@ -874,4 +874,23 @@ export default [
       expect(t.plan.state === "ready" && c.plan === before.plan + 1 && t.planBuilds === 1, `다시 만듦(${t.plan.state}, builds ${t.planBuilds})`);
     },
   },
+  {
+    // 리뷰 P2(dcd14eb): 검산 회차에 영역이 off_plan이고 전체가 unmet이면 검산 불일치로 보아 바로 다시 만든다.
+    name: "2단계 검산: 영역 off_plan + 전체 unmet은 검산 불일치(verify_diff) → pending, 다음 회차에 다시 만든다",
+    pages: { [PATH]: page() },
+    async run(h) {
+      const id = await withPlan(h);
+      await runNow(h, id);
+      await patchTask(h, id, { plan: { sinceFull: 9 } });
+      await setModel(h, { draftFor: { region: { verdict: "off_plan", reason: "처음 보는 상태" }, full: UNMET } });
+      let t = await runNow(h, id);
+      expect(t.lastCheck.mode === "verify" && t.lastCheck.verdict === "unmet" && t.status === "active", `검산 회차 전체 판정(${JSON.stringify(t.lastCheck)})`);
+      expect(t.plan.state === "pending" && eventKinds(t).includes("verify_diff"), `verify_diff → pending(${JSON.stringify(t.plan)}, ${eventKinds(t)})`);
+      await setModel(h);
+      const before = await counts(h);
+      t = await runNow(h, id);
+      const c = await counts(h);
+      expect(c.plan === before.plan + 1 && t.plan.state === "ready" && t.lastCheck.mode === "full", `다음 회차에 다시 만듦(${JSON.stringify(before)} → ${JSON.stringify(c)}, ${t.plan.state})`);
+    },
+  },
 ];

@@ -21,6 +21,7 @@ import {
   pushPlanEvent,
   readyState,
   regionObservation,
+  regionRoundOutcome,
   requestPlan,
   roundMode,
   roundsToVerify,
@@ -308,4 +309,25 @@ test("planEffect 새 작전: made는 readyState(지금)로, made·plan_failed·p
   assert.deepEqual(none.planEvents.at(-1), { at: 1000, kind: "plan_none" });
   const failed = effect(task(), { kind: "plan_failed", why: "timeout" });
   assert.deepEqual(failed.planEvents.at(-1), { at: 1000, kind: "plan_failed", why: "timeout" });
+});
+
+test("regionRoundOutcome(리뷰 P2): 검산 회차의 off_plan은 검산 불일치(→ verify_diff·pending), 일반 회차는 안 맞음", () => {
+  const f = (verdict) => ({ verdict, reason: "x" });
+  const r = (verdict) => ({ verdict, reason: "x" });
+  assert.deepEqual(regionRoundOutcome("verify", r("off_plan"), f("unmet")), { kind: "verify", region: "off_plan", full: "unmet" });
+  assert.deepEqual(regionRoundOutcome("verify", r("met"), f("unmet")), { kind: "verify", region: "met", full: "unmet" });
+  assert.deepEqual(regionRoundOutcome("verify", null, f("unmet")), { kind: "region_error" });
+  assert.deepEqual(regionRoundOutcome("region", r("off_plan"), f("unmet")), { kind: "off_plan", full: "unmet" });
+  assert.deepEqual(regionRoundOutcome("region", r("blocked"), f("unmet")), { kind: "confirm", region: "blocked", full: "unmet" });
+  assert.deepEqual(regionRoundOutcome("region", null, f("met")), { kind: "region_error" });
+  // 검산 off_plan + 전체 unmet → 바로 다시 만들 차례(한도면 포기).
+  const t = withReady(ready({ sinceFull: 9 }));
+  const d = effect(t, regionRoundOutcome("verify", r("off_plan"), f("unmet")));
+  assert.equal(d.plan.state, "pending");
+  assert.deepEqual(kinds(d).slice(-2), ["verify_diff", "regen"]);
+  const g = effect(withReady(ready({ sinceFull: 9 }), { planBuilds: PLAN_MAX_BUILDS }), regionRoundOutcome("verify", r("off_plan"), f("met")));
+  assert.equal(g.plan.state, "none");
+  assert.equal(kinds(g).at(-1), "gave_up");
+  // 전체도 판단하지 못한 화면이면 평가하지 않는다.
+  assert.equal(effect(t, regionRoundOutcome("verify", r("off_plan"), f("blocked"))).plan.state, "ready");
 });
