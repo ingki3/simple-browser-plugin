@@ -397,3 +397,11 @@ test("영역 모호: content가 ambiguous로 알리면 작전으로 받지 않�
   assert.deepEqual(regionFit(plan(), { found: false, why: "ambiguous" }), { ok: false, why: "ambiguous" });
   assert.deepEqual(acceptProbe(ok(draftObj()), { found: false, why: "ambiguous" }, 5000), { ok: false, why: "ambiguous" });
 });
+
+// 리뷰 5차(P1): 전체 화면 글자가 보지 않는 자리의 영역은 hidden(만들 때 거부, 확인 회차엔 전체 판단).
+test("영역 hidden: 작전으로 받지 않고 확인 회차엔 안 맞음", async () => {
+  const { REGION_MISSES } = await import("../src/lib/repeatPlan.ts");
+  assert.ok(REGION_MISSES.includes("hidden"));
+  assert.deepEqual(regionFit(plan(), { found: false, why: "hidden" }), { ok: false, why: "hidden" });
+  assert.deepEqual(acceptProbe(ok(draftObj()), { found: false, why: "hidden" }, 5000), { ok: false, why: "hidden" });
+});

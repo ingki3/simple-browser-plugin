@@ -472,7 +472,7 @@ export default [
       "/pl-h-attr": page({ tickets: `<div hidden>${TICKETS}</div><p>다른 글</p>` }),
       "/pl-h-aria": page({ tickets: `<div aria-hidden="true">${TICKETS}</div><p>다른 글</p>` }),
       "/pl-h-fallback": page({
-        tickets: `<div id="host"><p slot="s">배치된 글</p></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<div><slot name="s">${TICKETS.replace(/"/g, "&quot;")}</slot></div>';</script>`,
+        tickets: `<div id="host"><p slot="s">배치된 글</p></div><script>document.getElementById("host").attachShadow({mode:"open"}).innerHTML='<div><slot name="s">${TICKETS.replace(/"/g, "")}</slot></div>';</script>`,
       }),
     },
     async run(h) {

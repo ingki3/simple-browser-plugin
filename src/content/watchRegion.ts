@@ -3,7 +3,7 @@
 // - 선택자는 query_dom과 같은 정책(selectorBlock, #45)을 지나야 실행하고, 접근 가능한 같은 출처 루트에서만 찾는다.
 // - 기준점은 모델이 준 글자를 그대로(공백 정규화·소문자) 포함 비교만 한다. 글자의 뜻은 보지 않는다.
 import { getAccessibleRoots, type Root } from "./docs";
-import { groupLabelInfo, inProtectedArea, modelText, modelTextInfo } from "./modelText";
+import { groupLabelInfo, inProtectedArea, modelText, modelTextInfo, ownProtectedReason, reachedByPageText } from "./modelText";
 import { skeletonOf } from "./skeleton";
 import { composedChildren, walkComposed } from "./composed";
 import { findClickables } from "./clickables";
@@ -132,7 +132,7 @@ export function regionOutline(max = OUTLINE_MAX): OutlineItem[] {
   // 글자 수를 먼저 재고 많은 순서로 정렬한 뒤, 앞에서부터 선택자를 만들 수 있는 것만 max개(선택자 만들기가 비싸다).
   const sized: Array<{ el: Element; chars: number }> = [];
   for (const el of cands) {
-    if (inProtectedArea(el) || containsFrame(el)) continue;
+    if (inProtectedArea(el) || !reachedByPageText(el) || containsFrame(el)) continue;
     const chars = modelTextInfo(el, OUTLINE_COUNT_MAX).text.length;
     if (chars) sized.push({ el, chars });
   }
@@ -178,7 +178,14 @@ export function readRegion(spec: RegionSpec): RegionProbe {
   if (matches.length > REGION_MATCH_MAX) return { found: false, why: "too_many" };
   // 선택자와 기준점에 함께 맞는 요소가 정확히 하나여야 한다. 둘 이상이면 첫 것을 고르지 않는다(같은 모양의 영역이 앞에
   // 끼어들면 엉뚱한 영역을 보고 unmet을 확정할 수 있다) — 만들 때 거부, 확인 회차엔 전체 판단.
-  const fits = matches.filter((m) => anchorFits(m, spec.anchor));
+  // 영역은 전체 화면 글자(modelText(document.body))가 보는 자리에 있을 때만 본다 — 같은 순회·같은 숨김 판정(reachedByPageText).
+  // 배치되지 않은 호스트 자식·가려진 slot 기본 내용·숨김 조상 아래·스스로 숨은 요소는 화면에 없어 옛 글자를 볼 수 있다.
+  const seen = matches.filter((m) => {
+    const own = ownProtectedReason(m);
+    return own !== "hidden" && own !== "non_text" && reachedByPageText(m, true);
+  });
+  if (!seen.length) return { found: false, why: "hidden" };
+  const fits = seen.filter((m) => anchorFits(m, spec.anchor));
   if (!fits.length) return { found: false, why: "anchor_missing" };
   if (fits.length > 1) return { found: false, why: "ambiguous" };
   const el = fits[0];

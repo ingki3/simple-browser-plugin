@@ -4,7 +4,7 @@
 // 둘 다 시작하기 전에 시작 요소와 그 조상이 보호 영역인지 먼저 본다(편집 영역 안의 버튼, aria-labelledby가
 // 편집 영역 안을 가리키는 경우 등). 내부 대상 비교·위험 판정은 이 글자가 아니라 원문을 쓴다(targets.ts).
 
-import { composedChildNodes } from "./composed";
+import { composedChildNodes, composedParentNode } from "./composed";
 import { NAME_ATTRS, VALUE_CONTROL_TAGS, cleanModelText, protectedReason, type ProtectFacts } from "@/lib/modelText";
 import { isShadowRoot, isTag } from "./docs";
 
@@ -116,6 +116,45 @@ export function inProtectedArea(el: Element, selfIsControl = false, ignoreSelfAr
 function inlineDisplay(display: string | null): boolean {
   const d = display ?? "inline";
   return d.startsWith("inline") || d === "contents" || d.startsWith("ruby");
+}
+
+// el이 문서 전체 화면 글자(modelText(document.body))의 순회에 닿는 자리인지(#284 — 반복 작업 영역은 전체 화면 관측이 보는
+// 자리에 있을 때만 본다). subtreeTextInfo가 내려가는 규칙을 그대로 거꾸로 따른다: 같은 합성 트리 자식 규칙(composedChildNodes
+// ↔ composedParentNode — 배치되지 않은 호스트 자식·가려진 slot 기본 내용은 닿지 않음)과, 내려가며 건너뛰는 같은 판정
+// (protectedReason(factsOf) — 값 컨트롤·편집 영역·hidden·aria-hidden·display:none·visibility:hidden·글자 아닌 요소)으로
+// el부터 body 바로 아래까지 본다. body 자체는 modelText의 시작 검사(inProtectedArea)와 같게 본다.
+// 같은 출처 iframe 문서 안이면 그 문서에서 같은 검사를 하고, 그 프레임 요소가 바깥 문서에서 같은 검사를 지나야 한다.
+// skipSelf: el 자신의 판정은 빼고 본다(부르는 쪽이 따로 사유를 나눌 때).
+export function reachedByPageText(el: Element, skipSelf = false): boolean {
+  let cur: Element = el;
+  let self = skipSelf;
+  for (let hops = 0; hops < 8; hops++) {
+    const doc = cur.ownerDocument;
+    const body = doc.body;
+    if (!body || doc.designMode === "on") return false;
+    let n: Node | null | undefined = cur;
+    for (let steps = 0; n !== body; steps++) {
+      if (!n || steps > MAX_ANCESTORS) return false;
+      if (n.nodeType === Node.ELEMENT_NODE && !(self && n === cur) && protectedReason(factsOf(n as Element)) !== null) return false;
+      n = composedParentNode(n);
+    }
+    if (inProtectedArea(body)) return false;
+    let frame: Element | null = null;
+    try {
+      frame = doc.defaultView?.frameElement ?? null;
+    } catch {
+      frame = null;
+    }
+    if (!frame) return true;
+    cur = frame;
+    self = false;
+  }
+  return false;
+}
+
+// el 자신의 보호 사유(subtreeTextInfo가 이 요소에서 내려가지 않는 까닭). 없으면 null.
+export function ownProtectedReason(el: Element): ReturnType<typeof protectedReason> {
+  return protectedReason(factsOf(el));
 }
 
 // root 아래의 글자(합성 트리 순서: 열린 shadow root와 슬롯에 배치된 노드 포함). 보호 요소의 하위 트리는 뺀다.
