@@ -69,7 +69,9 @@ function label(el: Element): string | null {
   return el.localName;
 }
 
-export function pageSkeleton(doc: Document = document): string {
+// root 아래(root 자신은 빼고) 구조 요소 중첩의 해시. maxDepth: 이보다 깊은 구조는 보지 않는다.
+// 페이지 키(pageSkeleton)는 body를 기본 깊이로, 반복 작업 작전(#284)의 영역 모양은 영역 뿌리를 얕은 깊이로 잰다.
+export function skeletonOf(root: Element, maxDepth = MAX_STRUCT_DEPTH): string {
   let visits = 0;
 
   // el 아래에서 찾은 구조 요소들의 서명 목록을 돌려준다(el 자신은 빼고).
@@ -81,7 +83,7 @@ export function pageSkeleton(doc: Document = document): string {
       if (SKIP.has(child.localName)) continue;
       const own = label(child);
       if (own) {
-        if (depth >= MAX_STRUCT_DEPTH) {
+        if (depth >= maxDepth) {
           out.push(own);
         } else {
           const inner = collapseRepeats(childSigs(child, depth + 1));
@@ -98,8 +100,13 @@ export function pageSkeleton(doc: Document = document): string {
     return out;
   };
 
+  return fnv1a(collapseRepeats(childSigs(root, 0)).join(","));
+}
+
+// 페이지 키의 뼈대(읽기 레시피 #156). 값이 바뀌면 저장된 레시피 키가 모두 무효가 되므로 skeletonOf(body)와 같게 둔다
+// (하네스 skeleton-compat이 고정값으로 지킨다).
+export function pageSkeleton(doc: Document = document): string {
   const body = doc.body;
   if (!body) return fnv1a("");
-  const sig = collapseRepeats(childSigs(body, 0)).join(",");
-  return fnv1a(sig);
+  return skeletonOf(body);
 }
