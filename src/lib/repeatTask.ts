@@ -2,7 +2,7 @@
 // 상태 전이와 확인 응답 해석은 여기(순수 함수, npm test로 시험)에 두고, 저장·알람·탭은 src/background/repeatTasks.ts가 한다.
 // 조건이 맞았는지는 모델이 판단한다(코드에 낱말 목록을 두지 않는다). 코드는 응답의 형태만 엄격히 검사한다.
 import { normalizeNavigationUrl } from "./sanitize.ts";
-import { normalizePlanState, type PlanState } from "./repeatPlan.ts";
+import { normalizePlanEvents, normalizePlanState, type PlanEvent, type PlanState } from "./repeatPlan.ts";
 
 export type RepeatStatus = "active" | "paused" | "triggered" | "started" | "done";
 export type RepeatVerdict = "met" | "unmet" | "blocked" | "login_required" | "unknown";
@@ -13,13 +13,14 @@ export interface RepeatCheck {
   // error: 확인 자체가 실패(탭·스냅샷·모델 오류). 모델이 답한 결과는 verdict.
   verdict: RepeatVerdict | "error";
   reason: string;
-  // 어떻게 판단했는지(#284): full 전체 화면, region 작전 영역만(unmet 확정), region+full 영역 판단 뒤 전체 화면으로 다시 확인.
+  // 어떻게 판단했는지(#284): full 전체 화면, region 작전 영역만(unmet 확정), region+full 영역 판단 뒤 전체 화면으로 다시 확인,
+  // skip 영역 관측이 직전 unmet과 같아 모델을 부르지 않음(늘 unmet), verify 검산 회차(영역·전체 둘 다 묻고 전체 판단을 씀).
   mode?: RepeatCheckMode;
   // 이 회차에 모델에 보낸 user 글자 수(판단·작전 만들기 합).
   sent?: number;
 }
 
-export type RepeatCheckMode = "full" | "region" | "region+full";
+export type RepeatCheckMode = "full" | "region" | "region+full" | "skip" | "verify";
 
 export interface RepeatTask {
   id: string;
@@ -33,7 +34,7 @@ export interface RepeatTask {
   createdAt: number;
   endsAt: number;
   maxRuns: number;
-  // 확인을 시작한 회차 수. 성공 여부·모델 호출 수와 관계없이 센다.
+  // 확인 회차 수. 성공 여부·모델 호출 수와 관계없이 센다(모델을 부르지 않은 생략 회차도 센다 — maxRuns도 회차 수).
   attempts: number;
   status: RepeatStatus;
   // 상태의 이유(멈춘 이유·끝난 이유). 사용자에게 보인다.
@@ -52,6 +53,8 @@ export interface RepeatTask {
   plan: PlanState;
   // 마지막 사용자 "작전 만들기" 뒤 자동으로 만든 작전 수(2단계 다시 만들기 한도).
   planBuilds: number;
+  // 작전 이벤트(2단계, 최근 20개 — 종류·고정 사유 코드만).
+  planEvents: PlanEvent[];
 }
 
 export interface RepeatArgs {
@@ -123,6 +126,7 @@ export function newRepeatTask(a: Required<RepeatArgs>, o: { id: string; now: num
     // 첫 확인 때(그 회차 판정이 unmet이면) 작전을 만든다.
     plan: { state: "pending", tries: 0, gen: o.planGen ?? `new:${o.id}` },
     planBuilds: 0,
+    planEvents: [],
   };
 }
 
@@ -131,7 +135,7 @@ export function normalizeTask(raw: unknown): RepeatTask | null {
   if (!raw || typeof raw !== "object" || typeof (raw as { id?: unknown }).id !== "string") return null;
   const r = raw as RepeatTask & Record<string, unknown>;
   const builds = typeof r.planBuilds === "number" && Number.isFinite(r.planBuilds) && r.planBuilds > 0 ? Math.floor(r.planBuilds) : 0;
-  return { ...r, plan: normalizePlanState(r.plan, !("plan" in r)), planBuilds: builds };
+  return { ...r, plan: normalizePlanState(r.plan, !("plan" in r)), planBuilds: builds, planEvents: normalizePlanEvents(r.planEvents) };
 }
 
 // 더 확인하지 않을 이유(기간 끝·횟수 소진). 없으면 null.

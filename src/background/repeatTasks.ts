@@ -5,6 +5,7 @@
 // - 조건이 맞으면 알리기만 한다. 다음 일은 사용자가 패널에서 "이어서 진행"을 눌러 새 대화로 시작한다(한 번만).
 // - 확인 작전(#284, src/lib/repeatPlan.ts): 첫 unmet 회차에 모델이 볼 영역·판단 기준을 정하고, 그 뒤로는 영역 글자만 보낸다.
 //   영역 판단은 unmet만 확정하고, 그 밖의 판정·호출 실패·영역이 안 맞으면 같은 회차에 전체 화면으로 판단한다(회차당 모델 2번까지).
+//   2단계: 영역 관측이 직전 unmet과 같으면 생략(모델 0번), 10회차·6시간마다 검산(영역·전체), 연속 안 맞음·불일치 뒤 다시 만들기.
 // - 한 회차는 시작부터 ROUND_DEADLINE_MS(170초) 안에 끝낸다(신호로 강제 — stale 인계 3분 전에).
 import {
   REPEAT_CHECK_SYSTEM,
@@ -47,6 +48,11 @@ import {
   REPEAT_PLAN_SYSTEM,
   REPEAT_REGION_SYSTEM,
   ROUND_DEADLINE_MS,
+  SKIP_REASON,
+  missRegen,
+  observationHash,
+  roundMode,
+  shouldSkip,
   acceptProbe,
   clearPlan,
   makePlan,
@@ -63,6 +69,7 @@ import {
   regionSpec,
   requestPlan,
   stepTimeout,
+  type BuildOutcome,
   type OutlineItem,
   type PlanOutcome,
   type RegionMiss,
@@ -377,9 +384,13 @@ export async function runCheck(id: string): Promise<void> {
     });
     await stillMine();
     const st = started.plan;
-    const ready = st.state === "ready" ? st.plan : null;
+    const ready = st.state === "ready" ? st : null;
+    // 회차 방식은 저장된 회차 수·시각(코드가 센 값)으로만 정한다(검산 회차를 페이지 글자로 건너뛰지 않는다).
+    const mode = roundMode(st, Date.now());
+    // 이 회차가 안 맞으면 바로 다시 만들 차례인 작업도 영역 후보를 함께 받는다(같은 회차에 만들 수 있게).
+    const wantOutline = st.state === "pending" || missRegen(st, started.planBuilds);
     // 전체 글자는 늘 함께 읽는다(영역이 안 맞거나 다시 확인할 때 같은 문서·같은 시점의 글자를 쓴다).
-    const snap = await readSnapshot(page, round, { region: ready ? regionSpec(ready.region) : undefined, outline: st.state === "pending" });
+    const snap = await readSnapshot(page, round, { region: ready ? regionSpec(ready.plan.region) : undefined, outline: wantOutline });
     await stillMine();
     const ctx = await modelContext(round);
     let sent = 0;
@@ -390,31 +401,63 @@ export async function runCheck(id: string): Promise<void> {
     const fullJudge = async () => parseVerdict(await ask(REPEAT_CHECK_SYSTEM, checkPrompt(started, snap)));
     let result: { verdict: RepeatCheck["verdict"]; reason: string; mode: NonNullable<RepeatCheck["mode"]> };
     if (ready) {
-      const fit = regionFit(ready, snap.region);
+      const p = ready.plan;
+      const fit = regionFit(p, snap.region);
       const budget = planBudget(round.deadline - Date.now(), ctx.limitMs, READ_MS);
-      if (fit.ok && budget.region && snap.region?.found) {
-        let r: ReturnType<typeof parseRegionVerdict> | null = null;
+      if (fit.ok && snap.region?.found) {
+        // 영역 판단에 보내는 관측(제목·최종 주소·영역 글자·영역 버튼과 상태) 하나를 프롬프트와 생략 키가 함께 쓴다.
+        const obs = regionObservation(snap, p, snap.region);
+        // 생략 키: 가리기 전 원문 관측의 SHA-256(해시만 저장). 못 내면 생략하지 않는다.
+        let hash: string | null = null;
         try {
-          r = parseRegionVerdict(await ask(REPEAT_REGION_SYSTEM, regionPrompt(started, ready, regionObservation(snap, ready, snap.region))));
+          hash = await bound(round, observationHash(obs));
         } catch (err) {
-          // 회차를 멈추는 오류·대상 바뀜·가림 목록 실패는 다시 보내지 않는다. 그 밖(시간 초과·네트워크)은 전체 판단으로.
-          if (roundStop(err) || err instanceof TargetChangedError || err instanceof SecretsReadError) throw err;
-          debugLog("repeat:region_error", err instanceof Error ? err.message : String(err), "warn");
+          if (roundStop(err)) throw err;
         }
-        if (r?.verdict === "unmet") {
-          result = { verdict: "unmet", reason: r.reason, mode: "region" };
-          outcome = { kind: "region" };
+        if (shouldSkip(ready, mode, snap.region, hash)) {
+          // 모델을 부르지 않는다. 기록은 늘 unmet(생략은 met·blocked를 만들지 않는다).
+          result = { verdict: "unmet", reason: SKIP_REASON, mode: "skip" };
+          outcome = { kind: "skip" };
+        } else if (budget.region) {
+          let r: ReturnType<typeof parseRegionVerdict> | null = null;
+          try {
+            r = parseRegionVerdict(await ask(REPEAT_REGION_SYSTEM, regionPrompt(started, p, obs)));
+          } catch (err) {
+            // 회차를 멈추는 오류·대상 바뀜·가림 목록 실패는 다시 보내지 않는다. 그 밖(시간 초과·네트워크)은 전체 판단으로.
+            if (roundStop(err) || err instanceof TargetChangedError || err instanceof SecretsReadError) throw err;
+            debugLog("repeat:region_error", err instanceof Error ? err.message : String(err), "warn");
+          }
+          if (mode === "verify") {
+            // 검산 회차: 영역 판단이 무엇이든 전체 판단을 하고 그 판정을 쓴다. 둘이 다르면 작전을 다시 만든다.
+            await stillMine();
+            const f = await fullJudge();
+            result = { ...f, mode: "verify" };
+            outcome = !r ? { kind: "region_error" } : r.verdict === "off_plan" ? { kind: "off_plan", full: f.verdict } : { kind: "verify", region: r.verdict, full: f.verdict };
+          } else if (r?.verdict === "unmet") {
+            result = { verdict: "unmet", reason: r.reason, mode: "region" };
+            outcome = { kind: "region", hash };
+          } else {
+            // 영역만 보고는 unmet 말고는 확정하지 않는다(작전 글은 페이지에서 유래했다). 같은 회차에 전체 화면으로 판단한다.
+            await stillMine();
+            const f = await fullJudge();
+            result = { ...f, mode: "region+full" };
+            outcome = !r ? { kind: "region_error" } : r.verdict === "off_plan" ? { kind: "off_plan", full: f.verdict } : { kind: "confirm", region: r.verdict, full: f.verdict };
+          }
         } else {
-          // 영역만 보고는 unmet 말고는 확정하지 않는다(작전 글은 페이지에서 유래했다). 같은 회차에 전체 화면으로 판단한다.
-          await stillMine();
+          // 두 번 부를 시간이 없으면 전체 판단만(검산 회차도 전체 판단은 하므로 검산을 건너뛰지 않는다).
           const f = await fullJudge();
-          result = { ...f, mode: "region+full" };
-          outcome = !r ? { kind: "region_error" } : r.verdict === "off_plan" ? { kind: "off_plan", full: f.verdict } : { kind: "confirm", region: r.verdict, full: f.verdict };
+          result = { ...f, mode: "full" };
+          outcome = { kind: "budget" };
         }
       } else {
+        const why = fit.ok ? "no_probe" : fit.why;
         const f = await fullJudge();
         result = { ...f, mode: "full" };
-        outcome = fit.ok ? { kind: "budget" } : { kind: "mismatch", why: fit.why };
+        outcome = { kind: "mismatch", why };
+        // 이 안 맞음으로 다시 만들 차례면(연속 PLAN_MISS_LIMIT번, 한도 안) 모델을 한 번만 부른 이 회차에 바로 만든다(unmet이고 시간이 될 때).
+        if (missRegen(ready, started.planBuilds) && f.verdict === "unmet" && planBudget(round.deadline - Date.now(), ctx.limitMs, READ_MS).make) {
+          outcome = { kind: "mismatch", why, build: await buildPlan(started, snap, page, round, ask, stillMine) };
+        }
       }
     } else {
       const f = await fullJudge();
@@ -453,7 +496,10 @@ export async function runCheck(id: string): Promise<void> {
   debugLog("repeat:result", `${next.title} · ${check.verdict}${check.mode ? ` · ${check.mode}` : ""}${check.reason ? ` · ${check.reason}` : ""}`, check.verdict === "error" ? "warn" : "info");
   // 작전 결과는 종류·사유 코드만 남긴다(작전 글은 로그에 넣지 않는다).
   // plan_none의 why는 모델이 쓴 글이라 넣지 않는다(코드가 만든 사유 코드만).
-  if (outcome.kind !== "keep") debugLog("repeat:plan", `${next.title} · ${outcome.kind}${"why" in outcome && outcome.kind !== "plan_none" ? ` · ${outcome.why}` : ""} → ${next.plan.state}`);
+  if (outcome.kind !== "keep") {
+    const build = outcome.kind === "mismatch" && outcome.build ? ` + ${outcome.build.kind}${outcome.build.kind === "plan_failed" ? ` · ${outcome.build.why}` : ""}` : "";
+    debugLog("repeat:plan", `${next.title} · ${outcome.kind}${"why" in outcome && outcome.kind !== "plan_none" ? ` · ${outcome.why}` : ""}${build} → ${next.plan.state}`);
+  }
   if (next.status !== "active") await disarm(id);
   // 조건이 맞은 그 회차에만 한 번 알린다(텔레그램 알림 등, #139).
   if (next.status === "triggered") for (const fn of triggerListeners) void Promise.resolve(fn({ id: next.id, title: next.title })).catch(() => {});
@@ -469,7 +515,7 @@ async function buildPlan(
   round: Round,
   ask: (system: string, user: string, maxTokens?: number) => Promise<string>,
   stillMine: () => Promise<void>,
-): Promise<PlanOutcome> {
+): Promise<BuildOutcome> {
   const mask = (s: string) => bound(round, maskStringForModel(s)).then((r) => r.text);
   try {
     await stillMine();
