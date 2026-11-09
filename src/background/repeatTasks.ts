@@ -66,6 +66,7 @@ import {
   regionFit,
   regionObservation,
   regionPrompt,
+  regionRoundOutcome,
   regionSpec,
   requestPlan,
   stepTimeout,
@@ -432,7 +433,7 @@ export async function runCheck(id: string): Promise<void> {
             await stillMine();
             const f = await fullJudge();
             result = { ...f, mode: "verify" };
-            outcome = !r ? { kind: "region_error" } : r.verdict === "off_plan" ? { kind: "off_plan", full: f.verdict } : { kind: "verify", region: r.verdict, full: f.verdict };
+            outcome = regionRoundOutcome("verify", r, f);
           } else if (r?.verdict === "unmet") {
             result = { verdict: "unmet", reason: r.reason, mode: "region" };
             outcome = { kind: "region", hash };
@@ -441,7 +442,7 @@ export async function runCheck(id: string): Promise<void> {
             await stillMine();
             const f = await fullJudge();
             result = { ...f, mode: "region+full" };
-            outcome = !r ? { kind: "region_error" } : r.verdict === "off_plan" ? { kind: "off_plan", full: f.verdict } : { kind: "confirm", region: r.verdict, full: f.verdict };
+            outcome = regionRoundOutcome("region", r, f);
           }
         } else {
           // 두 번 부를 시간이 없으면 전체 판단만(검산 회차도 전체 판단은 하므로 검산을 건너뛰지 않는다).

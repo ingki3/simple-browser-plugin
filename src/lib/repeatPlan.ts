@@ -543,8 +543,8 @@ export type PlanOutcome =
   | { kind: "skip" }
   // 영역 판단이 unmet이 아니라 전체 판단으로 확인함(검산 회차 아님).
   | { kind: "confirm"; region: RepeatVerdict; full: RepeatCheck["verdict"] }
-  // 검산 회차: 영역·전체를 둘 다 물음.
-  | { kind: "verify"; region: RepeatVerdict; full: RepeatCheck["verdict"] }
+  // 검산 회차: 영역·전체를 둘 다 물음. off_plan도 전체 판정과 다른 답이라 검산 불일치다.
+  | { kind: "verify"; region: RegionVerdict; full: RepeatCheck["verdict"] }
   | { kind: "off_plan"; full: RepeatCheck["verdict"] }
   // 영역 판단 호출 실패 → 전체 판단(작전 탓이 아니라 안 맞음으로 세지 않음).
   | { kind: "region_error" }
@@ -637,6 +637,15 @@ function readyEffect(t: RepeatTask, st: ReadyState, o: PlanOutcome, now: number)
     default:
       return t;
   }
+}
+
+// 영역 판단 뒤 전체 판단을 한 회차의 결과(runCheck가 쓴다). r: 영역 판단(호출 실패면 null), f: 전체 판단.
+// 검산 회차는 영역 판정이 무엇이든(off_plan 포함) 전체 판정과 비교한다 — 검산이 맞지 않는다고 본 작전을 계속 쓰지 않게.
+// 일반 회차의 off_plan은 안 맞음, 그 밖은 확인(confirm)이다.
+export function regionRoundOutcome(mode: "region" | "verify", r: { verdict: RegionVerdict } | null, f: { verdict: RepeatCheck["verdict"] }): PlanOutcome {
+  if (!r) return { kind: "region_error" };
+  if (mode === "verify") return { kind: "verify", region: r.verdict, full: f.verdict };
+  return r.verdict === "off_plan" ? { kind: "off_plan", full: f.verdict } : { kind: "confirm", region: r.verdict, full: f.verdict };
 }
 
 // 결과를 반영하는 update 안에서 applyRunResult 다음에 부른다. 지금 작전 상태가 시작 때(startedKey)와 다르면(확인하는 사이
