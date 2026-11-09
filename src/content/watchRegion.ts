@@ -5,6 +5,7 @@
 import { getAccessibleRoots, type Root } from "./docs";
 import { groupLabelInfo, inProtectedArea, modelText, modelTextInfo } from "./modelText";
 import { skeletonOf } from "./skeleton";
+import { composedChildren, walkComposed } from "./composed";
 import { findClickables } from "./clickables";
 import { selectorBlock } from "@/lib/selectorPolicy";
 import { plainWord } from "@/lib/actionLog";
@@ -83,26 +84,26 @@ function selectorFor(el: Element, roots: Root[]): string | null {
   return null;
 }
 
-// 영역 뿌리 안(열린 shadow 트리 포함)에 iframe·frame이 있는지. 끝까지 보지 못하면 있는 것으로 본다(덜 믿는 쪽).
-// 프레임 안의 글자·버튼·모양은 영역 글자(modelText)·버튼 목록(합성 포함은 프레임 문서 경계에서 멈춤)·뼈대 해시에 들지 않는다.
+// 영역 뿌리 자신이나 합성 트리 안(shadow·slot에 배치된 노드 포함 — src/content/composed.ts)에 iframe·frame이 있는지.
+// 끝까지 보지 못하면 있는 것으로 본다(덜 믿는 쪽). 프레임 안의 글자·버튼·모양은 영역 관측에 들지 않는다(프레임 문서 경계).
 function containsFrame(el: Element): boolean {
-  const stack: Array<Element | ShadowRoot> = [el];
-  let visited = 0;
-  while (stack.length) {
-    const root = stack.pop()!;
-    if (root.querySelector("iframe, frame")) return true;
-    const all = root.querySelectorAll("*");
-    visited += all.length;
-    if (visited > 20_000) return true;
-    // 같은 출처 iframe 문서의 요소는 다른 realm이라 instanceof 대신 nodeType으로 본다.
-    if (root.nodeType === 1 && (root as Element).shadowRoot) stack.push((root as Element).shadowRoot!);
-    for (const n of Array.from(all)) if (n.shadowRoot) stack.push(n.shadowRoot);
-  }
-  return false;
+  const isFrame = (e: Element) => e.localName === "iframe" || e.localName === "frame";
+  if (isFrame(el)) return true;
+  return walkComposed(el, isFrame) !== "done";
+}
+
+// 영역 안(합성 트리)의 제목 요소. 영역 글자와 같은 노드 집합에서 찾는다.
+function composedHeadings(el: Element, max: number): Element[] {
+  const out: Element[] = [];
+  walkComposed(el, (e) => {
+    if (e.matches(HEADING_SELECTOR)) out.push(e);
+    return out.length >= max;
+  });
+  return out;
 }
 
 function firstHeadingText(el: Element): string {
-  const h = el.querySelector(HEADING_SELECTOR);
+  const [h] = composedHeadings(el, 1);
   return h ? modelText(h, SHORT) : "";
 }
 
@@ -161,7 +162,7 @@ function anchorFits(el: Element, anchor: RegionSpec["anchor"]): boolean {
   const want = norm(anchor.text);
   if (!want) return false;
   if (anchor.where === "label") return norm(groupLabelInfo(el, 200).text).includes(want);
-  const heads = Array.from(el.querySelectorAll(HEADING_SELECTOR)).slice(0, 30);
+  const heads = composedHeadings(el, 30);
   const prev = el.previousElementSibling;
   if (prev && prev.matches(HEADING_SELECTOR)) heads.push(prev);
   if (el.matches(HEADING_SELECTOR)) heads.push(el);
@@ -196,7 +197,7 @@ export function readRegion(spec: RegionSpec): RegionProbe {
     found: true,
     text: info.text,
     cut: info.cut || buttonsCut,
-    shape: { tag: el.localName, role: el.getAttribute("role") ?? "", skeleton: skeletonOf(el, SHAPE_DEPTH) },
+    shape: { tag: el.localName, role: el.getAttribute("role") ?? "", skeleton: skeletonOf(el, SHAPE_DEPTH, composedChildren) },
     clickables,
   };
 }

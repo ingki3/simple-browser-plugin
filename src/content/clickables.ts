@@ -4,6 +4,7 @@ import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, emptyZeroDiag, queryTerms, type ZeroDiag } from "@/lib/clickQuery";
 import { resultHref, resultRole } from "@/lib/clickResult";
 import { getAccessibleRoots, isTag } from "./docs";
+import { composedContains } from "./composed";
 import { modelName, modelNameInfo, modelText, modelTextInfo } from "./modelText";
 import {
   choiceUrlsOf,
@@ -504,16 +505,10 @@ export function findClickables(args: FindClickablesArgs, internal: InternalClick
   return scanTargets(() => collectClickables({ ...args, mode: "list" }, internal.within).items);
 }
 
-// 합성 트리에서 el이 within 안(within 자신 포함)인지: 배치된 노드는 slot, shadow root 바로 아래는 host를 따라 올라간다.
-// 같은 출처 iframe 문서의 요소는 그 문서 안에서만 올라가므로, iframe 안의 영역이면 그 iframe 문서 안의 후보만 맞는다.
-function composedWithin(within: Node, el: Element): boolean {
-  let n: Node | null = el;
-  for (let i = 0; n && i < 10_000; i++) {
-    if (n === within) return true;
-    n = composedParent(n);
-  }
-  return false;
-}
+// 합성 트리에서 el이 within 안(within 자신 포함)인지 — 영역 글자(modelText)·모양과 같은 규칙(src/content/composed.ts):
+// 배치된 노드는 slot, shadow root 바로 아래는 host를 따라 올라가고, 배치되지 않은 호스트 자식은 들지 않는다. 같은 출처
+// iframe 문서의 요소는 그 문서 안에서만 올라가므로, iframe 안의 영역이면 그 iframe 문서 안의 후보만 맞는다.
+const composedWithin = (within: Node, el: Element) => composedContains(within, el);
 
 const isElementLike = (v: unknown): v is Element =>
   !!v && typeof v === "object" && (v as Node).nodeType === 1 && typeof (v as Node).contains === "function";

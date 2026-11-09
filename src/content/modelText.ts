@@ -4,6 +4,7 @@
 // 둘 다 시작하기 전에 시작 요소와 그 조상이 보호 영역인지 먼저 본다(편집 영역 안의 버튼, aria-labelledby가
 // 편집 영역 안을 가리키는 경우 등). 내부 대상 비교·위험 판정은 이 글자가 아니라 원문을 쓴다(targets.ts).
 
+import { composedChildNodes } from "./composed";
 import { NAME_ATTRS, VALUE_CONTROL_TAGS, cleanModelText, protectedReason, type ProtectFacts } from "@/lib/modelText";
 import { isShadowRoot, isTag } from "./docs";
 
@@ -149,17 +150,8 @@ export function subtreeTextInfo(
 ): { text: string; cut: boolean } {
   const limit = max * 4;
   let out = "";
-  const childrenOf = (node: Node): Node[] => {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node as Element;
-      if (el.localName === "slot") {
-        const assigned = (el as HTMLSlotElement).assignedNodes();
-        if (assigned.length) return assigned;
-      }
-      if (el.shadowRoot) return Array.from(el.shadowRoot.childNodes);
-    }
-    return Array.from(node.childNodes);
-  };
+  // 합성 트리 자식(src/content/composed.ts — 영역 버튼·모양·프레임 검사와 같은 규칙).
+  const childrenOf = composedChildNodes;
   // 문자열 항목은 블록 요소가 끝날 때 넣을 공백.
   const stack: Array<Node | string> = childrenOf(root).reverse();
   while (stack.length && out.length < limit) {

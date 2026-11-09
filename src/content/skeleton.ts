@@ -71,13 +71,18 @@ function label(el: Element): string | null {
 
 // root 아래(root 자신은 빼고) 구조 요소 중첩의 해시. maxDepth: 이보다 깊은 구조는 보지 않는다.
 // 페이지 키(pageSkeleton)는 body를 기본 깊이로, 반복 작업 작전(#284)의 영역 모양은 영역 뿌리를 얕은 깊이로 잰다.
-export function skeletonOf(root: Element, maxDepth = MAX_STRUCT_DEPTH): string {
+// kidsOf: 자식 목록. 기본은 페이지 키용 DOM 순서(shadow root 자식 + light 자식 — 값이 바뀌면 레시피 키가 무효가 되므로
+// 그대로 둔다). 반복 작업 영역 모양은 합성 트리 자식(composedChildren)을 넘겨 글자·버튼과 같은 노드 집합을 본다.
+const domKids = (el: Element): Element[] =>
+  el.shadowRoot ? [...Array.from(el.shadowRoot.children), ...Array.from(el.children)] : Array.from(el.children);
+
+export function skeletonOf(root: Element, maxDepth = MAX_STRUCT_DEPTH, kidsOf: (el: Element) => Element[] = domKids): string {
   let visits = 0;
 
   // el 아래에서 찾은 구조 요소들의 서명 목록을 돌려준다(el 자신은 빼고).
   const childSigs = (el: Element, depth: number): string[] => {
     const out: string[] = [];
-    const kids = el.shadowRoot ? [...Array.from(el.shadowRoot.children), ...Array.from(el.children)] : Array.from(el.children);
+    const kids = kidsOf(el);
     for (const child of kids) {
       if (++visits > MAX_VISITS) break;
       if (SKIP.has(child.localName)) continue;
