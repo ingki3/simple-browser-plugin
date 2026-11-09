@@ -27,6 +27,15 @@ export const SHAPE_DEPTH = 3;
 // 한 회차의 마감: REPEAT_RUN_STALE_MS(3분) - 10초. 이 시각을 넘기면 회차를 끊는다(stale 인계 전에 끝나게).
 export const ROUND_DEADLINE_MS = 3 * 60_000 - 10_000;
 
+// 2단계(계획 3절·10절 Q5): 검산 회차 주기(회차 수·시간), 연속 안 맞음 한도, 자동 다시 만들기 한도, 작전 이벤트 수.
+export const PLAN_VERIFY_EVERY = 10;
+export const PLAN_VERIFY_MS = 6 * 3_600_000;
+export const PLAN_MISS_LIMIT = 2;
+export const PLAN_MAX_BUILDS = 3;
+export const PLAN_EVENTS = 20;
+// 생략 회차의 기록 이유(코드가 만든 고정 글).
+export const SKIP_REASON = "영역 글자가 직전 확인과 같아 모델을 부르지 않았습니다.";
+
 // 하네스 모의 모델이 요청 종류를 가려내는 표지 문구(tests/harness/requestParts.mjs). 문구를 바꾸면 하네스도 같이 바꾼다.
 export const PLAN_SYSTEM_MARK = "반복 확인 작전을 만든다";
 export const REGION_SYSTEM_MARK = "반복 확인 작전의 영역만 보고";
@@ -66,14 +75,31 @@ export interface RepeatPlan extends PlanDraft {
   fullChars: number;
   regionChars: number;
 }
-// 2단계는 ready에 misses·lastUnmetHash·sinceFull·lastFullAt 등을 더한다(없으면 기본값으로 읽는다).
+// ready(2단계): misses 연속으로 안 맞은 수(못 찾음·모양·잘림·off_plan 등), lastUnmetHash 직전 "영역 판단 unmet" 회차의 영역 관측
+// SHA-256(관측 글자는 저장하지 않음 — 같으면 다음 회차를 생략), sinceFull 마지막 전체 판단 뒤 회차 수(생략 포함), lastFullAt
+// 마지막 전체 판단 시각, skips 이 작전으로 생략한 회차 수(표시용). 1단계에 저장된 ready는 기본값으로 읽는다(normalizePlanState).
 // pending.gen: 작전 만들기 요청의 세대. 사용자가 "작전 만들기"를 누를 때마다 새로 정하고, 같은 세대 안의 자동 재시도는
 // 세대를 유지한다. 확인 결과를 반영할 때 세대가 다르면(만드는 사이 지우기 → 만들기) 옛 결과를 버린다.
 export type PlanState =
   | { state: "pending"; tries: number; gen: string }
-  | { state: "ready"; plan: RepeatPlan }
+  | ReadyState
   | { state: "none"; why: string; at: number }
   | { state: "cleared"; at: number };
+
+export interface ReadyState {
+  state: "ready";
+  plan: RepeatPlan;
+  misses: number;
+  lastUnmetHash: string | null;
+  sinceFull: number;
+  lastFullAt: number;
+  skips: number;
+}
+
+// 새 작전(만든 회차에 전체 판단을 했으므로 lastFullAt = 지금).
+export function readyState(plan: RepeatPlan, now: number): ReadyState {
+  return { state: "ready", plan, misses: 0, lastUnmetHash: null, sinceFull: 0, lastFullAt: now, skips: 0 };
+}
 
 // 작전 만들기용 영역 후보(content regionOutline). 글자는 modelText 경로로 만든 화면 글자다.
 export interface OutlineItem {
@@ -101,6 +127,80 @@ export type RegionProbe =
   | { found: true; text: string; cut: boolean; shape: RegionShape; clickables: RepeatSnapshot["clickables"] }
   | { found: false; why: RegionMiss };
 export const REGION_MISSES: readonly RegionMiss[] = ["blocked_selector", "no_match", "too_many", "anchor_missing", "ambiguous", "hidden", "protected", "empty", "frame"];
+
+// ---- 작전 이벤트(2단계) ----
+// 설정의 작전 "자세히"에 보이는 최근 기록. 종류와 코드가 만든 고정 사유 코드만 담는다(페이지 글자·모델 글자 없음).
+export type PlanEventKind =
+  | "made"
+  | "plan_failed"
+  | "plan_none"
+  | "miss"
+  | "fallback"
+  | "skip"
+  | "verify_same"
+  | "verify_diff"
+  | "confirm_diff"
+  | "regen"
+  | "gave_up"
+  | "cleared"
+  | "requested";
+export const PLAN_EVENT_KINDS: readonly PlanEventKind[] = ["made", "plan_failed", "plan_none", "miss", "fallback", "skip", "verify_same", "verify_diff", "confirm_diff", "regen", "gave_up", "cleared", "requested"];
+// 사유 코드: 영역 못 찾음(RegionMiss)·영역 맞음 검사(cut·shape·no_probe)·영역 판단(off_plan·unsure·region_error)·다시 만든 까닭
+// (misses·verify_diff·confirm_diff)·포기(builds)·만들기 실패(timeout·schema·secret·probe·changed·region_cut·not_smaller·error).
+export const PLAN_EVENT_WHYS: readonly string[] = [
+  ...REGION_MISSES,
+  "cut",
+  "shape",
+  "no_probe",
+  "off_plan",
+  "unsure",
+  "region_error",
+  "misses",
+  "verify_diff",
+  "confirm_diff",
+  "builds",
+  "timeout",
+  "schema",
+  "secret",
+  "probe",
+  "changed",
+  "region_cut",
+  "not_smaller",
+  "error",
+];
+export interface PlanEvent {
+  at: number;
+  kind: PlanEventKind;
+  why?: string;
+  // 이어진 생략을 한 줄로 합친 횟수(2 이상일 때만).
+  n?: number;
+}
+
+const whyCode = (why: string | undefined) => (why !== undefined && PLAN_EVENT_WHYS.includes(why) ? why : undefined);
+
+// 이벤트를 더한다(최근 PLAN_EVENTS개). 이어진 생략은 한 줄로 합쳐 횟수를 센다(생략이 다른 기록을 밀어내지 않게).
+export function pushPlanEvent(list: PlanEvent[], ev: PlanEvent): PlanEvent[] {
+  const why = whyCode(ev.why);
+  const e: PlanEvent = { at: ev.at, kind: ev.kind, ...(why ? { why } : {}) };
+  const last = list.at(-1);
+  if (e.kind === "skip" && last?.kind === "skip") return [...list.slice(0, -1), { ...e, n: (last.n ?? 1) + 1 }];
+  return [...list, e].slice(-PLAN_EVENTS);
+}
+
+// 저장소에서 읽은 이벤트 목록. 모르는 종류는 버리고, 모르는 사유 코드는 뺀다.
+export function normalizePlanEvents(raw: unknown): PlanEvent[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .flatMap((x): PlanEvent[] => {
+      if (!x || typeof x !== "object") return [];
+      const r = x as Record<string, unknown>;
+      if (typeof r.at !== "number" || !Number.isFinite(r.at) || typeof r.kind !== "string" || !(PLAN_EVENT_KINDS as readonly string[]).includes(r.kind)) return [];
+      const why = typeof r.why === "string" ? whyCode(r.why) : undefined;
+      const n = typeof r.n === "number" && Number.isInteger(r.n) && r.n > 1 ? r.n : undefined;
+      return [{ at: r.at, kind: r.kind as PlanEventKind, ...(why ? { why } : {}), ...(n ? { n } : {}) }];
+    })
+    .slice(-PLAN_EVENTS);
+}
 
 // content에 보내는 영역 읽기 요청.
 export interface RegionSpec {
@@ -232,7 +332,19 @@ export function normalizePlanState(raw: unknown, legacy: boolean): PlanState {
     }
     case "ready": {
       const plan = readyPlan(r.plan);
-      return plan ? { state: "ready", plan } : { state: "none", why: BROKEN_WHY, at };
+      if (!plan) return { state: "none", why: BROKEN_WHY, at };
+      // 2단계 필드. 1단계에 저장된 ready(필드 없음)나 틀린 값은 기본값: 안 맞음 0, 해시 없음(첫 회차는 생략하지 않음), sinceFull 0,
+      // lastFullAt = 작전 만든 때(오래된 작전이면 첫 회차가 바로 검산 — 안전한 쪽).
+      const count = (v: unknown, max: number) => (isNum(v) && v >= 0 ? Math.min(Math.floor(v), max) : 0);
+      return {
+        state: "ready",
+        plan,
+        misses: count(r.misses, PLAN_MISS_LIMIT),
+        lastUnmetHash: typeof r.lastUnmetHash === "string" && /^[0-9a-f]{64}$/.test(r.lastUnmetHash) ? r.lastUnmetHash : null,
+        sinceFull: count(r.sinceFull, 1_000_000),
+        lastFullAt: isNum(r.lastFullAt) ? r.lastFullAt : plan.createdAt,
+        skips: count(r.skips, 1_000_000_000),
+      };
     }
     case "none":
       return { state: "none", why: typeof r.why === "string" ? r.why.slice(0, 300) : BROKEN_WHY, at: isNum(r.at) ? r.at : at };
@@ -364,6 +476,39 @@ export function regionObservationKey(o: RegionObservation): string {
   return JSON.stringify([o.title, o.url, o.selector, o.text, buttons]);
 }
 
+// 생략 키의 SHA-256(16진 64자). 가리기 전 원문 관측으로 백그라운드에서 내고, 해시만 저장한다.
+export async function observationHash(o: RegionObservation): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(regionObservationKey(o)));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ---- 회차 방식(2단계) ----
+
+// 이 회차를 어떻게 판단할지. 저장된 회차 수·시각(코드가 센 값)만 본다 — 페이지에서 유래한 값으로 검산을 건너뛰지 않는다.
+// full: 작전 없음, region: 영역 판단(생략 가능), verify: 영역·전체 둘 다 묻고 전체 판단을 쓴다(생략하지 않음).
+export function roundMode(st: PlanState, now: number): "full" | "region" | "verify" {
+  if (st.state !== "ready") return "full";
+  if (st.sinceFull >= PLAN_VERIFY_EVERY - 1 || now - st.lastFullAt >= PLAN_VERIFY_MS) return "verify";
+  return "region";
+}
+
+// 다음 검산까지 남은 회차(이번이 검산 회차면 1).
+export function roundsToVerify(st: ReadyState): number {
+  return Math.max(1, PLAN_VERIFY_EVERY - st.sinceFull);
+}
+
+// 모델을 부르지 않고 직전 unmet을 그대로 쓸지. region 회차(검산 아님)·페이지만으로 판단하는 작전·영역이 맞음·영역 관측 해시가
+// 직전 "영역 판단 unmet" 회차와 같을 때만. 생략은 늘 unmet이다(met·blocked를 만들지 않는다).
+export function shouldSkip(st: ReadyState, mode: "full" | "region" | "verify", probe: RegionProbe | undefined, hash: string | null): boolean {
+  if (mode !== "region" || !st.plan.pageOnly || !regionFit(st.plan, probe).ok) return false;
+  return hash !== null && st.lastUnmetHash !== null && hash === st.lastUnmetHash;
+}
+
+// 이번 회차가 안 맞으면 다시 만들 차례이고, 한도 안이라 같은 회차에 만들 수 있는지(전체 판단 1번뿐인 회차).
+export function missRegen(st: PlanState, planBuilds: number): boolean {
+  return st.state === "ready" && st.misses + 1 >= PLAN_MISS_LIMIT && planBuilds < PLAN_MAX_BUILDS;
+}
+
 // 영역 판단 요청. 순서: 조건(맨 앞) → 작전 메모(페이지에서 유래, 데이터 블록) → 영역 글자 → 영역 안 버튼. 작전 글은
 // system에 넣지 않는다.
 export function regionPrompt(t: Pick<RepeatTask, "check">, plan: RepeatPlan, o: RegionObservation): string {
@@ -387,19 +532,27 @@ export function regionPrompt(t: Pick<RepeatTask, "check">, plan: RepeatPlan, o: 
 
 // ---- 작전 결과 반영 ----
 
-// 한 회차에서 작전에 일어난 일. 1단계는 made·plan_failed·plan_none만 상태를 바꾸고, 나머지는 2단계(안 맞음 누적·다시 만들기·
-// 검산)가 쓴다.
+// 한 회차에서 작전에 일어난 일. 작전 만들기 결과(BuildOutcome)는 pending에, 나머지는 ready에 반영한다.
+export type BuildOutcome = { kind: "made"; plan: RepeatPlan } | { kind: "plan_failed"; why: string } | { kind: "plan_none"; why: string };
 export type PlanOutcome =
+  // 바꾸지 않음(오류 회차 등).
   | { kind: "keep" }
-  | { kind: "region" }
+  // 영역 판단으로 unmet 확정. hash: 그 영역 관측의 해시(못 냈으면 null — 다음 회차를 생략하지 않음).
+  | { kind: "region"; hash: string | null }
+  // 변화가 없어 모델을 부르지 않음.
+  | { kind: "skip" }
+  // 영역 판단이 unmet이 아니라 전체 판단으로 확인함(검산 회차 아님).
   | { kind: "confirm"; region: RepeatVerdict; full: RepeatCheck["verdict"] }
+  // 검산 회차: 영역·전체를 둘 다 물음. off_plan도 전체 판정과 다른 답이라 검산 불일치다.
+  | { kind: "verify"; region: RegionVerdict; full: RepeatCheck["verdict"] }
   | { kind: "off_plan"; full: RepeatCheck["verdict"] }
+  // 영역 판단 호출 실패 → 전체 판단(작전 탓이 아니라 안 맞음으로 세지 않음).
   | { kind: "region_error" }
-  | { kind: "mismatch"; why: string }
+  // 영역이 안 맞음 → 전체 판단. build: 이 안 맞음으로 다시 만들 차례라 같은 회차에 만든 결과.
+  | { kind: "mismatch"; why: string; build?: BuildOutcome }
+  // 남은 시간이 모자라 전체 판단만 함(ready) / 작전을 만들지 못함(pending).
   | { kind: "budget" }
-  | { kind: "made"; plan: RepeatPlan }
-  | { kind: "plan_failed"; why: string }
-  | { kind: "plan_none"; why: string };
+  | BuildOutcome;
 
 const FAIL_WHY: Record<string, string> = {
   timeout: "모델이 제때 답하지 않음",
@@ -411,42 +564,112 @@ const FAIL_WHY: Record<string, string> = {
   not_smaller: "영역이 페이지 전체보다 작지 않음",
   error: "요청이 실패함",
 };
+export const GAVE_UP_WHY = "작전을 여러 번 다시 만들어도 맞지 않아 전체 화면으로 확인합니다.";
 
-// 결과를 반영하는 update 안에서 applyRunResult 다음에 부른다. 지금 작전 상태가 시작 때(startedKey)와 다르면(확인하는 사이
-// 지움·새로 만들기 등) outcome을 버린다. 판정은 이미 applyRunResult가 반영했다. revision은 올리지 않는다(이어서 진행의
-// verify가 revision을 비교한다).
-export function planEffect(t: RepeatTask, startedKey: string, outcome: PlanOutcome, now: number): RepeatTask {
-  if (planKey(t.plan) !== startedKey) return t;
-  const st = t.plan;
-  if (st.state !== "pending") return t;
-  switch (outcome.kind) {
+const withEvent = (t: RepeatTask, now: number, kind: PlanEventKind, why?: string): RepeatTask => ({ ...t, planEvents: pushPlanEvent(t.planEvents, { at: now, kind, why }) });
+
+// 작전 만들기 결과(pending에만).
+function buildEffect(t: RepeatTask, st: Extract<PlanState, { state: "pending" }>, o: PlanOutcome, now: number): RepeatTask {
+  switch (o.kind) {
     case "made":
-      return { ...t, plan: { state: "ready", plan: outcome.plan }, planBuilds: t.planBuilds + 1 };
+      return withEvent({ ...t, plan: readyState(o.plan, now), planBuilds: t.planBuilds + 1 }, now, "made");
     case "plan_none":
-      return { ...t, plan: { state: "none", why: `모델이 볼 영역 하나를 정하지 못해 전체 화면으로 확인합니다: ${outcome.why}`.slice(0, 300), at: now } };
+      // 모델이 쓴 이유는 상태 줄에만(가린 뒤), 이벤트에는 넣지 않는다.
+      return withEvent({ ...t, plan: { state: "none", why: `모델이 볼 영역 하나를 정하지 못해 전체 화면으로 확인합니다: ${o.why}`.slice(0, 300), at: now } }, now, "plan_none");
     case "plan_failed": {
       const tries = st.tries + 1;
-      if (tries >= PLAN_MAX_TRIES) {
-        return { ...t, plan: { state: "none", why: `작전을 만들지 못해 전체 화면으로 확인합니다(${FAIL_WHY[outcome.why] ?? FAIL_WHY.error}).`, at: now } };
-      }
-      return { ...t, plan: { state: "pending", tries, gen: st.gen } };
+      const next: RepeatTask =
+        tries >= PLAN_MAX_TRIES
+          ? { ...t, plan: { state: "none", why: `작전을 만들지 못해 전체 화면으로 확인합니다(${FAIL_WHY[o.why] ?? FAIL_WHY.error}).`, at: now } }
+          : { ...t, plan: { state: "pending", tries, gen: st.gen } };
+      return withEvent(next, now, "plan_failed", o.why);
     }
     default:
       return t;
   }
 }
 
+// 다시 만들 차례: 한도(PLAN_MAX_BUILDS) 안이면 pending(이 작전에서 나온 세대), 넘으면 none(gave_up — 전체 판단 유지).
+function regen(t: RepeatTask, st: ReadyState, why: string, now: number): RepeatTask {
+  if (t.planBuilds >= PLAN_MAX_BUILDS) return withEvent({ ...t, plan: { state: "none", why: GAVE_UP_WHY, at: now } }, now, "gave_up", "builds");
+  return withEvent({ ...t, plan: { state: "pending", tries: 0, gen: `regen:${st.plan.id}` } }, now, "regen", why);
+}
+
+// 작전 회차 결과(ready에만).
+function readyEffect(t: RepeatTask, st: ReadyState, o: PlanOutcome, now: number): RepeatTask {
+  // 전체 판단이 든 회차: 검산 주기를 다시 세고, 생략 키를 지운다(다음 영역 판단 unmet 뒤에야 생략).
+  const full: ReadyState = { ...st, sinceFull: 0, lastFullAt: now, lastUnmetHash: null };
+  const keep = (plan: ReadyState, task = t): RepeatTask => ({ ...task, plan });
+  const miss = (why: string): RepeatTask => {
+    const task = withEvent(t, now, "miss", why);
+    const misses = full.misses + 1;
+    return misses >= PLAN_MISS_LIMIT ? regen(task, full, "misses", now) : keep({ ...full, misses }, task);
+  };
+  const isJudged = (v: RepeatCheck["verdict"]) => v === "met" || v === "unmet";
+  switch (o.kind) {
+    case "region":
+      return keep({ ...st, misses: 0, lastUnmetHash: o.hash, sinceFull: st.sinceFull + 1 });
+    case "skip":
+      return withEvent(keep({ ...st, sinceFull: st.sinceFull + 1, skips: st.skips + 1 }), now, "skip");
+    case "budget":
+      return keep(full);
+    case "region_error":
+      return withEvent(keep(full), now, "fallback", "region_error");
+    case "off_plan":
+      return miss("off_plan");
+    case "mismatch": {
+      const r = miss(o.why);
+      // 이 안 맞음으로 pending이 됐을 때만 같은 회차에 만든 결과를 쓴다(포기했거나 아직 차례가 아니면 버림).
+      return o.build && r.plan.state === "pending" ? buildEffect(r, r.plan, o.build, now) : r;
+    }
+    case "confirm":
+      // 영역 met인데 전체 unmet: 작전이 틀렸다(검산 불일치와 같게) → 바로 다시 만든다.
+      if (o.region === "met" && o.full === "unmet") return regen(withEvent(keep(full), now, "confirm_diff"), full, "confirm_diff", now);
+      if (o.region === o.full) return keep({ ...full, misses: 0 });
+      // 영역이 판단하지 못했는데(blocked·login_required·unknown) 전체는 판단함 → 안 맞음으로 센다.
+      if (isJudged(o.full)) return miss("unsure");
+      return keep(full);
+    case "verify":
+      // 전체 판단도 판단하지 못한 화면(차단·로그인·오류)이면 작전을 평가하지 않는다.
+      if (!isJudged(o.full)) return keep(full);
+      if (o.region === o.full) return withEvent(keep({ ...full, misses: 0 }), now, "verify_same");
+      return regen(withEvent(keep(full), now, "verify_diff"), full, "verify_diff", now);
+    default:
+      return t;
+  }
+}
+
+// 영역 판단 뒤 전체 판단을 한 회차의 결과(runCheck가 쓴다). r: 영역 판단(호출 실패면 null), f: 전체 판단.
+// 검산 회차는 영역 판정이 무엇이든(off_plan 포함) 전체 판정과 비교한다 — 검산이 맞지 않는다고 본 작전을 계속 쓰지 않게.
+// 일반 회차의 off_plan은 안 맞음, 그 밖은 확인(confirm)이다.
+export function regionRoundOutcome(mode: "region" | "verify", r: { verdict: RegionVerdict } | null, f: { verdict: RepeatCheck["verdict"] }): PlanOutcome {
+  if (!r) return { kind: "region_error" };
+  if (mode === "verify") return { kind: "verify", region: r.verdict, full: f.verdict };
+  return r.verdict === "off_plan" ? { kind: "off_plan", full: f.verdict } : { kind: "confirm", region: r.verdict, full: f.verdict };
+}
+
+// 결과를 반영하는 update 안에서 applyRunResult 다음에 부른다. 지금 작전 상태가 시작 때(startedKey)와 다르면(확인하는 사이
+// 지움·새로 만들기 등) outcome을 버린다. 판정은 이미 applyRunResult가 반영했다. revision은 올리지 않는다(이어서 진행의
+// verify가 revision을 비교한다). none·cleared는 어떤 결과로도 바뀌지 않는다(지운 작전은 다시 만들지 않음).
+export function planEffect(t: RepeatTask, startedKey: string, outcome: PlanOutcome, now: number): RepeatTask {
+  if (planKey(t.plan) !== startedKey) return t;
+  const st = t.plan;
+  if (st.state === "pending") return buildEffect(t, st, outcome, now);
+  if (st.state === "ready") return readyEffect(t, st, outcome, now);
+  return t;
+}
+
 // 설정의 "작전 지우기(전체 판단)": 만드는 중이거나 작전이 있을 때만. 지운 작업은 자동으로 다시 만들지 않는다.
 export function clearPlan(t: RepeatTask, now: number): RepeatTask | null {
   if (t.plan.state !== "ready" && t.plan.state !== "pending") return null;
-  return { ...t, plan: { state: "cleared", at: now } };
+  return withEvent({ ...t, plan: { state: "cleared", at: now } }, now, "cleared");
 }
 
 // 설정의 "작전 만들기(다음 확인 때)": 작전이 없을 때(none·cleared)만 pending으로. gen: 새 요청 세대(부르는 쪽이 무작위로).
-// 자동으로 만든 횟수를 0으로 돌린다.
-export function requestPlan(t: RepeatTask, gen: string): RepeatTask | null {
+// 자동으로 만든 횟수를 0으로 돌린다(다시 만들기 한도로 포기한 작업도 다시 시도한다).
+export function requestPlan(t: RepeatTask, gen: string, now = Date.now()): RepeatTask | null {
   if (t.plan.state !== "none" && t.plan.state !== "cleared") return null;
-  return { ...t, plan: { state: "pending", tries: 0, gen }, planBuilds: 0 };
+  return withEvent({ ...t, plan: { state: "pending", tries: 0, gen }, planBuilds: 0 }, now, "requested");
 }
 
 // ---- 회차 마감 ----
