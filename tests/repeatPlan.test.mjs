@@ -389,3 +389,11 @@ test("raceSignal: 이미 끊긴 신호면 원래 기다림의 거부가 처리�
     process.off("unhandledRejection", on);
   }
 });
+
+// 리뷰 4차(P1): 선택자·기준점에 맞는 영역이 여럿이면 어느 것을 볼지 모른다 → 모호(만들 때 거부, 확인 회차엔 전체 판단).
+test("영역 모호: content가 ambiguous로 알리면 작전으로 받지 않고 확인 회차엔 안 맞음", async () => {
+  const { REGION_MISSES } = await import("../src/lib/repeatPlan.ts");
+  assert.ok(REGION_MISSES.includes("ambiguous"), "ambiguous 사유");
+  assert.deepEqual(regionFit(plan(), { found: false, why: "ambiguous" }), { ok: false, why: "ambiguous" });
+  assert.deepEqual(acceptProbe(ok(draftObj()), { found: false, why: "ambiguous" }, 5000), { ok: false, why: "ambiguous" });
+});

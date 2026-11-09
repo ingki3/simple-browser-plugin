@@ -421,6 +421,28 @@ export default [
     },
   },
   {
+    // 리뷰 4차(P1): 선택자·기준점에 맞는 영역이 둘이 되면(같은 영역이 앞에 끼어듦) 어느 것을 볼지 모른다 → 전체 판단.
+    name: "선택자·기준점에 맞는 영역이 둘이면(같은 영역이 앞에 끼어듦) 모호해 전체 판단, 처음부터 둘이면 작전으로 받지 않음",
+    pages: { [PATH]: page({ tickets: `<section class="tickets"><h2>예매 현황</h2><p>오픈 예정</p><button disabled>예매하기</button></section>` }) },
+    async run(h) {
+      const plan = { ...PLAN, region: { ...PLAN.region, selector: "section.tickets" } };
+      const id = await withPlan(h, plan);
+      const copy = `<section class="tickets"><h2>예매 현황</h2><p>오픈 예정</p><button disabled>예매하기</button></section>`;
+      const opened = `<section class="tickets"><h2>예매 현황</h2><p>오픈 예정</p><button>예매하기</button></section>`;
+      // 원래 영역은 열렸는데, 그 앞에 같은 모양의 닫힌 영역이 끼어든다.
+      h.pages.set(`1${PATH}`, page({ tickets: copy + opened }));
+      await setModel(h, { plan, draftFor: { region: UNMET, full: MET } });
+      const t = await runNow(h, id);
+      expect(t.status === "triggered" && t.lastCheck.mode !== "region", `영역만으로 unmet을 확정하지 않음(${t.status}, ${JSON.stringify(t.lastCheck)})`);
+      // 처음부터 둘이면 작전으로 받지 않는다.
+      await setModel(h, { plan });
+      const id2 = await seed(h);
+      h.pages.set(`1${PATH}`, page({ tickets: copy + copy.replace("오픈 예정", "준비 중") }));
+      const t2 = await runNow(h, id2);
+      expect(t2.plan.state !== "ready", `둘이면 작전으로 받지 않음(${JSON.stringify(t2.plan)})`);
+    },
+  },
+  {
     name: "작전을 확인해 읽는 사이 문서가 바뀌면 작전을 버리고 판정만 남긴다",
     pages: { [PATH]: page() },
     async run(h) {
@@ -525,6 +547,80 @@ export default [
       expect(c.full === 0 && c.plan === 0, `요청 없음(${JSON.stringify(c)})`);
       await h.panel.waitForTimeout(500);
       expect((await tabCount(h)) === before, `확인용 탭 닫힘(${before} → ${await tabCount(h)})`);
+    },
+  },
+  {
+    // 리뷰 4차(P2): 보내기 직전 대상 확인(guard.verify)의 설정 읽기가 붙잡혀도 회차는 마감(170초)에 끝나 오류를 남기고 탭을 닫는다.
+    // 하네스 전용 상수 없이 실제 마감까지 기다린다(약 3분).
+    name: "보내기 직전 설정 읽기가 붙잡혀도 회차는 170초 마감에 오류로 끝나고 확인용 탭을 닫는다",
+    pages: { [PATH]: page() },
+    isolate: true,
+    onWorker: async (sw) => {
+      await sw.evaluate(() => {
+        const keysOf = (keys) => (keys == null ? [] : Array.isArray(keys) ? keys : typeof keys === "string" ? [keys] : Object.keys(keys));
+        const session = chrome.storage.session;
+        const sget = session.get;
+        globalThis.__secretGateArmed = false;
+        globalThis.__secretGateHits = 0;
+        session.get = async function (keys, ...rest) {
+          if (keysOf(keys).includes("loginSecrets") && globalThis.__secretGateArmed) {
+            globalThis.__secretGateArmed = false;
+            globalThis.__secretGateHits += 1;
+            await new Promise((r) => (globalThis.__releaseSecretGate = r));
+          }
+          return sget.call(session, keys, ...rest);
+        };
+        const local = chrome.storage.local;
+        const lget = local.get;
+        globalThis.__settingsHold = false;
+        globalThis.__settingsHeld = 0;
+        const waiters = [];
+        globalThis.__releaseSettings = () => {
+          globalThis.__settingsHold = false;
+          for (const w of waiters.splice(0)) w();
+        };
+        local.get = async function (keys, ...rest) {
+          if (globalThis.__settingsHold && keysOf(keys).includes("settings")) {
+            globalThis.__settingsHeld += 1;
+            await new Promise((r) => waiters.push(r));
+          }
+          return lget.call(local, keys, ...rest);
+        };
+      });
+    },
+    async run(h) {
+      await setModel(h);
+      const id = await seed(h);
+      const before = await tabCount(h);
+      await h.sw.evaluate(() => {
+        globalThis.__secretGateArmed = true;
+      });
+      const t0 = Date.now();
+      await startRun(h, id);
+      // 모델 설정을 읽은 뒤 가림 목록을 읽는 자리에서 붙잡는다.
+      await waitUntil(() => h.sw.evaluate(() => globalThis.__secretGateHits === 1), { timeoutMs: 20_000, label: "가림 목록 읽기 붙잡힘" });
+      // 대상은 그대로 두고 설정을 한 번 저장해 설정 캐시를 비운 뒤, 설정 읽기를 붙잡는다 → 보내기 직전 verify가 저장소를 읽다 멈춘다.
+      await h.sw.evaluate(async () => {
+        const cur = (await chrome.storage.local.get("settings")).settings;
+        globalThis.__settingsHold = true;
+        await chrome.storage.local.set({ settings: { ...cur, quickThinking: !cur.quickThinking } });
+        await new Promise((r) => setTimeout(r, 300));
+        globalThis.__releaseSecretGate?.();
+      });
+      await waitUntil(() => h.sw.evaluate(() => globalThis.__settingsHeld > 0), { timeoutMs: 10_000, label: "설정 읽기 붙잡힘" });
+      try {
+        const t = await waitUntil(async () => (await taskOf(h, id))?.lastCheck && (await taskOf(h, id)), { timeoutMs: 200_000, intervalMs: 1000, label: "회차 마감 오류" });
+        const took = Date.now() - t0;
+        expect(t.lastCheck.verdict === "error" && t.lastCheck.reason.includes("확인 시간"), `마감 오류(${JSON.stringify(t.lastCheck)})`);
+        expect(took < 185_000, `stale(180초) 전에 끝남(${took}ms)`);
+        expect(t.run === null, "실행 상태가 풀림");
+        const c = await counts(h);
+        expect(c.full === 0 && c.region === 0 && c.plan === 0, `판단 요청을 보내지 않음(${JSON.stringify(c)})`);
+        await h.panel.waitForTimeout(500);
+        expect((await tabCount(h)) === before, `확인용 탭 닫힘(${before} → ${await tabCount(h)})`);
+      } finally {
+        await h.sw.evaluate(() => globalThis.__releaseSettings?.());
+      }
     },
   },
 ];
