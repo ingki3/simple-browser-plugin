@@ -11,6 +11,7 @@ import {
   followUpText,
   newRepeatTask,
   normalizeRepeatArgs,
+  normalizeTask,
   parseVerdict,
   pauseTask,
   resumeTask,
@@ -140,4 +141,49 @@ test("이어서 진행 글은 저장된 작업 내용으로만 만든다", () =>
   assert.ok(p.includes("조건: 예매하기 버튼이 활성화됨"));
   assert.ok(p.includes("- [button] 예매하기 (disabled=true)"));
   assert.ok(p.includes("title=\"A'B\""));
+});
+
+test("작전(#284): 새 작업은 pending, 옛 작업(plan 없음)은 정규화 때 none(legacy), id 없는 값은 버린다", () => {
+  const t = task();
+  assert.deepEqual(t.plan, { state: "pending", tries: 0 });
+  assert.equal(t.planBuilds, 0);
+  const { plan, planBuilds, ...old } = t;
+  const n = normalizeTask(old);
+  assert.equal(n.plan.state, "none");
+  assert.match(n.plan.why, /이 기능 전에 등록한 작업/);
+  assert.equal(n.planBuilds, 0);
+  assert.equal(n.title, t.title);
+  assert.deepEqual(normalizeTask(t), t);
+  assert.equal(normalizeTask({ ...t, plan: { state: "ready", plan: { v: 9 } } }).plan.state, "none", "망가진 작전");
+  assert.equal(normalizeTask({ ...t, planBuilds: -3 }).planBuilds, 0);
+  assert.equal(normalizeTask(null), null);
+  assert.equal(normalizeTask({ title: "x" }), null);
+});
+
+test("작전(#284): 판정 기록의 mode·sent는 정상·기간 만료 두 경로 모두 lastCheck·history에 남는다", () => {
+  const check = { at: 3, verdict: "unmet", reason: "아직", mode: "region+full", sent: 1234 };
+  const a = applyRunResult(started(task()), "tok", check, 3);
+  for (const e of [a.lastCheck, a.history.at(-1)]) {
+    assert.equal(e.mode, "region+full");
+    assert.equal(e.sent, 1234);
+  }
+  const late = applyRunResult(started(task()), "tok", { ...check, mode: "region" }, 24 * H);
+  assert.equal(late.status, "done");
+  for (const e of [late.lastCheck, late.history.at(-1)]) {
+    assert.equal(e.mode, "region");
+    assert.equal(e.sent, 1234);
+  }
+  // mode·sent가 없는 기록(오류 등)에는 키를 만들지 않는다.
+  const err = applyRunResult(started(task()), "tok", { at: 3, verdict: "error", reason: "x" }, 3);
+  assert.ok(!("mode" in err.lastCheck) && !("sent" in err.lastCheck));
+});
+
+test("작전(#284): 멈춤·다시 시작·이어서 진행은 작전을 건드리지 않는다", () => {
+  const ready = { ...task(), plan: { state: "pending", tries: 1 }, planBuilds: 1 };
+  const p = pauseTask(ready);
+  assert.deepEqual(p.plan, ready.plan);
+  assert.deepEqual(resumeTask(p, 1, 0).task.plan, ready.plan);
+  const trig = applyRunResult(started(ready), "tok", { at: 5, verdict: "met", reason: "" }, 5);
+  assert.deepEqual(claimContinue(trig, 10).task.plan, ready.plan);
+  assert.equal(claimContinue(trig, 10).task.planBuilds, 1);
 });
