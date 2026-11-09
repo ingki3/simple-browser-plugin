@@ -1494,6 +1494,14 @@ body,
   color: var(--warn);
   font-size: 11px;
 }
+/* 반복 작업 확인 작전(#284) 자세히. */
+.repeat-plan {
+  font-size: 11px;
+}
+.repeat-plan summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+}
 .repeat-actions {
   display: flex;
   flex-wrap: wrap;

@@ -4,6 +4,7 @@
 // 둘 다 시작하기 전에 시작 요소와 그 조상이 보호 영역인지 먼저 본다(편집 영역 안의 버튼, aria-labelledby가
 // 편집 영역 안을 가리키는 경우 등). 내부 대상 비교·위험 판정은 이 글자가 아니라 원문을 쓴다(targets.ts).
 
+import { composedChildNodes, composedParentNode } from "./composed";
 import { NAME_ATTRS, VALUE_CONTROL_TAGS, cleanModelText, protectedReason, type ProtectFacts } from "@/lib/modelText";
 import { isShadowRoot, isTag } from "./docs";
 
@@ -117,6 +118,45 @@ function inlineDisplay(display: string | null): boolean {
   return d.startsWith("inline") || d === "contents" || d.startsWith("ruby");
 }
 
+// el이 문서 전체 화면 글자(modelText(document.body))의 순회에 닿는 자리인지(#284 — 반복 작업 영역은 전체 화면 관측이 보는
+// 자리에 있을 때만 본다). subtreeTextInfo가 내려가는 규칙을 그대로 거꾸로 따른다: 같은 합성 트리 자식 규칙(composedChildNodes
+// ↔ composedParentNode — 배치되지 않은 호스트 자식·가려진 slot 기본 내용은 닿지 않음)과, 내려가며 건너뛰는 같은 판정
+// (protectedReason(factsOf) — 값 컨트롤·편집 영역·hidden·aria-hidden·display:none·visibility:hidden·글자 아닌 요소)으로
+// el부터 body 바로 아래까지 본다. body 자체는 modelText의 시작 검사(inProtectedArea)와 같게 본다.
+// 같은 출처 iframe 문서 안이면 그 문서에서 같은 검사를 하고, 그 프레임 요소가 바깥 문서에서 같은 검사를 지나야 한다.
+// skipSelf: el 자신의 판정은 빼고 본다(부르는 쪽이 따로 사유를 나눌 때).
+export function reachedByPageText(el: Element, skipSelf = false): boolean {
+  let cur: Element = el;
+  let self = skipSelf;
+  for (let hops = 0; hops < 8; hops++) {
+    const doc = cur.ownerDocument;
+    const body = doc.body;
+    if (!body || doc.designMode === "on") return false;
+    let n: Node | null | undefined = cur;
+    for (let steps = 0; n !== body; steps++) {
+      if (!n || steps > MAX_ANCESTORS) return false;
+      if (n.nodeType === Node.ELEMENT_NODE && !(self && n === cur) && protectedReason(factsOf(n as Element)) !== null) return false;
+      n = composedParentNode(n);
+    }
+    if (inProtectedArea(body)) return false;
+    let frame: Element | null = null;
+    try {
+      frame = doc.defaultView?.frameElement ?? null;
+    } catch {
+      frame = null;
+    }
+    if (!frame) return true;
+    cur = frame;
+    self = false;
+  }
+  return false;
+}
+
+// el 자신의 보호 사유(subtreeTextInfo가 이 요소에서 내려가지 않는 까닭). 없으면 null.
+export function ownProtectedReason(el: Element): ReturnType<typeof protectedReason> {
+  return protectedReason(factsOf(el));
+}
+
 // root 아래의 글자(합성 트리 순서: 열린 shadow root와 슬롯에 배치된 노드 포함). 보호 요소의 하위 트리는 뺀다.
 // 슬롯은 평탄화하지 않고 한 단계씩 따라간다(안쪽 슬롯 자신의 보호 속성도 검사하게).
 export function modelText(root: Element, max: number, opts: { substitute?: ReadonlyMap<Element, string> } = {}): string {
@@ -149,17 +189,8 @@ export function subtreeTextInfo(
 ): { text: string; cut: boolean } {
   const limit = max * 4;
   let out = "";
-  const childrenOf = (node: Node): Node[] => {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node as Element;
-      if (el.localName === "slot") {
-        const assigned = (el as HTMLSlotElement).assignedNodes();
-        if (assigned.length) return assigned;
-      }
-      if (el.shadowRoot) return Array.from(el.shadowRoot.childNodes);
-    }
-    return Array.from(node.childNodes);
-  };
+  // 합성 트리 자식(src/content/composed.ts — 영역 버튼·모양·프레임 검사와 같은 규칙).
+  const childrenOf = composedChildNodes;
   // 문자열 항목은 블록 요소가 끝날 때 넣을 공백.
   const stack: Array<Node | string> = childrenOf(root).reverse();
   while (stack.length && out.length < limit) {
@@ -209,14 +240,14 @@ function cleanInfo(raw: string, max: number): TextInfo {
   return { text: cleanModelText(s, max), cut: s.length > max };
 }
 
-function refTextInfo(el: Element, attr: string, max: number): TextInfo {
+function refTextInfo(el: Element, attr: string, max: number, refOk?: (ref: Element) => boolean): TextInfo {
   const root = el.getRootNode() as Document | ShadowRoot;
   const parts: string[] = [];
   let cut = false;
   for (const id of (el.getAttribute(attr) ?? "").split(/\s+/).filter(Boolean)) {
     // 같은 Document/ShadowRoot 안에서만 찾는다(다른 루트의 같은 id로 대신하지 않는다).
     const ref = root.getElementById?.(id) ?? null;
-    if (ref) {
+    if (ref && (!refOk || refOk(ref))) {
       const info = modelTextInfo(ref, max);
       parts.push(info.text);
       cut ||= info.cut;
@@ -272,9 +303,10 @@ export function modelNameInfo(el: HTMLElement, max = 200): TextInfo {
   return { text: "", cut: skippedCut };
 }
 
-export function groupLabelInfo(el: Element, max: number): TextInfo {
+// refOk: aria-labelledby가 가리키는 요소 중 이것을 지나는 것만 쓴다(반복 작업 영역은 그려진 이름표만 — reachedByPageText).
+export function groupLabelInfo(el: Element, max: number, refOk?: (ref: Element) => boolean): TextInfo {
   if (inProtectedArea(el)) return { text: "", cut: false };
-  const ref = refTextInfo(el, "aria-labelledby", max);
+  const ref = refTextInfo(el, "aria-labelledby", max, refOk);
   if (ref.text) return ref;
   // 연결한 표제가 잘린 채 비었으면(앞쪽 긴 공백 등) 대신 쓴 aria-label도 잘린 것으로 본다(#185).
   const label = cleanInfo(el.getAttribute("aria-label") ?? "", max);
