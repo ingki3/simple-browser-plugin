@@ -51,6 +51,16 @@ export function composedContains(root: Node, node: Node): boolean {
   return false;
 }
 
+// 합성 트리에서 바로 앞 형제 요소(합성 부모의 composedChildNodes 가운데 el 앞의 요소). 합성 트리에 들지 않거나 맨 위면 null.
+export function composedPreviousElement(el: Element): Element | null {
+  const parent = composedParentNode(el);
+  if (!parent) return null;
+  const sibs = composedChildNodes(parent);
+  const i = sibs.indexOf(el);
+  for (let j = i - 1; j >= 0; j--) if (isElement(sibs[j])) return sibs[j] as Element;
+  return null;
+}
+
 // root 아래(root 자신 제외) 요소를 합성 트리 문서 순서로 돈다. visit가 true를 돌려주면 멈춘다. 한도를 넘으면 "cut".
 export function walkComposed(root: Element, visit: (el: Element) => boolean | void, max = 20_000): "done" | "stopped" | "cut" {
   const stack: Element[] = composedChildren(root).reverse();

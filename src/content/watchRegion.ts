@@ -5,7 +5,7 @@
 import { getAccessibleRoots, type Root } from "./docs";
 import { groupLabelInfo, inProtectedArea, modelText, modelTextInfo, ownProtectedReason, reachedByPageText } from "./modelText";
 import { skeletonOf } from "./skeleton";
-import { composedChildren, walkComposed } from "./composed";
+import { composedChildren, composedParentNode, composedPreviousElement, walkComposed } from "./composed";
 import { findClickables } from "./clickables";
 import { selectorBlock } from "@/lib/selectorPolicy";
 import { plainWord } from "@/lib/actionLog";
@@ -62,6 +62,8 @@ function nthOfType(el: Element): string {
 }
 
 // 구조로 만든 선택자 중 정책을 지나고 모든 루트에서 el 하나에만 맞는 첫 것.
+// 여기의 parentElement·previousElementSibling은 CSS 선택자를 만들기 위한 DOM 관계다(CSS의 >·:nth-of-type은 DOM 트리 기준).
+// 영역의 정체는 이 선택자로 정하지 않는다 — readRegion이 그려진 요소만 남기고 기준점·모호 검사로 다시 정한다.
 function selectorFor(el: Element, roots: Root[]): string | null {
   const unique = (sel: string) => {
     if (sel.length > 200 || selectorBlock(sel)) return false;
@@ -92,15 +94,21 @@ function containsFrame(el: Element): boolean {
   return walkComposed(el, isFrame) !== "done";
 }
 
-// 영역 안(합성 트리)의 제목 요소. 영역 글자와 같은 노드 집합에서 찾는다.
+// 영역의 정체(기준점·후보 설명)에 쓰는 요소는 전체 화면 글자가 닿는 것만 쓴다 — 같은 순회·같은 숨김 판정(reachedByPageText).
+const rendered = (e: Element) => reachedByPageText(e);
+
+// 영역 안(합성 트리)의 그려진 제목 요소. 영역 글자와 같은 노드 집합에서 찾는다.
 function composedHeadings(el: Element, max: number): Element[] {
   const out: Element[] = [];
   walkComposed(el, (e) => {
-    if (e.matches(HEADING_SELECTOR)) out.push(e);
+    if (e.matches(HEADING_SELECTOR) && rendered(e)) out.push(e);
     return out.length >= max;
   });
   return out;
 }
+
+// 영역 뿌리의 이름표(aria-labelledby는 그려진 요소만, aria-label은 뿌리 자신의 속성).
+const regionLabel = (el: Element, max: number) => groupLabelInfo(el, max, rendered).text;
 
 function firstHeadingText(el: Element): string {
   const [h] = composedHeadings(el, 1);
@@ -122,7 +130,9 @@ export function regionOutline(max = OUTLINE_MAX): OutlineItem[] {
     }
     for (const h of Array.from(root.querySelectorAll("h1, h2, h3"))) {
       if (cands.length >= OUTLINE_SCAN_MAX) break;
-      const p = h.parentElement;
+      // 제목의 합성 부모(그려지는 자리의 부모 — slot이면 영역 후보가 아니다).
+      const pn = composedParentNode(h);
+      const p = pn && pn.nodeType === 1 && (pn as Element).localName !== "slot" ? (pn as Element) : null;
       if (p && p.localName !== "body" && p.localName !== "html" && !seen.has(p)) {
         seen.add(p);
         cands.push(p);
@@ -147,7 +157,7 @@ export function regionOutline(max = OUTLINE_MAX): OutlineItem[] {
       tag: el.localName,
       role: el.getAttribute("role") ?? "",
       heading: firstHeadingText(el),
-      label: groupLabelInfo(el, SHORT).text,
+      label: regionLabel(el, SHORT),
       chars,
       preview: modelText(el, SHORT),
     });
@@ -161,13 +171,22 @@ function anchorFits(el: Element, anchor: RegionSpec["anchor"]): boolean {
   if (anchor.where === "element") return true;
   const want = norm(anchor.text);
   if (!want) return false;
-  if (anchor.where === "label") return norm(groupLabelInfo(el, 200).text).includes(want);
+  if (anchor.where === "label") return norm(regionLabel(el, 200)).includes(want);
   const heads = composedHeadings(el, 30);
-  const prev = el.previousElementSibling;
-  if (prev && prev.matches(HEADING_SELECTOR)) heads.push(prev);
+  // 합성 트리의 바로 앞 형제 제목(그려진 것만 — DOM 앞 형제는 그려지지 않을 수 있다).
+  const prev = composedPreviousElement(el);
+  if (prev && prev.matches(HEADING_SELECTOR) && rendered(prev)) heads.push(prev);
   if (el.matches(HEADING_SELECTOR)) heads.push(el);
   return heads.some((h) => norm(modelText(h, 200)).includes(want));
 }
+
+// 영역 모양의 자식: 합성 트리 자식 중 전체 화면 글자가 건너뛰는 숨김·글자 아닌 요소는 뺀다(글자와 같은 노드 집합).
+// 값 컨트롤·편집 영역은 글자는 빼도 구조로는 남긴다(모양에는 칸이 있다는 사실만 든다).
+const shapeKids = (el: Element) =>
+  composedChildren(el).filter((c) => {
+    const r = ownProtectedReason(c);
+    return r !== "hidden" && r !== "non_text";
+  });
 
 // 작전 영역 하나를 읽는다. 모양은 코드가 잰 값(tag·role·skeletonOf 깊이 SHAPE_DEPTH), 버튼은 영역 안의 것만.
 export function readRegion(spec: RegionSpec): RegionProbe {
@@ -208,7 +227,7 @@ export function readRegion(spec: RegionSpec): RegionProbe {
     found: true,
     text: info.text,
     cut: info.cut || buttonsCut,
-    shape: { tag: el.localName, role: el.getAttribute("role") ?? "", skeleton: skeletonOf(el, SHAPE_DEPTH, composedChildren) },
+    shape: { tag: el.localName, role: el.getAttribute("role") ?? "", skeleton: skeletonOf(el, SHAPE_DEPTH, shapeKids) },
     clickables,
   };
 }

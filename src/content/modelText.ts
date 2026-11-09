@@ -240,14 +240,14 @@ function cleanInfo(raw: string, max: number): TextInfo {
   return { text: cleanModelText(s, max), cut: s.length > max };
 }
 
-function refTextInfo(el: Element, attr: string, max: number): TextInfo {
+function refTextInfo(el: Element, attr: string, max: number, refOk?: (ref: Element) => boolean): TextInfo {
   const root = el.getRootNode() as Document | ShadowRoot;
   const parts: string[] = [];
   let cut = false;
   for (const id of (el.getAttribute(attr) ?? "").split(/\s+/).filter(Boolean)) {
     // 같은 Document/ShadowRoot 안에서만 찾는다(다른 루트의 같은 id로 대신하지 않는다).
     const ref = root.getElementById?.(id) ?? null;
-    if (ref) {
+    if (ref && (!refOk || refOk(ref))) {
       const info = modelTextInfo(ref, max);
       parts.push(info.text);
       cut ||= info.cut;
@@ -303,9 +303,10 @@ export function modelNameInfo(el: HTMLElement, max = 200): TextInfo {
   return { text: "", cut: skippedCut };
 }
 
-export function groupLabelInfo(el: Element, max: number): TextInfo {
+// refOk: aria-labelledby가 가리키는 요소 중 이것을 지나는 것만 쓴다(반복 작업 영역은 그려진 이름표만 — reachedByPageText).
+export function groupLabelInfo(el: Element, max: number, refOk?: (ref: Element) => boolean): TextInfo {
   if (inProtectedArea(el)) return { text: "", cut: false };
-  const ref = refTextInfo(el, "aria-labelledby", max);
+  const ref = refTextInfo(el, "aria-labelledby", max, refOk);
   if (ref.text) return ref;
   // 연결한 표제가 잘린 채 비었으면(앞쪽 긴 공백 등) 대신 쓴 aria-label도 잘린 것으로 본다(#185).
   const label = cleanInfo(el.getAttribute("aria-label") ?? "", max);
