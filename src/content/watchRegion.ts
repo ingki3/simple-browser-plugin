@@ -176,8 +176,12 @@ export function readRegion(spec: RegionSpec): RegionProbe {
   if (matches === null) return { found: false, why: "blocked_selector" };
   if (!matches.length) return { found: false, why: "no_match" };
   if (matches.length > REGION_MATCH_MAX) return { found: false, why: "too_many" };
-  const el = matches.find((m) => anchorFits(m, spec.anchor));
-  if (!el) return { found: false, why: "anchor_missing" };
+  // 선택자와 기준점에 함께 맞는 요소가 정확히 하나여야 한다. 둘 이상이면 첫 것을 고르지 않는다(같은 모양의 영역이 앞에
+  // 끼어들면 엉뚱한 영역을 보고 unmet을 확정할 수 있다) — 만들 때 거부, 확인 회차엔 전체 판단.
+  const fits = matches.filter((m) => anchorFits(m, spec.anchor));
+  if (!fits.length) return { found: false, why: "anchor_missing" };
+  if (fits.length > 1) return { found: false, why: "ambiguous" };
+  const el = fits[0];
   // 값 컨트롤·편집 영역·숨김 영역이 뿌리면(그 안이면) 읽지 않는다.
   if (inProtectedArea(el)) return { found: false, why: "protected" };
   // 프레임을 감싼 영역은 관측이 다 들지 않는다(만들 때 거부, 확인 회차엔 전체 판단).

@@ -93,12 +93,13 @@ export function capClickables<T>(list: T[], limit: number): { clickables: T[]; c
 }
 
 // frame: 영역 뿌리 안(shadow 포함)에 iframe·frame이 있다 — 그 안의 글자·버튼·모양이 영역 관측에 들지 않아 잘린 영역처럼 다룬다.
-export type RegionMiss = "blocked_selector" | "no_match" | "too_many" | "anchor_missing" | "protected" | "empty" | "frame";
+// ambiguous: 선택자·기준점에 맞는 요소가 둘 이상 — 어느 것을 볼지 정할 수 없다(첫 것을 고르면 끼어든 다른 영역을 볼 수 있다).
+export type RegionMiss = "blocked_selector" | "no_match" | "too_many" | "anchor_missing" | "ambiguous" | "protected" | "empty" | "frame";
 // cut: 글자(REGION_TEXT_MAX)나 버튼 목록(REGION_CLICKABLES)이 상한을 넘어 잘렸다.
 export type RegionProbe =
   | { found: true; text: string; cut: boolean; shape: RegionShape; clickables: RepeatSnapshot["clickables"] }
   | { found: false; why: RegionMiss };
-export const REGION_MISSES: readonly RegionMiss[] = ["blocked_selector", "no_match", "too_many", "anchor_missing", "protected", "empty", "frame"];
+export const REGION_MISSES: readonly RegionMiss[] = ["blocked_selector", "no_match", "too_many", "anchor_missing", "ambiguous", "protected", "empty", "frame"];
 
 // content에 보내는 영역 읽기 요청.
 export interface RegionSpec {

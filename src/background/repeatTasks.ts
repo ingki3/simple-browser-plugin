@@ -328,6 +328,10 @@ function startRound(user: AbortSignal): Round {
 function roundError(r: Round): Error {
   return r.user.aborted ? new Discarded() : new DeadlineError(DEADLINE_MESSAGE);
 }
+// 회차 안의 기다림은 모두 이 신호와 경쟁한다(확장 API·저장소 읽기가 멈춰도 마감·멈춤에 끝난다). 원래 작업은 계속 돌 수 있다.
+const bound = <T>(r: Round, p: Promise<T>): Promise<T> => raceSignal(p, r.signal, () => roundError(r));
+// 회차가 끝난 뒤 정리(탭 닫기)에 쓰는 짧은 제한.
+const CLEANUP_MS = 5000;
 const deadlineHit = (r: Round) => r.signal.aborted && !r.user.aborted;
 const left = (r: Round, stageMs: number) => stepTimeout(stageMs, r.deadline, Date.now());
 // 회차 자체를 멈추는 오류(같은 회차에 다른 판단으로 이어 가지 않는다).
@@ -364,7 +368,7 @@ export async function runCheck(id: string): Promise<void> {
   let ownTab: number | null = null;
   try {
     const stillMine = async () => {
-      const cur = (await load()).find((t) => t.id === id);
+      const cur = (await bound(round, load())).find((t) => t.id === id);
       if (!cur || cur.status !== "active" || cur.run?.token !== token || controller.signal.aborted) throw new Discarded();
       if (round.signal.aborted) throw roundError(round);
     };
@@ -466,7 +470,7 @@ async function buildPlan(
   ask: (system: string, user: string, maxTokens?: number) => Promise<string>,
   stillMine: () => Promise<void>,
 ): Promise<PlanOutcome> {
-  const mask = (s: string) => raceSignal(maskStringForModel(s), round.signal, () => roundError(round)).then((r) => r.text);
+  const mask = (s: string) => bound(round, maskStringForModel(s)).then((r) => r.text);
   try {
     await stillMine();
     const text = await ask(REPEAT_PLAN_SYSTEM, planPrompt(t, snap, snap.outline ?? []), PLAN_MAX_TOKENS);
@@ -518,10 +522,10 @@ async function closeOwnTab(tabId: number | null, registered: string): Promise<vo
   const touched = touchedTabs.has(tabId);
   openChecks.delete(tabId);
   touchedTabs.delete(tabId);
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const tab = await withTimeout(chrome.tabs.get(tabId), CLEANUP_MS, "탭 확인 시간 초과").catch(() => null);
   if (!tab || touched || tab.active || !tab.url || !inRegisteredSite(registered, tab.url)) return;
   if (seen !== null && tab.url !== seen) return;
-  await chrome.tabs.remove(tabId).catch(() => {});
+  await withTimeout(chrome.tabs.remove(tabId), CLEANUP_MS, "탭 닫기 시간 초과").catch(() => {});
 }
 
 interface OpenedPage {
@@ -534,20 +538,28 @@ interface OpenedPage {
 // 옮기지 않는다. 다 뜬 뒤 최종 주소가 등록한 사이트 밖이면 읽지 않는다. onTab: 탭을 연 즉시 알린다(실패해도 닫을 수 있게).
 async function openPage(t: RepeatTask, round: Round, onTab: (tabId: number) => void): Promise<OpenedPage> {
   if (round.signal.aborted) throw roundError(round);
-  const created = await chrome.tabs.create({ url: t.url, active: false });
+  const creating = chrome.tabs.create({ url: t.url, active: false });
+  let created: chrome.tabs.Tab;
+  try {
+    created = await bound(round, creating);
+  } catch (err) {
+    // 마감·멈춤으로 기다리지 않게 된 뒤에 탭이 열리면 닫는다(이 확인이 연 탭을 남기지 않게).
+    void creating.then((tab) => (tab.id !== undefined ? chrome.tabs.remove(tab.id) : undefined)).catch(() => {});
+    throw err;
+  }
   if (created.id === undefined) throw new Error("확인용 탭을 열지 못했습니다.");
   const tabId = created.id;
   openChecks.set(tabId, null);
   onTab(tabId);
   await waitLoaded(tabId, round);
   await sleep(SETTLE_MS, round);
-  const tab = await chrome.tabs.get(tabId);
+  const tab = await bound(round, chrome.tabs.get(tabId));
   const url = tab.url ?? "";
   if (openChecks.has(tabId)) openChecks.set(tabId, url);
   if (!/^https?:/.test(url)) throw new Error("확인용 탭이 웹 페이지가 아닙니다.");
   // 등록한 주소와 같은 출처이거나 같은 등록 도메인이면 읽는다(공유 호스팅은 등록 도메인으로 묶지 않으므로 같은 출처만).
   if (!inRegisteredSite(t.url, url)) throw new Error("등록한 사이트 밖으로 이동해 읽지 않았습니다.");
-  const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
+  const frame = await bound(round, chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null));
   if (!frame?.documentId) throw new Error("페이지 문서를 확인하지 못했습니다.");
   return { tabId, documentId: frame.documentId, url };
 }
@@ -556,7 +568,7 @@ async function waitLoaded(tabId: number, round: Round): Promise<void> {
   const deadline = Date.now() + left(round, LOAD_TIMEOUT_MS);
   await sleep(300, round);
   while (Date.now() < deadline) {
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const tab = await bound(round, chrome.tabs.get(tabId).catch(() => null));
     if (!tab) throw new Error("확인용 탭이 닫혔습니다.");
     if (tab.status === "complete") return;
     await sleep(300, round);
@@ -648,8 +660,8 @@ async function readSnapshot(page: OpenedPage, round: Round, opts: { region?: Reg
     res = await ask();
   }
   if (!res?.ok || !res.data || typeof res.data !== "object") throw new Error(res?.error ?? "페이지 글자를 읽지 못했습니다.");
-  const frame = await chrome.webNavigation.getFrame({ tabId: page.tabId, frameId: 0 }).catch(() => null);
-  const tab = await chrome.tabs.get(page.tabId).catch(() => null);
+  const frame = await bound(round, chrome.webNavigation.getFrame({ tabId: page.tabId, frameId: 0 }).catch(() => null));
+  const tab = await bound(round, chrome.tabs.get(page.tabId).catch(() => null));
   if (frame?.documentId !== page.documentId || tab?.url !== page.url) throw new Error("읽는 사이 페이지가 바뀌었습니다.");
   const d = res.data as { title?: unknown; text?: unknown; clickables?: unknown; region?: unknown; outline?: unknown };
   const region = opts.region ? readProbe(d.region) : undefined;
@@ -674,7 +686,7 @@ class ModelTimeoutError extends Error {}
 
 // 모델 설정 읽기(시간 제한이 없던 기다림이라 회차 신호에 묶는다).
 async function modelContext(round: Round): Promise<ModelCtx> {
-  const active = activeModel(await raceSignal(getSettings(), round.signal, () => roundError(round)));
+  const active = activeModel(await bound(round, getSettings()));
   if (!active.ready) throw new Error(active.missing === "key" ? "API 키가 없어 확인하지 못했습니다." : "로컬 서버 주소와 모델이 없어 확인하지 못했습니다.");
   return { active, limitMs: providerTimeout(active.provider, MODEL_TIMEOUT_MS) };
 }
@@ -686,13 +698,12 @@ async function askModel(ctx: ModelCtx, system: string, user: string, round: Roun
   // 가림 목록을 못 읽으면 던진다(가릴 값을 모른 채 페이지 글자를 보내지 않는다). 읽기가 붙잡혀도 회차 마감에 끊긴다.
   let messages: Array<{ role: "system" | "user"; content: string }>;
   try {
-    ({ value: messages } = await raceSignal(
+    ({ value: messages } = await bound(
+      round,
       maskMessagesForModel([
         { role: "system" as const, content: system },
         { role: "user" as const, content: user },
       ]),
-      round.signal,
-      () => roundError(round),
     ));
   } catch (err) {
     if (roundStop(err)) throw err;
@@ -708,12 +719,17 @@ async function askModel(ctx: ModelCtx, system: string, user: string, round: Roun
   // 준비하는 사이 대상이 바뀌면 보내지 않고, 보낸 뒤 바뀌면 결과를 버린다(#193).
   const guard = beginTargetGuard(active, controller.signal);
   try {
-    await guard.verify();
+    // 대상 확인의 설정 읽기도 마감·멈춤과 경쟁한다(읽기가 멈춰도 회차가 끝나게).
+    await bound(round, guard.verify());
     onSent(user.length);
-    const text = await providerAdapter(provider).complete(
-      active,
-      { model, messages, temperature: 0, reasoning: "off", maxTokens, responseFormat: { type: "json_object" } },
-      guard.signal,
+    // 요청은 신호(마감·멈춤·모델 시간 제한)로 끊고, 어댑터가 신호를 늦게 따르더라도 기다림은 회차 신호와 경쟁한다.
+    const text = await bound(
+      round,
+      providerAdapter(provider).complete(
+        active,
+        { model, messages, temperature: 0, reasoning: "off", maxTokens, responseFormat: { type: "json_object" } },
+        guard.signal,
+      ),
     );
     guard.assert();
     return text;
