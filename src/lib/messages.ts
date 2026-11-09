@@ -1,3 +1,4 @@
+import type { RegionSpec } from "./repeatPlan";
 import type { ZeroDiag } from "./clickQuery";
 import type { ResumeMissing } from "./panelLink";
 import type { HrefTooLong } from "./clickResult";
@@ -430,7 +431,8 @@ export type BgToContent =
   // 저장 카드 초안(#86): 이 문서의 화면 글자(modelText — 입력 칸 값·편집 영역·숨은 내용 제외). 주소가 expectUrl과 다르면 읽지 않는다.
   | { kind: "screen_text"; expectUrl: string; max: number }
   // 반복 작업의 확인(#138): 화면 글자(modelText)와 누를 수 있는 것의 글자·상태. 입력값·편집 영역은 담지 않는다(#43).
-  | { kind: "watch_snapshot"; expectUrl: string; max: number; limit: number }
+  // region(#284): 작전 영역도 읽는다(RegionProbe). outline: 작전 만들기용 영역 후보 수. max·limit이 0이면 전체 글자·버튼을 읽지 않는다.
+  | { kind: "watch_snapshot"; expectUrl: string; max: number; limit: number; region?: RegionSpec; outline?: number }
   // read_linked_pages: 이 주소들이 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 링크에 있는지와 링크 글자.
   | { kind: "link_lookup"; urls: string[] }
   // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크(후보 고정용).

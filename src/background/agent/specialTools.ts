@@ -7,6 +7,7 @@ import type { BgToPanel } from "@/lib/messages";
 import type { OpenRouterMessage } from "@/lib/openrouter";
 import { providerAdapter } from "@/lib/providers";
 import { normalizeRepeatArgs, type RepeatArgs, type RepeatTask } from "@/lib/repeatTask";
+import { PLAN_MAX_BUILDS, PLAN_VERIFY_EVERY, PLAN_VERIFY_MS } from "@/lib/repeatPlan";
 import { activeModel } from "@/lib/settings";
 import { debugLog } from "../debug";
 import { registerRepeatTask } from "../repeatTasks";
@@ -59,7 +60,9 @@ export async function scheduleRepeat(call: ToolCallContext, deps: SpecialToolDep
     `조건이 맞으면: ${args.then}`,
     `간격: ${args.intervalMinutes}분마다 · 승인한 때부터 ${args.endsInHours}시간 · 최대 ${args.maxRuns}번`,
     "",
-    `· 확인할 때마다 그 페이지를 새로고침하고 화면 글자를 ${providerAdapter(provider).label}로 보내 모델을 한 번 부릅니다(최대 ${args.maxRuns}번, 요금이 듭니다). 입력 칸에 쓴 값은 보내지 않습니다.`,
+    `· 확인할 때마다 그 페이지를 새로고침하고 화면 글자를 ${providerAdapter(provider).label}로 보내 모델을 부릅니다(최대 ${args.maxRuns}회차, 회차마다 0~2번 — 작전 만들기·다시 만들기 포함, 요금이 듭니다). 입력 칸에 쓴 값은 보내지 않습니다.`,
+    "· 첫 확인 때 볼 영역과 판단 기준(작전)을 모델에 한 번 더 물어 정하고, 그 뒤로는 그 영역 글자만 보냅니다. 영역이 안 맞거나 조건이 맞아 보이면 그 회차는 전체 화면 글자로 다시 확인합니다(그 회차는 모델을 2번 부름). 작전은 설정 → 반복 작업에서 보고 지울 수 있습니다.",
+    `· 영역 글자가 직전과 같으면 모델을 부르지 않습니다(시간에 달린 조건은 제외). ${PLAN_VERIFY_EVERY}회차 또는 ${PLAN_VERIFY_MS / 3_600_000}시간마다 한 번은 전체 화면으로 다시 확인하고, 작전이 안 맞으면 자동으로 다시 만듭니다(최대 ${PLAN_MAX_BUILDS}번).`,
     "· 조건이 맞으면 알려 드립니다. 다음 일은 '이어서 진행'을 직접 눌러야 새 대화로 시작합니다.",
     "· 이어서 진행한 대화는 지금 실행 방식을 따릅니다('처음에 승인 받고 끝까지 실행'이면 그 대화에서 맡긴 뒤로는 결제·삭제도 묻지 않습니다).",
     "· 설정 → 반복 작업에서 언제든 멈추거나 지울 수 있습니다.",

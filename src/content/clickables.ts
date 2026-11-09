@@ -4,6 +4,7 @@ import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
 import { clickMatchScore, emptyZeroDiag, queryTerms, type ZeroDiag } from "@/lib/clickQuery";
 import { resultHref, resultRole } from "@/lib/clickResult";
 import { getAccessibleRoots, isTag } from "./docs";
+import { composedContains } from "./composed";
 import { modelName, modelNameInfo, modelText, modelTextInfo } from "./modelText";
 import {
   choiceUrlsOf,
@@ -492,10 +493,25 @@ function safeCandidate(
   return { el, text, href, tag, role, region: detectRegion(el), inViewport: rectInViewport(el), relation };
 }
 
-export function findClickables(args: FindClickablesArgs): ClickableElement[] {
-  captureHiddenBaselines();
-  return scanTargets(() => collectClickables({ ...args, mode: "list" }).items);
+// 내부 전용 인자(도구 인자 JSON으로는 받지 않는다 — findClickablesCounted에는 없다).
+// within: 이 요소 안(shadow 경계를 넘는 합성 포함)의 후보만(반복 작업 작전의 영역 버튼 목록, #284). 요소인지는 realm에
+// 기대지 않고 nodeType·contains로 본다(같은 출처 iframe의 요소는 다른 realm이다). 요소가 아니면 아무것도 돌려주지 않는다.
+interface InternalClickablesArgs {
+  within?: Element;
 }
+
+export function findClickables(args: FindClickablesArgs, internal: InternalClickablesArgs = {}): ClickableElement[] {
+  captureHiddenBaselines();
+  return scanTargets(() => collectClickables({ ...args, mode: "list" }, internal.within).items);
+}
+
+// 합성 트리에서 el이 within 안(within 자신 포함)인지 — 영역 글자(modelText)·모양과 같은 규칙(src/content/composed.ts):
+// 배치된 노드는 slot, shadow root 바로 아래는 host를 따라 올라가고, 배치되지 않은 호스트 자식은 들지 않는다. 같은 출처
+// iframe 문서의 요소는 그 문서 안에서만 올라가므로, iframe 안의 영역이면 그 iframe 문서 안의 후보만 맞는다.
+const composedWithin = (within: Node, el: Element) => composedContains(within, el);
+
+const isElementLike = (v: unknown): v is Element =>
+  !!v && typeof v === "object" && (v as Node).nodeType === 1 && typeof (v as Node).contains === "function";
 
 // find_clickables 도구용(모드별 응답). list: 찾은 요소와 찾기 조건만 빼면 돌려줄 수 있었던 수(#151). items: 목록 항목(#161).
 export function findClickablesCounted(args: FindClickablesArgs): FindClickablesResponse {
@@ -515,7 +531,7 @@ export function findClickablesCounted(args: FindClickablesArgs): FindClickablesR
   });
 }
 
-function collectClickables(args: FindClickablesArgs): {
+function collectClickables(args: FindClickablesArgs, within?: Element): {
   items: ClickableElement[];
   unfiltered: number;
   unrelated: number;
@@ -524,6 +540,8 @@ function collectClickables(args: FindClickablesArgs): {
   screenText?: number;
 } {
   const limit = Math.min(args.limit ?? 50, 200);
+  // within을 넘겼는데 요소가 아니면(잘못된 값) 범위를 넓히지 않고 아무것도 돌려주지 않는다.
+  if (within !== undefined && !isElementLike(within)) return { items: [], unfiltered: 0, unrelated: 0, longHrefs: 0 };
   const terms = queryTerms(args.query);
   // 낱말이 여럿이면 모든 요소를 보며 점수 상위 limit개만 남긴다(앞쪽 상품 링크 수백 개에 밀려
   // footer의 '주문/배송 조회'가 빠지지 않게). 낱말이 하나 이하면 예전처럼 문서 순서로 limit개에서 멈춘다.
@@ -553,6 +571,7 @@ function collectClickables(args: FindClickablesArgs): {
         continue;
       }
       if (!c) continue;
+      if (within && !composedWithin(within, c.el)) continue;
       unfiltered += 1;
       if ((args.onlyViewport && !c.inViewport) || (args.region && c.region !== args.region)) continue;
       let score = 0;

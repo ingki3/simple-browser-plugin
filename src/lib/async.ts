@@ -34,3 +34,19 @@ export function createSerial(): <T>(fn: () => Promise<T>) => Promise<T> {
     return run;
   };
 }
+
+// 시간 제한이 없는 기다림(설정·가림 목록 읽기)을 신호에 묶는다. 신호가 끊기면 onAbort()의 오류로 바로 거부한다 — 원래
+// 작업은 계속 돌 수 있지만 부르는 쪽은 기다리지 않는다(#284 반복 작업 회차 마감).
+export function raceSignal<T>(p: Promise<T>, signal: AbortSignal, onAbort: () => Error): Promise<T> {
+  // 기다리지 않게 된 뒤 원래 작업이 실패해도 처리되지 않은 거부로 남지 않게 받아 둔다(부르는 쪽 결과에는 영향 없음).
+  p.catch(() => {});
+  if (signal.aborted) return Promise.reject(onAbort());
+  let listener: (() => void) | undefined;
+  const stop = new Promise<never>((_, reject) => {
+    listener = () => reject(onAbort());
+    signal.addEventListener("abort", listener, { once: true });
+  });
+  return Promise.race([p, stop]).finally(() => {
+    if (listener) signal.removeEventListener("abort", listener);
+  });
+}
