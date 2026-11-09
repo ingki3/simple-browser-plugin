@@ -22,8 +22,10 @@ import { listLocalModels, setLocalNote } from "@/lib/providers/local";
 // 로컬 서버 어댑터의 메모(뺀 선택 필드 등, #193)를 디버그 타임라인으로.
 setLocalNote((tag, detail) => debugLog(tag, detail));
 import {
+  clearRepeatPlan,
   continueRepeatTask,
   deleteRepeatTask,
+  makeRepeatPlan,
   listRepeatTasks,
   pauseRepeatTask,
   registerRepeatSink,
@@ -515,7 +517,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     m.kind === "repeat_pause" ||
     m.kind === "repeat_resume" ||
     m.kind === "repeat_delete" ||
-    m.kind === "repeat_run_now"
+    m.kind === "repeat_run_now" ||
+    m.kind === "repeat_clear_plan" ||
+    m.kind === "repeat_make_plan"
   ) {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
@@ -531,7 +535,11 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
             ? deleteRepeatTask(id)
             : m.kind === "repeat_run_now"
               ? runRepeatNow(id)
-              : listRepeatTasks();
+              : m.kind === "repeat_clear_plan"
+                ? clearRepeatPlan(id)
+                : m.kind === "repeat_make_plan"
+                  ? makeRepeatPlan(id)
+                  : listRepeatTasks();
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));

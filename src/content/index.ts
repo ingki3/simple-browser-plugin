@@ -12,11 +12,29 @@ import { getYoutubeTranscript } from "./youtube";
 import { listFileLinks, pageDownloadLinks } from "./fileLinks";
 import { inspectTargets, readEffect, StaleTargetError, TargetDriftError } from "./targets";
 import { pageSkeleton } from "./skeleton";
+import { readRegion, regionOutline } from "./watchRegion";
 import { modelText } from "./modelText";
 import { snapshotRole } from "@/lib/repeatTask";
 import { endHandoff, handoffStatus, showHandoff } from "./handoff";
 import { armFrameGuard, cancelGuard, checkBeforePress, disarm, frameBlocked, guardAlive, guardResult } from "./trustedClick";
 import { captureBegin, captureEnd, captureHideFixed, captureMeasure, captureScroll } from "./capture";
+
+// 작전 영역·영역 후보를 읽다 실패해도 전체 글자 응답은 돌려준다(그 회차는 전체 판단으로, #284).
+function safeRegion(spec: Parameters<typeof readRegion>[0]): ReturnType<typeof readRegion> {
+  try {
+    return readRegion(spec);
+  } catch {
+    return { found: false, why: "no_match" };
+  }
+}
+
+function safeOutline(max: number): ReturnType<typeof regionOutline> {
+  try {
+    return regionOutline(max);
+  } catch {
+    return [];
+  }
+}
 
 async function execTool(toolName: ToolName, args: unknown, callId: string, trusted?: string): Promise<unknown> {
   switch (toolName) {
@@ -197,10 +215,18 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   if (msg.kind === "watch_snapshot") {
     try {
       if (location.href !== msg.expectUrl) throw new Error("탭의 주소가 바뀌었습니다.");
-      const clickables = findClickables({ limit: msg.limit }).map((c) => ({ text: c.text, role: snapshotRole(c.tag, c.role), ...(c.states ? { states: c.states } : {}) }));
+      const clickables =
+        msg.limit > 0 ? findClickables({ limit: msg.limit }).map((c) => ({ text: c.text, role: snapshotRole(c.tag, c.role), ...(c.states ? { states: c.states } : {}) })) : [];
+      // 전체 글자·작전 영역·영역 후보를 한 응답에 담는다(한 문서·한 시점의 글자, #284).
       sendResponse({
         ok: true,
-        data: { title: document.title, text: document.body ? modelText(document.body, msg.max) : "", clickables },
+        data: {
+          title: document.title,
+          text: document.body && msg.max > 0 ? modelText(document.body, msg.max) : "",
+          clickables,
+          ...(msg.region ? { region: safeRegion(msg.region) } : {}),
+          ...(msg.outline ? { outline: safeOutline(msg.outline) } : {}),
+        },
       } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);

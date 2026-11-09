@@ -2,6 +2,7 @@
 // 상태 전이와 확인 응답 해석은 여기(순수 함수, npm test로 시험)에 두고, 저장·알람·탭은 src/background/repeatTasks.ts가 한다.
 // 조건이 맞았는지는 모델이 판단한다(코드에 낱말 목록을 두지 않는다). 코드는 응답의 형태만 엄격히 검사한다.
 import { normalizeNavigationUrl } from "./sanitize.ts";
+import { normalizePlanState, type PlanState } from "./repeatPlan.ts";
 
 export type RepeatStatus = "active" | "paused" | "triggered" | "started" | "done";
 export type RepeatVerdict = "met" | "unmet" | "blocked" | "login_required" | "unknown";
@@ -12,7 +13,13 @@ export interface RepeatCheck {
   // error: 확인 자체가 실패(탭·스냅샷·모델 오류). 모델이 답한 결과는 verdict.
   verdict: RepeatVerdict | "error";
   reason: string;
+  // 어떻게 판단했는지(#284): full 전체 화면, region 작전 영역만(unmet 확정), region+full 영역 판단 뒤 전체 화면으로 다시 확인.
+  mode?: RepeatCheckMode;
+  // 이 회차에 모델에 보낸 user 글자 수(판단·작전 만들기 합).
+  sent?: number;
 }
+
+export type RepeatCheckMode = "full" | "region" | "region+full";
 
 export interface RepeatTask {
   id: string;
@@ -26,7 +33,7 @@ export interface RepeatTask {
   createdAt: number;
   endsAt: number;
   maxRuns: number;
-  // 확인을 시작한 횟수(모델 요청 시도 수). 성공 여부와 관계없이 센다.
+  // 확인을 시작한 회차 수. 성공 여부·모델 호출 수와 관계없이 센다.
   attempts: number;
   status: RepeatStatus;
   // 상태의 이유(멈춘 이유·끝난 이유). 사용자에게 보인다.
@@ -41,6 +48,10 @@ export interface RepeatTask {
   triggeredAt: number | null;
   // 마지막 "지금 확인" 시각(연타 제한).
   lastManualAt: number;
+  // 확인 작전(#284, src/lib/repeatPlan.ts). 저장소에서 읽을 때 normalizeTask가 정규화한다.
+  plan: PlanState;
+  // 마지막 사용자 "작전 만들기" 뒤 자동으로 만든 작전 수(2단계 다시 만들기 한도).
+  planBuilds: number;
 }
 
 export interface RepeatArgs {
@@ -109,7 +120,18 @@ export function newRepeatTask(a: Required<RepeatArgs>, o: { id: string; now: num
     failures: 0,
     triggeredAt: null,
     lastManualAt: 0,
+    // 첫 확인 때(그 회차 판정이 unmet이면) 작전을 만든다.
+    plan: { state: "pending", tries: 0 },
+    planBuilds: 0,
   };
+}
+
+// 저장소에서 읽은 작업 하나. id가 없으면 버리고(null), 작전 필드를 정규화한다(plan 키가 없는 옛 작업은 전체 판단 유지).
+export function normalizeTask(raw: unknown): RepeatTask | null {
+  if (!raw || typeof raw !== "object" || typeof (raw as { id?: unknown }).id !== "string") return null;
+  const r = raw as RepeatTask & Record<string, unknown>;
+  const builds = typeof r.planBuilds === "number" && Number.isFinite(r.planBuilds) && r.planBuilds > 0 ? Math.floor(r.planBuilds) : 0;
+  return { ...r, plan: normalizePlanState(r.plan, !("plan" in r)), planBuilds: builds };
 }
 
 // 더 확인하지 않을 이유(기간 끝·횟수 소진). 없으면 null.
@@ -138,12 +160,14 @@ export function beginRun(t: RepeatTask, token: string, now: number): RunStart {
 export function applyRunResult(t: RepeatTask, token: string, check: RepeatCheck, now: number): RepeatTask | null {
   if (t.status !== "active" || t.run?.token !== token) return null;
   const reason = check.reason.slice(0, REASON_MAX);
+  // 판단 방식·보낸 글자 수(#284)는 두 기록 경로 모두 남긴다.
+  const extra = { ...(check.mode ? { mode: check.mode } : {}), ...(typeof check.sent === "number" ? { sent: check.sent } : {}) };
   // 정한 기간이 지난 뒤에 끝난 확인은 결과(met 포함)를 쓰지 않고 끝낸다.
   if (now >= t.endsAt) {
-    const entry: RepeatCheck = { at: check.at, verdict: check.verdict, reason };
+    const entry: RepeatCheck = { at: check.at, verdict: check.verdict, reason, ...extra };
     return { ...t, run: null, lastCheck: entry, history: [...t.history, entry].slice(-REPEAT_HISTORY), status: "done", note: "정한 기간이 끝났습니다.", revision: t.revision + 1 };
   }
-  const entry: RepeatCheck = { at: check.at, verdict: check.verdict, reason };
+  const entry: RepeatCheck = { at: check.at, verdict: check.verdict, reason, ...extra };
   const next: RepeatTask = {
     ...t,
     run: null,
@@ -214,7 +238,8 @@ export function parseVerdict(text: string): { verdict: RepeatVerdict; reason: st
   return { verdict: v as RepeatVerdict, reason: r.slice(0, REASON_MAX) };
 }
 
-function firstJsonObject(text: string): unknown {
+// 글자에서 첫 JSON 객체를 꺼낸다(작전 응답 parsePlan도 쓴다). 객체가 아니면 null.
+export function firstJsonObject(text: string): unknown {
   const start = text.indexOf("{");
   if (start < 0) return null;
   let depth = 0;
@@ -265,15 +290,20 @@ JSON 객체 하나만 답한다: {"verdict": "met" | "unmet" | "blocked" | "logi
 - login_required: 로그인 화면이라 내용을 볼 수 없다.
 - unknown: 페이지가 비었거나 오류 화면이라 판단할 수 없다.`;
 
-// 확인 요청의 사용자 메시지. 조건은 사용자가 등록 카드에서 승인한 글이다.
-export function checkPrompt(t: Pick<RepeatTask, "check">, s: RepeatSnapshot): string {
-  const buttons = s.clickables
+// 확인 요청의 버튼 목록 줄(전체 판단·영역 판단·작전 만들기가 같은 꼴을 쓴다).
+export function snapshotButtons(clickables: RepeatSnapshot["clickables"]): string {
+  return clickables
     .filter((c) => c.text)
     .map((c) => {
       const st = c.states ? Object.entries(c.states).map(([k, v]) => `${k}=${v}`).join(",") : "";
       return `- [${c.role || "link"}] ${c.text}${st ? ` (${st})` : ""}`;
     })
     .join("\n");
+}
+
+// 확인 요청의 사용자 메시지. 조건은 사용자가 등록 카드에서 승인한 글이다.
+export function checkPrompt(t: Pick<RepeatTask, "check">, s: RepeatSnapshot): string {
+  const buttons = snapshotButtons(s.clickables);
   return [
     `조건: ${t.check}`,
     "",

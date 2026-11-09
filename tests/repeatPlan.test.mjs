@@ -312,6 +312,8 @@ test("raceSignal: 끝나지 않는 준비 대기도 신호가 끊으면 바로 �
   const done = new AbortController();
   done.abort();
   await assert.rejects(raceSignal(Promise.resolve(1), done.signal, () => new Error("이미")), /이미/);
-  // 가짜 시계가 아니어도 AbortSignal.timeout으로 마감이 걸린다.
+  // 회차 마감에 쓰는 AbortSignal.timeout으로도 끊긴다(Node는 그 타이머가 이벤트 루프를 붙잡지 않아 따로 붙잡아 둔다).
+  const keep = setTimeout(() => {}, 1000);
   await assert.rejects(raceSignal(never, AbortSignal.timeout(10), () => new Error("시간")), /시간/);
+  clearTimeout(keep);
 });

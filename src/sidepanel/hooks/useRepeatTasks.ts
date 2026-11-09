@@ -6,7 +6,8 @@ import { useLatestGate, useStorageKeys } from "./syncHelpers";
 // 백그라운드 반복 작업 저장 키(src/background/repeatTasks.ts의 STORE_KEY).
 const REPEAT_TASKS_KEY = "repeatTasks";
 
-export type RepeatAction = "repeat_pause" | "repeat_resume" | "repeat_delete" | "repeat_run_now";
+// repeat_clear_plan·repeat_make_plan: 확인 작전 지우기·만들기(#284).
+export type RepeatAction = "repeat_pause" | "repeat_resume" | "repeat_delete" | "repeat_run_now" | "repeat_clear_plan" | "repeat_make_plan";
 
 // 반복 작업 목록(#138). 백그라운드가 바뀌었다고 알리면(repeatVersion) 다시 읽는다.
 export function useRepeatTasks() {
