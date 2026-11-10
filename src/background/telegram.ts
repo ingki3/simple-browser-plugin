@@ -17,12 +17,16 @@ import {
   newPairing,
   parseUpdate,
   remoteErrorText,
+  prepareOwnSend,
+  runPreparedSend,
   runRepeatNotice,
   splitMessage,
   staleMessage,
   type Pairing,
+  type PartSendResult,
   type RepeatNoticeRead,
 } from "@/lib/telegram";
+import { setTelegramSender } from "./telegramSender";
 import type { RemoteApprover, RemoteAskResult, RemoteQuestion } from "@/lib/remoteApproval";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
@@ -403,7 +407,7 @@ const HELP = [
   "간편 브라우저 도우미 텔레그램 연동",
   "- 할 일을 글로 보내면 브라우저의 새 탭에서 처리하고 최종 답만 보냅니다. 예: \"naver.com에서 오늘 날씨 알려 줘\"",
   "- 이동·클릭·입력처럼 승인이 필요한 일은 요청마다 처음 한 번 [승인][거절] 버튼으로 맡길지 묻고, 맡기면 그 요청이 끝날 때까지 묻지 않고 진행합니다(결제·삭제도 묻지 않음, 10분 안에 누르지 않으면 하지 않음).",
-  "- 설정에서 버튼으로 묻기를 끄면 승인이 필요한 일은 원격에서 하지 않습니다. 자동 로그인·저장한 링크 열기·반복 작업 등록은 원격에서 하지 않습니다(패널에서 요청하세요).",
+  "- 설정에서 버튼으로 묻기를 끄면 승인이 필요한 일은 원격에서 하지 않습니다. 자동 로그인·저장한 링크 열기·반복 작업 등록·텔레그램으로 보내기는 원격에서 하지 않습니다(패널에서 요청하세요).",
   "- /stop: 진행 중인 요청 멈추기, /new: 새 대화",
   "- 브라우저가 켜져 있어야 하고, 받는 데 최대 1분쯤 걸립니다.",
 ].join("\n");
@@ -743,35 +747,60 @@ async function readQueued(): Promise<RepeatNoticeRead<TelegramState>> {
   return { s, conn, alive: !conn.aborted && conn === connAbort.signal };
 }
 
+// 조각 하나 보내기(반복 작업 알림·send_to_telegram). 429(기다릴 시간이 짧을 때)면 보내지 않고 기다릴 시간을 돌려줘 부르는 쪽이
+// 다시 확인한 뒤 보내게 한다. 그 밖의 실패는 TgError(메서드·상태 코드만)로 던진다. sendText는 그대로 둔다.
+async function sendOnePart(s: Pick<TelegramState, "token" | "chatId">, part: string, signal: AbortSignal): Promise<PartSendResult> {
+  const params = { chat_id: s.chatId, text: part, link_preview_options: { is_disabled: true } };
+  try {
+    await tgCall(s.token, "sendMessage", params, signal);
+    return "ok";
+  } catch (err) {
+    if (err instanceof TgError && err.status === 429 && err.retryAfter > 0 && err.retryAfter <= 30) return { retryAfterMs: err.retryAfter * 1000 };
+    throw err;
+  }
+}
+
+// 429 대기. 신호가 끊기면 바로 끝난다.
+function waitAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+const maskForSend = async (text: string) => (await maskStringForModel(text)).text;
+
+// 패널 요청 결과를 연결한 채팅으로 보내기(send_to_telegram, #210). 받는 곳은 저장된 chatId뿐이다(매개변수 없음).
+// 준비(미리보기)와 실행 모두 저장 큐를 거쳐 읽고 연결 세대·신호를 확인한다(lib/telegram.ts prepareOwnSend·runPreparedSend).
+setTelegramSender({
+  prepare: async (text) => {
+    await recovered;
+    return prepareOwnSend({ read: readQueued, mask: maskForSend }, text);
+  },
+  send: async (p, signal) => {
+    await recovered;
+    const r = await runPreparedSend({ read: readQueued, mask: maskForSend, send: sendOnePart, wait: waitAbortable }, p, signal);
+    debugLog("telegram:own_send", r.ok ? `${r.parts}개` : `${r.why} · ${r.sent}개 감`, r.ok ? "info" : "warn");
+    return r;
+  },
+});
+
 // 반복 작업 알림(설정에서 켰을 때만): 작업 이름을 보내고, "확인 결과 요약도 보내기"를 켰으면 가려 저장한 이유를 붙인다(#209).
 // 할 일은 보내지 않는다. 처음과 보내기 직전에 상태를 다시 읽어 그 사이 끈 설정·끊은 연결을 따른다(lib/telegram.ts runRepeatNotice).
 onRepeatTriggered(async (t) => {
-  await runRepeatNotice(
+  await runRepeatNotice<TelegramState>(
     {
       read: readQueued,
-      mask: async (text) => (await maskStringForModel(text)).text,
-      // 알림 전용 전송(조각 하나씩, 429면 기다릴 시간을 돌려줘 runRepeatNotice가 다시 확인한 뒤 보내게). sendText는 그대로 둔다.
-      send: async (s, part, signal) => {
-        const params = { chat_id: s.chatId, text: part, link_preview_options: { is_disabled: true } };
-        try {
-          await tgCall(s.token, "sendMessage", params, signal);
-          return "ok";
-        } catch (err) {
-          if (err instanceof TgError && err.status === 429 && err.retryAfter > 0 && err.retryAfter <= 30) return { retryAfterMs: err.retryAfter * 1000 };
-          throw err;
-        }
-      },
-      wait: (ms, signal) =>
-        new Promise<void>((resolve) => {
-          if (signal.aborted) return resolve();
-          const done = () => {
-            clearTimeout(timer);
-            signal.removeEventListener("abort", done);
-            resolve();
-          };
-          const timer = setTimeout(done, ms);
-          signal.addEventListener("abort", done, { once: true });
-        }),
+      mask: maskForSend,
+      // 조각 하나씩, 429면 기다릴 시간을 돌려줘 runRepeatNotice가 다시 확인한 뒤 보내게.
+      send: sendOnePart,
+      wait: waitAbortable,
     },
     t,
   ).catch(() => {});
