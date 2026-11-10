@@ -1,6 +1,6 @@
 // 텔레그램 연동(#139): 서비스 워커의 fetch로 api.telegram.org를 흉내 낸다(받을 업데이트·보낸 메시지를 전역에 둔다).
 // 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 '처음에 승인 받고
-// 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만.
+// 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만(확인 결과 요약은 따로 켤 때만, #209).
 import { ask, expect, waitUntil } from "../lib.mjs";
 import { checkRemoteHandoffRefused, installHandoffObserver, markTurnStart, remoteTabAt, restoreHandoffObserver } from "../handoffObserve.mjs";
 
@@ -737,4 +737,69 @@ export default [
       expect(!calls.includes("getUpdates") && (await sent(h)).length === 0, `끊은 뒤에는 받지 않음(${calls.join(",")})`);
     },
   },
+  {
+    name: "반복 작업 알림 요약(#209): 꺼짐이면 지금 글 그대로(이름만), 켜면 이름+요약, 알림을 끄면 요약이 켜져 있어도 안 보냄, 토큰 바꾸기는 유지·지우기는 기본값",
+    pages: { "/watch": `<title>공연</title><button>예매하기</button><div id=out></div>` },
+    async run(h) {
+      await connect(h);
+      const st0 = (await ask(h, { kind: "telegram_status" })).data;
+      expect(st0.notifyRepeatSummary === false, `요약 기본 꺼짐(${JSON.stringify(st0)})`);
+      await ask(h, { kind: "telegram_set_notify", on: true });
+      await fireRepeat(h, "공연 A", "예매 버튼이 눌리는 상태입니다");
+      let s = await waitSent(h, 1, 10_000);
+      expect(s.length === 1 && s[0] === noticeName("공연 A"), `요약 꺼짐은 이름만, 지금 글 그대로(${JSON.stringify(s)})`);
+
+      const on = await ask(h, { kind: "telegram_set_notify_summary", on: true });
+      expect(on.ok && on.data.notifyRepeatSummary === true && on.data.notifyRepeat === true, `요약 켬(${JSON.stringify(on)})`);
+      await fireRepeat(h, "공연 B", "예매 버튼이 눌리는 상태입니다");
+      s = await waitSent(h, 1, 10_000);
+      expect(s.length === 1 && s[0] === `${noticeName("공연 B")}\n\n확인 결과: 예매 버튼이 눌리는 상태입니다`, `요약 켬은 이름+요약(${JSON.stringify(s)})`);
+      expect(!s[0].includes("예약"), "할 일은 보내지 않음");
+
+      // 알림을 끄면(요약은 켜진 채) 아무것도 보내지 않는다.
+      const off = await ask(h, { kind: "telegram_set_notify", on: false });
+      expect(off.data.notifyRepeat === false && off.data.notifyRepeatSummary === true, `알림만 끔(${JSON.stringify(off.data)})`);
+      await fireRepeat(h, "공연 C", "예매 버튼이 눌리는 상태입니다");
+      await waitUntil(async () => (await repeatTasks(h)).some((t) => t.title === "공연 C" && t.status === "triggered"), { timeoutMs: 10_000, label: "공연 C 조건 맞음" });
+      await h.panel.waitForTimeout(1500);
+      expect((await sent(h)).length === 0, `알림 꺼짐 + 요약 켜짐이면 전송 0(${JSON.stringify(await sent(h))})`);
+
+      const again = await ask(h, { kind: "telegram_save_token", token: TOKEN });
+      expect(again.data.notifyRepeatSummary === true, `토큰 바꾸기는 요약 설정 유지(${JSON.stringify(again.data)})`);
+      const cleared = await ask(h, { kind: "telegram_clear" });
+      expect(cleared.data.notifyRepeatSummary === false && cleared.data.notifyRepeat === false, `토큰 지우기는 기본값(${JSON.stringify(cleared.data)})`);
+    },
+  },
+  {
+    name: "반복 작업 알림 요약(#209): 자동 로그인 값이 든 요약은 가려서 보낸다(새 워커 — 가림 목록을 미리 넣음)",
+    isolate: true,
+    // 가림 목록(loginSecrets 모듈 캐시)이 채워지기 전에 세션 저장소에 값을 넣는다.
+    onWorker: (sw) => sw.evaluate((v) => chrome.storage.session.set({ loginSecrets: { t1: [v] } }).then(() => true), NOTICE_SECRET_VALUE),
+    pages: { "/watch": `<title>공연</title><button>예매하기</button><div id=out></div>` },
+    async run(h) {
+      await connect(h);
+      await ask(h, { kind: "telegram_set_notify", on: true });
+      await ask(h, { kind: "telegram_set_notify_summary", on: true });
+      await fireRepeat(h, "공연 D", `로그인 값 ${NOTICE_SECRET_VALUE} 이 화면에 보임`);
+      const s = await waitSent(h, 1, 10_000);
+      expect(s.length === 1 && s[0].startsWith(`${noticeName("공연 D")}\n\n확인 결과: `), `이름+요약(${JSON.stringify(s)})`);
+      expect(!s[0].includes(NOTICE_SECRET_VALUE) && s[0].includes("[가린 값]"), `자동 로그인 값은 가림(${JSON.stringify(s)})`);
+    },
+  },
 ];
+
+// 반복 작업 알림 요약(#209) 시나리오의 자동 로그인 값(가림 목록에 미리 넣는다).
+const NOTICE_SECRET_VALUE = "Harness-Pw-7731";
+
+const noticeName = (title) => `반복 작업 ‘${title}’의 조건이 맞았습니다. 패널에서 ‘이어서 진행’을 누르세요.`;
+
+const repeatTasks = (h) => h.panel.evaluate(async () => (await chrome.runtime.sendMessage({ kind: "repeat_list" })).data);
+
+// 반복 작업 하나를 등록한다. 첫 확인(바로 돈다)이 reason과 함께 조건이 맞았다고 답한다.
+async function fireRepeat(h, title, reason) {
+  await h.sw.evaluate((reason) => {
+    globalThis.__tg.sent = [];
+    globalThis.__draft = { verdict: "met", reason };
+  }, reason);
+  await h.turn([{ tool: "schedule_repeat_task", args: { title, url: `${h.base}/watch`, check: "예매 열림", then: "예약", intervalMinutes: 10 } }, { text: "등록" }], { path: "/watch", approve: true });
+}

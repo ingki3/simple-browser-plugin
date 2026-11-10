@@ -668,6 +668,11 @@ body,
   cursor: pointer;
 }
 
+/* 위 체크박스에 딸린 선택(위가 꺼지면 비활성, #209). */
+.check-row.check-row-sub {
+  margin-left: 22px;
+}
+
 .field .key-row .field-help {
   flex: 1;
   align-self: center;
