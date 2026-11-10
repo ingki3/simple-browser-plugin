@@ -133,3 +133,28 @@ test("승인 규칙: 칸을 구조로 추정한 선택지(nearest)는 묻기·�
   // 추정이 아니면 기존 결과 그대로(맡기기 → 맡긴 작업).
   assert.equal(decideApproval(input({ taskMode: true, preview: { autoBlock: null, linkHrefs: [], fillValues: [] } })).mode, "task");
 });
+
+// send_to_telegram(#210): 새 예외 규칙 없이 기존 판정 그대로. 미리보기는 autoBlock null(받는 곳이 내 채팅으로 고정)만 준다.
+test("send_to_telegram: ask→카드, task→맡긴 작업, auto→자동, 보호 중 auto→카드·task→맡긴 작업, 대화 허락·링크 허락 제안 없음", () => {
+  const tg = (over) => input({ toolName: "send_to_telegram", pageUrl: undefined, trusted: new Set(), preview: { autoBlock: null }, ...over });
+  const cases = [
+    [{}, "card"],
+    [{ taskMode: true }, "task"],
+    [{ autoApprove: true }, "auto"],
+    [{ autoApprove: true, guarded: true }, "card"],
+    [{ taskMode: true, guarded: true }, "task"],
+    [{ guarded: true }, "card"],
+  ];
+  for (const [over, mode] of cases) {
+    const d = decideApproval(tg(over));
+    assert.equal(d.mode, mode, JSON.stringify(over));
+    assert.equal(d.chatGrant.offer, false, `대화 허락 제안 없음 ${JSON.stringify(over)}`);
+    assert.equal(d.chatGrant.covered, false);
+    assert.equal(d.linkOffer, false);
+    assert.equal(d.urlOffer, false);
+  }
+  // 대화 허락이 다른 도구에 있어도 덮이지 않는다.
+  const held = decideApproval(tg({ chatGrants: new Map([["translate_page", ""], ["read_linked_pages", ""], ["download_images", ""]]) }));
+  assert.equal(held.mode, "card");
+  assert.equal(held.chatGrant.offer, false);
+});

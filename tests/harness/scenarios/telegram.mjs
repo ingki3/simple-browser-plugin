@@ -1,6 +1,6 @@
 // 텔레그램 연동(#139): 서비스 워커의 fetch로 api.telegram.org를 흉내 낸다(받을 업데이트·보낸 메시지를 전역에 둔다).
 // 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 '처음에 승인 받고
-// 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만.
+// 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만(확인 결과 요약은 따로 켤 때만, #209).
 import { ask, expect, waitUntil } from "../lib.mjs";
 import { checkRemoteHandoffRefused, installHandoffObserver, markTurnStart, remoteTabAt, restoreHandoffObserver } from "../handoffObserve.mjs";
 
@@ -25,6 +25,15 @@ export async function installTelegram(h) {
           globalThis.__tg.rateLimitNext = false;
           globalThis.__tg.limited = (globalThis.__tg.limited ?? 0) + 1;
           return new Response(JSON.stringify({ ok: false, error_code: 429, parameters: { retry_after: 2 } }), { status: 429, headers: { "content-type": "application/json" } });
+        }
+        // failAfter(#210): 그만큼 받은 뒤 다음 한 번은 500으로 거절한다(중간 조각 실패).
+        if (typeof globalThis.__tg.failAfter === "number") {
+          if (globalThis.__tg.failAfter <= 0) {
+            globalThis.__tg.failAfter = undefined;
+            globalThis.__tg.failed = (globalThis.__tg.failed ?? 0) + 1;
+            return new Response(JSON.stringify({ ok: false, error_code: 500, description: "서버 오류 원문" }), { status: 500, headers: { "content-type": "application/json" } });
+          }
+          globalThis.__tg.failAfter -= 1;
         }
         // holdReply(#145): 승인 질문이 아닌 글의 응답을 늦춘다(중단 신호를 따른다).
         if (!body.reply_markup && globalThis.__tg.holdReply) {
@@ -159,6 +168,7 @@ const tabTitles = (h) => h.sw.evaluate(async () => (await chrome.tabs.query({}))
 const waitSent = (h, n, ms = 15_000) => waitCount(() => sent(h), n, ms, 250, "보낸 글");
 
 // 원격 요청에서 쓰지 않는 도구(#263 단계 0 — chatAgent.ts REMOTE_BLOCKED_TOOLS, remember_page는 위 시나리오가 따로 본다).
+// send_to_telegram(#210): 원격 요청이 연결한 텔레그램으로 글을 내보내지 않는다(작업을 맡긴 뒤는 telegram-send.mjs가 본다).
 // 인자는 해석을 통과하는 가짜 값이다(차단은 해석 뒤·승인 앞에서 한다). telegram·mcp 시나리오가 함께 쓴다.
 export const remoteBlockedCalls = (h) => [
   { tool: "sign_in", args: { id: "f0-blocked" } },
@@ -167,6 +177,7 @@ export const remoteBlockedCalls = (h) => [
     tool: "schedule_repeat_task",
     args: { title: "막힘 확인", url: `${h.base2}/watch`, check: "열렸는지", then: "알려 줘", intervalMinutes: 30 },
   },
+  { tool: "send_to_telegram", args: { text: "원격에서 보내기 시도" } },
 ];
 
 // 한 원격 요청(턴)의 결과를 본다: 차단 도구는 승인 경로(카드·원격 질문)에 닿기 전에 취소된다.
@@ -416,7 +427,7 @@ export default [
     },
   },
   {
-    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram을 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
     pages2: { "/": `<title>shop</title><p>상품</p>` },
     async run(h) {
       await connect(h);
@@ -737,4 +748,69 @@ export default [
       expect(!calls.includes("getUpdates") && (await sent(h)).length === 0, `끊은 뒤에는 받지 않음(${calls.join(",")})`);
     },
   },
+  {
+    name: "반복 작업 알림 요약(#209): 꺼짐이면 지금 글 그대로(이름만), 켜면 이름+요약, 알림을 끄면 요약이 켜져 있어도 안 보냄, 토큰 바꾸기는 유지·지우기는 기본값",
+    pages: { "/watch": `<title>공연</title><button>예매하기</button><div id=out></div>` },
+    async run(h) {
+      await connect(h);
+      const st0 = (await ask(h, { kind: "telegram_status" })).data;
+      expect(st0.notifyRepeatSummary === false, `요약 기본 꺼짐(${JSON.stringify(st0)})`);
+      await ask(h, { kind: "telegram_set_notify", on: true });
+      await fireRepeat(h, "공연 A", "예매 버튼이 눌리는 상태입니다");
+      let s = await waitSent(h, 1, 10_000);
+      expect(s.length === 1 && s[0] === noticeName("공연 A"), `요약 꺼짐은 이름만, 지금 글 그대로(${JSON.stringify(s)})`);
+
+      const on = await ask(h, { kind: "telegram_set_notify_summary", on: true });
+      expect(on.ok && on.data.notifyRepeatSummary === true && on.data.notifyRepeat === true, `요약 켬(${JSON.stringify(on)})`);
+      await fireRepeat(h, "공연 B", "예매 버튼이 눌리는 상태입니다");
+      s = await waitSent(h, 1, 10_000);
+      expect(s.length === 1 && s[0] === `${noticeName("공연 B")}\n\n확인 결과: 예매 버튼이 눌리는 상태입니다`, `요약 켬은 이름+요약(${JSON.stringify(s)})`);
+      expect(!s[0].includes("예약"), "할 일은 보내지 않음");
+
+      // 알림을 끄면(요약은 켜진 채) 아무것도 보내지 않는다.
+      const off = await ask(h, { kind: "telegram_set_notify", on: false });
+      expect(off.data.notifyRepeat === false && off.data.notifyRepeatSummary === true, `알림만 끔(${JSON.stringify(off.data)})`);
+      await fireRepeat(h, "공연 C", "예매 버튼이 눌리는 상태입니다");
+      await waitUntil(async () => (await repeatTasks(h)).some((t) => t.title === "공연 C" && t.status === "triggered"), { timeoutMs: 10_000, label: "공연 C 조건 맞음" });
+      await h.panel.waitForTimeout(1500);
+      expect((await sent(h)).length === 0, `알림 꺼짐 + 요약 켜짐이면 전송 0(${JSON.stringify(await sent(h))})`);
+
+      const again = await ask(h, { kind: "telegram_save_token", token: TOKEN });
+      expect(again.data.notifyRepeatSummary === true, `토큰 바꾸기는 요약 설정 유지(${JSON.stringify(again.data)})`);
+      const cleared = await ask(h, { kind: "telegram_clear" });
+      expect(cleared.data.notifyRepeatSummary === false && cleared.data.notifyRepeat === false, `토큰 지우기는 기본값(${JSON.stringify(cleared.data)})`);
+    },
+  },
+  {
+    name: "반복 작업 알림 요약(#209): 자동 로그인 값이 든 요약은 가려서 보낸다(새 워커 — 가림 목록을 미리 넣음)",
+    isolate: true,
+    // 가림 목록(loginSecrets 모듈 캐시)이 채워지기 전에 세션 저장소에 값을 넣는다.
+    onWorker: (sw) => sw.evaluate((v) => chrome.storage.session.set({ loginSecrets: { t1: [v] } }).then(() => true), NOTICE_SECRET_VALUE),
+    pages: { "/watch": `<title>공연</title><button>예매하기</button><div id=out></div>` },
+    async run(h) {
+      await connect(h);
+      await ask(h, { kind: "telegram_set_notify", on: true });
+      await ask(h, { kind: "telegram_set_notify_summary", on: true });
+      await fireRepeat(h, "공연 D", `로그인 값 ${NOTICE_SECRET_VALUE} 이 화면에 보임`);
+      const s = await waitSent(h, 1, 10_000);
+      expect(s.length === 1 && s[0].startsWith(`${noticeName("공연 D")}\n\n확인 결과: `), `이름+요약(${JSON.stringify(s)})`);
+      expect(!s[0].includes(NOTICE_SECRET_VALUE) && s[0].includes("[가린 값]"), `자동 로그인 값은 가림(${JSON.stringify(s)})`);
+    },
+  },
 ];
+
+// 반복 작업 알림 요약(#209) 시나리오의 자동 로그인 값(가림 목록에 미리 넣는다).
+const NOTICE_SECRET_VALUE = "Harness-Pw-7731";
+
+const noticeName = (title) => `반복 작업 ‘${title}’의 조건이 맞았습니다. 패널에서 ‘이어서 진행’을 누르세요.`;
+
+const repeatTasks = (h) => h.panel.evaluate(async () => (await chrome.runtime.sendMessage({ kind: "repeat_list" })).data);
+
+// 반복 작업 하나를 등록한다. 첫 확인(바로 돈다)이 reason과 함께 조건이 맞았다고 답한다.
+async function fireRepeat(h, title, reason) {
+  await h.sw.evaluate((reason) => {
+    globalThis.__tg.sent = [];
+    globalThis.__draft = { verdict: "met", reason };
+  }, reason);
+  await h.turn([{ tool: "schedule_repeat_task", args: { title, url: `${h.base}/watch`, check: "예매 열림", then: "예약", intervalMinutes: 10 } }, { text: "등록" }], { path: "/watch", approve: true });
+}

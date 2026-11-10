@@ -91,6 +91,7 @@ import { prepareSignIn, runSignIn, stepLabel, type SignInPreview } from "../sign
 import { loginShapeBlocks } from "@/lib/loginPolicy";
 import { httpOrigin } from "@/lib/url";
 import { offerRebase } from "./rowRebase";
+import { prepareTelegramSend, sendPreparedTelegram } from "../telegramSender";
 
 export interface ToolExecResult {
   ok: boolean;
@@ -149,6 +150,8 @@ export interface ToolPreview {
   autoBlockIfUrlsAllowed?: string | null;
   // 실행에 쓸 인자. 미리보기에서 정한 값(download_images의 저장 폴더)을 실행까지 고정한다. 없으면 모델 인자 그대로.
   execArgs?: unknown;
+  // 패널 카드(tool_pending)에 실을 인자. 없으면 모델 인자 그대로. send_to_telegram은 가린 글만 싣는다(#210).
+  panelArgs?: unknown;
   // sign_in: 로그인 양식 모양·출처·비밀번호 관리자 항목(이름·아이디만, 값 없음). 승인 판정은 agent/chatAgent.ts가 한다.
   signIn?: SignInPreview;
 }
@@ -530,6 +533,19 @@ export async function buildToolPreview(
           ? `팝업 창 따라가기를 멈추고 원래 탭을 ${destination.hostname}(으)로 이동합니다.`
           : `현재 탭을 ${destination.hostname}(으)로 이동합니다.`,
         details: url,
+      };
+    }
+    case "send_to_telegram": {
+      // 받는 곳은 연결한 채팅 하나(인자 없음). 연결 확인·가림·상한은 여기서 하고, 실패하면 카드 없이 고정 문구로 끝낸다.
+      // 준비 정보는 telegramSender가 이 호출(callId)에 묶어 두고, 카드·패널에는 가린 글만 보인다(카드에 보인 글 = 보낼 글).
+      const args = parsedArgs as ToolArgs["send_to_telegram"];
+      const { safeText, chatLabel } = await prepareTelegramSend(callId, args.text);
+      return {
+        summary: `연결한 텔레그램 채팅${chatLabel ? `(${chatLabel})` : ""}으로 글(${safeText.length}자)을 보냅니다.`,
+        details: safeText,
+        // 받는 곳이 사용자 자신의 채팅으로 고정이라 자동 실행(auto)에서는 묻지 않는다(외부 본문 보호 중이면 기존 규칙대로 카드).
+        autoBlock: null,
+        panelArgs: { text: safeText },
       };
     }
     case "google_sheets_write_range": {
@@ -1362,6 +1378,11 @@ async function runTool(
         summary: `${args.format} export · ${data.bytes} bytes${data.truncated ? " · 잘림" : ""}`,
         data,
       };
+    }
+    case "send_to_telegram": {
+      // 미리보기가 준비한(카드에 보인) 글만 보낸다. 결과에는 보낸 글·응답 원문을 싣지 않는다.
+      const { parts } = await sendPreparedTelegram(callId, signal);
+      return { ok: true, summary: `텔레그램으로 보냄(${parts}개 메시지)`, data: { sent: true, parts } };
     }
     case "confirm_task":
       // 작업 맡기기 카드는 대화 객체(ChatAgent.confirmTask)가 직접 처리한다.

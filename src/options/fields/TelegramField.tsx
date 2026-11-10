@@ -10,6 +10,7 @@ interface Status {
   pairingExpiresAt: number | null;
   status: "idle" | "stopped_auth" | "stopped_conflict";
   notifyRepeat: boolean;
+  notifyRepeatSummary: boolean;
   askApproval: boolean;
   recent: Array<{ at: number; preview: string; status: string }>;
 }
@@ -21,6 +22,7 @@ type Req =
   | { kind: "telegram_disconnect" }
   | { kind: "telegram_clear" }
   | { kind: "telegram_set_notify"; on: boolean }
+  | { kind: "telegram_set_notify_summary"; on: boolean }
   | { kind: "telegram_set_ask"; on: boolean };
 
 const RECENT_STATUS: Record<string, string> = {
@@ -72,7 +74,7 @@ export function TelegramField() {
   // 받기 기록(offset·failures)만 바뀐 것은 보지 않는다 — 상태 조회가 받기를 다시 시도해 실패 기록이 또 바뀌는 순환을 만들지 않게
   // (recent는 요청 실행만 바꾸고 상태 조회는 바꾸지 않는다).
   useEffect(() => {
-    const fields = ["token", "botName", "chatId", "chatLabel", "connectedAt", "epoch", "notifyRepeat", "askApproval", "status", "pairing", "recent"];
+    const fields = ["token", "botName", "chatId", "chatLabel", "connectedAt", "epoch", "notifyRepeat", "notifyRepeatSummary", "askApproval", "status", "pairing", "recent"];
     const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== "local" || !("telegram" in changes)) return;
       const o = (changes.telegram.oldValue ?? {}) as Record<string, unknown>;
@@ -140,7 +142,19 @@ export function TelegramField() {
           </label>
           <label className="check-row">
             <input type="checkbox" checked={st.notifyRepeat} disabled={busy} onChange={(e) => void request({ kind: "telegram_set_notify", on: e.target.checked })} />
-            <span>반복 작업의 조건이 맞으면 텔레그램으로 알리기(작업 이름만 보냄)</span>
+            <span>반복 작업의 조건이 맞으면 텔레그램으로 알리기(작업 이름을 보냄 — 아래를 켜면 확인 결과 요약도)</span>
+          </label>
+          <label className="check-row check-row-sub">
+            <input
+              type="checkbox"
+              checked={st.notifyRepeatSummary}
+              disabled={busy || !st.notifyRepeat}
+              onChange={(e) => void request({ kind: "telegram_set_notify_summary", on: e.target.checked })}
+            />
+            <span>
+              알림에 확인 결과 요약도 보내기(기본 끔) — 요약은 확인한 페이지 내용을 보고 AI가 쓴 글이라 페이지 글자가 들어갈 수 있고, 텔레그램 서버에 남습니다(봇 대화는
+              종단 간 암호화가 아님). 자동 로그인 값은 가리고 1000자까지 보냅니다.
+            </span>
           </label>
           <div className="repeat-actions">
             {st.connected && (

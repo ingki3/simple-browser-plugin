@@ -59,6 +59,9 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   schedule_repeat_task: ACTION,
   // 저장 카드만 띄운다(페이지를 바꾸지 않고 모델 값을 밖으로 보내지 않음). 저장은 사용자가 카드에서 누를 때만.
   remember_page: LOCAL_READ,
+  // 모델이 만든 글을 연결한 텔레그램 채팅으로 보낸다(#210 — 밖으로 보내므로 관측 전용이 아님, 외부 본문 보호 중에는 늘 묻는다).
+  // 결과는 보낸 조각 수 같은 고정 값이라 외부 데이터를 들여오지 않는다.
+  send_to_telegram: ACTION,
 };
 
 // 외부 본문 보호가 켜진 대화에서 이 도구 호출에 승인 카드가 필요한지(관측 전용이 아니면 모두).

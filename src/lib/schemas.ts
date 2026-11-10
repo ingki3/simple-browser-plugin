@@ -2,6 +2,7 @@ import { z } from "zod";
 import { isNavigationSafeUrl } from "./sanitize";
 import { checkFileUrl } from "./fileFormat";
 import { QUERY_DOM_ATTRS } from "./modelText";
+import { sendToTelegramArgs } from "./telegramSendArgs";
 
 export const describePageArgs = z.object({}).strict();
 
@@ -280,6 +281,7 @@ export const toolArgsSchemas = {
   confirm_task: confirmTaskArgs,
   schedule_repeat_task: scheduleRepeatTaskArgs,
   remember_page: z.object({}).strict(),
+  send_to_telegram: sendToTelegramArgs,
 } as const;
 
 export type ToolArgs = {

@@ -10,16 +10,23 @@ import {
   askResultLine,
   backoffMs,
   checkPairing,
+  MASK_FAILED_TEXT,
   newAskId,
   parseAskCallback,
   TELEGRAM_ASK_TTL_MS,
   newPairing,
   parseUpdate,
   remoteErrorText,
+  prepareOwnSend,
+  runPreparedSend,
+  runRepeatNotice,
   splitMessage,
   staleMessage,
   type Pairing,
+  type PartSendResult,
+  type RepeatNoticeRead,
 } from "@/lib/telegram";
+import { setTelegramSender } from "./telegramSender";
 import type { RemoteApprover, RemoteAskResult, RemoteQuestion } from "@/lib/remoteApproval";
 import { RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
@@ -51,6 +58,8 @@ interface TelegramState {
   epoch: number;
   offset: number;
   notifyRepeat: boolean;
+  // 반복 작업 알림에 확인 결과 요약도 붙이기(#209, 기본 끔). notifyRepeat가 켜져 있을 때만 쓴다.
+  notifyRepeatSummary: boolean;
   // 승인이 필요한 이동·클릭을 텔레그램 버튼으로 묻기(#185, 기본 켬). 끄면 지금처럼 거절한다.
   askApproval: boolean;
   status: "idle" | "stopped_auth" | "stopped_conflict";
@@ -68,6 +77,7 @@ const EMPTY: TelegramState = {
   epoch: 0,
   offset: 0,
   notifyRepeat: false,
+  notifyRepeatSummary: false,
   askApproval: true,
   status: "idle",
   failures: 0,
@@ -168,7 +178,7 @@ async function sendMasked(s: Pick<TelegramState, "token" | "chatId">, text: stri
   try {
     safe = (await maskStringForModel(text)).text;
   } catch {
-    safe = "결과를 안전하게 보내지 못했습니다. 패널에서 확인해 주세요.";
+    safe = MASK_FAILED_TEXT;
   }
   if (signal?.aborted) return;
   await sendText(s, safe, signal);
@@ -185,6 +195,7 @@ export interface TelegramStatus {
   pairingExpiresAt: number | null;
   status: TelegramState["status"];
   notifyRepeat: boolean;
+  notifyRepeatSummary: boolean;
   askApproval: boolean;
   recent: TelegramRecent[];
 }
@@ -200,6 +211,7 @@ function statusOf(s: TelegramState): TelegramStatus {
     pairingExpiresAt: pairing?.expiresAt ?? null,
     status: s.status,
     notifyRepeat: s.notifyRepeat,
+    notifyRepeatSummary: s.notifyRepeatSummary,
     askApproval: s.askApproval,
     recent: s.recent,
   };
@@ -225,7 +237,7 @@ export async function telegramSaveToken(raw: string): Promise<TelegramStatus> {
     throw new Error(err instanceof TgError && err.status === 401 ? "텔레그램이 이 토큰을 받지 않았습니다. 토큰을 다시 확인하세요." : "텔레그램에 연결하지 못했습니다. 인터넷 연결을 확인하세요.");
   }
   endSession("토큰을 바꿈");
-  const s = await update((cur) => ({ ...EMPTY, epoch: cur.epoch + 1, token, botName: me.username ? `@${me.username}` : (me.first_name ?? "봇"), notifyRepeat: cur.notifyRepeat, askApproval: cur.askApproval }));
+  const s = await update((cur) => ({ ...EMPTY, epoch: cur.epoch + 1, token, botName: me.username ? `@${me.username}` : (me.first_name ?? "봇"), notifyRepeat: cur.notifyRepeat, notifyRepeatSummary: cur.notifyRepeatSummary, askApproval: cur.askApproval }));
   debugLog("telegram:token", s?.botName ?? "");
   return statusOf(s ?? (await load()));
 }
@@ -262,6 +274,12 @@ export async function telegramClear(): Promise<TelegramStatus> {
 export async function telegramSetNotify(on: boolean): Promise<TelegramStatus> {
   await recovered;
   const s = await update((cur) => ({ ...cur, notifyRepeat: on }));
+  return statusOf(s ?? (await load()));
+}
+
+export async function telegramSetNotifySummary(on: boolean): Promise<TelegramStatus> {
+  await recovered;
+  const s = await update((cur) => ({ ...cur, notifyRepeatSummary: on }));
   return statusOf(s ?? (await load()));
 }
 
@@ -389,7 +407,7 @@ const HELP = [
   "간편 브라우저 도우미 텔레그램 연동",
   "- 할 일을 글로 보내면 브라우저의 새 탭에서 처리하고 최종 답만 보냅니다. 예: \"naver.com에서 오늘 날씨 알려 줘\"",
   "- 이동·클릭·입력처럼 승인이 필요한 일은 요청마다 처음 한 번 [승인][거절] 버튼으로 맡길지 묻고, 맡기면 그 요청이 끝날 때까지 묻지 않고 진행합니다(결제·삭제도 묻지 않음, 10분 안에 누르지 않으면 하지 않음).",
-  "- 설정에서 버튼으로 묻기를 끄면 승인이 필요한 일은 원격에서 하지 않습니다. 자동 로그인·저장한 링크 열기·반복 작업 등록은 원격에서 하지 않습니다(패널에서 요청하세요).",
+  "- 설정에서 버튼으로 묻기를 끄면 승인이 필요한 일은 원격에서 하지 않습니다. 자동 로그인·저장한 링크 열기·반복 작업 등록·텔레그램으로 보내기는 원격에서 하지 않습니다(패널에서 요청하세요).",
   "- /stop: 진행 중인 요청 멈추기, /new: 새 대화",
   "- 브라우저가 켜져 있어야 하고, 받는 데 최대 1분쯤 걸립니다.",
 ].join("\n");
@@ -721,13 +739,71 @@ const recovered = (async () => {
   }
 })();
 
-// 반복 작업 알림(설정에서 켰을 때만): 제목만 보내고 확인 결과의 이유·할 일은 보내지 않는다.
-onRepeatTriggered(async (t) => {
-  // 이 알림이 속한 연결(그 사이 끊거나 토큰을 바꾸면 보내지 않는다).
+// 저장 큐를 거쳐 읽는다: 읽기 전에 연결 신호를 붙잡고, 앞선 저장(설정 끄기·연결 끊기·토큰 바꾸기)이 끝난 뒤의 상태와
+// 붙잡은 신호가 아직 지금 연결인지를 함께 돌려준다(끊기·토큰 바꾸기는 신호를 바꾼 같은 순간에 저장을 큐에 넣는다).
+async function readQueued(): Promise<RepeatNoticeRead<TelegramState>> {
   const conn = connAbort.signal;
-  const s = await load();
-  if (conn.aborted || !s.notifyRepeat || s.chatId === null || s.status !== "idle") return;
-  await sendMasked(s, `반복 작업 ‘${t.title}’의 조건이 맞았습니다. 패널에서 ‘이어서 진행’을 누르세요.`, conn).catch(() => {});
+  const s = await serial(() => load());
+  return { s, conn, alive: !conn.aborted && conn === connAbort.signal };
+}
+
+// 조각 하나 보내기(반복 작업 알림·send_to_telegram). 429(기다릴 시간이 짧을 때)면 보내지 않고 기다릴 시간을 돌려줘 부르는 쪽이
+// 다시 확인한 뒤 보내게 한다. 그 밖의 실패는 TgError(메서드·상태 코드만)로 던진다. sendText는 그대로 둔다.
+async function sendOnePart(s: Pick<TelegramState, "token" | "chatId">, part: string, signal: AbortSignal): Promise<PartSendResult> {
+  const params = { chat_id: s.chatId, text: part, link_preview_options: { is_disabled: true } };
+  try {
+    await tgCall(s.token, "sendMessage", params, signal);
+    return "ok";
+  } catch (err) {
+    if (err instanceof TgError && err.status === 429 && err.retryAfter > 0 && err.retryAfter <= 30) return { retryAfterMs: err.retryAfter * 1000 };
+    throw err;
+  }
+}
+
+// 429 대기. 신호가 끊기면 바로 끝난다.
+function waitAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+const maskForSend = async (text: string) => (await maskStringForModel(text)).text;
+
+// 패널 요청 결과를 연결한 채팅으로 보내기(send_to_telegram, #210). 받는 곳은 저장된 chatId뿐이다(매개변수 없음).
+// 준비(미리보기)와 실행 모두 저장 큐를 거쳐 읽고 연결 세대·신호를 확인한다(lib/telegram.ts prepareOwnSend·runPreparedSend).
+setTelegramSender({
+  prepare: async (text) => {
+    await recovered;
+    return prepareOwnSend({ read: readQueued, mask: maskForSend }, text);
+  },
+  send: async (p, signal) => {
+    await recovered;
+    const r = await runPreparedSend({ read: readQueued, mask: maskForSend, send: sendOnePart, wait: waitAbortable }, p, signal);
+    debugLog("telegram:own_send", r.ok ? `${r.parts}개` : `${r.why} · ${r.sent}개 감`, r.ok ? "info" : "warn");
+    return r;
+  },
+});
+
+// 반복 작업 알림(설정에서 켰을 때만): 작업 이름을 보내고, "확인 결과 요약도 보내기"를 켰으면 가려 저장한 이유를 붙인다(#209).
+// 할 일은 보내지 않는다. 처음과 보내기 직전에 상태를 다시 읽어 그 사이 끈 설정·끊은 연결을 따른다(lib/telegram.ts runRepeatNotice).
+onRepeatTriggered(async (t) => {
+  await runRepeatNotice<TelegramState>(
+    {
+      read: readQueued,
+      mask: maskForSend,
+      // 조각 하나씩, 429면 기다릴 시간을 돌려줘 runRepeatNotice가 다시 확인한 뒤 보내게.
+      send: sendOnePart,
+      wait: waitAbortable,
+    },
+    t,
+  ).catch(() => {});
 });
 
 // 하네스(tests/harness/scenarios/telegram.mjs)가 알람을 기다리지 않고 받기를 부르는 진입점. 서비스 워커 안에서만 보인다.

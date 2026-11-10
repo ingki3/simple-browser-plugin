@@ -7,6 +7,8 @@ import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "../otherTabs";
 import { discardLinkCall, setChosenLinks } from "../linkedPages";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "../downloadChoices";
+import { discardTelegramSend } from "../telegramSender";
+import { MAX_TELEGRAM_SENDS_PER_TURN } from "@/lib/telegram";
 import { makeOffer, makeOfferResult } from "../savedPagesStore";
 import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
@@ -110,7 +112,8 @@ export type TurnOutcome = { outcome: "ok" | "aborted"; finalText: string } | { o
 export interface AgentSink {
   postMessage(msg: BgToPanel): void;
 }
-const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page"]);
+// send_to_telegram(#210): 원격 대화에서는 답이 이미 그 채널로 가고, 원격 요청이 연결한 텔레그램으로 글을 내보내지 않게(작업을 맡긴 뒤에도).
+const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page", "send_to_telegram"]);
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
 
 // 턴 시작 옵션. tabId·site: 반복 작업의 이어서 진행(#138). expect: 페이지 제안 실행(#173) — 확인한 탭·주소·문서.
@@ -1158,7 +1161,7 @@ export class ChatAgent {
     turn: number,
     turnTab: TurnTab,
     record: RecordRun,
-    reads: { documents: number; otherTabs: number },
+    reads: { documents: number; otherTabs: number; telegramSends: number },
   ): Promise<boolean> {
     const toolName = fc.function.name as ToolName;
     // 모델이 준 id는 대화 기록에만 쓰고, 나머지는 내부 키로 찾는다(#221 — 다른 대화·같은 대화의 다른 턴이 같은 id를 줘도 겹치지 않게).
@@ -1200,6 +1203,11 @@ export class ChatAgent {
     // 원격 대화에서 쓰지 않는 도구: 자동 로그인(승인한 사이트여도), 저장 링크(요청 글에 적지 않은 사이트로 간다), 반복 작업 등록.
     if (this.remote && REMOTE_BLOCKED_TOOLS.has(toolName)) {
       this.cancelCall(call, null);
+      return true;
+    }
+    // 텔레그램으로 보내기(#210)는 한 요청에 몇 번까지만(모델 반복 호출·스팸 방지). 카드에서 거절한 호출도 센다.
+    if (toolName === "send_to_telegram" && ++reads.telegramSends > MAX_TELEGRAM_SENDS_PER_TURN) {
+      failCall(`한 요청에서 텔레그램으로 보내기는 최대 ${MAX_TELEGRAM_SENDS_PER_TURN}번입니다. 더 보내지 말고 지금까지 한 일을 답하세요.`, argsKey);
       return true;
     }
     if (toolName === "confirm_task") return this.confirmTask(call);
@@ -1355,7 +1363,9 @@ export class ChatAgent {
         // 원격은 카드 글(원문 대상 글자가 섞일 수 있음) 대신 원격 질문 재료로 만든 줄만 보이고, 만들 수 없으면 묻지 않고 거절한다.
         const firstAction = this.remote ? remoteActionLines(remoteInput) : null;
         if (this.remote && !firstAction) return this.remoteNeedsTask(call, signInToken);
-        const asked = await this.askTask(call, this.remote ? "" : `첫 동작: ${preview.summary}`, [], firstAction);
+        // 패널 카드에는 미리보기가 정한 인자만 싣는다(send_to_telegram은 가린 글만, #210).
+        const cardCall = preview.panelArgs !== undefined ? { ...call, parsedArgs: preview.panelArgs } : call;
+        const asked = await this.askTask(cardCall, this.remote ? "" : `첫 동작: ${preview.summary}`, [], firstAction);
         if (asked === null) {
           discardSignIn(signInToken);
           return STALE;
@@ -1598,7 +1608,8 @@ export class ChatAgent {
       kind: "tool_pending",
       callId,
       toolName,
-      args: parsedArgs,
+      // 미리보기가 패널용 인자를 정했으면 그것만(send_to_telegram은 가린 글만, #210).
+      args: preview.panelArgs !== undefined ? preview.panelArgs : parsedArgs,
       // 이 도구를 이번 대화에서 허락했는데 묻는 것이면 그 이유를 먼저 보인다(보호 중이라 쓰지 않는 경우 포함).
       previewSummary: chatGrant.reason
         ? `${preview.summary} (이번 대화 허락 예외: ${chatGrant.reason})`
@@ -1719,6 +1730,7 @@ export class ChatAgent {
     discardTabChoices(callId);
     discardLinkCall(callId);
     discardDownloadCall(callId);
+    discardTelegramSend(callId);
     if (this.remote) {
       // 원격 대화에서 승인이 필요해 하지 않은 호출.
       this.remoteRefusedTurn = call.turn;
@@ -1886,7 +1898,7 @@ export class ChatAgent {
       runs.push({ tool, argsKey, ok, resultKey: fingerprint(result), summary, changed: extra.changed === true, cancelled: extra.cancelled });
     };
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
-    const reads = { documents: 0, otherTabs: 0 };
+    const reads = { documents: 0, otherTabs: 0, telegramSends: 0 };
     // 생각만 하다 응답 상한에 걸려 빈 답이 나오면 생각을 줄여 한 번 더 시도한다(턴마다 한 번).
     let lengthRetried = false;
     let lowReasoning = false;
