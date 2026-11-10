@@ -1,6 +1,7 @@
 // 설정 페이지(탭)를 여러 개·오래 열어 두어도 최신 값을 따라가는지(#127 2단계): 저장 값과 편집 초안을 나눈 칸(키·음성 모델·MCP 포트),
 // 백그라운드에서 읽어 오는 목록(저장 링크·동작 기록·페이지 제안)의 다시 읽기와 늦은 옛 변경 거절.
-import { expect } from "../lib.mjs";
+import { ask, expect, waitUntil } from "../lib.mjs";
+import { connect } from "./telegram.mjs";
 
 const stored = (h) => h.sw.evaluate(async () => (await chrome.storage.local.get("settings")).settings);
 
@@ -129,6 +130,35 @@ export default [
       expect(rules[0].label === "다른 곳에서 고침", `옛 초안은 저장되지 않음(${rules[0].label})`);
       expect((await field.innerText()).includes("다른 곳에서 바뀌었습니다"), "거절 이유");
       await opt.close();
+    },
+  },
+  {
+    name: "텔레그램 알림 요약 체크박스(#209): 알림이 꺼져 있으면 비활성, 눌러 저장, 다른 곳에서 바꾸면 열린 설정 화면이 따라간다",
+    async run(h) {
+      await connect(h);
+      const a = await h.openOptions("model");
+      const b = await h.openOptions("model");
+      const notify = (p) => p.locator("label.check-row", { hasText: "반복 작업의 조건이 맞으면 텔레그램으로 알리기" }).locator("input");
+      const summary = (p) => p.locator("label.check-row", { hasText: "알림에 확인 결과 요약도 보내기" }).locator("input");
+      const tg = () => h.sw.evaluate(async () => (await chrome.storage.local.get("telegram")).telegram);
+      const until = (fn, label) => waitUntil(fn, { timeoutMs: 5000, intervalMs: 100, label });
+      expect((await summary(a).count()) === 1, "요약 체크박스가 있음");
+      expect((await summary(a).isDisabled()) && !(await summary(a).isChecked()), "알림 꺼짐이면 요약은 꺼진 채 비활성");
+      await notify(a).check();
+      await until(async () => !(await summary(a).isDisabled()), "알림을 켜면 요약 활성");
+      await summary(a).check();
+      await until(async () => (await tg()).notifyRepeatSummary === true, "요약 저장");
+      await until(async () => (await summary(b).isChecked()) && !(await summary(b).isDisabled()), "다른 설정 화면이 따라감");
+      // 다른 곳(패널 메시지)에서 끄면 열린 두 화면이 따라간다.
+      expect((await ask(h, { kind: "telegram_set_notify_summary", on: false })).ok, "다른 곳에서 요약 끔");
+      await until(async () => !(await summary(a).isChecked()) && !(await summary(b).isChecked()), "요약 끔을 따라감");
+      // 알림을 끄면 요약은 비활성이지만 저장 값은 그대로 둔다.
+      await ask(h, { kind: "telegram_set_notify_summary", on: true });
+      await ask(h, { kind: "telegram_set_notify", on: false });
+      await until(async () => (await summary(a).isDisabled()) && (await summary(a).isChecked()), "알림 끔이면 비활성(값은 그대로)");
+      expect((await tg()).notifyRepeatSummary === true, "저장 값 유지");
+      await a.close();
+      await b.close();
     },
   },
 ];
