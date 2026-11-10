@@ -750,7 +750,28 @@ onRepeatTriggered(async (t) => {
     {
       read: readQueued,
       mask: async (text) => (await maskStringForModel(text)).text,
-      send: (s, text, signal) => sendText(s, text, signal),
+      // 알림 전용 전송(조각 하나씩, 429면 기다릴 시간을 돌려줘 runRepeatNotice가 다시 확인한 뒤 보내게). sendText는 그대로 둔다.
+      send: async (s, part, signal) => {
+        const params = { chat_id: s.chatId, text: part, link_preview_options: { is_disabled: true } };
+        try {
+          await tgCall(s.token, "sendMessage", params, signal);
+          return "ok";
+        } catch (err) {
+          if (err instanceof TgError && err.status === 429 && err.retryAfter > 0 && err.retryAfter <= 30) return { retryAfterMs: err.retryAfter * 1000 };
+          throw err;
+        }
+      },
+      wait: (ms, signal) =>
+        new Promise<void>((resolve) => {
+          if (signal.aborted) return resolve();
+          const done = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", done);
+            resolve();
+          };
+          const timer = setTimeout(done, ms);
+          signal.addEventListener("abort", done, { once: true });
+        }),
     },
     t,
   ).catch(() => {});

@@ -196,11 +196,18 @@ export interface RepeatNoticeDeps<S extends RepeatNoticeState> {
   read(): Promise<RepeatNoticeRead<S>>;
   // 자동 로그인 값 가리기. 목록을 못 읽으면 던진다.
   mask(text: string): Promise<string>;
-  send(s: S, text: string, signal: AbortSignal): Promise<void>;
+  // 조각 하나를 보낸다. 429(기다릴 시간이 짧을 때)면 보내지 않고 기다릴 시간을 돌려준다. 그 밖의 실패는 던진다.
+  send(s: S, part: string, signal: AbortSignal): Promise<RepeatSendResult>;
+  // 429 대기. 신호가 끊기면 바로 끝난다.
+  wait(ms: number, signal: AbortSignal): Promise<void>;
 }
+
+export type RepeatSendResult = "ok" | { retryAfterMs: number };
 
 // 반복 작업 알림 하나(조건이 맞은 회차). reason은 repeatTasks가 이미 가려 저장한 이유(가림 실패면 빈 글).
 // 처음 읽기 → (요약 켜짐이면) 요약 가림, 실패면 이름만 → 전체 글 가림(이름만 글이 실패하면 대체 문구) → 보내기 직전 다시 읽기 → 보내기.
+// 보내기는 조각마다 하고 429면 한 번 기다려 다시 보내는데, 다시 보내기 직전에도 상태를 다시 읽어 같은 판정을 한다(#209 리뷰 P2):
+// 알림을 껐거나 연결이 바뀌었으면 보내지 않고, 요약만 껐으면(아직 앞 조각을 보내지 않았을 때) 이름만 글로 바꾼다.
 export async function runRepeatNotice<S extends RepeatNoticeState>(deps: RepeatNoticeDeps<S>, t: { title: string; reason: string }): Promise<{ kind: RepeatNoticeKind; text: string | null }> {
   const none = { kind: "none" as const, text: null };
   const first = await deps.read();
@@ -230,10 +237,40 @@ export async function runRepeatNotice<S extends RepeatNoticeState>(deps: RepeatN
     }
   }
   const second = await deps.read();
-  const kind = repeatNoticePlan(first, second, fullText !== null);
+  let kind = repeatNoticePlan(first, second, fullText !== null);
   if (kind === "none" || first.conn.aborted) return none;
-  const text = kind === "summary" && fullText !== null ? fullText : nameText;
-  await deps.send(second.s, text, first.conn);
+  const pick = (k: RepeatNoticeKind) => (k === "summary" && fullText !== null ? fullText : nameText);
+  let text = pick(kind);
+  let s = second.s;
+  let parts = splitMessage(text);
+  let i = 0;
+  let retried = false;
+  while (i < parts.length) {
+    if (first.conn.aborted) break;
+    const r = await deps.send(s, parts[i], first.conn);
+    if (r === "ok") {
+      i++;
+      retried = false;
+      continue;
+    }
+    // 조각마다 한 번만 기다린다(두 번째 429면 그만 — sendText와 같다).
+    if (retried) break;
+    retried = true;
+    await deps.wait(r.retryAfterMs, first.conn);
+    // 기다리는 사이 연결을 끊었거나 바꿨으면 다시 보내지 않는다.
+    if (first.conn.aborted) return i > 0 ? { kind, text } : none;
+    const again = await deps.read();
+    const k = repeatNoticePlan(first, again, fullText !== null);
+    if (k === "none") return none;
+    if (k !== kind) {
+      // 앞 조각이 이미 갔으면 글을 바꿔 이어 붙이지 않고 그만둔다.
+      if (i > 0) break;
+      kind = k;
+      text = pick(k);
+      parts = splitMessage(text);
+    }
+    s = again.s;
+  }
   return { kind, text };
 }
 
