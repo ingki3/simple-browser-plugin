@@ -106,7 +106,7 @@ function fakeStore(init) {
   let store = { ...init };
   let gen = new AbortController();
   const sent = [];
-  return {
+  const self = {
     sent,
     serial,
     get store() {
@@ -136,10 +136,29 @@ function fakeStore(init) {
       const s = await serial(async () => ({ ...store }));
       return { s, conn, alive: !conn.aborted && conn === gen.signal };
     },
-    send: async (s, text, signal) => {
+    // 보낸 시도(429로 거절된 것 포함) 수. rateLimit만큼 다음 시도를 429(retryAfterMs)로 거절한다(sent에는 남지 않음).
+    attempts: 0,
+    rateLimit: 0,
+    // 429 대기 중에 부를 함수(그 사이 설정 끄기·끊기를 흉내 낸다).
+    onWait: null,
+    waits: 0,
+    async send(s, text, signal) {
+      this.attempts++;
+      if (this.rateLimit > 0) {
+        this.rateLimit--;
+        return { retryAfterMs: 5 };
+      }
       sent.push({ chatId: s.chatId, text, aborted: signal.aborted });
+      return "ok";
+    },
+    async wait() {
+      this.waits++;
+      if (this.onWait) await this.onWait();
     },
   };
+  self.send = self.send.bind(self);
+  self.wait = self.wait.bind(self);
+  return self;
 }
 
 const identity = async (x) => x;
@@ -147,7 +166,7 @@ const T = { id: "1", title: "공연 예매", reason: "예매 버튼이 열렸습
 
 test("runRepeatNotice: 요약 꺼짐이면 지금과 같은 글(이름만)", async () => {
   const f = fakeStore(st());
-  const r = await runRepeatNotice({ read: f.read, mask: identity, send: f.send }, T);
+  const r = await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, T);
   assert.equal(r.kind, "name");
   assert.deepEqual(f.sent, [{ chatId: 7, text: base("공연 예매"), aborted: false }]);
 });
@@ -155,7 +174,7 @@ test("runRepeatNotice: 요약 꺼짐이면 지금과 같은 글(이름만)", asy
 test("runRepeatNotice: 요약 켜짐이면 이름 + 요약, 가린 글로", async () => {
   const f = fakeStore(st({ notifyRepeatSummary: true }));
   const mask = async (x) => x.replaceAll("열렸", "[가린 값]");
-  const r = await runRepeatNotice({ read: f.read, mask, send: f.send }, T);
+  const r = await runRepeatNotice({ read: f.read, mask, send: f.send, wait: f.wait }, T);
   assert.equal(r.kind, "summary");
   assert.equal(f.sent.length, 1);
   assert.equal(f.sent[0].text, `${base("공연 예매")}\n\n확인 결과: 예매 버튼이 [가린 값]습니다.`);
@@ -163,7 +182,7 @@ test("runRepeatNotice: 요약 켜짐이면 이름 + 요약, 가린 글로", asyn
 
 test("runRepeatNotice: 이유가 비어 있으면(저장 때 가림 실패) 이름만", async () => {
   const f = fakeStore(st({ notifyRepeatSummary: true }));
-  await runRepeatNotice({ read: f.read, mask: identity, send: f.send }, { ...T, reason: "  " });
+  await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, { ...T, reason: "  " });
   assert.deepEqual(f.sent.map((m) => m.text), [base("공연 예매")]);
 });
 
@@ -173,7 +192,7 @@ test("runRepeatNotice: 요약 가림이 실패하면 대체 문구가 아니라 
     if (x === T.reason) throw new Error("목록 못 읽음");
     return x;
   };
-  const r = await runRepeatNotice({ read: f.read, mask, send: f.send }, T);
+  const r = await runRepeatNotice({ read: f.read, mask, send: f.send, wait: f.wait }, T);
   assert.equal(r.kind, "name");
   assert.deepEqual(f.sent.map((m) => m.text), [base("공연 예매")]);
 });
@@ -184,7 +203,7 @@ test("runRepeatNotice: 전체 글 가림이 실패하면 지금처럼 대체 문
     const mask = async () => {
       throw new Error("목록 못 읽음");
     };
-    await runRepeatNotice({ read: f.read, mask, send: f.send }, T);
+    await runRepeatNotice({ read: f.read, mask, send: f.send, wait: f.wait }, T);
     assert.deepEqual(f.sent.map((m) => m.text), [MASK_FAILED_TEXT]);
     assert.equal(MASK_FAILED_TEXT, "결과를 안전하게 보내지 못했습니다. 패널에서 확인해 주세요.");
   }
@@ -194,7 +213,7 @@ test("runRepeatNotice: 알림이 꺼져 있거나 연결이 없으면 가리지�
   for (const s of [st({ notifyRepeat: false, notifyRepeatSummary: true }), st({ chatId: null }), st({ status: "stopped_conflict" })]) {
     const f = fakeStore(s);
     let masked = 0;
-    const r = await runRepeatNotice({ read: f.read, mask: async (x) => (masked++, x), send: f.send }, T);
+    const r = await runRepeatNotice({ read: f.read, mask: async (x) => (masked++, x), send: f.send, wait: f.wait }, T);
     assert.equal(r.kind, "none");
     assert.equal(f.sent.length, 0);
     assert.equal(masked, 0);
@@ -211,7 +230,7 @@ async function raceCase(init, change) {
     if (maskCalls === 1) await gate.p;
     return x;
   };
-  const run = runRepeatNotice({ read: f.read, mask, send: f.send }, T);
+  const run = runRepeatNotice({ read: f.read, mask, send: f.send, wait: f.wait }, T);
   // 첫 읽기가 끝나고 가림에서 붙잡힐 때까지.
   while (maskCalls === 0) await new Promise((r) => setTimeout(r, 1));
   const release = f.slowSave();
@@ -252,5 +271,69 @@ test("runRepeatNotice(저장 큐 지연): 끊고 다시 연결해 다른 채팅�
     await f.set({ chatId: 99 });
   });
   assert.equal(r.kind, "none");
+  assert.equal(f.sent.length, 0);
+});
+
+// ---- 429 재시도(코드 리뷰 P2): 기다리는 동안 바뀐 설정·연결을 재시도 직전에 다시 읽는다 ----
+
+test("runRepeatNotice(429): 기다리는 동안 바뀐 것이 없으면 같은 글을 한 번 다시 보낸다", async () => {
+  const f = fakeStore(st({ notifyRepeatSummary: true }));
+  f.rateLimit = 1;
+  const r = await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, T);
+  assert.equal(r.kind, "summary");
+  assert.equal(f.attempts, 2);
+  assert.deepEqual(f.sent.map((m) => m.text), [`${base("공연 예매")}\n\n확인 결과: ${T.reason}`]);
+});
+
+test("runRepeatNotice(429): 기다리는 동안 요약을 끄면 재시도 글에 요약이 없다", async () => {
+  const f = fakeStore(st({ notifyRepeatSummary: true }));
+  f.rateLimit = 1;
+  f.onWait = () => f.set({ notifyRepeatSummary: false });
+  const r = await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, T);
+  assert.equal(r.kind, "name");
+  assert.equal(f.waits, 1);
+  assert.deepEqual(f.sent.map((m) => m.text), [base("공연 예매")]);
+});
+
+test("runRepeatNotice(429): 기다리는 동안 알림을 끄면 다시 보내지 않는다", async () => {
+  const f = fakeStore(st({ notifyRepeatSummary: true }));
+  f.rateLimit = 1;
+  f.onWait = () => f.set({ notifyRepeat: false });
+  const r = await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, T);
+  assert.equal(r.kind, "none");
+  assert.equal(f.attempts, 1);
+  assert.equal(f.sent.length, 0);
+});
+
+test("runRepeatNotice(429): 기다리는 동안 연결을 끊으면 다시 보내지 않는다", async () => {
+  for (const summary of [false, true]) {
+    const f = fakeStore(st({ notifyRepeatSummary: summary }));
+    f.rateLimit = 1;
+    f.onWait = () => f.disconnect();
+    const r = await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, T);
+    assert.equal(r.kind, "none");
+    assert.equal(f.attempts, 1);
+    assert.equal(f.sent.length, 0);
+  }
+});
+
+test("runRepeatNotice(429): 저장 큐가 밀린 동안의 끄기도 재시도 직전 읽기가 본다", async () => {
+  const f = fakeStore(st({ notifyRepeatSummary: true }));
+  f.rateLimit = 1;
+  f.onWait = () => {
+    const release = f.slowSave();
+    void f.set({ notifyRepeatSummary: false });
+    setTimeout(release, 20);
+  };
+  const r = await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, T);
+  assert.equal(r.kind, "name");
+  assert.deepEqual(f.sent.map((m) => m.text), [base("공연 예매")]);
+});
+
+test("runRepeatNotice(429): 다시 보낸 것도 429면 그만둔다(한 번만 재시도)", async () => {
+  const f = fakeStore(st());
+  f.rateLimit = 2;
+  await runRepeatNotice({ read: f.read, mask: identity, send: f.send, wait: f.wait }, T);
+  assert.equal(f.attempts, 2);
   assert.equal(f.sent.length, 0);
 });
