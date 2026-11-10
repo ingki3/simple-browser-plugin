@@ -18,7 +18,9 @@ test("only page-reading tools that never change the page are allowed without app
     "remember_page",
   ]);
   for (const name of ["get_youtube_transcript", "translate_page", "navigate_to_url",
-    "click_element", "fill_form_fields", "download_images", "download_files", "capture_page", "read_document", "google_drive_search", "google_sheets_append_rows"]) {
+    "click_element", "fill_form_fields", "download_images", "download_files", "capture_page", "read_document", "google_drive_search", "google_sheets_append_rows",
+    // 모델이 만든 글을 텔레그램(내 채팅)으로 보낸다(#210). 결과는 고정 값이라 외부 데이터가 아니다.
+    "send_to_telegram"]) {
     assert.equal(needsApprovalWhenProtected(name), true, name);
   }
 });
