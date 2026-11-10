@@ -22,12 +22,12 @@ const REMOTE_SITE = "https://example.com";
 const CUSTOM = "시험용 사용자 지침: 답은 존댓말로 짧게.";
 
 const EXPECTED = {
-  "panel system 기본": "7a67af1b75ab09b4d0a604a149a2515e277d1d59e59422e33f27291d6590d2b3",
-  "panel system 빠르게 생각": "c5594f6c26d262e4c2a7bd65aaa380f0cc7a5e3b56ca4dc929f96f51fc7c92cb",
-  "panel system 사용자 지침": "19c73ac756e555072cc429fe0831a6fa3c348fd602944fa6d7ffea58ebeadd1a",
-  "panel system 빠르게 생각+사용자 지침": "28d8cec2b52dc5e0779def2502160a3cdb44e96c02bcb7211a21aff927c83a42",
+  "panel system 기본": "4c4b2549b3a261fcdf3eb586cfe8c87b7fb1e16723119befa1be57ffefdb3de7",
+  "panel system 빠르게 생각": "0c7940be6619aa063a8f34018ba9ab1c877014ca53a6620af225b108ec5453f4",
+  "panel system 사용자 지침": "69094fb9089ad1b3d1fb814ada8023db0c87d3dbbe9eaa9562278547357819e8",
+  "panel system 빠르게 생각+사용자 지침": "5e344db7af8eae4c301e9d4d9002b8ac3f09c74da40e232db5cd1fbf418cec4b",
   "panel task 실행 방식 task": "005077764e71dffdebd5bbe7080c10908d6da03e06479ff4fa7e00cc96a3c4ec",
-  "telegram system": "7a67af1b75ab09b4d0a604a149a2515e277d1d59e59422e33f27291d6590d2b3",
+  "telegram system": "4c4b2549b3a261fcdf3eb586cfe8c87b7fb1e16723119befa1be57ffefdb3de7",
   "telegram remote 물음·사이트 없음": "5b2053387f0352cbc9d12a77f2cdee3b1e12007de4538e50fa5cffb760507896",
   "telegram remote 물음·허용 사이트": "b854635168e5b6504a758ce3e10640600efae6ef725455e2153173f50ebf5a58",
   "telegram task 물음": "005077764e71dffdebd5bbe7080c10908d6da03e06479ff4fa7e00cc96a3c4ec",
@@ -35,7 +35,7 @@ const EXPECTED = {
   "telegram remote 안 물음·사이트 없음": "c34ad2a03be90d1dd2dce38dabdfd483ebf945ac438f241cdff41747883be72b",
   "telegram remote 안 물음·허용 사이트": "1e57b4f4f1c1759d9bc4247337b02098f969eb165a77e80dbdfacb4dfc7ae8ed",
   "telegram remote 안 물음·적은 사이트+허용 사이트": "78ced2185c67d101a409d0a31ec31597df1600799090cb6dcd15be0bcd735576",
-  "mcp system": "7a67af1b75ab09b4d0a604a149a2515e277d1d59e59422e33f27291d6590d2b3",
+  "mcp system": "4c4b2549b3a261fcdf3eb586cfe8c87b7fb1e16723119befa1be57ffefdb3de7",
   "mcp remote 물음·사이트 없음": "37599ab9fba155d92a7f5dc88e20b41d0a1c63c84fa878aafad4dedfb2b02841",
   "mcp remote 물음·적은 사이트": "22c0ecf0afa95ddfece2bbff48dd7d67c5d77512ab33107c1e1fe170f924782c",
   "mcp remote 물음·허용 사이트": "0798b10b7190fdf4bbe1b010e59d28c09f6b1a15ccd579fbcb4b1a2ea405b763",

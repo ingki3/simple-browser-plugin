@@ -26,6 +26,15 @@ export async function installTelegram(h) {
           globalThis.__tg.limited = (globalThis.__tg.limited ?? 0) + 1;
           return new Response(JSON.stringify({ ok: false, error_code: 429, parameters: { retry_after: 2 } }), { status: 429, headers: { "content-type": "application/json" } });
         }
+        // failAfter(#210): 그만큼 받은 뒤 다음 한 번은 500으로 거절한다(중간 조각 실패).
+        if (typeof globalThis.__tg.failAfter === "number") {
+          if (globalThis.__tg.failAfter <= 0) {
+            globalThis.__tg.failAfter = undefined;
+            globalThis.__tg.failed = (globalThis.__tg.failed ?? 0) + 1;
+            return new Response(JSON.stringify({ ok: false, error_code: 500, description: "서버 오류 원문" }), { status: 500, headers: { "content-type": "application/json" } });
+          }
+          globalThis.__tg.failAfter -= 1;
+        }
         // holdReply(#145): 승인 질문이 아닌 글의 응답을 늦춘다(중단 신호를 따른다).
         if (!body.reply_markup && globalThis.__tg.holdReply) {
           globalThis.__tg.holding = true;
@@ -159,6 +168,7 @@ const tabTitles = (h) => h.sw.evaluate(async () => (await chrome.tabs.query({}))
 const waitSent = (h, n, ms = 15_000) => waitCount(() => sent(h), n, ms, 250, "보낸 글");
 
 // 원격 요청에서 쓰지 않는 도구(#263 단계 0 — chatAgent.ts REMOTE_BLOCKED_TOOLS, remember_page는 위 시나리오가 따로 본다).
+// send_to_telegram(#210): 원격 요청이 연결한 텔레그램으로 글을 내보내지 않는다(작업을 맡긴 뒤는 telegram-send.mjs가 본다).
 // 인자는 해석을 통과하는 가짜 값이다(차단은 해석 뒤·승인 앞에서 한다). telegram·mcp 시나리오가 함께 쓴다.
 export const remoteBlockedCalls = (h) => [
   { tool: "sign_in", args: { id: "f0-blocked" } },
@@ -167,6 +177,7 @@ export const remoteBlockedCalls = (h) => [
     tool: "schedule_repeat_task",
     args: { title: "막힘 확인", url: `${h.base2}/watch`, check: "열렸는지", then: "알려 줘", intervalMinutes: 30 },
   },
+  { tool: "send_to_telegram", args: { text: "원격에서 보내기 시도" } },
 ];
 
 // 한 원격 요청(턴)의 결과를 본다: 차단 도구는 승인 경로(카드·원격 질문)에 닿기 전에 취소된다.
@@ -416,7 +427,7 @@ export default [
     },
   },
   {
-    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram을 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
     pages2: { "/": `<title>shop</title><p>상품</p>` },
     async run(h) {
       await connect(h);

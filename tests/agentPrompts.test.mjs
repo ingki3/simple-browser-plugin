@@ -18,14 +18,14 @@ const NAMED = { none: [], one: ["https://news.naver.com"], two: ["https://news.n
 const SITES = { none: [], one: ["https://example.com"], two: ["https://example.com", "https://shop.example.org"] };
 
 const SNAP = {
-  "system g=false q=false c=0": "7a67af1b75ab09b4d0a604a149a2515e277d1d59e59422e33f27291d6590d2b3",
-  "system g=false q=false c=1": "d7b703a0ce37806ef6b93065536f8b2189c8d7ad867f36df23e243f2f6fea314",
-  "system g=false q=true c=0": "c5594f6c26d262e4c2a7bd65aaa380f0cc7a5e3b56ca4dc929f96f51fc7c92cb",
-  "system g=false q=true c=1": "71d1bf45d23bfa8530b350e3b2866df653db49dd4b103447c1a02c6e63d81b43",
-  "system g=true q=false c=0": "9a3acaba47a90a027820c448b1944f95f6750c290fe9808f1ac208fe04764660",
-  "system g=true q=false c=1": "97bdf296277044ab1397decb37c7f4deb732af99fcb5003eb3878a256d2b523a",
-  "system g=true q=true c=0": "c34c8734de67c4e14b70b920933158e775b77a8b9c185420aa363b76ff16c002",
-  "system g=true q=true c=1": "6d69642c7888bed187361b966a557fbfc9608fdeec22f89d21d788bd356119b4",
+  "system g=false q=false c=0": "4c4b2549b3a261fcdf3eb586cfe8c87b7fb1e16723119befa1be57ffefdb3de7",
+  "system g=false q=false c=1": "43cb4c3add1fb51cfc04e2aea8d28f2b19657a15e2290f735b8f2de76e55d289",
+  "system g=false q=true c=0": "0c7940be6619aa063a8f34018ba9ab1c877014ca53a6620af225b108ec5453f4",
+  "system g=false q=true c=1": "8760c8f4ee606b5eb5372651b2df3c1826c54a8fee3035244be4ccc3468115ad",
+  "system g=true q=false c=0": "711f6a81ded80fe6b01e06f64eaf130749d618ac5a4b03c716dbe17993fefc90",
+  "system g=true q=false c=1": "3926992119fa94079e376a992980456d7b932d65656e800230aeb0843a52d670",
+  "system g=true q=true c=0": "2d150eb9e2733d1a5a6821fb76cbb94a11a693ad482c3197f46bdcc5953571ce",
+  "system g=true q=true c=1": "0971e0119ee8676415686868be68a20d5e3a9ccd6f1d52ee1fbee249c7ebaffa",
   "remote panel named=none ask=false sites=none": "e9b5c931c33c7c34b03c3b973c16a2baa89ace5e0310f4cbbcc0c8bd686395d0",
   "remote panel named=none ask=false sites=one": "31abe1f780df0cb1ed0b5b5578a63bbf4136e788f51a15deda64587bd506836c",
   "remote panel named=none ask=false sites=two": "cce20de157c132ea5ee26da1ff7cae0cf6aaa591a8435d28c62089620cc9eaf4",
@@ -106,7 +106,7 @@ test("composeSystemPrompt: 빠르게 생각 켬·끔 × Google 있음·없음 ×
     }
   }
   // 하네스 진단(prompt-fingerprint.mjs "panel system 기본")과 같은 글이다.
-  assert.equal(SNAP["system g=false q=false c=0"], "7a67af1b75ab09b4d0a604a149a2515e277d1d59e59422e33f27291d6590d2b3");
+  assert.equal(SNAP["system g=false q=false c=0"], "4c4b2549b3a261fcdf3eb586cfe8c87b7fb1e16723119befa1be57ffefdb3de7");
 });
 
 test("composeSystemPrompt: Google 지침은 설정됐을 때만, 빠르게 생각은 Thought 규칙만 바꾼다", () => {

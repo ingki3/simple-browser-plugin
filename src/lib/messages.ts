@@ -45,7 +45,9 @@ export type ToolName =
   // 반복 작업 등록(#138): 늘 승인 카드로 묻고, 승인하면 정한 간격으로 페이지를 확인한다.
   | "schedule_repeat_task"
   // "이 페이지 기억해줘": 지금 보고 있는 페이지의 저장 카드를 띄운다(저장은 사용자가 카드에서 누를 때만).
-  | "remember_page";
+  | "remember_page"
+  // 패널 요청의 결과를 설정에서 연결한 텔레그램 채팅으로 보낸다(#210). 받는 곳 인자는 없다(연결한 채팅 하나로 고정).
+  | "send_to_telegram";
 
 // 실행 방식(#123). ask: 모든 동작에 승인 후 실행. auto: 페이지 이동·클릭·입력을 묻지 않고 실행(위험한 동작은 묻는다).
 // task: 처음에 작업을 한 번 승인받고, 이 대화가 끝날 때까지 승인 카드 없이 실행한다.
@@ -77,6 +79,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "google_sheets_write_range",
   "google_sheets_append_rows",
   "google_sheets_write_markdown_table",
+  // 모델이 만든 글을 연결한 텔레그램 채팅으로 보낸다(#210). 카드에 보낼 글 전체(가린 글)를 보인다. 원격 대화에서는 쓰지 않는다.
+  "send_to_telegram",
 ]);
 
 export type PageRegion = "main" | "article" | "nav" | "aside" | "header" | "footer" | "other";
