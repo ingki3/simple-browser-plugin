@@ -137,6 +137,106 @@ function isHighSurrogate(c: number): boolean {
   return c >= 0xd800 && c <= 0xdbff;
 }
 
+// 자동 로그인 가림 목록을 못 읽었을 때 내용 대신 보내는 글.
+export const MASK_FAILED_TEXT = "결과를 안전하게 보내지 못했습니다. 패널에서 확인해 주세요.";
+
+// ---- 반복 작업 알림(#139, 요약 #209) ----
+
+export const REPEAT_SUMMARY_MAX = 1000;
+export const REPEAT_SUMMARY_CUT = "…(길어서 잘렸습니다)";
+
+// 알림 글. summary가 없거나 빈 글이면 작업 이름만(요약 기능 전과 같은 글). 요약은 상한에서 자르고(서로게이트 쌍을 가르지 않음) 잘림 표시를 붙인다.
+export function repeatNoticeText(title: string, summary: string | null): string {
+  const base = `반복 작업 ‘${title}’의 조건이 맞았습니다. 패널에서 ‘이어서 진행’을 누르세요.`;
+  const s = summary?.trim() ?? "";
+  if (!s) return base;
+  let body = s;
+  if (s.length > REPEAT_SUMMARY_MAX) {
+    let keep = REPEAT_SUMMARY_MAX;
+    if (isHighSurrogate(s.charCodeAt(keep - 1))) keep -= 1;
+    body = s.slice(0, keep) + REPEAT_SUMMARY_CUT;
+  }
+  return `${base}\n\n확인 결과: ${body}`;
+}
+
+// 알림 판단에 쓰는 연결 상태(background/telegram.ts의 TelegramState 일부).
+export interface RepeatNoticeState {
+  notifyRepeat: boolean;
+  notifyRepeatSummary: boolean;
+  chatId: number | null;
+  status: string;
+  epoch: number;
+}
+
+// 저장 큐를 거쳐 읽은 상태와, 읽기 전에 붙잡은 연결 신호·그 신호가 읽은 뒤에도 지금 연결인지.
+export interface RepeatNoticeRead<S extends RepeatNoticeState = RepeatNoticeState> {
+  s: S;
+  conn: AbortSignal;
+  alive: boolean;
+}
+
+export type RepeatNoticeKind = "none" | "name" | "summary";
+
+export function repeatNoticeWants(s: RepeatNoticeState): RepeatNoticeKind {
+  if (!s.notifyRepeat || s.chatId === null || s.status !== "idle") return "none";
+  return s.notifyRepeatSummary ? "summary" : "name";
+}
+
+// 보내기 직전 판단: 처음 읽은 뒤 연결(신호·세대)이 바뀌었거나 알림을 껐으면 보내지 않는다. 요약은 처음과 지금 모두 켜져 있고
+// 준비한 요약(hasSummary)이 있을 때만, 아니면 이름만.
+export function repeatNoticePlan(before: RepeatNoticeRead, after: RepeatNoticeRead, hasSummary: boolean): RepeatNoticeKind {
+  if (!before.alive || !after.alive || after.conn !== before.conn || after.s.epoch !== before.s.epoch) return "none";
+  const now = repeatNoticeWants(after.s);
+  if (now === "none") return "none";
+  return now === "summary" && repeatNoticeWants(before.s) === "summary" && hasSummary ? "summary" : "name";
+}
+
+export interface RepeatNoticeDeps<S extends RepeatNoticeState> {
+  // 저장 큐를 거쳐 읽는다(앞선 철회·끊기 저장이 끝난 뒤의 상태).
+  read(): Promise<RepeatNoticeRead<S>>;
+  // 자동 로그인 값 가리기. 목록을 못 읽으면 던진다.
+  mask(text: string): Promise<string>;
+  send(s: S, text: string, signal: AbortSignal): Promise<void>;
+}
+
+// 반복 작업 알림 하나(조건이 맞은 회차). reason은 repeatTasks가 이미 가려 저장한 이유(가림 실패면 빈 글).
+// 처음 읽기 → (요약 켜짐이면) 요약 가림, 실패면 이름만 → 전체 글 가림(이름만 글이 실패하면 대체 문구) → 보내기 직전 다시 읽기 → 보내기.
+export async function runRepeatNotice<S extends RepeatNoticeState>(deps: RepeatNoticeDeps<S>, t: { title: string; reason: string }): Promise<{ kind: RepeatNoticeKind; text: string | null }> {
+  const none = { kind: "none" as const, text: null };
+  const first = await deps.read();
+  const want = first.alive ? repeatNoticeWants(first.s) : "none";
+  if (want === "none") return none;
+  let summary: string | null = null;
+  if (want === "summary" && t.reason.trim()) {
+    // 저장 뒤 가림 목록이 늘었을 수 있어 한 번 더 가린다. 실패하면 요약 없이(대체 문구로 바꾸지 않는다).
+    try {
+      summary = await deps.mask(t.reason);
+    } catch {
+      summary = null;
+    }
+  }
+  let nameText: string;
+  try {
+    nameText = await deps.mask(repeatNoticeText(t.title, null));
+  } catch {
+    nameText = MASK_FAILED_TEXT;
+  }
+  let fullText: string | null = null;
+  if (summary?.trim()) {
+    try {
+      fullText = await deps.mask(repeatNoticeText(t.title, summary));
+    } catch {
+      fullText = null;
+    }
+  }
+  const second = await deps.read();
+  const kind = repeatNoticePlan(first, second, fullText !== null);
+  if (kind === "none" || first.conn.aborted) return none;
+  const text = kind === "summary" && fullText !== null ? fullText : nameText;
+  await deps.send(second.s, text, first.conn);
+  return { kind, text };
+}
+
 // 실패가 이어질 때 기다릴 시간: 1·2·4…초, 최대 5분.
 export function backoffMs(failures: number): number {
   return Math.min(300_000, 1000 * 2 ** Math.max(0, failures - 1));

@@ -1,6 +1,6 @@
 // 텔레그램 연동(#139): 서비스 워커의 fetch로 api.telegram.org를 흉내 낸다(받을 업데이트·보낸 메시지를 전역에 둔다).
 // 확인 코드 연결 → 요청 → 최종 답만, 허용 밖 채팅·오래된 메시지 무시, 원격 요청은 전역 실행 방식과 관계없이 '처음에 승인 받고
-// 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만.
+// 끝까지 실행'(요청마다 텔레그램 버튼으로 한 번 맡길지 묻는다 — 묻기를 끄면 auto 판정이고 카드가 필요한 동작은 거절), 반복 작업 알림은 켰을 때 제목만(확인 결과 요약은 따로 켤 때만, #209).
 import { ask, expect, waitUntil } from "../lib.mjs";
 import { checkRemoteHandoffRefused, installHandoffObserver, markTurnStart, remoteTabAt, restoreHandoffObserver } from "../handoffObserve.mjs";
 
@@ -739,7 +739,7 @@ export default [
   },
   {
     name: "반복 작업 알림 요약(#209): 꺼짐이면 지금 글 그대로(이름만), 켜면 이름+요약, 알림을 끄면 요약이 켜져 있어도 안 보냄, 토큰 바꾸기는 유지·지우기는 기본값",
-    pages: { "/watch": `<title>공연</title><button>예매하기</button>` },
+    pages: { "/watch": `<title>공연</title><button>예매하기</button><div id=out></div>` },
     async run(h) {
       await connect(h);
       const st0 = (await ask(h, { kind: "telegram_status" })).data;
@@ -775,7 +775,7 @@ export default [
     isolate: true,
     // 가림 목록(loginSecrets 모듈 캐시)이 채워지기 전에 세션 저장소에 값을 넣는다.
     onWorker: (sw) => sw.evaluate((v) => chrome.storage.session.set({ loginSecrets: { t1: [v] } }).then(() => true), NOTICE_SECRET_VALUE),
-    pages: { "/watch": `<title>공연</title><button>예매하기</button>` },
+    pages: { "/watch": `<title>공연</title><button>예매하기</button><div id=out></div>` },
     async run(h) {
       await connect(h);
       await ask(h, { kind: "telegram_set_notify", on: true });

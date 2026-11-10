@@ -144,9 +144,10 @@ export default [
       const until = (fn, label) => waitUntil(fn, { timeoutMs: 5000, intervalMs: 100, label });
       expect((await summary(a).count()) === 1, "요약 체크박스가 있음");
       expect((await summary(a).isDisabled()) && !(await summary(a).isChecked()), "알림 꺼짐이면 요약은 꺼진 채 비활성");
-      await notify(a).check();
-      await until(async () => !(await summary(a).isDisabled()), "알림을 켜면 요약 활성");
-      await summary(a).check();
+      // 체크박스는 저장 응답으로 바뀌는 제어 칸이라 check() 대신 눌러 두고 결과를 기다린다.
+      await notify(a).click();
+      await until(async () => (await notify(a).isChecked()) && !(await summary(a).isDisabled()), "알림을 켜면 요약 활성");
+      await summary(a).click();
       await until(async () => (await tg()).notifyRepeatSummary === true, "요약 저장");
       await until(async () => (await summary(b).isChecked()) && !(await summary(b).isDisabled()), "다른 설정 화면이 따라감");
       // 다른 곳(패널 메시지)에서 끄면 열린 두 화면이 따라간다.
