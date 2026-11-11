@@ -362,11 +362,11 @@ async function readOneTab(
     }
     if (tabId === null) throw new LinkFail("탭을 열지 못했습니다.");
     void deps.mute(tabId).catch(() => {});
-    // 로딩 대기.
+    // 로딩 대기. 막 만든 탭이 이동을 시작하기 전(빈 about:blank)의 complete는 다 뜬 것으로 보지 않는다.
     const loadUntil = Date.now() + limits.loadMs;
     for (;;) {
       const tab = await checkUser();
-      if (tab.status === "complete") break;
+      if (tab.status === "complete" && !!tab.url && tab.url !== "about:blank") break;
       if (Date.now() >= loadUntil) throw new LinkFail(`페이지가 ${Math.round(limits.loadMs / 1000)}초 안에 다 뜨지 않았습니다.`);
       await sleep(limits.pollMs, link.signal).catch(() => {
         throw stop();

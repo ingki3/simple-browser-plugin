@@ -146,7 +146,10 @@ function depsFor(turnTab: TurnTab): TabLinkDeps {
   return {
     turnTab: async () => {
       const id = await resolveTurnTab(turnTab);
-      const t = await chrome.tabs.get(id);
+      let t = await chrome.tabs.get(id);
+      // 따라가는 팝업이 별도 팝업 창이면(탭을 더할 수 없는 창) 원래 탭 옆에 연다.
+      const win = await chrome.windows.get(t.windowId).catch(() => null);
+      if (win && win.type !== "normal" && "tabId" in turnTab && turnTab.tabId !== id) t = await chrome.tabs.get(turnTab.tabId);
       if (t.incognito) throw new Error("시크릿 창에서는 링크를 탭으로 열어 읽지 않습니다.");
       return { windowId: t.windowId, index: t.index };
     },

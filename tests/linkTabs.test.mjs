@@ -409,3 +409,16 @@ test("이미 중단된 신호면 탭을 만들지 않는다", async () => {
   await assert.rejects(runTabReads(["https://a.example/1"], f.deps, f.owner, ready, ctl.signal, FAST), (e) => e.message === ABORTED_TEXT);
   assert.equal(f.created.length, 0);
 });
+
+test("실행기: 막 만든 탭의 about:blank complete는 다 뜬 것으로 보지 않고 실제 주소가 뜰 때까지 기다린다", async () => {
+  const f = fake({
+    onCreate: (id, tabs) => {
+      const real = tabs.get(id).url;
+      Object.assign(tabs.get(id), { url: "about:blank", status: "complete" });
+      setTimeout(() => Object.assign(tabs.get(id), { url: real, status: "complete" }), 30);
+    },
+  });
+  const [r] = await runTabReads(["https://a.example/1"], f.deps, f.owner, ready, new AbortController().signal, FAST);
+  assert.equal(r.text, "본문 https://a.example/1");
+  assert.equal(f.tabs.size, 0);
+});
