@@ -428,8 +428,8 @@ test("실행기: 읽은 뒤 topDocumentId를 기다리는 사이 활성화되면
   let docCalls = 0;
   const f = fake({
     onDoc: (id) => {
-      // 두 번째 호출 = 읽은 뒤 확인. 그 사이 onActivated만 왔다(get의 active는 아직 false).
-      if (++docCalls === 2) f.owner.noteActivated(id);
+      // 세 번째 호출 = 읽은 뒤 확인(앞의 둘은 로딩 대기의 settle 전·후). 그 사이 onActivated만 왔다(get의 active는 아직 false).
+      if (++docCalls === 3) f.owner.noteActivated(id);
     },
     read: async (id, doc, url) => ({ url, title: "t", mainText: "사용자 탭의 글" }),
   });
@@ -445,9 +445,9 @@ test("실행기: 닫기 단계의 확인에서 활성으로 보이면 이미 만
   let docCalls = 0;
   let armed = false;
   const f = fake({
-    // 읽은 뒤 확인(두 번째 topDocumentId)이 끝난 다음의 get = 닫기 단계의 확인. 거기서 처음 활성으로 보인다(onActivated 없이).
+    // 읽은 뒤 확인(세 번째 topDocumentId)이 끝난 다음의 get = 닫기 단계의 확인. 거기서 처음 활성으로 보인다(onActivated 없이).
     onDoc: () => {
-      if (++docCalls === 2) armed = true;
+      if (++docCalls === 3) armed = true;
     },
     read: async (id, doc, url) => ({ url, title: "t", mainText: "닫기 직전 사용자 탭의 글" }),
   });
@@ -499,4 +499,87 @@ test("읽는 중 활성화되면 저장된 소유 목록에서 바로 빠지고,
   assert.equal(f.tabs.size, 1, "탭은 그대로");
   assert.deepEqual(f.storage.ids, []);
   assert.equal(f.owner.has([...f.tabs.keys()][0]), false, "끝난 뒤 메모리에서도 빠짐");
+});
+
+// 리뷰 P2(#293 3차): 다 뜬 뒤 대기하는 사이 새 이동(로그인 중계 페이지의 스크립트 리다이렉트 등)이 시작되면 다시 기다린다.
+test("실행기: settle 대기 중 loading으로 바뀌면(주소는 그대로) 다시 기다려 새 주소의 새 문서 글을 읽는다", async () => {
+  const f = fake({
+    onCreate: (id, tabs) => {
+      const t = tabs.get(id);
+      Object.assign(t, { url: "https://a.example/relay", status: "complete", doc: "relay" });
+      setTimeout(() => (t.status = "loading"), 15);
+      setTimeout(() => Object.assign(t, { url: "https://a.example/article", status: "complete", doc: "article" }), 120);
+    },
+    read: async (id, doc, url) => ({ url, title: "t", mainText: `문서 ${doc} 글 ${url}` }),
+  });
+  const [r] = await runTabReads(["https://a.example/relay"], f.deps, f.owner, ready, new AbortController().signal, { ...FAST, settleMs: 50 });
+  assert.equal(r.text, "문서 article 글 https://a.example/article");
+  assert.equal(r.finalUrl, "https://a.example/article");
+  assert.equal(f.tabs.size, 0);
+});
+
+test("실행기: settle 뒤 계속 loading이면 로딩 한도에서 '다 뜨지 않음' 오류, 탭은 닫힘", async () => {
+  const f = fake({
+    onCreate: (id, tabs) => {
+      setTimeout(() => (tabs.get(id).status = "loading"), 15);
+    },
+  });
+  const [r] = await runTabReads(["https://a.example/1"], f.deps, f.owner, ready, new AbortController().signal, { ...FAST, settleMs: 50, loadMs: 250 });
+  assert.match(r.error, /다 뜨지 않았습니다/);
+  assert.equal(f.tabs.size, 0);
+  assert.deepEqual(f.storage.ids, []);
+});
+
+test("실행기: settle 사이 최상위 문서만 바뀌어도(같은 주소 재로드) 다시 기다린다", async () => {
+  let docCalls = 0;
+  const f = fake({
+    onDoc: (id, tabs) => {
+      // 첫 settle 전 문서 id를 준 뒤 바꾼다 → settle 후 id가 달라 한 번 더 기다린다.
+      if (++docCalls === 1) setTimeout(() => (tabs.get(id).doc = "reloaded"), 0);
+    },
+    read: async (id, doc, url) => ({ url, title: "t", mainText: `문서 ${doc}` }),
+  });
+  const [r] = await runTabReads(["https://a.example/1"], f.deps, f.owner, ready, new AbortController().signal, { ...FAST, settleMs: 30 });
+  assert.equal(r.text, "문서 reloaded");
+  assert.ok(docCalls >= 5, `다시 기다림(${docCalls})`);
+});
+
+// 리뷰 P2(#293 3차): 초기 청소 중 앞 탭 정리가 늦는 사이 사용자가 뒤쪽 청소 대상 탭을 활성화했다가 옮기면 닫지 않는다.
+test("초기 청소: 앞 탭 닫기가 늦는 사이 활성화된 뒤쪽 탭은 비활성으로 돌아가도 닫지 않고 목록에서 빠진다", async () => {
+  const f = fake({ stored: [1, 2] });
+  f.tabs.set(1, { url: "https://a.example/1", status: "complete", active: false, doc: "x" });
+  f.tabs.set(2, { url: "https://a.example/2", status: "complete", active: false, doc: "y" });
+  const owner = new TabOwnership(f.deps);
+  f.deps.remove = async (id) => {
+    if (id === 1) {
+      // 첫 탭 닫기가 늦는 사이 사용자가 둘째 탭을 앞으로 가져왔다가 다른 탭으로 옮긴다.
+      f.tabs.get(2).active = true;
+      await owner.noteActivated(2);
+      f.tabs.get(2).active = false;
+      await wait(20);
+    }
+    f.tabs.delete(id);
+  };
+  const r = await owner.cleanup();
+  assert.deepEqual(r, { closed: 1, kept: 0 });
+  assert.ok(!f.tabs.has(1));
+  assert.ok(f.tabs.has(2), "사용자가 쓴 탭은 그대로");
+  assert.deepEqual(f.storage.ids, []);
+  assert.equal(owner.has(2), false);
+});
+
+test("초기 청소: 탭 조회를 기다리는 사이 활성화되면(mem에서 빠짐) 닫지 않는다", async () => {
+  const f = fake({ stored: [5] });
+  f.tabs.set(5, { url: "https://a.example/5", status: "complete", active: false, doc: "z" });
+  const owner = new TabOwnership(f.deps);
+  const get = f.deps.get;
+  f.deps.get = async (id) => {
+    const t = await get(id);
+    await owner.noteActivated(id);
+    return t;
+  };
+  const r = await owner.cleanup();
+  assert.deepEqual(r, { closed: 0, kept: 0 });
+  assert.ok(f.tabs.has(5));
+  assert.deepEqual(f.storage.ids, []);
 });

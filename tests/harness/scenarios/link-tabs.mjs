@@ -32,6 +32,7 @@ const LIST = `<title>목록</title><main><h1>목록</h1><ul>
 <li><a href="/slow-art/y">느린 글 둘</a></li>
 <li><a href="/pub/1">공개 글</a></li>
 <li><a href="/secret/1">값이 든 글</a></li>
+<li><a href="/relay/1">중계 뒤 글</a></li>
 </ul><p id=out></p></main>`;
 
 const APP = `<title>앱</title><main id=m></main><script>
@@ -58,6 +59,9 @@ function setup(h) {
   h.routes.set("1/rt-final/1", (q, r) => send(r, loggedIn(q) ? article("왕복 글", ROUND) : article("안내", "로그인이 필요합니다.")));
   h.routes.set("1/event/7", (q, r) => redirect(r, "/checkout/pay"));
   h.routes.set("1/checkout/pay", (q, r) => send(r, article("결제", "결제 화면 글")));
+  // 로그인 중계 페이지(#293 3차 리뷰): 처음 뜬 뒤 500ms에 location.replace로 본문 페이지로 가고, 본문 응답은 1.5초 늦다.
+  h.pages.set("1/relay/1", `<title>중계</title><main><p>${"중계 페이지 글입니다. ".repeat(20)}</p></main><script>setTimeout(() => location.replace("/late/1"), 500)</script>`);
+  h.routes.set("1/late/1", (q, r) => setTimeout(() => send(r, article("본문 페이지", ROUND)), 1_500));
   for (const k of ["x", "y"]) h.routes.set(`1/slow-art/${k}`, (q, r) => setTimeout(() => send(r, article("느린 글", PUBLIC)), 8_000));
 }
 
@@ -69,7 +73,7 @@ const tabLog = (r) => r.tools.filter((t) => t.name === "read_links_in_tabs");
 
 // 이 시나리오가 링크로 둔 경로의 탭(이 도구가 연 탭). 공용 하네스에서는 앞 시나리오 묶음이 연 다른 경로의 탭이 남아 있을 수 있어
 // 이 파일의 경로만 본다. 탭 줄 순서.
-const LINK_PATH = /^\/(member|rt|rt-final|bounce|app|pub|secret|slow-art|event|checkout|payment|files|nope)(\/|$)/;
+const LINK_PATH = /^\/(member|rt|rt-final|bounce|app|pub|secret|slow-art|event|checkout|payment|files|nope|relay|late)(\/|$)/;
 const extraTabs = (h) =>
   h.sw.evaluate(
     async ({ bases, re }) => {
@@ -244,6 +248,16 @@ export default [
       const [t] = okResult(r, "read_links_in_tabs");
       expect(String(t.text).includes("화면 B 글") && !String(t.text).includes("화면 A 글") && t.url === `${h.base}/app#/b`, `B 화면(${JSON.stringify(t).slice(0, 200)})`);
       await noLeftover(h, "해시");
+    },
+  },
+  {
+    name: "read_links_in_tabs: 다 뜬 뒤 대기하는 사이 중계 페이지가 새 이동을 시작하면 다시 기다려 본문 페이지의 글을 읽는다",
+    async run(h) {
+      setup(h);
+      const r = await h.turn([inTabs([`${h.base}/relay/1`]), { text: "끝" }], { path: "/lt", approve: true, maxWaitMs: 30_000 });
+      const [t] = okResult(r, "read_links_in_tabs");
+      expect(String(t.text).includes("왕복 리다이렉트 뒤에") && !String(t.text).includes("중계 페이지 글") && t.finalUrl === `${h.base}/late/1`, `본문 페이지 글(${JSON.stringify(t).slice(0, 240)})`);
+      await noLeftover(h, "중계");
     },
   },
   {

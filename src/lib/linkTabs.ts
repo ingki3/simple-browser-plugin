@@ -286,11 +286,16 @@ export class TabOwnership {
   // 초기 청소(서비스 워커가 다시 뜸): 시작할 때 저장소에 있던 id만 다룬다. 활성 탭은 닫지 않고 목록에서만 빼고, 닫기에 실패한 것은 남긴다.
   async cleanup(): Promise<{ closed: number; kept: number }> {
     const ids = await this.serial(() => this.deps.loadOwned()).catch(() => [] as number[]);
+    // 시작할 때 읽은 id를 (읽는 중이 아닌) 소유 탭으로 메모리에 먼저 올린다: 청소하는 사이 사용자가 뒤쪽 탭을 앞으로 가져오면
+    // noteActivated가 잡아 메모리·저장소에서 뺀다.
+    for (const id of ids) if (!this.running.has(id)) this.mem.add(id);
     let closed = 0;
     let kept = 0;
     for (const id of ids) {
+      if (!this.mem.has(id)) continue;
       const tab = await this.deps.get(id).catch(() => undefined);
-      if (tab === null || tab?.active) {
+      // 닫기 직전 확인은 동기적으로: get을 기다리는 사이의 활성화(noteActivated → mem에서 빠짐)도 놓치지 않는다.
+      if (tab === null || tab?.active || !this.mem.has(id) || this.touched.has(id)) {
         await this.drop(id);
         continue;
       }
@@ -386,24 +391,35 @@ async function readOneTab(
     }
     if (tabId === null) throw new LinkFail("탭을 열지 못했습니다.");
     void deps.mute(tabId).catch(() => {});
-    // 로딩 대기. 막 만든 탭이 이동을 시작하기 전(빈 about:blank)의 complete는 다 뜬 것으로 보지 않는다.
+    // 로딩 대기: complete 확인 → 대기(settle) → 다시 조회를 한 루프로 한다. 대기하는 사이 페이지가 새 이동(스크립트·meta
+    // 리다이렉트 — 로그인 중계 페이지 등)을 시작해 complete가 아니게 됐거나 주소·최상위 문서가 바뀌었으면 다시 기다린다.
+    // 막 만든 탭이 이동을 시작하기 전(빈 about:blank)의 complete는 다 뜬 것으로 보지 않는다. 한도(loadMs)는 처음부터 하나.
     const loadUntil = Date.now() + limits.loadMs;
-    for (;;) {
-      const tab = await checkUser();
-      if (tab.status === "complete" && !!tab.url && tab.url !== "about:blank") break;
-      if (Date.now() >= loadUntil) throw new LinkFail(`페이지가 ${Math.round(limits.loadMs / 1000)}초 안에 다 뜨지 않았습니다.`);
-      await sleep(limits.pollMs, link.signal).catch(() => {
+    const notLoaded = () => new LinkFail(`페이지가 ${Math.round(limits.loadMs / 1000)}초 안에 다 뜨지 않았습니다.`);
+    const pause = (ms: number) =>
+      sleep(ms, link.signal).catch(() => {
         throw stop();
       });
+    let finalUrl = "";
+    let documentId: string | null = null;
+    for (;;) {
+      const tab = await checkUser();
+      if (tab.status === "complete" && !!tab.url && tab.url !== "about:blank") {
+        const beforeDoc = await bound(deps.topDocumentId(tabId));
+        await pause(limits.settleMs);
+        const loaded = await checkUser();
+        const afterDoc = await bound(deps.topDocumentId(tabId));
+        if (loaded.status === "complete" && loaded.url === tab.url && !!afterDoc && afterDoc === beforeDoc) {
+          finalUrl = loaded.url ?? "";
+          documentId = afterDoc;
+          break;
+        }
+      }
+      if (Date.now() >= loadUntil) throw notLoaded();
+      await pause(limits.pollMs);
     }
-    await sleep(limits.settleMs, link.signal).catch(() => {
-      throw stop();
-    });
-    const loaded = await checkUser();
-    const finalUrl = loaded.url ?? "";
     const blocked = finalUrlBlock(finalUrl);
     if (blocked) return { url: open, finalUrl: clipUrl(finalUrl), error: blocked };
-    const documentId = await bound(deps.topDocumentId(tabId));
     if (!documentId) throw new LinkFail("페이지 문서를 확인하지 못했습니다.");
     // 본문 읽기 직전 확인.
     await checkUser();
