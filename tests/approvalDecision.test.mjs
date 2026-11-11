@@ -158,3 +158,31 @@ test("send_to_telegram: ask→카드, task→맡긴 작업, auto→자동, 보�
   assert.equal(held.mode, "card");
   assert.equal(held.chatGrant.offer, false);
 });
+
+// read_links_in_tabs(#293): 새 예외 없이 기존 판정 그대로. 미리보기는 고정 autoBlock(로그인된 탭으로 여는 읽기는 늘 확인)만 준다.
+test("read_links_in_tabs: ask·auto→카드, task→맡긴 작업, 보호 중 task→맡긴 작업, 대화 허락·링크 허락 제안 없음", async () => {
+  const { TAB_LINK_AUTO_BLOCK } = await import("../src/lib/linkTabs.ts");
+  const tl = (over) => input({ toolName: "read_links_in_tabs", pageUrl: undefined, preview: { autoBlock: TAB_LINK_AUTO_BLOCK }, ...over });
+  const cases = [
+    [{}, "card"],
+    [{ autoApprove: true }, "card"],
+    [{ taskMode: true }, "task"],
+    [{ guarded: true }, "card"],
+    [{ autoApprove: true, guarded: true }, "card"],
+    [{ taskMode: true, guarded: true }, "task"],
+  ];
+  for (const [over, mode] of cases) {
+    const d = decideApproval(tl(over));
+    assert.equal(d.mode, mode, JSON.stringify(over));
+    assert.equal(d.chatGrant.offer, false, `대화 허락 제안 없음 ${JSON.stringify(over)}`);
+    assert.equal(d.chatGrant.covered, false);
+    assert.equal(d.linkOffer, false);
+    assert.equal(d.urlOffer, false);
+  }
+  // auto 카드의 이유는 고정 문구.
+  assert.equal(decideApproval(tl({ autoApprove: true })).block, TAB_LINK_AUTO_BLOCK);
+  // 다른 도구의 대화 허락(read_linked_pages 포함)이 있어도 덮이지 않는다.
+  const held = decideApproval(tl({ chatGrants: new Map([["read_linked_pages", ""], ["translate_page", ""], ["download_images", ""]]) }));
+  assert.equal(held.mode, "card");
+  assert.equal(held.chatGrant.offer, false);
+});

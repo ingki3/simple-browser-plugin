@@ -9,9 +9,11 @@ import {
   MAX_LINK_REDIRECTS,
   RedirectMemory,
   blockedWithoutCookies,
+  crossSiteRedirectText,
   nextRedirectStep,
   requestUrl,
   structuralReject,
+  tabReadFallbackText,
   type RedirectStep,
 } from "@/lib/linkRedirect";
 import { resolveTurnTab, type TurnTab } from "./tools/handlers";
@@ -56,6 +58,11 @@ const snapshots = new Map<string, Snapshot>();
 const chosen = new Map<string, string[]>();
 // 턴마다 새로 만드는 TurnTab(한 탭)에 묶어 두므로, 기억은 그 턴·그 탭 안에서만 쓰이고 턴이 끝나면 함께 사라진다.
 const redirectMemory = new WeakMap<TurnTab, RedirectMemory>();
+
+// read_links_in_tabs(#293): 이 턴에 기억한 다른 사이트 리다이렉트 목적지면 그 원래 페이지 링크(해시 없는 주소), 아니면 null.
+export function rememberedPageLink(turnTab: TurnTab, url: string): string | null {
+  return redirectMemory.get(turnTab)?.pageLinkFor(url) ?? null;
+}
 
 function memoryFor(turnTab: TurnTab): RedirectMemory {
   let m = redirectMemory.get(turnTab);
@@ -236,15 +243,14 @@ function short(url: string): string {
 }
 
 // 따라가지 않은 리다이렉트를 모델에 알리는 오류. 다른 사이트 목적지만 이 턴에 기억한다(다시 부르면 새 카드).
-function redirectStopError(step: Extract<RedirectStep, { kind: "stop" }>, memory: RedirectMemory, pageLink: string): LinkReadError {
+// url: 지금 읽은 후보. pageLink와 다르면 그 후보가 이미 기억한 리다이렉트 목적지였다(#293 — 탭 도구 안내).
+function redirectStopError(step: Extract<RedirectStep, { kind: "stop" }>, memory: RedirectMemory, pageLink: string, url: string): LinkReadError {
   const to = short(step.url);
   switch (step.reason) {
     case "cross_site":
+      // 목적지 후보가 또 다른 사이트로 가도 기억한다(원래 링크는 그대로 pageLink — 탭 도구가 원래 링크로 바꿔 연다).
       memory.remember(step.url, pageLink);
-      return new LinkReadError(
-        `이 링크는 다른 사이트 주소로 리다이렉트됩니다: ${to}\n안전을 위해 다른 사이트로 가는 리다이렉트는 따라가지 않았습니다. 사용자가 원한 글로 보이면 read_linked_pages를 이 주소(redirectTo)로 한 번 다시 호출하세요(새 승인 카드가 뜹니다).`,
-        { redirectTo: step.url },
-      );
+      return new LinkReadError(crossSiteRedirectText(to, pageLink !== url), { redirectTo: step.url });
     case "sensitive":
       return new LinkReadError(
         `이 링크는 ${to}로 리다이렉트되는데, 그 주소에 ${step.detail} 신호가 있어 따라가지 않았습니다. 이 주소로 다시 읽지 말고 사용자에게 알리세요.`,
@@ -315,7 +321,7 @@ async function fetchHtml(
       }
       const step = nextRedirectStep(url, location, visited);
       debugLog("linked_pages:redirect", `${short(current)} → ${short(location)} · ${step.kind === "follow" ? "follow" : step.reason}`);
-      if (step.kind !== "follow") throw redirectStopError(step, memory, pageLink);
+      if (step.kind !== "follow") throw redirectStopError(step, memory, pageLink, url);
       visited.push(step.url);
       current = step.url;
     }
@@ -325,7 +331,7 @@ async function fetchHtml(
     debugLog("linked_pages:status", `${short(current)} · HTTP ${res.status}`, "warn");
     if (blockedWithoutCookies(res.status)) {
       throw new LinkReadError(
-        `HTTP ${res.status}: 이 사이트가 로그인 쿠키 없이 받는 요청을 막았습니다(로그인 필요·접근 거부·요청 제한일 수 있음). 이 링크가 꼭 필요하면 click_element를 거치지 말고 navigate_to_url로 ${short(url)} 을 한 번 열어 get_page_content로 읽으세요.`,
+        `HTTP ${res.status}: 이 사이트가 로그인 쿠키 없이 받는 요청을 막았습니다(로그인 필요·접근 거부·요청 제한일 수 있음). ${tabReadFallbackText(short(url))}`,
         { blocked: true },
       );
     }
@@ -392,7 +398,7 @@ async function readOne(
         url,
         ...moved,
         error:
-          "본문을 추출하지 못했습니다(자바스크립트로 그리는 페이지·로그인·오류 화면일 수 있음). 이 링크가 꼭 필요하면 click_element를 거치지 말고 navigate_to_url로 이 주소를 한 번 열어 get_page_content로 읽으세요.",
+          `본문을 추출하지 못했습니다(자바스크립트로 그리는 페이지·로그인·오류 화면일 수 있음). ${tabReadFallbackText(short(url))}`,
       };
     }
     return {

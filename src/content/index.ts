@@ -235,7 +235,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
   }
   if (msg.kind === "link_lookup") {
     try {
-      sendResponse({ ok: true, data: lookupLinks(msg.urls) } satisfies ContentResponse);
+      sendResponse({ ok: true, data: lookupLinks(msg.urls, msg.exact === true) } satisfies ContentResponse);
     } catch (err) {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies ContentResponse);
     }
