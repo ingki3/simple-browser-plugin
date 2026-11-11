@@ -343,7 +343,10 @@ async function readOneTab(
     }
     return tab;
   };
-  try {
+  // 결과는 변수에 담고, 탭 정리(닫기) 뒤에 정한다 — 닫기 직전에 사용자 개입이 보이면 이미 만든 글을 버린다.
+  let result: TabRead | null = null;
+  let abort: UserAbort | null = null;
+  const run = async (): Promise<TabRead> => {
     const where = await bound(deps.turnTab());
     // 만들기 약속을 받은 즉시(다른 await 없이) 정리 책임을 잡는다: 탭 id를 받으면 메모리 목록에 먼저 넣고 저장소에 기록한다.
     // 기한·중단으로 기다리지 않게 된 뒤에 탭이 열리면 등록이 끝난 뒤 닫는다.
@@ -400,24 +403,48 @@ async function readOneTab(
     // 읽은 직후 확인: 사용자가 건드리지 않았고, 주소와 최상위 문서가 그대로일 때만 글을 쓴다.
     const after = await checkUser();
     const afterDoc = await bound(deps.topDocumentId(tabId));
+    // 마지막 비동기 확인을 기다리는 사이의 활성화 기록(onActivated)을 한 번 더 동기적으로 본다.
+    if (owner.isTouched(tabId)) {
+      userTab = true;
+      throw new UserTab();
+    }
     if (after.url !== finalUrl || afterDoc !== documentId || got.url !== finalUrl) {
       return { url: open, ...(finalUrl !== open ? { finalUrl } : {}), error: CHANGED_TEXT };
     }
     return tabReadResult(open, finalUrl, got.title, got.mainText, maxChars);
+  };
+  try {
+    result = await run();
   } catch (err) {
-    if (user.aborted) throw new UserAbort();
-    if (err instanceof UserTab) return { url: open, error: USER_TAB_TEXT };
-    const msg = err instanceof LinkFail ? err.message : "링크를 탭에서 읽지 못했습니다.";
-    if (!(err instanceof LinkFail)) deps.log("link_tabs:error", err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200), "warn");
-    return { url: open, error: msg };
-  } finally {
+    if (user.aborted) abort = new UserAbort();
+    else if (err instanceof UserTab) result = { url: open, error: USER_TAB_TEXT };
+    else {
+      const msg = err instanceof LinkFail ? err.message : "링크를 탭에서 읽지 못했습니다.";
+      if (!(err instanceof LinkFail)) deps.log("link_tabs:error", err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200), "warn");
+      result = { url: open, error: msg };
+    }
+  }
+  return settle();
+
+  // 정리: 기한·중단 리스너를 풀고 탭을 닫는다(사용자가 건드린 탭은 닫지 않고 목록에서 뺀다). 닫기 단계에서 개입이 보이면("user")
+  // 이미 만든 결과(본문 포함)를 버리고 사용자 탭 오류로 바꾼다. 중단이면 정리가 끝난 뒤 중단으로 끝낸다.
+  async function settle(): Promise<TabRead> {
     clearTimeout(timer);
     user.removeEventListener("abort", onUser);
     if (tabId !== null) {
-      // 닫기 직전 확인(사용자가 건드린 탭은 닫지 않고 목록에서 뺀다).
-      if (userTab) await owner.drop(tabId);
-      else await owner.close(tabId);
+      let closed: "closed" | "user" | "kept" = "kept";
+      try {
+        if (userTab) {
+          await owner.drop(tabId);
+          closed = "user";
+        } else closed = await owner.close(tabId);
+      } catch {
+        /* 정리 실패는 목록에 남아 다음 초기 청소가 다시 시도한다 */
+      }
+      if (closed === "user") result = { url: open, error: USER_TAB_TEXT };
     }
+    if (abort) throw abort;
+    return result ?? { url: open, error: "링크를 탭에서 읽지 못했습니다." };
   }
 }
 

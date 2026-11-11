@@ -422,3 +422,43 @@ test("실행기: 막 만든 탭의 about:blank complete는 다 뜬 것으로 보
   assert.equal(r.text, "본문 https://a.example/1");
   assert.equal(f.tabs.size, 0);
 });
+
+// 리뷰 P2(#293): 읽은 뒤 마지막 비동기 확인(topDocumentId)을 기다리는 사이·닫기 직전에 사용자가 앞으로 가져오면 글을 버린다.
+test("실행기: 읽은 뒤 topDocumentId를 기다리는 사이 활성화되면 글 없음·탭 안 닫힘·목록에서 빠짐", async () => {
+  let docCalls = 0;
+  const f = fake({
+    onDoc: (id) => {
+      // 두 번째 호출 = 읽은 뒤 확인. 그 사이 onActivated만 왔다(get의 active는 아직 false).
+      if (++docCalls === 2) f.owner.noteActivated(id);
+    },
+    read: async (id, doc, url) => ({ url, title: "t", mainText: "사용자 탭의 글" }),
+  });
+  const [r] = await runTabReads(["https://a.example/1"], f.deps, f.owner, ready, new AbortController().signal, FAST);
+  assert.equal(r.error, USER_TAB_TEXT);
+  assert.ok(!JSON.stringify(r).includes("사용자 탭의 글"));
+  assert.equal(f.tabs.size, 1, "탭은 그대로");
+  assert.deepEqual(f.storage.ids, []);
+  assert.equal(f.owner.has([...f.tabs.keys()][0]), false);
+});
+
+test("실행기: 닫기 단계의 확인에서 활성으로 보이면 이미 만든 글을 버리고 탭을 닫지 않는다", async () => {
+  let docCalls = 0;
+  let armed = false;
+  const f = fake({
+    // 읽은 뒤 확인(두 번째 topDocumentId)이 끝난 다음의 get = 닫기 단계의 확인. 거기서 처음 활성으로 보인다(onActivated 없이).
+    onDoc: () => {
+      if (++docCalls === 2) armed = true;
+    },
+    read: async (id, doc, url) => ({ url, title: "t", mainText: "닫기 직전 사용자 탭의 글" }),
+  });
+  const get = f.deps.get;
+  f.deps.get = async (id) => {
+    if (armed && f.tabs.has(id)) f.tabs.get(id).active = true;
+    return get(id);
+  };
+  const [r] = await runTabReads(["https://a.example/1"], f.deps, f.owner, ready, new AbortController().signal, FAST);
+  assert.equal(r.error, USER_TAB_TEXT);
+  assert.ok(!JSON.stringify(r).includes("닫기 직전"));
+  assert.equal(f.tabs.size, 1, "탭은 그대로");
+  assert.deepEqual(f.storage.ids, []);
+});
