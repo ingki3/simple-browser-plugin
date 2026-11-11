@@ -46,9 +46,17 @@ export async function startHarness({ onWorker } = {}) {
   const pages = new Map();
   // 서버가 받은 요청(서버 번호 + 경로, #193 — 리다이렉트를 따르지 않는지 본다).
   const hits = [];
+  // 시나리오가 경로마다 직접 답하는 처리기(#293 — 쿠키를 보고 다른 글, 리다이렉트 왕복). 열쇠는 서버 번호 + 경로,
+  // 값은 (req, res, { base, base2 }) => void. 시나리오마다 비운다(run.mjs).
+  const routes = new Map();
   const serve = (which) => (q, r) => {
     const path = q.url.split("?")[0];
     hits.push(`${which}${path}`);
+    const route = routes.get(`${which}${path}`);
+    if (route) {
+      route(q, r, { base: `http://127.0.0.1:${srv.address().port}`, base2: `http://localhost:${srv2.address().port}` });
+      return;
+    }
     // /redir…(#193): 다른 출처(서버 2)의 같은 경로로 307 — 로컬 서버 주소가 넘기는 응답을 따르지 않는지 시험.
     if (which === 1 && path.startsWith("/redir/")) {
       r.writeHead(307, { location: `http://localhost:${srv2.address().port}/v1${path.slice("/redir".length)}` });
@@ -264,7 +272,7 @@ export async function startHarness({ onWorker } = {}) {
     };
   }
 
-  return { base, base2, pages, hits, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, panelLogs, installKeePassXC, userDataDir, optionsUrl, optionsPages, openOptions, waitOptions };
+  return { base, base2, pages, routes, hits, sw, tab, panel, ctx, extId, settings, reset, turn, close, logs, panelLogs, installKeePassXC, userDataDir, optionsUrl, optionsPages, openOptions, waitOptions };
 }
 
 // 모의 모델: 단계마다 직전 도구 결과를 보고 다음 호출을 만든다. 도구 결과(모델에 간 그대로)는 __toolLog에 남긴다.
