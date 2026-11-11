@@ -16,6 +16,8 @@ import { DOWNLOAD_LIMITS } from "@/lib/downloadPick";
 import { snapshotDownloads, takeChosenDownloads } from "../downloadChoices";
 import { MAX_TABS_PER_CALL, readChosenTabs, snapshotCandidates } from "../otherTabs";
 import { readChosenLinks, snapshotLinks } from "../linkedPages";
+import { readChosenTabLinks, snapshotTabLinks } from "../linkTabs";
+import { TAB_LINK_AUTO_BLOCK } from "@/lib/linkTabs";
 import type {
   FindClickablesResponse,
   FileLinkList,
@@ -471,6 +473,20 @@ export async function buildToolPreview(
         grantBlock,
         grantChoiceIds: choices.map((c) => c.id),
         remoteChoices: { kind: "link", picks: defaults.map((id) => picks[id]).filter((p): p is { url: string; note: string } => !!p) },
+      };
+    }
+    case "read_links_in_tabs": {
+      // 로그인된 탭으로 여는 것은 링크를 누른 것과 같아 실행 방식 auto에서도 카드로 묻는다(autoBlock 고정 문구).
+      // 이번 대화 허락·원격 질문 재료는 주지 않는다(대화 허락 대상이 아니고, 원격 대화에서는 거절).
+      const args = parsedArgs as ToolArgs["read_links_in_tabs"];
+      const { choices, rejected } = await snapshotTabLinks(callId, turnTab, args.urls);
+      return {
+        summary: `페이지의 링크 ${choices.length}개를 로그인된 상태로 새 탭(뒤에서)으로 열어 본문을 읽고 닫습니다. 링크를 직접 누른 것과 같아 페이지 스크립트가 실행되고 읽음 표시 같은 흔적이 남을 수 있으며, 다른 사이트로 넘어갈 수 있습니다. 읽을 링크를 고르세요. 읽은 내용은 모델 제공자로 전송됩니다.`,
+        ...(rejected.length ? { details: `열지 않는 주소:\n${rejected.join("\n")}` } : {}),
+        choices,
+        choiceLimit: choices.length,
+        choiceDefaults: choices.map((c) => c.id),
+        autoBlock: TAB_LINK_AUTO_BLOCK,
       };
     }
     case "read_other_tabs": {
@@ -1076,6 +1092,15 @@ async function runTool(
       return {
         ok: okCount > 0,
         summary: `링크 ${data.length}개 중 ${okCount}개 읽음`,
+        data,
+      };
+    }
+    case "read_links_in_tabs": {
+      const data = await readChosenTabLinks(callId, signal);
+      const okCount = data.filter((d) => "text" in d).length;
+      return {
+        ok: okCount > 0,
+        summary: `링크 ${data.length}개 중 ${okCount}개를 탭에서 읽음`,
         data,
       };
     }

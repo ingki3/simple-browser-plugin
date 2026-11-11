@@ -30,6 +30,7 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   google_drive_export: "Google 드라이브 파일 읽기",
   read_other_tabs: "다른 탭 읽기",
   read_linked_pages: "링크한 페이지 읽기",
+  read_links_in_tabs: "링크를 탭으로 열어 읽기",
   confirm_task: "작업 맡기기",
   schedule_repeat_task: "반복 작업 등록",
   remember_page: "이 페이지 기억하기",

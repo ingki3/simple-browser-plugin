@@ -40,6 +40,8 @@ export type ToolName =
   | "google_drive_export"
   | "read_other_tabs"
   | "read_linked_pages"
+  // 지금 페이지의 링크를 로그인된 상태로 비활성 탭에서 열어 본문을 읽고 닫는다(#293). 늘 사용자가 카드에서 고른다(auto 포함).
+  | "read_links_in_tabs"
   // '처음에 승인 받고 끝까지 실행'(runMode task, #123): 할 일과 위험을 보이고 사용자에게 작업을 한 번 맡긴다.
   | "confirm_task"
   // 반복 작업 등록(#138): 늘 승인 카드로 묻고, 승인하면 정한 간격으로 페이지를 확인한다.
@@ -76,6 +78,8 @@ export const SENSITIVE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "read_other_tabs",
   // 지금 페이지의 링크를 쿠키 없이 받아 본문을 읽는다. 늘 사용자가 읽을 링크를 고른다.
   "read_linked_pages",
+  // 지금 페이지의 링크를 로그인된 탭으로 열어 읽는다(#293). 링크를 누른 것과 같아 실행 방식 auto에서도 카드로 묻는다.
+  "read_links_in_tabs",
   "google_sheets_write_range",
   "google_sheets_append_rows",
   "google_sheets_write_markdown_table",
@@ -438,7 +442,8 @@ export type BgToContent =
   // region(#284): 작전 영역도 읽는다(RegionProbe). outline: 작전 만들기용 영역 후보 수. max·limit이 0이면 전체 글자·버튼을 읽지 않는다.
   | { kind: "watch_snapshot"; expectUrl: string; max: number; limit: number; region?: RegionSpec; outline?: number }
   // read_linked_pages: 이 주소들이 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 링크에 있는지와 링크 글자.
-  | { kind: "link_lookup"; urls: string[] }
+  // exact(read_links_in_tabs, #293): 해시 포함 href 전체와 글자 그대로 같은 것만, 받은 주소 그대로 돌려준다.
+  | { kind: "link_lookup"; urls: string[]; exact?: true }
   // download_files(#48): 지금 문서(최상위 + 접근 가능한 같은 출처 프레임)의 http(s) 링크(후보 고정용).
   // urls(모델이 넘긴 주소)는 돌려주는 수의 한도와 관계없이 끝까지 찾는다.
   | { kind: "download_links"; urls: string[] }

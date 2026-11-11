@@ -158,7 +158,7 @@ export default [
     },
   },
   {
-    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram을 쓰지 않는다(물을 수 있어도 elicitation·패널 카드 없음)",
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·read_links_in_tabs를 쓰지 않는다(물을 수 있어도 elicitation·패널 카드 없음)",
     async run(h) {
       const bridge = await askReady(h);
       try {

@@ -178,6 +178,8 @@ export const remoteBlockedCalls = (h) => [
     args: { title: "막힘 확인", url: `${h.base2}/watch`, check: "열렸는지", then: "알려 줘", intervalMinutes: 30 },
   },
   { tool: "send_to_telegram", args: { text: "원격에서 보내기 시도" } },
+  // read_links_in_tabs(#293): 로그인된 탭으로 링크를 여는 것은 원격 요청으로 하지 않는다(카드·질문 전에 거절, 탭을 열지 않음).
+  { tool: "read_links_in_tabs", args: { urls: [`${h.base2}/watch`] } },
 ];
 
 // 한 원격 요청(턴)의 결과를 본다: 차단 도구는 승인 경로(카드·원격 질문)에 닿기 전에 취소된다.
@@ -427,7 +429,7 @@ export default [
     },
   },
   {
-    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram을 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·read_links_in_tabs를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
     pages2: { "/": `<title>shop</title><p>상품</p>` },
     async run(h) {
       await connect(h);

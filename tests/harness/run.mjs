@@ -43,6 +43,7 @@ for (const s of chosen) {
   const own = s.isolate ? await startHarness({ onWorker: s.onWorker }) : null;
   const h = own ?? (shared ??= await startHarness());
   h.pages.clear();
+  h.routes.clear();
   for (const [path, html] of Object.entries(s.pages ?? {})) h.pages.set(`1${path}`, html);
   for (const [path, html] of Object.entries(s.pages2 ?? {})) h.pages.set(`2${path}`, html);
   const t0 = Date.now();
