@@ -227,6 +227,13 @@ export const readLinkedPagesArgs = z
   })
   .strict();
 
+// read_links_in_tabs(#293): read_linked_pages와 같은 모양(최대 8개).
+export const readLinksInTabsArgs = z
+  .object({
+    urls: z.array(z.string().min(1).max(2048)).min(1).max(8),
+  })
+  .strict();
+
 export const confirmTaskArgs = z
   .object({
     // 사용자에게 보일 할 일 요약.
@@ -278,6 +285,7 @@ export const toolArgsSchemas = {
   google_drive_export: googleDriveExportArgs,
   read_other_tabs: readOtherTabsArgs,
   read_linked_pages: readLinkedPagesArgs,
+  read_links_in_tabs: readLinksInTabsArgs,
   confirm_task: confirmTaskArgs,
   schedule_repeat_task: scheduleRepeatTaskArgs,
   remember_page: z.object({}).strict(),

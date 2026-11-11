@@ -90,6 +90,18 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: "read_links_in_tabs",
+    description:
+      "read_linked_pages로 읽지 못했거나(다른 사이트 리다이렉트가 되돌아옴, blocked=true, 본문 없음) 로그인해야 전부 보이는 글일 때만 쓴다. 지금 페이지의 링크를 사용자의 로그인 상태로 뒤에서 새 탭으로 열어(브라우저가 리다이렉트를 따라감) 다 뜬 페이지의 본문을 읽고 탭을 닫는다(최대 8개). 링크를 누른 것과 같아 늘 승인 카드가 뜨고 사용자가 읽을 링크를 고른다. urls는 페이지에 있는 링크 주소 그대로(해시 포함, 고치지 않음). read_linked_pages 결과의 redirectTo를 넣으면 그 목적지로 보낸 원래 페이지 링크를 연다. 결제·개인정보 신호가 있는 주소·파일 링크는 열지 않는다. 결과는 링크마다 제목·본문(finalUrl은 실제로 연 주소) 또는 읽지 못한 이유. 한 요청에 최대 2번. 텔레그램·MCP에서 온 원격 요청에서는 쓸 수 없다.",
+    parameters: {
+      type: "object",
+      properties: {
+        urls: { type: "array", items: { type: "string" }, description: "탭으로 열어 읽을 링크의 절대 주소(최대 8개)." },
+      },
+      required: ["urls"],
+    },
+  },
+  {
     name: "read_document",
     description:
       "파일 URL을 내려받아 텍스트로 읽는다. 지원: Word(.docx)·Excel(.xlsx)·PowerPoint(.pptx)·OpenDocument(.odt/.ods/.odp)는 Markdown(제목·목록·표 유지), PDF는 쪽별 글자, 한글(.hwp/.hwpx)은 Markdown(병합 셀 표는 HTML), CSV/TSV는 표, TXT/MD는 원문. 확장자 없는 다운로드 링크(download.do?fileId=… 등)도 받은 뒤 형식을 판별한다. 페이지에 있는 파일 링크는 list_file_links로 URL을 먼저 얻는다. 이미지·스캔 PDF 속 글자는 읽지 못한다.",

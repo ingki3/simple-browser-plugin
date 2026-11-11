@@ -53,6 +53,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   read_other_tabs: EXTERNAL,
   // 링크한 페이지(다른 사이트일 수 있음)의 본문.
   read_linked_pages: EXTERNAL,
+  // 링크를 로그인된 탭으로 열어 읽은 본문(#293). 다른 사이트일 수 있고, 여는 것 자체가 링크를 누른 것과 같다.
+  read_links_in_tabs: EXTERNAL,
   // 작업 맡기기 카드(#123): 페이지를 건드리지 않고 사용자에게만 묻는다.
   confirm_task: LOCAL_READ,
   // 반복 작업 등록(#138): 늘 카드로 묻는다. 브라우저에 남아 페이지를 다시 여는 활동을 만든다.

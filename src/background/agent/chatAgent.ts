@@ -6,6 +6,8 @@ import { internalNavigateAutoBlock, siteOf, userNamedSites } from "@/lib/siteTru
 import { TOOL_POLICY, needsApprovalWhenProtected } from "@/lib/toolPolicy";
 import { discardCall as discardTabChoices, setChosen as setChosenTabs } from "../otherTabs";
 import { discardLinkCall, setChosenLinks } from "../linkedPages";
+import { discardTabLinkCall, setChosenTabLinks } from "../linkTabs";
+import { MAX_TAB_LINK_READS_PER_TURN } from "@/lib/linkTabs";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "../downloadChoices";
 import { discardTelegramSend } from "../telegramSender";
 import { MAX_TELEGRAM_SENDS_PER_TURN } from "@/lib/telegram";
@@ -113,7 +115,8 @@ export interface AgentSink {
   postMessage(msg: BgToPanel): void;
 }
 // send_to_telegram(#210): 원격 대화에서는 답이 이미 그 채널로 가고, 원격 요청이 연결한 텔레그램으로 글을 내보내지 않게(작업을 맡긴 뒤에도).
-const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page", "send_to_telegram"]);
+// read_links_in_tabs(#293): 로그인된 탭으로 링크를 여는 것은 사용자가 링크를 누른 것과 같아 원격 요청으로는 하지 않는다(맡긴 뒤에도).
+const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page", "send_to_telegram", "read_links_in_tabs"]);
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
 
 // 턴 시작 옵션. tabId·site: 반복 작업의 이어서 진행(#138). expect: 페이지 제안 실행(#173) — 확인한 탭·주소·문서.
@@ -371,6 +374,7 @@ export class ChatAgent {
     if (choiceIds && this.pendingApprovals.has(callId)) {
       setChosenTabs(callId, choiceIds);
       setChosenLinks(callId, choiceIds);
+      setChosenTabLinks(callId, choiceIds);
       setChosenDownloads(callId, choiceIds);
       const token = this.grants.signInToken(callId);
       if (token) chooseSignInEntry(token, choiceIds);
@@ -1161,7 +1165,7 @@ export class ChatAgent {
     turn: number,
     turnTab: TurnTab,
     record: RecordRun,
-    reads: { documents: number; otherTabs: number; telegramSends: number },
+    reads: { documents: number; otherTabs: number; telegramSends: number; tabLinkReads: number },
   ): Promise<boolean> {
     const toolName = fc.function.name as ToolName;
     // 모델이 준 id는 대화 기록에만 쓰고, 나머지는 내부 키로 찾는다(#221 — 다른 대화·같은 대화의 다른 턴이 같은 id를 줘도 겹치지 않게).
@@ -1208,6 +1212,11 @@ export class ChatAgent {
     // 텔레그램으로 보내기(#210)는 한 요청에 몇 번까지만(모델 반복 호출·스팸 방지). 카드에서 거절한 호출도 센다.
     if (toolName === "send_to_telegram" && ++reads.telegramSends > MAX_TELEGRAM_SENDS_PER_TURN) {
       failCall(`한 요청에서 텔레그램으로 보내기는 최대 ${MAX_TELEGRAM_SENDS_PER_TURN}번입니다. 더 보내지 말고 지금까지 한 일을 답하세요.`, argsKey);
+      return true;
+    }
+    // 로그인된 탭으로 링크 읽기(#293)는 한 요청에 2번까지(카드를 연달아 띄우지 않게). 카드에서 거절한 호출도 센다.
+    if (toolName === "read_links_in_tabs" && ++reads.tabLinkReads > MAX_TAB_LINK_READS_PER_TURN) {
+      failCall(`한 요청에서 링크를 탭으로 열어 읽기는 최대 ${MAX_TAB_LINK_READS_PER_TURN}번입니다. 지금까지 읽은 내용으로 답하세요.`, argsKey);
       return true;
     }
     if (toolName === "confirm_task") return this.confirmTask(call);
@@ -1377,6 +1386,7 @@ export class ChatAgent {
       if (preview.choices) {
         const ids = preview.choiceDefaults ?? [];
         setChosenLinks(callId, ids);
+        setChosenTabLinks(callId, ids);
         setChosenDownloads(callId, ids);
       }
       return { kind: "run", execArgs, via: "task", signInAttempt, internalNavSite: null };
@@ -1387,6 +1397,7 @@ export class ChatAgent {
       // 주소의 후보). 경고가 붙은 후보가 있으면 위에서 덮지 않았다.
       if (preview.grantChoiceIds) {
         setChosenLinks(callId, preview.grantChoiceIds);
+        setChosenTabLinks(callId, preview.grantChoiceIds);
         setChosenDownloads(callId, preview.grantChoiceIds);
       }
       return { kind: "run", execArgs, via: "grant", grantImages, signInAttempt, internalNavSite: null };
@@ -1424,6 +1435,7 @@ export class ChatAgent {
       if (preview.choices) {
         const ids = preview.choiceDefaults ?? [];
         setChosenLinks(callId, ids);
+        setChosenTabLinks(callId, ids);
         setChosenDownloads(callId, ids);
       }
       debugLog("tool:remote_approved", toolName);
@@ -1701,6 +1713,7 @@ export class ChatAgent {
     discardSignIn(signInToken);
     discardTabChoices(callId);
     discardLinkCall(callId);
+    discardTabLinkCall(callId);
     discardDownloadCall(callId);
     const summary = "작업을 맡기기 전이라 하지 않음";
     debugLog("remote:task_needed", toolName);
@@ -1729,6 +1742,7 @@ export class ChatAgent {
     discardSignIn(signInToken);
     discardTabChoices(callId);
     discardLinkCall(callId);
+    discardTabLinkCall(callId);
     discardDownloadCall(callId);
     discardTelegramSend(callId);
     if (this.remote) {
@@ -1898,7 +1912,7 @@ export class ChatAgent {
       runs.push({ tool, argsKey, ok, resultKey: fingerprint(result), summary, changed: extra.changed === true, cancelled: extra.cancelled });
     };
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
-    const reads = { documents: 0, otherTabs: 0, telegramSends: 0 };
+    const reads = { documents: 0, otherTabs: 0, telegramSends: 0, tabLinkReads: 0 };
     // 생각만 하다 응답 상한에 걸려 빈 답이 나오면 생각을 줄여 한 번 더 시도한다(턴마다 한 번).
     let lengthRetried = false;
     let lowReasoning = false;

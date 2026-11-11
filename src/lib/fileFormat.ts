@@ -76,6 +76,11 @@ const NOT_DOCUMENT = new Set([
 // 웹 페이지·스크립트·데이터 주소. 읽지도 저장 후보로 보이지도 않는다(링크한 페이지이지 첨부 파일이 아니다).
 const WEB_RESOURCE = new Set(["html", "htm", "xhtml", "shtml", "js", "mjs", "css", "json", "xml"]);
 
+// 웹 페이지·스크립트·데이터 확장자인지(링크한 페이지로 보는 주소, read_links_in_tabs의 파일 판정 #293).
+export function isWebResourceExtension(ext: string): boolean {
+  return WEB_RESOURCE.has(ext.toLowerCase());
+}
+
 // 사용자 이름·비밀번호가 실린 주소(https://user:pass@host/…). 이런 주소는 모델에 보내는 목록에 넣지 않는다.
 export function hasUrlCredentials(rawUrl: string): boolean {
   try {

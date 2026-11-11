@@ -116,6 +116,20 @@ export class RedirectMemory {
   }
 }
 
+// 다른 사이트로 가는 리다이렉트를 따라가지 않았을 때의 안내(#293). fromDestination: 지금 읽은 후보가 이미 기억한 리다이렉트
+// 목적지였다(다시 부르면 또 리다이렉트된다) — 같은 주소로 되풀이하지 말고 로그인된 탭으로 원래 링크를 읽게 안내한다.
+export function crossSiteRedirectText(to: string, fromDestination: boolean): string {
+  if (fromDestination) {
+    return `이 주소도 다른 사이트 주소로 다시 리다이렉트됩니다: ${to}\n같은 주소로 read_linked_pages를 되풀이하지 말고, 꼭 필요하면 read_links_in_tabs를 원래 링크(또는 이 결과의 redirectTo)로 부르세요(로그인된 탭에서 브라우저가 리다이렉트를 따라갑니다. 새 승인 카드가 뜹니다).`;
+  }
+  return `이 링크는 다른 사이트 주소로 리다이렉트됩니다: ${to}\n안전을 위해 다른 사이트로 가는 리다이렉트는 따라가지 않았습니다. 사용자가 원한 글로 보이면 read_linked_pages를 이 주소(redirectTo)로 한 번 다시 호출하세요(새 승인 카드가 뜹니다).`;
+}
+
+// 쿠키 없이 읽지 못한 링크(blocked·본문 없음)의 다음 수단 안내(#293). 여러 개면 로그인된 탭으로 한 번에, 하나면 직접 열기.
+export function tabReadFallbackText(url: string): string {
+  return `이 링크가 꼭 필요하면 read_links_in_tabs로 로그인된 탭에서 읽거나(링크가 여러 개면 이쪽 — 한 번에 읽고 탭을 닫음), click_element를 거치지 말고 navigate_to_url로 ${url} 을 한 번 열어 get_page_content로 읽으세요.`;
+}
+
 // 쿠키 없이 받는 요청을 사이트가 막은 것으로 보이는 응답 상태(로그인 필요·접근 거부·요청 제한).
 export function blockedWithoutCookies(status: number): boolean {
   return status === 401 || status === 403 || status === 429;

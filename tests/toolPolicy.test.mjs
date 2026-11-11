@@ -20,7 +20,9 @@ test("only page-reading tools that never change the page are allowed without app
   for (const name of ["get_youtube_transcript", "translate_page", "navigate_to_url",
     "click_element", "fill_form_fields", "download_images", "download_files", "capture_page", "read_document", "google_drive_search", "google_sheets_append_rows",
     // 모델이 만든 글을 텔레그램(내 채팅)으로 보낸다(#210). 결과는 고정 값이라 외부 데이터가 아니다.
-    "send_to_telegram"]) {
+    "send_to_telegram",
+    // 링크를 로그인된 탭으로 연다(#293 — 링크를 누른 것과 같음).
+    "read_links_in_tabs"]) {
     assert.equal(needsApprovalWhenProtected(name), true, name);
   }
 });
@@ -28,6 +30,7 @@ test("only page-reading tools that never change the page are allowed without app
 test("external-content tools: file reading, file saving (server file names) and every Google tool", () => {
   const external = Object.entries(TOOL_POLICY).filter(([, p]) => p.bringsExternal).map(([n]) => n).sort();
   const google = Object.keys(TOOL_POLICY).filter((n) => n.startsWith("google_"));
-  assert.deepEqual(external, ["download_files", "read_document", "read_linked_pages", "read_other_tabs", ...google].sort());
+  // read_links_in_tabs(#293): 로그인된 탭으로 연 링크의 본문.
+  assert.deepEqual(external, ["download_files", "read_document", "read_linked_pages", "read_links_in_tabs", "read_other_tabs", ...google].sort());
   for (const [name, p] of Object.entries(TOOL_POLICY)) assert.ok(!(p.bringsExternal && p.observeOnly), name);
 });
