@@ -67,14 +67,21 @@ const linked = (urls) => ({ tool: "read_linked_pages", args: { urls } });
 const inTabs = (urls) => ({ tool: "read_links_in_tabs", args: { urls } });
 const tabLog = (r) => r.tools.filter((t) => t.name === "read_links_in_tabs");
 
-// 시험 페이지 탭(/lt)이 아닌 시험 서버 탭들(이 도구가 연 탭). 탭 줄 순서.
+// 이 시나리오가 링크로 둔 경로의 탭(이 도구가 연 탭). 공용 하네스에서는 앞 시나리오 묶음이 연 다른 경로의 탭이 남아 있을 수 있어
+// 이 파일의 경로만 본다. 탭 줄 순서.
+const LINK_PATH = /^\/(member|rt|rt-final|bounce|app|pub|secret|slow-art|event|checkout|payment|files|nope)(\/|$)/;
 const extraTabs = (h) =>
   h.sw.evaluate(
-    async (bases) =>
-      (await chrome.tabs.query({}))
-        .filter((t) => bases.some((b) => (t.url || t.pendingUrl || "").startsWith(b)) && !/\/lt(\?|$)/.test(t.url || ""))
-        .map((t) => ({ id: t.id, url: t.url || t.pendingUrl, active: t.active })),
-    [h.base, h.base2],
+    async ({ bases, re }) => {
+      const path = new RegExp(re);
+      return (await chrome.tabs.query({}))
+        .filter((t) => {
+          const u = t.url || t.pendingUrl || "";
+          return bases.some((b) => u.startsWith(b)) && path.test(new URL(u).pathname);
+        })
+        .map((t) => ({ id: t.id, url: t.url || t.pendingUrl, active: t.active }));
+    },
+    { bases: [h.base, h.base2], re: LINK_PATH.source },
   );
 const owned = (h) => h.sw.evaluate(async () => (await chrome.storage.session.get("linkTabs:open"))["linkTabs:open"] ?? []);
 async function noLeftover(h, label) {
