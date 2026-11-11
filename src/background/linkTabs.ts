@@ -53,7 +53,7 @@ const ownership = new TabOwnership({
 });
 
 // 사용자가 이 도구가 연 탭을 앞으로 가져오면 그 탭은 사용자의 탭이다(읽지도 닫지도 않음).
-chrome.tabs.onActivated.addListener(({ tabId }) => ownership.noteActivated(tabId));
+chrome.tabs.onActivated.addListener(({ tabId }) => void ownership.noteActivated(tabId));
 
 // 초기 청소: 서비스 워커가 죽어 남은 탭을 닫는다. 실행은 이 약속을 기다린 뒤 시작한다(청소가 새 실행의 탭을 닫지 않게).
 const ready: Promise<unknown> = ownership.cleanup().catch(() => {});

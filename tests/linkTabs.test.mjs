@@ -462,3 +462,41 @@ test("실행기: 닫기 단계의 확인에서 활성으로 보이면 이미 만
   assert.equal(f.tabs.size, 1, "탭은 그대로");
   assert.deepEqual(f.storage.ids, []);
 });
+
+// 리뷰 P2(#293): 닫기에 실패해 남은 탭을 사용자가 앞으로 가져왔다가 다른 탭으로 옮겨도, 재시작 뒤 초기 청소가 그 탭을 닫지 않는다.
+test("닫기 실패로 남은 탭을 사용자가 활성화했다가 옮기면 재시작 뒤 초기 청소가 닫지 않는다", async () => {
+  const f = fake({ removeFails: new Set([100]) });
+  await runTabReads(["https://a.example/1"], f.deps, f.owner, ready, new AbortController().signal, FAST);
+  assert.deepEqual(f.storage.ids, [100], "닫기 실패 → 남김");
+  // 실행이 끝난 뒤 사용자가 그 탭을 앞으로 가져옴 → 다른 탭으로 옮김(비활성).
+  f.tabs.get(100).active = true;
+  await f.owner.noteActivated(100);
+  f.tabs.get(100).active = false;
+  assert.deepEqual(f.storage.ids, [], "저장된 소유 목록에서 빠짐");
+  assert.equal(f.owner.has(100), false, "메모리에서도 정리");
+  assert.equal(f.owner.isTouched(100), false);
+  // 재시작 흉내: 같은 가짜 저장소로 새 소유 목록 → 초기 청소. 닫기 실패 설정을 풀어도 그 탭은 닫지 않는다.
+  f.deps.remove = async (id) => {
+    f.tabs.delete(id);
+  };
+  const r = await new TabOwnership(f.deps).cleanup();
+  assert.deepEqual(r, { closed: 0, kept: 0 });
+  assert.ok(f.tabs.has(100), "사용자가 쓰던 탭은 그대로");
+});
+
+test("읽는 중 활성화되면 저장된 소유 목록에서 바로 빠지고, 진행 중인 읽기는 개입을 안다", async () => {
+  let duringRead = null;
+  const f = fake({
+    read: async (id, doc, url) => {
+      await f.owner.noteActivated(id);
+      duringRead = { stored: [...f.storage.ids], touched: f.owner.isTouched(id), has: f.owner.has(id) };
+      return { url, title: "t", mainText: "읽는 중 사용자 탭의 글" };
+    },
+  });
+  const [r] = await runTabReads(["https://a.example/1"], f.deps, f.owner, ready, new AbortController().signal, FAST);
+  assert.deepEqual(duringRead, { stored: [], touched: true, has: true });
+  assert.equal(r.error, USER_TAB_TEXT);
+  assert.equal(f.tabs.size, 1, "탭은 그대로");
+  assert.deepEqual(f.storage.ids, []);
+  assert.equal(f.owner.has([...f.tabs.keys()][0]), false, "끝난 뒤 메모리에서도 빠짐");
+});

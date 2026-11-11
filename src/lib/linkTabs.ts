@@ -204,6 +204,8 @@ export interface TabLinkDeps {
 export class TabOwnership {
   private readonly mem = new Set<number>();
   private readonly touched = new Set<number>();
+  // 지금 읽는 중인 탭(add ~ finish). 그 밖의 mem 탭은 실행이 끝났는데 닫기에 실패해 남은 탭이다.
+  private readonly running = new Set<number>();
   private readonly serial = createSerial();
   private readonly deps: Pick<TabLinkDeps, "get" | "remove" | "loadOwned" | "saveOwned" | "log">;
   constructor(deps: Pick<TabLinkDeps, "get" | "remove" | "loadOwned" | "saveOwned" | "log">) {
@@ -215,8 +217,28 @@ export class TabOwnership {
   }
 
   // 사용자가 앞으로 가져온 탭(onActivated). 이 도구가 연 탭이면 표시만 한다.
-  noteActivated(tabId: number): void {
-    if (this.mem.has(tabId)) this.touched.add(tabId);
+  noteActivated(tabId: number): Promise<void> {
+    if (!this.mem.has(tabId)) return Promise.resolve();
+    // 사용자가 앞으로 가져온 탭은 사용자의 탭이다: 저장된 소유 목록에서 바로 뺀다(재시작 뒤 초기 청소가 사용자가 쓰던 탭을 닫지 않게).
+    if (this.running.has(tabId)) {
+      // 읽는 중이면 진행 중인 readOneTab이 isTouched로 개입을 알아야 하므로 메모리 기록은 남긴다(그쪽이 끝날 때 drop).
+      this.touched.add(tabId);
+      return this.forgetStored(tabId);
+    }
+    // 실행이 끝났는데 닫기에 실패해 남은 탭: 메모리에서도 정리한다.
+    return this.drop(tabId);
+  }
+
+  // 읽기가 끝났다(닫기 시도 뒤). 남은 탭(닫기 실패)은 mem에 남지만 더는 읽는 중이 아니다.
+  finish(tabId: number): void {
+    this.running.delete(tabId);
+  }
+
+  private forgetStored(tabId: number): Promise<void> {
+    return this.serial(async () => {
+      const ids = await this.deps.loadOwned().catch(() => [] as number[]);
+      if (ids.includes(tabId)) await this.deps.saveOwned(ids.filter((id) => id !== tabId));
+    }).catch(() => {});
   }
 
   isTouched(tabId: number): boolean {
@@ -225,6 +247,7 @@ export class TabOwnership {
 
   add(tabId: number): Promise<void> {
     this.mem.add(tabId);
+    this.running.add(tabId);
     return this.serial(async () => {
       const ids = await this.deps.loadOwned().catch(() => [] as number[]);
       if (!ids.includes(tabId)) await this.deps.saveOwned([...ids, tabId]);
@@ -234,10 +257,8 @@ export class TabOwnership {
   drop(tabId: number): Promise<void> {
     this.mem.delete(tabId);
     this.touched.delete(tabId);
-    return this.serial(async () => {
-      const ids = await this.deps.loadOwned().catch(() => [] as number[]);
-      if (ids.includes(tabId)) await this.deps.saveOwned(ids.filter((id) => id !== tabId));
-    }).catch(() => {});
+    this.running.delete(tabId);
+    return this.forgetStored(tabId);
   }
 
   // 닫기: 사용자가 건드린 탭(앞으로 가져옴·지금 활성)은 닫지 않고 목록에서만 뺀다("user"). 닫았거나 이미 없으면 뺀다("closed").
@@ -441,6 +462,7 @@ async function readOneTab(
       } catch {
         /* 정리 실패는 목록에 남아 다음 초기 청소가 다시 시도한다 */
       }
+      owner.finish(tabId);
       if (closed === "user") result = { url: open, error: USER_TAB_TEXT };
     }
     if (abort) throw abort;
