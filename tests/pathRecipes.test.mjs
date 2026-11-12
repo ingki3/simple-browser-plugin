@@ -8,11 +8,20 @@ import "./helpers/tsLoader.mjs";
 const local = new Map();
 const session = new Map();
 let sessionFail = false;
+// key -> async () => void: 그 key를 읽을 때 한 번 기다린다(저장소 읽기 지연).
+const getHooks = new Map();
 function area(store, failing) {
   return {
     async get(keys) {
       if (failing?.()) throw new Error("session read failed");
       const list = keys == null ? [...store.keys()] : Array.isArray(keys) ? keys : [keys];
+      for (const k of list) {
+        const h = getHooks.get(k);
+        if (h) {
+          getHooks.delete(k);
+          await h();
+        }
+      }
       const out = {};
       for (const k of list) if (store.has(k)) out[k] = structuredClone(store.get(k));
       return out;
@@ -114,6 +123,7 @@ async function fresh() {
   await ticks();
   local.clear();
   tabs.clear();
+  getHooks.clear();
 }
 
 // 한 턴: 시작 → body(turnTab) → 커밋.
@@ -498,6 +508,39 @@ test("삭제 순번: 턴 도중·커밋 대기 중 그 출처의 경로를 지�
     await actionLog.clearActionLog();
   });
   assert.deepEqual(stored(), []);
+});
+
+test("마무리 판정 뒤 쓰기 큐의 저장소 읽기가 지연되는 사이 같은 출처로 또 이동하면 저장하지 않는다(쓴 횟수도 반영 안 함)", async () => {
+  await fresh();
+  openTab(1, `${O}/`);
+  await turnOn(1, async () => go(1, `${O}/help`));
+  assert.equal(local.get(KEY)[0].uses, 1);
+  const before = JSON.stringify(local.get(KEY));
+  for (const late of ["commit", "request"]) {
+    openTab(1, `${O}/`);
+    const t = { tabId: 1, internal: false };
+    P.beginPath(t, `${O}/`);
+    go(1, `${O}/help`);
+    let release;
+    const gate = new Promise((r) => (release = r));
+    let reading = false;
+    getHooks.set(KEY, async () => {
+      reading = true;
+      await gate;
+    });
+    const done = P.commitPath(t, opts());
+    for (let i = 0; i < 100 && !reading; i++) await new Promise((r) => setTimeout(r, 5));
+    assert.ok(reading, "쓰기 큐가 저장소를 읽는 중");
+    // 마무리 판정이 끝난 뒤의 이동: 새 문서의 요청은 아직 닫히지 않았다(또는 요청만 열렸다).
+    const r = request(1, [`${O}/other`]);
+    r.open();
+    if (late === "commit") commit(1, `${O}/other`);
+    release();
+    await done;
+    await ticks();
+    assert.equal(JSON.stringify(local.get(KEY)), before, `${late}: 이전 경로를 저장하거나 쓴 횟수를 올리지 않음`);
+    getHooks.clear();
+  }
 });
 
 test("삭제 표식 400개 초과: 가장 오래된 표식을 버리며 전역 무효화(그 전에 시작한 턴은 쓰지 못함)", async () => {

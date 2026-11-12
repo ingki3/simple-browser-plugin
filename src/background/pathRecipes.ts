@@ -67,6 +67,8 @@ interface TurnPath {
   offered: OfferedPath[];
   // 구독 중인지(턴이 끝나면 false — 그 뒤 이벤트는 무시).
   listening: boolean;
+  // 이 턴이 받은 이벤트 수(확정·같은 문서 안 이동·요청·오류). 마무리 판정 뒤 저장 직전에 달라졌으면 저장하지 않는다.
+  events: number;
   waiters: Set<() => void>;
 }
 
@@ -123,6 +125,7 @@ function forTab(tabId: number, fn: (rec: TurnPath) => void): void {
   if (tabId < 0) return;
   for (const rec of turns.values()) {
     if (!rec.listening || rec.tabId !== tabId) continue;
+    rec.events++;
     fn(rec);
     wake(rec);
   }
@@ -210,6 +213,7 @@ export function beginPath(turnTab: TurnTab, startUrl: string | null): void {
     closed: [],
     offered: [],
     listening: true,
+    events: 0,
     waiters: new Set(),
   };
   turns.set(key, rec);
@@ -338,6 +342,10 @@ async function runCommit(rec: TurnPath, opts: CommitPathOpts): Promise<string | 
   if (!matched) return "unmatched";
   // 기다리는 사이 또 옮겼으면 다 뜬 문서가 도착이 아니다.
   if (rec.raw.length !== nRaw) return "moved";
+  // 마무리 판정(대응 확인) 때의 관찰 상태. 저장 직전에 다시 보고 달라졌으면(또 이동·요청이 생김) 더 기다리지 않고 버린다.
+  const seenEvents = rec.events;
+  const lastDocAtCheck = rec.lastDoc;
+  const lastUrlAtCheck = rec.lastUrl;
   const rawPatterns = patternsOf([rec.startUrl, ...rec.raw], origin);
   if (!rawPatterns) return "bad_url";
   // 원본 주소(확정·리다이렉트·요청)에 자동 로그인 값이 보이면 저장하지 않는다(접기 전에 원본으로).
@@ -348,6 +356,13 @@ async function runCommit(rec: TurnPath, opts: CommitPathOpts): Promise<string | 
   const finalPattern = rawPatterns[rawPatterns.length - 1];
   const offered = rec.offered.filter((o) => o.reached);
   if (!observed && !offered.length) return "not_savable";
+  const settled = () =>
+    rec.listening &&
+    rec.events === seenEvents &&
+    rec.raw.length === nRaw &&
+    rec.lastDoc === lastDocAtCheck &&
+    rec.lastUrl === lastUrlAtCheck &&
+    matchRequests(rec.commits, rec.closed, rec.open.size) === "ok";
   return enqueue(async () => {
     if (!(await getSettings()).actionLogEnabled) return "disabled";
     const now = Date.now();
@@ -355,8 +370,9 @@ async function runCommit(rec: TurnPath, opts: CommitPathOpts): Promise<string | 
     const res = applyPath(prunePaths(obj[PATH_RECIPES_KEY], now), observed, offered, finalPattern, now, () => crypto.randomUUID());
     // 저장 직전 정규화된 틀 전체에도 비밀 값 검사(퍼센트 인코딩을 풀어 값이 드러날 수 있다). 쓴 횟수만 고치는 경우도 같다.
     for (const r of res.touched) if (!(await noSecret({ origin: r.origin, steps: r.steps }))) return "secret";
-    // 반영 직전(마지막 await 뒤)에 중단·제외·삭제 순번을 다시 본다.
+    // 반영 직전(마지막 await 뒤)에 중단·제외·삭제 순번과 이동·요청 상태를 다시 본다.
     if (!alive()) return why();
+    if (!settled()) return "moved";
     await savePaths(res.next);
     debugLog(
       "path_recipe:result",
