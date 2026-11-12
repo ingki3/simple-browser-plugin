@@ -1678,3 +1678,49 @@ body,
   flex-wrap: wrap;
   color: var(--error);
 }
+
+/* 저장된 읽기 방법 보기(#297) */
+.recipe-view {
+  font-size: 12px;
+}
+.recipe-view > summary {
+  cursor: pointer;
+  color: var(--primary);
+}
+.recipe-site {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-alt);
+}
+.recipe-site-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.recipe-origin,
+.recipe-pattern {
+  overflow-wrap: anywhere;
+}
+.recipe-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.recipe-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.recipe-row .field-help {
+  overflow-wrap: anywhere;
+}
+.recipe-delete {
+  margin-left: 6px;
+}

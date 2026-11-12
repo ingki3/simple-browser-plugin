@@ -186,6 +186,83 @@ export function pruneRecipes(raw: unknown, now: number): ReadRecipe[] {
   return kept;
 }
 
+// ---------------------------------------------------------------------------
+// 설정 화면의 "저장된 읽기 방법 보기"(#297 1단계)
+// ---------------------------------------------------------------------------
+
+// 레시피 하나를 가리키는 key. 확장 화면과 백그라운드 사이에서만 오간다. 접두사 "read:"는 나중에 다른 종류(path: 등)와 가르려고 둔다.
+export const READ_KEY_PREFIX = "read:";
+// recipe_delete 한 번에 받는 key 수의 상한(저장 상한 RECIPE_MAX_TOTAL보다 넉넉하게).
+export const MAX_RECIPE_DELETE_KEYS = 400;
+export function recipeKey(page: string, tool: string, args: ReadRecipe["args"]): string {
+  return `${READ_KEY_PREFIX}${page} ${argsKey(tool, args)}`;
+}
+
+// 페이지 키 문자열(origin + pattern + "@" + skeleton)을 다시 나눈다. 뼈대 해시는 @를 쓰지 않고, 주소 틀은 @가 든 경로 칸·쿼리 이름을
+// 자리표시({id}·{k})로 바꾸므로 마지막 @가 경계다. 출처는 다시 파싱해 http(s) 출처 그대로인지 확인한다. 맞지 않으면 null.
+export function splitPageId(page: string): { origin: string; pattern: string; skeleton: string } | null {
+  const at = page.lastIndexOf("@");
+  if (at < 0) return null;
+  const head = page.slice(0, at);
+  const scheme = head.indexOf("://");
+  if (scheme < 0) return null;
+  const slash = head.indexOf("/", scheme + 3);
+  if (slash < 0) return null;
+  const origin = head.slice(0, slash);
+  try {
+    const u = new URL(origin);
+    if ((u.protocol !== "http:" && u.protocol !== "https:") || u.origin !== origin) return null;
+  } catch {
+    return null;
+  }
+  return { origin, pattern: head.slice(slash), skeleton: page.slice(at + 1) };
+}
+
+export interface RecipeRow {
+  key: string;
+  pattern: string;
+  tool: RecipeTool;
+  args: ReadRecipe["args"];
+  successes: number;
+  failures: number;
+  lastUsed: number;
+}
+
+// origin이 ""이면 출처를 알 수 없는 항목의 묶음(화면에는 "알 수 없는 사이트").
+export interface RecipeSite {
+  origin: string;
+  reads: RecipeRow[];
+}
+
+// 출처별로 묶는다. 묶음 안은 최근에 쓴 것부터, 묶음은 가장 최근에 쓴 항목 순(알 수 없는 사이트는 맨 뒤).
+export function groupRecipes(recipes: ReadRecipe[]): RecipeSite[] {
+  const sites = new Map<string, RecipeRow[]>();
+  for (const r of recipes) {
+    const split = splitPageId(r.page);
+    const origin = split?.origin ?? "";
+    const row: RecipeRow = {
+      key: recipeKey(r.page, r.tool, r.args),
+      pattern: split ? split.pattern : r.page,
+      tool: r.tool,
+      args: r.args,
+      successes: r.successes,
+      failures: r.failures,
+      lastUsed: r.lastUsed,
+    };
+    const list = sites.get(origin) ?? [];
+    list.push(row);
+    sites.set(origin, list);
+  }
+  const out = [...sites].map(([origin, reads]) => ({ origin, reads: reads.sort((a, b) => b.lastUsed - a.lastUsed) }));
+  const newest = (s: RecipeSite) => s.reads[0]?.lastUsed ?? 0;
+  return out.sort((a, b) => (a.origin === "") !== (b.origin === "") ? (a.origin === "" ? 1 : -1) : newest(b) - newest(a));
+}
+
+// key가 가리키는 레시피를 뺀다(없는 key는 무시).
+export function removeRecipeKeys(recipes: ReadRecipe[], keys: ReadonlySet<string>): ReadRecipe[] {
+  return recipes.filter((r) => !keys.has(recipeKey(r.page, r.tool, r.args)));
+}
+
 // 이 페이지에 낼 후보. 뼈대 해시까지 같은 페이지 키만 본다. 성공이 많은 것부터.
 export function hintsFor(recipes: ReadRecipe[], page: PageKey, now: number): ReadHint[] {
   if (!page.skeleton) return [];

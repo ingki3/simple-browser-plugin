@@ -13,6 +13,8 @@ import { VOICE_PORT, handleVoicePort } from "./voice";
 import { addRule, checkSuggestionRun, deleteRule, listRules, updateRule } from "./pageSuggestStore";
 import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
+import { deleteRecipes, listRecipes } from "./readRecipes";
+import { MAX_RECIPE_DELETE_KEYS } from "@/lib/readRecipe";
 import { translateBatch } from "./translator";
 import { checkConnection } from "./connectionCheck";
 import { friendlyError } from "@/lib/friendlyError";
@@ -625,9 +627,25 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     return true;
   }
 
-  if (m.kind === "action_log_count" || m.kind === "action_log_clear") {
-    (m.kind === "action_log_clear" ? clearActionLog().then(() => ({ log: 0, recipes: 0 })) : storedCounts())
-      .then((count) => sendResponse({ ok: true, data: count }))
+  // 동작 기록 개수·지우기와 읽기 레시피 목록·지우기(#297): 이 확장의 화면(설정 탭)에서만 받는다(content script·웹 페이지 발신 거절).
+  if (m.kind === "action_log_count" || m.kind === "action_log_clear" || m.kind === "recipes_list" || m.kind === "recipe_delete") {
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+    let job: Promise<unknown>;
+    if (m.kind === "recipe_delete") {
+      const keys = (msg as { keys?: unknown }).keys;
+      if (!Array.isArray(keys) || keys.length > MAX_RECIPE_DELETE_KEYS || !keys.every((k) => typeof k === "string" && k.length <= 2000)) {
+        sendResponse({ ok: false, error: "잘못된 요청" });
+        return false;
+      }
+      job = deleteRecipes(keys as string[]).then((recipes) => ({ recipes }));
+    } else if (m.kind === "recipes_list") job = listRecipes();
+    else if (m.kind === "action_log_clear") job = clearActionLog().then(() => ({ log: 0, recipes: 0 }));
+    else job = storedCounts();
+    job
+      .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) =>
         sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
       );
