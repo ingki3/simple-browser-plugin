@@ -7,6 +7,7 @@ import type { ProviderId } from "./providers/types";
 import type { ModelId } from "./models";
 import type { ReadableFormat } from "./fileFormat";
 import type { ReadHint } from "./readRecipe";
+import type { PathHint } from "./pathRecipe";
 import type { LoginSite } from "./loginPolicy";
 
 export type ToolName =
@@ -167,6 +168,8 @@ export interface PageDescription {
   fallbackExcerpt: string;
   // 같은 구조의 페이지에서 전에 쓸모 있었던 읽기 도구 호출(읽기 레시피). 백그라운드가 붙인다.
   readHints?: ReadHint[];
+  // 이 사이트에서 전에 답을 마친 이동 경로 중 지금 틀 뒤의 구간(경로 레시피, #297). 백그라운드가 붙인다. 지시가 아니다.
+  pathHints?: PathHint[];
   // 관측한 창이 따라가는 팝업 창이면 그 안내(백그라운드가 붙인다).
   window?: string;
   // 내용을 읽을 수 없는 다른 출처 iframe 중 화면에 크게 보이는 것(#235, 있을 때만). declaredSrc는 페이지가 iframe에 적은 주소
@@ -555,6 +558,8 @@ export const ACTION_LOG_KEY = "actionLog";
 // 알 수 없어(보호 대화에서 생긴 인자일 수 있음) 힌트로 쓰지 않고 시작할 때 지운다(LEGACY_READ_RECIPES_KEYS).
 export const READ_RECIPES_KEY = "readRecipesV2";
 export const LEGACY_READ_RECIPES_KEYS = ["readRecipes"];
+// 경로 레시피(#297 2단계, src/lib/pathRecipe.ts): 같은 출처 안에서 답을 마친 이동 경로의 주소 틀 나열.
+export const PATH_RECIPES_KEY = "pathRecipes";
 
 export const PORT_NAME = "chat";
 

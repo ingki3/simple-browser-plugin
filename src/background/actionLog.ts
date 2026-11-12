@@ -1,5 +1,5 @@
 import { maskSyncDeep, maskValue } from "./loginSecrets";
-import { ACTION_LOG_KEY, LEGACY_READ_RECIPES_KEYS, READ_RECIPES_KEY } from "@/lib/messages";
+import { ACTION_LOG_KEY, LEGACY_READ_RECIPES_KEYS, PATH_RECIPES_KEY, READ_RECIPES_KEY } from "@/lib/messages";
 import {
   capTargets,
   pruneLog,
@@ -12,6 +12,7 @@ import { getSettings } from "./storage";
 import type { TurnTab } from "./tools/handlers";
 import { debugLog } from "./debug";
 import { clearPendingReads, readRecipeCount } from "./readRecipes";
+import { clearPendingPaths, pathRecipeCount } from "./pathRecipes";
 import { enqueue, turnKey } from "./actionQueue";
 
 // 승인 카드를 띄울 때 정한 대상과 페이지를 실행 결과가 나올 때까지 들고 있는다.
@@ -110,14 +111,15 @@ function actionLogCount(): Promise<number> {
   });
 }
 
-// 설정 화면에 보이는 개수: 동작 기록과 읽기 레시피. 셀 때 만료 항목도 지운다.
-export async function storedCounts(): Promise<{ log: number; recipes: number }> {
+// 설정 화면에 보이는 개수: 동작 기록과 읽기 레시피·이동 경로(#297). 셀 때 만료 항목도 지운다.
+export async function storedCounts(): Promise<{ log: number; recipes: number; paths: number }> {
   const log = await actionLogCount();
   const recipes = await readRecipeCount();
-  return { log, recipes };
+  const paths = await pathRecipeCount();
+  return { log, recipes, paths };
 }
 
-// 확장이 시작될 때 만료 항목과 이전 세대 읽기 레시피를 정리한다. 이전 세대는 읽는 쪽도 보지 않으므로
+// 확장이 시작될 때 만료 항목(동작 기록·읽기 레시피·이동 경로)과 이전 세대 읽기 레시피를 정리한다. 이전 세대는 읽는 쪽도 보지 않으므로
 // 지우기 전에도 힌트로 쓰이지 않는다.
 export function pruneActionLog(): void {
   void enqueue(() => chrome.storage.local.remove(LEGACY_READ_RECIPES_KEYS)).catch(() => undefined);
@@ -127,5 +129,6 @@ export function pruneActionLog(): void {
 export function clearActionLog(): Promise<void> {
   pending.clear();
   clearPendingReads();
-  return enqueue(() => chrome.storage.local.remove([ACTION_LOG_KEY, READ_RECIPES_KEY, ...LEGACY_READ_RECIPES_KEYS]));
+  clearPendingPaths();
+  return enqueue(() => chrome.storage.local.remove([ACTION_LOG_KEY, READ_RECIPES_KEY, PATH_RECIPES_KEY, ...LEGACY_READ_RECIPES_KEYS]));
 }
