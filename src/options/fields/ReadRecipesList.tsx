@@ -10,7 +10,10 @@ export function ReadRecipesList() {
   const [open, setOpen] = useState(false);
   const [sites, setSites] = useState<RecipeSite[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // 조회 오류와 삭제 오류를 따로 둔다: 삭제가 실패한 뒤 다시 읽기가 성공해도 삭제 실패 안내(항목이 남은 이유)가 지워지지 않게.
+  // 삭제 오류는 다음 삭제를 시도할 때만 지운다.
   const [error, setError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const gate = useLatestGate();
 
   const load = async () => {
@@ -38,12 +41,12 @@ export function ReadRecipesList() {
 
   const remove = async (keys: string[]) => {
     setBusy(true);
-    setError(null);
+    setDeleteError(null);
     try {
       const res = (await chrome.runtime.sendMessage({ kind: "recipe_delete", keys })) as { ok: boolean; error?: string } | undefined;
       if (!res?.ok) throw new Error(res?.error ?? "응답이 없습니다.");
     } catch (err) {
-      setError(`지우지 못했습니다(${err instanceof Error ? err.message : String(err)}).`);
+      setDeleteError(`지우지 못했습니다(${err instanceof Error ? err.message : String(err)}).`);
     }
     setBusy(false);
     // 아무것도 지우지 않았으면(이미 지워짐) 저장소 변경 알림이 없으므로 직접 다시 읽는다.
@@ -60,7 +63,8 @@ export function ReadRecipesList() {
       }}
     >
       <summary>저장된 읽기 방법 보기</summary>
-      {error && <span className="field-help error-text">{error}</span>}
+      {deleteError && <span className="field-help error-text recipe-delete-error">{deleteError}</span>}
+      {error && <span className="field-help error-text recipe-list-error">{error}</span>}
       {open && sites === null && !error && <span className="field-help">읽는 중…</span>}
       {sites && !sites.length && <span className="field-help">저장된 읽기 방법이 없습니다.</span>}
       {sites?.map((site) => (

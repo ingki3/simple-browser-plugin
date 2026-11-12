@@ -93,6 +93,46 @@ export default [
     },
   },
   {
+    name: "지우기가 실패하면 다시 읽은 뒤에도 실패 안내가 남고, 다음 지우기가 성공하면 사라진다",
+    pages: { "/list": PAGE },
+    async run(h) {
+      await h.turn([q("li.price"), { text: "읽음" }], { path: "/list" });
+      await waitUntil(async () => has(await stored(h), "li.price"), { label: "레시피 저장" });
+      const opt = await openList(h);
+      // 이 설정 화면에서만 recipe_delete가 실패하게 하고, recipes_list 조회 수를 센다.
+      await opt.evaluate(() => {
+        const real = chrome.runtime.sendMessage.bind(chrome.runtime);
+        globalThis.__failDelete = true;
+        globalThis.__lists = 0;
+        chrome.runtime.sendMessage = async (m) => {
+          if (m?.kind === "recipes_list") globalThis.__lists++;
+          if (m?.kind === "recipe_delete" && globalThis.__failDelete) return { ok: false, error: "시험 실패" };
+          return real(m);
+        };
+      });
+      const lists = () => opt.evaluate(() => globalThis.__lists);
+      await row(opt, h.base, "li.price").locator(".recipe-delete").click();
+      // 실패 뒤 다시 읽기(성공)까지 기다린다.
+      await waitUntil(async () => (await lists()) >= 1, { label: "실패 뒤 다시 읽음" });
+      await opt.waitForTimeout(300);
+      const msg = opt.locator(".recipe-delete-error");
+      expect((await msg.count()) === 1 && (await msg.innerText()).includes("지우지 못했습니다(시험 실패)"), `삭제 실패 안내(${await opt.locator(".recipe-view").innerText()})`);
+      expect((await row(opt, h.base, "li.price").count()) === 1, "항목은 남음");
+      expect((await opt.locator(".recipe-list-error").count()) === 0, "조회 오류는 없음");
+      // 다른 곳의 저장소 변경으로 다시 읽어도 안내가 남는다.
+      const n = await lists();
+      await h.turn([q("p.note"), { text: "읽음" }], { path: "/list" });
+      await waitUntil(async () => (await lists()) > n && (await opt.locator(".recipe-row").count()) === 2, { label: "저장소 변경 뒤 다시 읽음" });
+      expect((await opt.locator(".recipe-delete-error").count()) === 1, "다시 읽은 뒤에도 삭제 실패 안내가 남음");
+      // 다음 지우기가 성공하면 안내가 사라진다.
+      await opt.evaluate(() => (globalThis.__failDelete = false));
+      await row(opt, h.base, "li.price").locator(".recipe-delete").click();
+      await waitUntil(async () => (await row(opt, h.base, "li.price").count()) === 0, { label: "성공한 지우기" });
+      expect((await opt.locator(".recipe-delete-error").count()) === 0, "성공하면 안내가 사라짐");
+      await opt.close();
+    },
+  },
+  {
     name: "설정 화면 두 개에서 서로 다른 항목을 지워도 둘 다 반영된다",
     pages: { "/list": PAGE },
     pages2: { "/list": PAGE },
