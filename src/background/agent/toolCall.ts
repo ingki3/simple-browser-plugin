@@ -28,6 +28,9 @@ export interface ToolCallContext {
   // 이 호출을 실패로 끝낸다(패널 결과 줄·대화 기록·헛돌기 기록).
   failCall(msg: string, key: string, panelSummary?: string): void;
   record: RecordRun;
+  // 경로 레시피의 그림자 판정(#297): 승인 판정 자리에서 "auto·허락 없음"으로 다시 계산한 결과가 카드 없이 실행이었는지.
+  // 판정에 도달하지 않으면 false로 남는다(그 턴의 경로는 배우지 않는다).
+  shadow?: { auto: boolean };
 }
 
 // 승인 단계의 결론. stale: 이 요청이 끝났다(중단·새 요청). done: 결과를 이미 남겼다(실패·취소).

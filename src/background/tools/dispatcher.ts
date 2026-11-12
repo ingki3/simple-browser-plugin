@@ -88,6 +88,8 @@ import {
 } from "@/lib/actionLog";
 import { finishAction, notePendingAction } from "../actionLog";
 import { noteRead, readHintsFor } from "../readRecipes";
+import { offerPathHints } from "../pathRecipes";
+import type { PathHint } from "@/lib/pathRecipe";
 import { recipeArgs, usefulResult, type ReadHint } from "@/lib/readRecipe";
 import { prepareSignIn, runSignIn, stepLabel, type SignInPreview } from "../signIn";
 import { loginShapeBlocks } from "@/lib/loginPolicy";
@@ -811,35 +813,48 @@ function sameRecipeArgs(a: Record<string, string | number | boolean>, b: Record<
   return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
 }
 
-// describe_page 결과에 같은 구조의 페이지에서 전에 통한 읽기 방법을 붙인다. 실패해도 결과는 그대로 돌려준다.
+// describe_page 결과에 같은 구조의 페이지에서 전에 통한 읽기 방법(readHints)과 이 사이트에서 전에 답을 마친 이동 경로(pathHints,
+// #297)를 붙인다. 둘은 따로 구하고, 어느 쪽이 실패해도 결과는 그대로 돌려준다. 승인 판정에는 쓰지 않는다.
 async function attachReadHints(result: ToolExecResult, turnTab: TurnTab): Promise<ToolExecResult> {
   // 새 관측마다 이전 제안을 지운다(제안이 없는 관측 뒤나 새 대화에서 예전 제안으로 read_recipe:used를 남기지 않게).
   offeredHints.delete(turnKeyOf(turnTab));
+  let hints: ReadHint[] = [];
+  let paths: PathHint[] = [];
   try {
     // 관측한 뒤 탭이 다른 주소로 옮겼으면, 지금 페이지의 후보를 관측 결과에 섞지 않는다.
     const observed = (result.data as PageDescription).url;
     const tab = await chrome.tabs.get(await resolveTurnTab(turnTab));
     if (!observed || tab.url !== observed) return result;
+    paths = await pathHintsOf(turnTab, tab).catch(() => []);
     const page = await pageKeyFor(turnTab);
-    if (!page?.skeleton) return result;
-    const hints = await readHintsFor(page);
-    if (!hints.length) return result;
-    offeredHints.set(turnKeyOf(turnTab), { page: pageKeyId(page), hints });
-    while (offeredHints.size > MAX_OFFERED) {
-      const oldest = offeredHints.keys().next().value;
-      if (oldest === undefined) break;
-      offeredHints.delete(oldest);
+    if (page?.skeleton) hints = await readHintsFor(page).catch(() => []);
+    if (hints.length) {
+      offeredHints.set(turnKeyOf(turnTab), { page: pageKeyId(page!), hints });
+      while (offeredHints.size > MAX_OFFERED) {
+        const oldest = offeredHints.keys().next().value;
+        if (oldest === undefined) break;
+        offeredHints.delete(oldest);
+      }
+      // 제안한 레시피의 도구·인자를 디버그 로그에 남긴다(#156). 모델이 만든 인자만 — 입력 칸 값은 없다.
+      for (const h of hints) debugLog("read_recipe:offered", `${h.tool} ${recipeArgsText(h.args)} · 성공 ${h.successes}번`);
     }
-    // 제안한 레시피의 도구·인자를 디버그 로그에 남긴다(#156). 모델이 만든 인자만 — 입력 칸 값은 없다.
-    for (const h of hints) debugLog("read_recipe:offered", `${h.tool} ${recipeArgsText(h.args)} · 성공 ${h.successes}번`);
-    return {
-      ...result,
-      summary: `${result.summary} / 전에 통한 읽기 방법 ${hints.length}개`,
-      data: { ...(result.data as PageDescription), readHints: hints },
-    };
   } catch {
     return result;
   }
+  if (!hints.length && !paths.length) return result;
+  const notes = [hints.length ? `전에 통한 읽기 방법 ${hints.length}개` : "", paths.length ? `전에 간 이동 경로 ${paths.length}개` : ""].filter(Boolean);
+  return {
+    ...result,
+    summary: `${result.summary} / ${notes.join(" · ")}`,
+    data: { ...(result.data as PageDescription), ...(hints.length ? { readHints: hints } : {}), ...(paths.length ? { pathHints: paths } : {}) },
+  };
+}
+
+// 이동 경로 후보(#297): 기록이 켜져 있고, 시크릿 창이 아니고, 원래 탭(팝업·새 탭을 따라가는 중이 아님)을 관측했을 때만.
+async function pathHintsOf(turnTab: TurnTab, tab: chrome.tabs.Tab): Promise<PathHint[]> {
+  if (!("tabId" in turnTab) || followingPopup(turnTab) || tab.id !== turnTab.tabId || tab.incognito || !tab.url) return [];
+  if (!(await getSettings()).actionLogEnabled) return [];
+  return offerPathHints(turnTab, tab.url);
 }
 
 function actionOutcome(

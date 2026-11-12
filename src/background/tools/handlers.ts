@@ -4,6 +4,7 @@ import { navigationError, redirectedOnlyFrom, waitForNavigationSettle } from "..
 import { describeNavigationError } from "@/lib/navError";
 import { debugLog, timeSpan } from "../debug";
 import { isBrowserInternalUrl } from "@/lib/siteTrust";
+import { markPathRisk } from "../pathRecipes";
 
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const TOOL_TIMEOUT_MS: Partial<Record<ToolName, number>> = {
@@ -196,6 +197,8 @@ export async function followPopup(turnTab: TurnTab, popup: FollowedPopup): Promi
   if (stack.length >= MAX_FOLLOWED_POPUPS || stack.some((p) => p.tabId === popup.tabId)) return false;
   const first = stack.length === 0;
   stack.push(popup);
+  // 도구 대상이 원래 탭이 아니게 됐으므로 이 턴의 이동 경로는 배우지 않는다(#297, 원래 탭으로 돌아와도 되살리지 않음).
+  markPathRisk(turnTab, "popup");
   let known = knownPopupTabs.get(turnTab.tabId);
   if (!known) knownPopupTabs.set(turnTab.tabId, (known = new Set()));
   known.add(popup.tabId);

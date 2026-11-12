@@ -14,6 +14,8 @@ import { addRule, checkSuggestionRun, deleteRule, listRules, updateRule } from "
 import type { ParamChoice } from "@/lib/savedPages";
 import { clearActionLog, pruneActionLog, storedCounts } from "./actionLog";
 import { deleteRecipes, listRecipes } from "./readRecipes";
+import { deletePaths, listPaths } from "./pathRecipes";
+import { mergePathSites } from "@/lib/pathRecipe";
 import { MAX_RECIPE_DELETE_KEYS } from "@/lib/readRecipe";
 import { translateBatch } from "./translator";
 import { checkConnection } from "./connectionCheck";
@@ -627,7 +629,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     return true;
   }
 
-  // 동작 기록 개수·지우기와 읽기 레시피 목록·지우기(#297): 이 확장의 화면(설정 탭)에서만 받는다(content script·웹 페이지 발신 거절).
+  // 동작 기록 개수·지우기와 읽기 레시피·이동 경로 목록·지우기(#297): 이 확장의 화면(설정 탭)에서만 받는다(content script·웹 페이지 발신 거절).
   if (m.kind === "action_log_count" || m.kind === "action_log_clear" || m.kind === "recipes_list" || m.kind === "recipe_delete") {
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
       sendResponse({ ok: false, error: "허용되지 않은 요청" });
@@ -640,9 +642,11 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
         sendResponse({ ok: false, error: "잘못된 요청" });
         return false;
       }
-      job = deleteRecipes(keys as string[]).then((recipes) => ({ recipes }));
-    } else if (m.kind === "recipes_list") job = listRecipes();
-    else if (m.kind === "action_log_clear") job = clearActionLog().then(() => ({ log: 0, recipes: 0 }));
+      // 읽기 레시피(read:)와 이동 경로(path:) key를 각자 지운다(둘 다 큐에 넣기 전에 동기적으로 삭제 표식을 남긴다).
+      const ks = keys as string[];
+      job = Promise.all([deleteRecipes(ks), deletePaths(ks)]).then(([recipes, paths]) => ({ recipes, paths }));
+    } else if (m.kind === "recipes_list") job = Promise.all([listRecipes(), listPaths()]).then(([r, paths]) => ({ sites: mergePathSites(r.sites, paths) }));
+    else if (m.kind === "action_log_clear") job = clearActionLog().then(() => ({ log: 0, recipes: 0, paths: 0 }));
     else job = storedCounts();
     job
       .then((data) => sendResponse({ ok: true, data }))

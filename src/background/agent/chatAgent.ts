@@ -66,6 +66,7 @@ import {
   type TurnTab,
 } from "../tools/handlers";
 import { commitReads } from "../readRecipes";
+import { abortPath, beginPath, commitPath, markPathRisk } from "../pathRecipes";
 import { addUsage, emptyUsageTotal, formatTurnUsage, formatUsage, type ModelUsage, type UsageTotal } from "@/lib/usage";
 import {
   canonicalJson,
@@ -805,6 +806,10 @@ export class ChatAgent {
       this.sendChatGrants();
       this.sendTaskState();
     }
+    // 경로 레시피(#297): 원래 탭이 확정된 뒤(inheritPopups 뒤) 이 턴의 이동 기록을 시작한다. 모든 턴이 부른다(다른 대화의 턴과
+    // 겹쳤는지 보려고). 아래 try의 끝에서 commitPath, 그 밖의 끝은 finally의 abortPath로 이 턴의 구독을 없앤다.
+    beginPath(turnTab, startUrl);
+    let pathCommitted = false;
     try {
       const { apiKey, model, systemPrompt } = await this.ensureCredentials();
       debugLog("turn:model", model);
@@ -856,6 +861,13 @@ export class ChatAgent {
       // 외부 본문 보호가 켜진 대화에서는 읽기 레시피를 저장하지 않고 이 턴의 관찰을 버린다(보호 대상에서 유래한
       // 모델 인자가 레시피로 남아 새 대화의 readHints로 다시 들어오지 않게).
       commitReads(turnTab, completed && !this.isStale(turn) && !this.externalContent);
+      // 경로 레시피: 같은 조건으로 끝난 턴만. 원래 탭이 다 뜨기·요청 대응을 기다리므로 턴 끝을 늦추지 않게 기다리지 않는다.
+      pathCommitted = true;
+      void commitPath(turnTab, {
+        ok: completed && !this.isStale(turn) && !this.externalContent,
+        isLive: () => !this.isStale(turn) && !this.externalContent,
+        loadedPage,
+      });
       // 답을 마친 턴에서 탭이 다른 화면에 있으면 "이 페이지 기억하기"를 제안한다(시크릿·꺼짐·같은 주소는 제안 없음).
       if (completed && !this.isStale(turn) && "tabId" in turnTab) {
         const context = { query: userText, answer: lastAnswerText(this.history) };
@@ -885,6 +897,7 @@ export class ChatAgent {
       endTurn("fail");
       this.send({ kind: "error", ...friendlyError(err), provider: this.provider });
     } finally {
+      if (!pathCommitted) abortPath(turnTab);
       // 이 턴이 붙인 디버거를 뗀다. 새 턴에 밀렸으면 그 턴이 끝날 때 뗀다(같은 대화 상태를 쓰므로).
       if (!this.isStale(turn)) void detachSession(this.inputSession);
       endKeepalive();
@@ -1168,6 +1181,27 @@ export class ChatAgent {
     reads: { documents: number; otherTabs: number; telegramSends: number; tabLinkReads: number },
   ): Promise<boolean> {
     const toolName = fc.function.name as ToolName;
+    // 경로 레시피(#297) 턴 제외 4·5번: 관측 전용이 아닌 호출은 "허락 없는 자동 실행"에서 카드 없이 실행됐을 때만(그림자 판정,
+    // authorizeCall이 정한다) 이 턴의 경로를 남긴다. 판정에 도달하지 않은 호출(조기 반환·인자 오류 등)도 제외로 본다.
+    // sign_in은 로그인 흐름이라 목표 경로가 아니다. 실제 승인 동작에는 아무 영향이 없다.
+    const shadow = { auto: false };
+    try {
+      return await this.handleCallInner(fc, turn, turnTab, record, reads, shadow);
+    } finally {
+      if (toolName === "sign_in") markPathRisk(turnTab, "sign_in");
+      else if (!TOOL_POLICY[toolName]?.observeOnly && !shadow.auto) markPathRisk(turnTab, "shadow_card");
+    }
+  }
+
+  private async handleCallInner(
+    fc: OpenRouterToolCall,
+    turn: number,
+    turnTab: TurnTab,
+    record: RecordRun,
+    reads: { documents: number; otherTabs: number; telegramSends: number; tabLinkReads: number },
+    shadow: { auto: boolean },
+  ): Promise<boolean> {
+    const toolName = fc.function.name as ToolName;
     // 모델이 준 id는 대화 기록에만 쓰고, 나머지는 내부 키로 찾는다(#221 — 다른 대화·같은 대화의 다른 턴이 같은 id를 줘도 겹치지 않게).
     const modelCallId = fc.id;
     const callId = `k${this.callNonce}-${++this.callSeq}`;
@@ -1203,7 +1237,7 @@ export class ChatAgent {
       return true;
     }
 
-    const call: ToolCallContext = { turn, turnTab, callId, modelCallId, toolName, parsedArgs, argsKey, failCall, record };
+    const call: ToolCallContext = { turn, turnTab, callId, modelCallId, toolName, parsedArgs, argsKey, failCall, record, shadow };
     // 원격 대화에서 쓰지 않는 도구: 자동 로그인(승인한 사이트여도), 저장 링크(요청 글에 적지 않은 사이트로 간다), 반복 작업 등록.
     if (this.remote && REMOTE_BLOCKED_TOOLS.has(toolName)) {
       this.cancelCall(call, null);
@@ -1288,7 +1322,7 @@ export class ChatAgent {
     const fromInternal = toolName === "navigate_to_url" && (await turnTabIsInternal(turnTab));
     if (this.isStale(turn)) return STALE;
     // 승인 판정(손 넘기기·이번 대화 허락·자동 실행·카드)과 카드에 함께 보일 제안. 규칙은 src/lib/approvalDecision.ts.
-    let decision = decideApproval({
+    const approvalInput: Parameters<typeof decideApproval>[0] = {
       toolName,
       preview,
       guarded,
@@ -1303,7 +1337,22 @@ export class ChatAgent {
       namedSites: this.turnNamedSites,
       allowedPersonalUrls: this.grants.allowedPersonalUrls,
       chatGrants: this.grants.chatGrants,
-    });
+    };
+    let decision = decideApproval(approvalInput);
+    // 경로 레시피의 그림자 판정(#297 v4): 같은 입력으로 실행 방식만 auto로, 대화 허락·맡긴 작업·링크 이동 허락·개인정보 주소 허락·
+    // 원격 허용 사이트·카드로 허락한 이동 사이트를 모두 비운 채 다시 계산한다. 결과는 경로 기록에만 쓰고 위 decision은 바꾸지 않는다.
+    if (call.shadow) {
+      const shadowDecision = decideApproval({
+        ...approvalInput,
+        autoApprove: true,
+        taskMode: false,
+        trusted: new Set(this.turnSite ? [this.turnSite] : []),
+        linkGrant: null,
+        allowedPersonalUrls: new Set(),
+        chatGrants: new Map(),
+      });
+      call.shadow.auto = shadowDecision.mode === "auto";
+    }
     // 자동 로그인으로 값을 넣을 출처·단계(실행 직전에 시도로 기록한다).
     let signInAttempt: string | null = null;
     // sign_in 준비의 열쇠(취소·손 넘기기로 끝나면 받은 값을 버린다).
@@ -1347,6 +1396,7 @@ export class ChatAgent {
     }
 
     if (decision.mode === "handoff") {
+      markPathRisk(turnTab, "handoff");
       const handed = await handOff(call, preview, signInToken, signInHandoffWhy, this.handoffDeps);
       if (handed.kind !== "cancelled") return handed;
       return this.cancelCall(call, signInToken);

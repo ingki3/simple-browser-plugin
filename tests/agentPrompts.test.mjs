@@ -1,5 +1,6 @@
 // 지침·안내 문구(src/background/agent/prompts.ts, #263 단계 1). 옮기기 전 chatAgent.ts의 같은 함수·상수 본문을 임시 모듈로 실행해 뽑은
 // 결과(SHA-256)를 스냅숏으로 둔다 — 옮긴 뒤에도 한 글자도 같아야 한다. 문구를 일부러 고치면 이 값도 함께 고친다.
+// #297 2단계에서 pathHints 줄을 더해 system 스냅숏을 고쳤다(원격 안내·고정 문구는 그대로).
 // isGoogleConfigured는 manifest의 oauth2.client_id와 chrome.identity를 보므로 chrome 전역 대역으로 Google 있음/없음을 고른다.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -18,14 +19,14 @@ const NAMED = { none: [], one: ["https://news.naver.com"], two: ["https://news.n
 const SITES = { none: [], one: ["https://example.com"], two: ["https://example.com", "https://shop.example.org"] };
 
 const SNAP = {
-  "system g=false q=false c=0": "8c329b6792dd52c610569538284862989527e1a101b858bc07b6c4f419cbd7df",
-  "system g=false q=false c=1": "136a9d2b4b72ddbdeb8a7d49caab1092d1e837c7168fd94af3fcee57bef46bcf",
-  "system g=false q=true c=0": "02beab13dfb2cfc71fc80f0576adaa2bd53435e539ebf80d1589b7f199ed265a",
-  "system g=false q=true c=1": "ef953ac9514a3905ea78484dad5c99410b069f158f59d35e2c1a77ae258b1e4c",
-  "system g=true q=false c=0": "b6bf39a712f4274eedad9c9a8bb94cb9e7b03e66532e8088ab941927068a84ee",
-  "system g=true q=false c=1": "1b09fcdf40301930f833767f168aa23db2b070a5ad6beac849dfa0e163917479",
-  "system g=true q=true c=0": "2b6be02dc1e453e393068dae5694baf7cbfebfaa1763069967d6b0cc22a114d5",
-  "system g=true q=true c=1": "fd033d7ce6862a3577c6623cedd8737fb4c3818239145e5dfa853afaf23b4fc3",
+  "system g=false q=false c=0": "5fdde95d928283b9a64f38cadae4697e806124058e69fbe88c43b25bcce00b66",
+  "system g=false q=false c=1": "b0d9a7a426cbf7225e62a7646675bb7a5e66155dbd5a4c12422091f3864f8391",
+  "system g=false q=true c=0": "00ca1fa241ade641b1ec4ab472422841736978e455dcf0f3a9ef9eb1082b2f3d",
+  "system g=false q=true c=1": "4239514f576c11ee927b7c57cd92f896e2e64201c480e04dcbe6a6f76558b6a0",
+  "system g=true q=false c=0": "48bdc57a89239c15cccd9fec743bc723957817faeac2cb2403e2ebfb663e0426",
+  "system g=true q=false c=1": "70b85a3a64dffcf6e1af90bb1ec1175752387754ccf8e47c49a0873b094dc54c",
+  "system g=true q=true c=0": "b824c20378571956890233661ebb28f1c51f52bc49926aba701372ba475906bd",
+  "system g=true q=true c=1": "cf6f6312f31df150bf98b2392aba9f4822be1d0b871d6dd76aa86ed6b04836f2",
   "remote panel named=none ask=false sites=none": "e9b5c931c33c7c34b03c3b973c16a2baa89ace5e0310f4cbbcc0c8bd686395d0",
   "remote panel named=none ask=false sites=one": "31abe1f780df0cb1ed0b5b5578a63bbf4136e788f51a15deda64587bd506836c",
   "remote panel named=none ask=false sites=two": "cce20de157c132ea5ee26da1ff7cae0cf6aaa591a8435d28c62089620cc9eaf4",
@@ -106,7 +107,7 @@ test("composeSystemPrompt: 빠르게 생각 켬·끔 × Google 있음·없음 ×
     }
   }
   // 하네스 진단(prompt-fingerprint.mjs "panel system 기본")과 같은 글이다.
-  assert.equal(SNAP["system g=false q=false c=0"], "8c329b6792dd52c610569538284862989527e1a101b858bc07b6c4f419cbd7df");
+  assert.equal(SNAP["system g=false q=false c=0"], "5fdde95d928283b9a64f38cadae4697e806124058e69fbe88c43b25bcce00b66");
 });
 
 test("composeSystemPrompt: Google 지침은 설정됐을 때만, 빠르게 생각은 Thought 규칙만 바꾼다", () => {
