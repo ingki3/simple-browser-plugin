@@ -56,7 +56,7 @@ OpenRouter를 고르면 OpenRouter가 고른 모델의 회사로 다시 전달�
 
 - 설정, AI 서비스의 API 키(암호화하지 않음 — 공용 컴퓨터에서는 쓰지 마세요), 텔레그램 봇 토큰과 최근 요청 5개의 앞부분
 - 저장한 링크, 페이지 제안 규칙, 반복 작업
-- 동작 기록·읽기 레시피(입력값과 페이지 내용은 남기지 않음, 설정에서 끄거나 지울 수 있음). 읽기 레시피는 설정의 "저장된 읽기 방법 보기"에서 사이트별로 주소 틀·도구·인자·쓴 횟수를 보고 하나씩 또는 사이트째 지울 수 있음(이 목록은 확장 화면에만 보이고 외부로 보내지 않음, 자동 로그인으로 넣은 값이 보이는 항목은 목록에서 뺌)
+- 동작 기록·읽기 레시피·이동 경로(입력값과 페이지 내용은 남기지 않음, 설정에서 끄거나 지울 수 있음). 이동 경로는 같은 사이트 안에서 답을 마칠 때 거쳐 간 주소 틀(숫자·이름 같은 칸은 자리표시)만 남기며, 같은 사이트에서만 후보로 씀. 읽기 레시피는 설정의 "저장된 읽기 방법 보기"에서 사이트별로 주소 틀·도구·인자·쓴 횟수를 보고 하나씩 또는 사이트째 지울 수 있음(이 목록은 확장 화면에만 보이고 외부로 보내지 않음, 자동 로그인으로 넣은 값이 보이는 항목은 목록에서 뺌)
 - KeePassXC 연결 식별 키, MCP 비밀
 
 대화 기록과 진단 로그는 저장하지 않습니다(패널을 닫으면 사라짐). 진단 로그는 사용자가 🐞 → 진단 복사를 누를 때만 클립보드로 복사됩니다.
@@ -137,7 +137,7 @@ Stored in `chrome.storage.local` (this browser profile) and never sent anywhere:
 
 - Settings, the AI provider API key (not encrypted, so avoid shared computers), the Telegram bot token, and the first part of the last 5 Telegram requests
 - Saved links, page suggestion rules, repeat tasks
-- Action log and read recipes (no typed values or page content; can be turned off or cleared in settings)
+- Action log, read recipes and navigation paths (no typed values or page content; can be turned off or cleared in settings). A navigation path is only the URL patterns visited within one site while answering a request (numbers, names and similar parts are replaced by placeholders), and it is offered again only on that site
 - The KeePassXC association key and the MCP secret
 
 Conversations and diagnostic logs are not stored; they disappear when the panel closes. The diagnostic log is copied to the clipboard

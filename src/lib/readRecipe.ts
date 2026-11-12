@@ -4,6 +4,7 @@
 
 import { ACTION_LOG_MAX_AGE_MS, maskName, pageKeyId, plainWord, type PageKey } from "./actionLog.ts";
 import { QUERY_DOM_ATTRS } from "./modelText.ts";
+import type { PathRow } from "./pathRecipe.ts";
 
 export type RecipeTool = "query_dom" | "list_file_links" | "find_clickables";
 
@@ -232,6 +233,8 @@ export interface RecipeRow {
 export interface RecipeSite {
   origin: string;
   reads: RecipeRow[];
+  // 이동 경로(#297 2단계, src/lib/pathRecipe.ts mergePathSites가 더한다).
+  paths?: PathRow[];
 }
 
 // 출처별로 묶는다. 묶음 안은 최근에 쓴 것부터, 묶음은 가장 최근에 쓴 항목 순(알 수 없는 사이트는 맨 뒤).

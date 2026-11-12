@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { READ_RECIPES_KEY } from "@/lib/messages";
+import { PATH_RECIPES_KEY, READ_RECIPES_KEY } from "@/lib/messages";
 import type { RecipeSite } from "@/lib/readRecipe";
 import { toolLabel } from "@/lib/toolLabels";
 import { useLatestGate, useStorageKeys } from "../../sidepanel/hooks/syncHelpers";
 
-// 저장된 읽기 방법(읽기 레시피) 보기·지우기(#297 1단계). 목록·지우기는 백그라운드에 맡긴다(기록 쓰기와 같은 큐에서 순서를 맞추려고).
+// 저장된 읽기 방법(읽기 레시피)과 이동 경로(경로 레시피) 보기·지우기(#297 1·2단계). 목록·지우기는 백그라운드에 맡긴다(기록 쓰기와 같은 큐에서 순서를 맞추려고).
 // 모든 값은 React 텍스트로만 보인다(주소 틀·인자는 페이지에서 온 낱말일 수 있다). 고치기는 없다.
 export function ReadRecipesList() {
   const [open, setOpen] = useState(false);
@@ -35,7 +35,7 @@ export function ReadRecipesList() {
   };
 
   // 다른 화면·턴이 레시피를 바꾸면 다시 읽는다(열어 둔 동안만).
-  useStorageKeys([READ_RECIPES_KEY], () => {
+  useStorageKeys([READ_RECIPES_KEY, PATH_RECIPES_KEY], () => {
     if (open) void load();
   });
 
@@ -66,12 +66,17 @@ export function ReadRecipesList() {
       {deleteError && <span className="field-help error-text recipe-delete-error">{deleteError}</span>}
       {error && <span className="field-help error-text recipe-list-error">{error}</span>}
       {open && sites === null && !error && <span className="field-help">읽는 중…</span>}
-      {sites && !sites.length && <span className="field-help">저장된 읽기 방법이 없습니다.</span>}
+      {sites && !sites.length && <span className="field-help">저장된 읽기 방법·이동 경로가 없습니다.</span>}
       {sites?.map((site) => (
         <div className="recipe-site" key={site.origin || "(unknown)"}>
           <div className="recipe-site-head">
             <strong className="recipe-origin">{site.origin || "알 수 없는 사이트"}</strong>
-            <button type="button" className="link-btn recipe-delete-site" disabled={busy} onClick={() => void remove(site.reads.map((r) => r.key))}>
+            <button
+              type="button"
+              className="link-btn recipe-delete-site"
+              disabled={busy}
+              onClick={() => void remove([...site.reads.map((r) => r.key), ...(site.paths ?? []).map((p) => p.key)])}
+            >
               이 사이트 모두 지우기
             </button>
           </div>
@@ -91,6 +96,24 @@ export function ReadRecipesList() {
               </li>
             ))}
           </ul>
+          {!!site.paths?.length && (
+            <>
+              <span className="field-help recipe-paths-head">이동 경로</span>
+              <ul className="recipe-list recipe-paths">
+                {site.paths.map((p) => (
+                  <li key={p.key} className="recipe-row recipe-path-row">
+                    <span className="recipe-pattern">{p.steps.join(" → ")}</span>
+                    <span className="field-help">
+                      쓴 횟수 {p.uses}번{p.misses ? ` · 최근 연속 빗나감 ${p.misses}번` : ""} · 마지막 사용 {dateText(p.lastUsed)}
+                      <button type="button" className="link-btn recipe-delete" disabled={busy} onClick={() => void remove([p.key])}>
+                        지우기
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       ))}
     </details>
