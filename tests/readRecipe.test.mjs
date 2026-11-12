@@ -129,3 +129,69 @@ test("recipeArgs·usefulResult: find_clickables 항목 모드·matchContext(#159
   assert.equal(usefulResult("find_clickables", { items: [{ text: "상품", targets: [] }], outside: 0 }), true);
   assert.equal(usefulResult("find_clickables", { items: [], note: "…" }), false);
 });
+
+// ---------------------------------------------------------------------------
+// 설정 화면의 읽기 방법 보기·지우기(#297 1단계)
+// ---------------------------------------------------------------------------
+import { groupRecipes, recipeKey, removeRecipeKeys, splitPageId } from "../src/lib/readRecipe.ts";
+import { pageKeyId, urlPattern } from "../src/lib/actionLog.ts";
+
+test("#297 splitPageId: 마지막 @ 기준으로 출처·주소 틀·뼈대를 나눈다", () => {
+  assert.deepEqual(splitPageId("https://ex.test/board/{n}/view?id@abcd1234"), {
+    origin: "https://ex.test",
+    pattern: "/board/{n}/view?id",
+    skeleton: "abcd1234",
+  });
+  assert.deepEqual(splitPageId("http://127.0.0.1:8080/@"), { origin: "http://127.0.0.1:8080", pattern: "/", skeleton: "" });
+  // 주소 틀은 @가 든 경로 칸·쿼리 이름·해시 경로 칸을 자리표시로 바꾸므로 페이지 키의 마지막 @가 경계다.
+  const p = urlPattern("https://ex.test/user/me@mail.com/list?a@b=1&page=2#/x/y@z");
+  assert.ok(p && !p.pattern.includes("@"), `주소 틀에 @ 없음(${p?.pattern})`);
+  const id = pageKeyId({ origin: p.origin, pattern: p.pattern, skeleton: "ff00ff00" });
+  assert.deepEqual(splitPageId(id), { origin: "https://ex.test", pattern: p.pattern, skeleton: "ff00ff00" });
+});
+
+test("#297 splitPageId: 출처를 다시 파싱해 맞지 않으면 null", () => {
+  assert.equal(splitPageId("no-at-sign"), null);
+  assert.equal(splitPageId("/path@abc"), null);
+  assert.equal(splitPageId("https://ex.test@abc"), null, "경로 없음");
+  assert.equal(splitPageId("ftp://ex.test/x@abc"), null, "http(s) 아님");
+  assert.equal(splitPageId("https://EX.test/x@abc"), null, "정규화된 출처가 아님");
+  assert.equal(splitPageId("https://ex.test:443/x@abc"), null, "기본 포트가 붙은 출처");
+  assert.equal(splitPageId("https://u:p@ex.test/x@abc"), null, "계정 정보");
+});
+
+const rec = (page, args, lastUsed, extra = {}) => ({ page, tool: "query_dom", args, successes: 1, failures: 0, lastUsed, ...extra });
+
+test("#297 groupRecipes: 출처별 묶음, 최근 순, 알 수 없는 사이트는 맨 뒤", () => {
+  const list = [
+    rec("https://a.test/list@s1", { selector: "li" }, 100),
+    rec("https://b.test/x@s2", { selector: "p" }, 300),
+    rec("bogus", { selector: "td" }, 500),
+    rec("https://a.test/view@s3", { selector: "h1" }, 200, { tool: "find_clickables", successes: 4, failures: 1 }),
+  ];
+  const sites = groupRecipes(list);
+  assert.deepEqual(sites.map((s) => s.origin), ["https://b.test", "https://a.test", ""]);
+  assert.deepEqual(sites[1].reads.map((r) => r.pattern), ["/view", "/list"]);
+  const row = sites[1].reads[0];
+  assert.deepEqual(row, {
+    key: recipeKey("https://a.test/view@s3", "find_clickables", { selector: "h1" }),
+    pattern: "/view",
+    tool: "find_clickables",
+    args: { selector: "h1" },
+    successes: 4,
+    failures: 1,
+    lastUsed: 200,
+  });
+  assert.equal(sites[2].reads[0].pattern, "bogus", "알 수 없는 항목은 페이지 키 그대로");
+  assert.deepEqual(groupRecipes([]), []);
+});
+
+test("#297 recipeKey·removeRecipeKeys: key 형식과 해당 key만 빼기", () => {
+  assert.equal(recipeKey("https://a.test/x@s", "query_dom", { selector: "li", limit: 5 }), 'read:https://a.test/x@s query_dom {"selector":"li","limit":5}');
+  const a = rec("https://a.test/x@s", { selector: "li" }, 1);
+  const b = rec("https://a.test/x@s", { selector: "td" }, 2);
+  const c = rec("https://a.test/y@s", { selector: "li" }, 3);
+  const keys = new Set([recipeKey(a.page, a.tool, a.args), recipeKey(c.page, c.tool, c.args), "read:없는 key", "path:1"]);
+  assert.deepEqual(removeRecipeKeys([a, b, c], keys), [b]);
+  assert.deepEqual(removeRecipeKeys([a, b], new Set()), [a, b]);
+});
