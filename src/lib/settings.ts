@@ -19,6 +19,7 @@ import {
   type Settings,
   type SettingsPatch,
 } from "./messages.ts";
+import { DEFAULT_TRANSLATION_STYLE, isTranslationStyle } from "./translationProtocol.ts";
 import { DEFAULT_VOICE_INPUT, mergeVoiceInput, normalizeVoiceInput } from "./voice.ts";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -30,6 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: DEFAULT_MODEL,
   systemPrompt: "",
   translationTargetLang: "ko",
+  translationStyle: DEFAULT_TRANSLATION_STYLE,
   downloadFolderPrefix: "simple-browser-plugin",
   maxToolHops: DEFAULT_MAX_TOOL_HOPS,
   actionLogEnabled: true,
@@ -63,6 +65,7 @@ export function normalizeSettings(raw: Partial<Settings> | null | undefined): Se
       typeof r.translationTargetLang === "string" && r.translationTargetLang.length >= 2
         ? r.translationTargetLang
         : DEFAULT_SETTINGS.translationTargetLang,
+    translationStyle: isTranslationStyle(r.translationStyle) ? r.translationStyle : DEFAULT_SETTINGS.translationStyle,
     downloadFolderPrefix:
       typeof r.downloadFolderPrefix === "string" ? r.downloadFolderPrefix : DEFAULT_SETTINGS.downloadFolderPrefix,
     maxToolHops: normalizeMaxToolHops(r),

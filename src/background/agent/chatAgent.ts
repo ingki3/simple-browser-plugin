@@ -1842,7 +1842,8 @@ export class ChatAgent {
       if (current) translationTabs.push(current.tabId);
       if ("tabId" in turnTab) translationTabs.push(turnTab.tabId);
       // 승인 카드를 띄운 사이 설정에서 보낼 대상을 바꿨으면 번역하지 않는다(대화 대상과 지금 설정이 같아야 함).
-      const now = activeModel(await getSettings());
+      const settingsNow = await getSettings();
+      const now = activeModel(settingsNow);
       if (this.isStale(turn)) return false;
       if (this.targetChangedTurn === turn || targetKey(now) !== this.conversationTarget()) {
         this.targetChangedTurn = turn;
@@ -1862,6 +1863,10 @@ export class ChatAgent {
         ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}),
         ready: true,
         missing: null,
+      }, {
+        // 대상 언어·문체를 세션에 고정한다(#302): 다른 언어의 배치는 거절하고, 번역 도중 문체 설정을 바꿔도 이 세션은 그대로(다음 번역부터).
+        targetLang: String((execArgs as { targetLang?: unknown }).targetLang ?? ""),
+        style: settingsNow.translationStyle,
       });
       for (const tabId of translationTabs) this.translationSessions.set(tabId, translationSession);
       execArgs = { ...(execArgs as object), session: translationSession };
