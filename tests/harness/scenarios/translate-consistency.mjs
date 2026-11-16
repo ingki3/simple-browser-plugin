@@ -106,10 +106,27 @@ export default [
     name: "번역(#302): 첫 덩어리 요청이 실패하면(시간 초과와 같은 비-모양 오류) 지금처럼 번역 실패·세션 종료 — 나머지·관찰 요청 없음",
     pages: { "/long": LONG(60) },
     async run(h) {
+      // 첫 응답을 붙잡은 사이 문단을 더해(관찰 큐에 모임) 그 뒤 첫 요청을 실패시킨다 — 모은 큐를 보내지 않아야 한다.
       await h.sw.evaluate(() => {
-        globalThis.__translateFor = ({ index }) => (index === 0 ? { status: 500 } : {});
+        globalThis.__translateFor = ({ index }) => (index === 0 ? { hold: true, status: 500 } : {});
       });
-      const r = await translateTurn(h, "/long");
+      const pending = translateTurn(h, "/long");
+      pending.catch(() => {});
+      let ready = false;
+      try {
+        await waitUntil(async () => (await heldCount(h)) >= 1, { timeoutMs: 15_000, label: "첫 응답 붙잡힘" });
+        await h.tab.evaluate(() => {
+          const p = document.createElement("p");
+          p.textContent = "DURINGFAIL words added while waiting";
+          document.body.appendChild(p);
+        });
+        await h.tab.waitForTimeout(500);
+        ready = true;
+      } finally {
+        await release(h);
+        if (!ready) await pending.catch(() => {});
+      }
+      const r = await pending;
       const tr = r.tools.find((t) => t.name === "translate_page");
       expect(tr && tr.error, `번역 도구 실패(${JSON.stringify(tr).slice(0, 160)})`);
       await h.tab.evaluate(() => {
@@ -120,6 +137,9 @@ export default [
       await h.tab.waitForTimeout(1500);
       const sent = await reqs(h);
       expect(sent.length === 1, `실패 뒤 모델 요청 없음(${sent.length})`);
+      const msgs = await batchMsgs(h);
+      expect(msgs.length === 1 && !msgs.some((m) => m.texts.some((t) => t.includes("DURINGFAIL"))), `대기 중 모은 글은 보내지 않음(배치 메시지 ${msgs.length})`);
+      expect(!(await startsWith(h, "DURINGFAIL", "번역:")), "대기 중 추가 문단 번역 없음");
       expect(!(await startsWith(h, "item0z", "번역:")), "번역 적용 없음");
       expect(!(await startsWith(h, "AFTERFAIL", "번역:")), "관찰 번역 없음");
     },

@@ -390,6 +390,8 @@ interface ObserverHandle {
   addMissingRoots(): void;
   // 보류를 풀고 모은 큐를 한 번 flush한다.
   release(): void;
+  // 모은 큐를 버리고 보류를 유지한다(첫 배치 실패 — 세션이 끝나므로 더 보내지 않는다. 관찰자는 translate_stop이 끊는다).
+  discard(): void;
 }
 
 // 관찰자를 붙인다(#302: 첫 배치를 기다리기 전에). 보류 중에는 변경 노드를 큐에만 모으고 flush(단위 구성·요청)를 하지 않는다 —
@@ -495,6 +497,13 @@ function scheduleObserver(targetLang: string, gen: number, session: string): Obs
       if (timer !== null) window.clearTimeout(timer);
       void flush();
     },
+    discard: () => {
+      held = true;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      queue = [];
+      queuedNodes = new WeakSet<Text>();
+    },
   };
 }
 
@@ -546,13 +555,17 @@ export async function translatePage(args: {
     firstCount = firstBatch
       ? await translateBatchWithRetry(firstBatch, args.targetLang, gen, session)
       : 0;
-  } finally {
-    // 첫 배치가 적용(또는 실패)된 뒤: 기다리는 사이 생긴 루트에도 관찰자를 붙이고, 보류를 풀어 모은 큐를 한 번 보낸다.
-    // 그 사이 중지·재호출됐으면(세대가 바뀜) 관찰자는 이미 끊겼고 아무것도 하지 않는다.
-    if (gen === generation) {
-      watcher.addMissingRoots();
-      watcher.release();
-    }
+  } catch (err) {
+    // 첫 배치가 실패하면(시간 초과·네트워크 등) 기다리는 동안 모은 큐를 버리고 보내지 않는다 — 오류가 ChatAgent에 닿아 세션을
+    // 끝내기 전에 새 요청이 나가지 않게. 관찰자는 보류 그대로 두고 translate_stop이 끊는다.
+    if (gen === generation) watcher.discard();
+    throw err;
+  }
+  // 첫 배치가 적용된 뒤: 기다리는 사이 생긴 루트에도 관찰자를 붙이고, 보류를 풀어 모은 큐를 한 번 보낸다.
+  // 그 사이 중지·재호출됐으면(세대가 바뀜) 관찰자는 이미 끊겼고 아무것도 하지 않는다.
+  if (gen === generation) {
+    watcher.addMissingRoots();
+    watcher.release();
   }
   const scheduledNodes = remainingBatches.reduce((sum, batch) => sum + batch.length, 0);
   if (remainingBatches.length > 0) {
