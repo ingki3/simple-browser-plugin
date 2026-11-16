@@ -479,6 +479,9 @@ export interface Settings {
   localServer: { baseUrl: string; model: string };
   systemPrompt: string;
   translationTargetLang: string;
+  // 번역 문체(#302): "plain" 해라체 · "polite" 해요체 · "formal" 합쇼체(일본어 대상은 だ·である / です·ます). 그 밖의 언어는 어조 유지만.
+  // translate_page를 시작할 때 번역 세션에 고정한다(도중에 바꾸면 다음 번역부터).
+  translationStyle: "plain" | "polite" | "formal";
   downloadFolderPrefix: string;
   maxToolHops: number;
   // 저장할 때 MAX_TOOL_HOPS_VERSION을 붙인다(normalizeMaxToolHops).

@@ -91,7 +91,7 @@ test("translation schema requires exactly one output per input", () => {
 
 test("translation response rejects missing items", () => {
   assert.deepEqual(
-    parseTranslationResponse('{"translations":["가","나"]}', 2),
+    parseTranslationResponse('{"translations":["가","나"]}', 2).translations,
     ["가", "나"],
   );
   assert.throws(
@@ -101,14 +101,9 @@ test("translation response rejects missing items", () => {
 });
 
 test("translation parser accepts schema-ignoring response shapes", () => {
-  assert.deepEqual(parseTranslationResponse('["가","나"]', 2), ["가", "나"]);
-  assert.deepEqual(
-    parseTranslationResponse('[{"translations":["가","나"]}]', 2),
-    ["가", "나"],
-  );
-  assert.deepEqual(
-    parseTranslationResponse('[{"translations":["가"]}]', 1),
-    ["가"],
-  );
+  const tr = (raw, n) => parseTranslationResponse(raw, n).translations;
+  assert.deepEqual(tr('["가","나"]', 2), ["가", "나"]);
+  assert.deepEqual(tr('[{"translations":["가","나"]}]', 2), ["가", "나"]);
+  assert.deepEqual(tr('[{"translations":["가"]}]', 1), ["가"]);
   assert.throws(() => parseTranslationResponse('["가"]', 2), /길이 불일치/);
 });

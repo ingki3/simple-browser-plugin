@@ -237,15 +237,16 @@ function batchUnits(units: Unit[]): Unit[][] {
   return batches;
 }
 
-// 이번 번역의 세션 id(#193 — 백그라운드가 translate_page 실행 때 대상을 고정해 만든 불투명한 값). 동적 재번역도 같은 세션으로 보낸다.
+// 지금 번역의 세션 id(#193 — 백그라운드가 translate_page 실행 때 대상을 고정해 만든 불투명한 값). stopTranslation(session)의 비교에만 쓴다.
+// 요청은 이 전역을 읽지 않고 작업(세대)마다 고정한 세션 id를 인자로 보낸다(#302 — 재호출 뒤 옛 작업·관찰자의 요청이 새 세션으로 가지 않게).
 let activeSession = "";
 
-async function requestTranslation(texts: string[], targetLang: string): Promise<string[]> {
+async function requestTranslation(texts: string[], targetLang: string, session: string): Promise<string[]> {
   const res = (await chrome.runtime.sendMessage({
     kind: "translate_text_batch",
     texts,
     targetLang,
-    session: activeSession,
+    session,
   })) as { ok: boolean; data?: string[]; error?: string };
   if (!res?.ok || !Array.isArray(res.data)) {
     throw new Error(res?.error ?? "번역 요청 실패");
@@ -315,6 +316,7 @@ async function translateBatchWithRetry(
   batch: Unit[],
   targetLang: string,
   gen: number,
+  session: string,
   depth = 0,
 ): Promise<number> {
   if (!batch.length || gen !== generation) return 0;
@@ -323,15 +325,15 @@ async function translateBatchWithRetry(
   if (!batch.length) return 0;
   let translated: string[];
   try {
-    translated = await requestTranslation(batch.map((u) => u.source), targetLang);
+    translated = await requestTranslation(batch.map((u) => u.source), targetLang, session);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const responseShapeError = /JSON 파싱|응답 길이 불일치/.test(message);
     if (!responseShapeError) throw err;
     if (batch.length > 1 && depth < BISECT_MAX_DEPTH) {
       const mid = Math.floor(batch.length / 2);
-      const a = await translateBatchWithRetry(batch.slice(0, mid), targetLang, gen, depth + 1);
-      const b = await translateBatchWithRetry(batch.slice(mid), targetLang, gen, depth + 1);
+      const a = await translateBatchWithRetry(batch.slice(0, mid), targetLang, gen, session, depth + 1);
+      const b = await translateBatchWithRetry(batch.slice(mid), targetLang, gen, session, depth + 1);
       return a + b;
     }
     console.warn(
@@ -355,36 +357,63 @@ async function translateBatchWithRetry(
     }
     if (applyUnit(unit, out)) swapped += 1;
   });
-  if (retry.length) swapped += await translateBatchWithRetry(retry, targetLang, gen, depth);
+  if (retry.length) swapped += await translateBatchWithRetry(retry, targetLang, gen, session, depth);
   return swapped;
 }
 
 let observers: MutationObserver[] = [];
 let activeTargetLang: string | null = null;
-// stopTranslation()마다 증가. 진행 중인 배치는 시작 시점의 값과 비교해 멈춘다.
+// stopTranslation()·새 translatePage마다 증가. 진행 중인 배치는 시작 시점의 값과 비교해 멈춘다.
 let generation = 0;
+// 지금 관찰자의 대기 중 flush를 취소한다(앞 작업을 끊을 때).
+let cancelObserverFlush: (() => void) | null = null;
+
+// 지금 번역 작업을 끊는다: 세대를 올리고 관찰자·대기 중 flush를 정리한다(원문 복원은 하지 않는다).
+function cutCurrentJob(): void {
+  generation += 1;
+  for (const obs of observers) obs.disconnect();
+  observers = [];
+  cancelObserverFlush?.();
+  cancelObserverFlush = null;
+  activeTargetLang = null;
+}
 
 // session을 주면 지금 번역이 그 세션일 때만 멈춘다(늦게 온 앞 번역의 정리 무시, #193).
 export function stopTranslation(session?: string): void {
   if (session !== undefined && session !== activeSession) return;
-  generation += 1;
+  cutCurrentJob();
   activeSession = "";
-  for (const obs of observers) obs.disconnect();
-  observers = [];
-  activeTargetLang = null;
 }
 
-function scheduleObserver(targetLang: string): void {
+interface ObserverHandle {
+  // 아직 관찰자가 없는 접근 가능한 루트(대기 중 생긴 열린 shadow root·같은 출처 iframe 문서)에 관찰자를 더 붙인다(큐는 그대로).
+  addMissingRoots(): void;
+  // 보류를 풀고 모은 큐를 한 번 flush한다.
+  release(): void;
+}
+
+// 관찰자를 붙인다(#302: 첫 배치를 기다리기 전에). 보류 중에는 변경 노드를 큐에만 모으고 flush(단위 구성·요청)를 하지 않는다 —
+// 첫 배치가 적용된 뒤 release()에서 블록을 다시 묶어야, 첫 배치가 번역한 노드는 빠지고 같은 문단에 새로 붙은 글만 단위가 된다.
+// 관찰자는 만들어질 때의 세대·세션 id·대상 언어를 쥔다.
+function scheduleObserver(targetLang: string, gen: number, session: string): ObserverHandle {
   for (const obs of observers) obs.disconnect();
   observers = [];
   activeTargetLang = targetLang;
-  const gen = generation;
   let queue: Text[] = [];
   let queuedNodes = new WeakSet<Text>();
   let timer: number | null = null;
+  let held = true;
+  const observed = new Set<Node>();
+  cancelObserverFlush = () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+    queue = [];
+    queuedNodes = new WeakSet<Text>();
+  };
 
   const flush = async () => {
     timer = null;
+    if (gen !== generation || held) return;
     if (!queue.length || activeTargetLang !== targetLang) return;
     // flush 시점에 이미 번역된 노드는 제외 (중복 enqueue 방어).
     const pending = queue.filter((node) => node.isConnected && !isAlreadyTranslated(node));
@@ -400,13 +429,14 @@ function scheduleObserver(targetLang: string): void {
     }
     const batches = batchUnits(collectUnits([...blocks]));
     try {
-      await runConcurrent(batches, 2, (batch) => translateBatchWithRetry(batch, targetLang, gen));
+      await runConcurrent(batches, 2, (batch) => translateBatchWithRetry(batch, targetLang, gen, session));
     } catch (err) {
       console.warn("[translate observer]", err);
     }
   };
 
   const schedule = () => {
+    if (held || gen !== generation) return;
     if (timer === null && queue.length) timer = window.setTimeout(flush, OBSERVER_FLUSH_MS);
   };
 
@@ -443,13 +473,29 @@ function scheduleObserver(targetLang: string): void {
 
   // 초기 수집이 훑은 모든 루트(top doc + iframe docs + shadow roots)에 옵저버 부착.
   // 예전엔 document.body 하나만 감시해서 iframe/shadow 내부 변경을 놓쳤음.
-  for (const root of getAccessibleRoots()) {
-    const target = isShadowRoot(root) ? root : root.body;
-    if (!target) continue;
-    const obs = new MutationObserver(handleMutations);
-    obs.observe(target, { childList: true, subtree: true, characterData: true });
-    observers.push(obs);
-  }
+  const attachRoots = () => {
+    if (gen !== generation) return;
+    for (const root of getAccessibleRoots()) {
+      const target = isShadowRoot(root) ? root : root.body;
+      if (!target || observed.has(target)) continue;
+      observed.add(target);
+      const obs = new MutationObserver(handleMutations);
+      obs.observe(target, { childList: true, subtree: true, characterData: true });
+      observers.push(obs);
+    }
+  };
+  attachRoots();
+
+  return {
+    addMissingRoots: attachRoots,
+    release: () => {
+      if (!held) return;
+      held = false;
+      if (gen !== generation || !queue.length) return;
+      if (timer !== null) window.clearTimeout(timer);
+      void flush();
+    },
+  };
 }
 
 function rootScanTarget(root: Root): Node | null {
@@ -468,8 +514,11 @@ export async function translatePage(args: {
   perRoot: Array<{ name: string; collected: number }>;
   totalCollected: number;
 }> {
+  // 앞 번역 작업(첫 배치·나머지 배치·관찰자)을 먼저 끊고 새 세대·세션으로 시작한다(#302). 세션 id는 이 작업에 고정해 넘긴다.
+  cutCurrentJob();
   const gen = generation;
-  activeSession = typeof args.session === "string" ? args.session : "";
+  const session = typeof args.session === "string" ? args.session : "";
+  activeSession = session;
   const allUnits: Unit[] = [];
   const perRoot: Array<{ name: string; collected: number }> = [];
   const seen = new Set<Text>();
@@ -490,15 +539,25 @@ export async function translatePage(args: {
     .map(({ unit }) => unit);
   const batches = batchUnits(units);
   const [firstBatch, ...remainingBatches] = batches;
-  const firstCount = firstBatch
-    ? await translateBatchWithRetry(firstBatch, args.targetLang, gen)
-    : 0;
-  // 첫 배치를 기다리는 사이 중지됐으면 옵저버를 다시 붙이지 않는다.
-  if (gen === generation) scheduleObserver(args.targetLang);
+  // 관찰자는 초기 수집 직후·첫 배치를 기다리기 전에 붙여 첫 응답을 기다리는 동안 생긴 글도 모은다(flush는 첫 배치 뒤로 보류).
+  const watcher = scheduleObserver(args.targetLang, gen, session);
+  let firstCount = 0;
+  try {
+    firstCount = firstBatch
+      ? await translateBatchWithRetry(firstBatch, args.targetLang, gen, session)
+      : 0;
+  } finally {
+    // 첫 배치가 적용(또는 실패)된 뒤: 기다리는 사이 생긴 루트에도 관찰자를 붙이고, 보류를 풀어 모은 큐를 한 번 보낸다.
+    // 그 사이 중지·재호출됐으면(세대가 바뀜) 관찰자는 이미 끊겼고 아무것도 하지 않는다.
+    if (gen === generation) {
+      watcher.addMissingRoots();
+      watcher.release();
+    }
+  }
   const scheduledNodes = remainingBatches.reduce((sum, batch) => sum + batch.length, 0);
   if (remainingBatches.length > 0) {
     void runConcurrent(remainingBatches, INITIAL_CONCURRENCY, (batch) =>
-      translateBatchWithRetry(batch, args.targetLang, gen),
+      translateBatchWithRetry(batch, args.targetLang, gen, session),
     )
       .then((counts) => {
         const translated = counts.reduce((sum, count) => sum + count, 0);
