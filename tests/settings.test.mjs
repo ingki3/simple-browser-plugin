@@ -61,6 +61,13 @@ test("normalizeSettings: 비거나 형식이 틀린 값은 기본값, 켜짐 기
   assert.equal(s.systemPrompt.length, 4000);
 });
 
+test("translationStyle(#302): 기본은 해라체(plain), 세 값만 받고 모르는 값은 기본", () => {
+  assert.equal(DEFAULT_SETTINGS.translationStyle, "plain");
+  assert.equal(normalizeSettings({}).translationStyle, "plain");
+  for (const v of ["plain", "polite", "formal"]) assert.equal(normalizeSettings({ translationStyle: v }).translationStyle, v);
+  for (const v of ["casual", "", 3, null, "Polite"]) assert.equal(normalizeSettings({ translationStyle: v }).translationStyle, "plain");
+});
+
 test("runMode(#123): 예전 autoApprove는 true면 auto, 값이 있으면 그 값, 틀린 값은 ask", () => {
   assert.equal(normalizeSettings({ autoApprove: true }).runMode, "auto");
   assert.equal(normalizeSettings({ autoApprove: false }).runMode, "ask");

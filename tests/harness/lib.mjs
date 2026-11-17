@@ -184,6 +184,24 @@ export async function startHarness({ onWorker } = {}) {
       globalThis.__translateHold = false;
       globalThis.__translateHeld = 0;
       globalThis.__translateEcho = undefined;
+      // #302: 요청별 제어·기준표 응답, 요청별로 붙잡은 응답은 풀고 비운다.
+      globalThis.__translateFor = null;
+      globalThis.__translateGlossary = undefined;
+      for (const r of globalThis.__translateHeldList ?? []) r();
+      globalThis.__translateHeldList = [];
+      globalThis.__releaseHeldTranslate = () => {
+        for (const r of globalThis.__translateHeldList ?? []) r();
+        globalThis.__translateHeldList = [];
+      };
+      // content → 백그라운드 번역 배치 메시지(세션 id·대상 언어·글자)를 남긴다(#302 — 재호출 뒤 옛 작업의 요청이 새 세션으로 가지 않는지).
+      // 응답은 하지 않는다(실제 처리기가 답한다). 워커가 다시 뜨면 표시가 사라져 다시 건다.
+      globalThis.__batchMsgs = [];
+      if (!globalThis.__batchMsgHooked) {
+        globalThis.__batchMsgHooked = true;
+        chrome.runtime.onMessage.addListener((m) => {
+          if (m && m.kind === "translate_text_batch") (globalThis.__batchMsgs ??= []).push({ session: m.session, targetLang: m.targetLang, texts: m.texts });
+        });
+      }
       // 스트림 게이트(textParts holdAfter, #252): 앞 시나리오가 남긴 붙잡힌 스트림은 풀고 비운다.
       globalThis.__releaseStream?.();
       globalThis.__streamGate = null;
@@ -441,10 +459,18 @@ async function installMockModel(sw) {
       // 기록에는 실제로 보낸 입력 글자 배열(texts)을 남긴다(#256 — 편집 영역 글자가 요청에 실리지 않는지 본문으로 검사).
       // __translateEcho(#256): 이 글자가 든 입력은 원문 그대로 돌려준다(쓸 수 없는 번역 → 그 단위만 다시 요청하는 경로 시험).
       // __translateHold(#256): 켜져 있으면 응답을 붙잡고 __translateHeld를 센다. __releaseTranslate()로 붙잡힌 응답을 모두 풀고 끈다.
+      // #302: 기록에 프롬프트 전문(prompt)·response_format도 남긴다. __translateGlossary(배열 또는 ({texts, prompt, index}) => 배열)는 응답에 넣을 기준표.
+      // __translateFor({texts, prompt, index}) → { hold, delayMs, status, networkError, prefix, glossary }: 요청별 제어(index는 이 시나리오의 번역 요청 순번, 0부터).
+      //   hold: 그 요청만 붙잡는다(__translateHeldList에 쌓임, __releaseHeldTranslate()로 모두 풂). status: 그 HTTP 오류로 끝냄. prefix: 번역 앞말(기본 "번역:").
       const userText = typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : "";
       if (body.response_format && userText.includes("translations 배열")) {
         const input = JSON.parse(userText.slice(userText.lastIndexOf("입력:\n") + "입력:\n".length));
-        (globalThis.__translateReqs ??= []).push({ url: String(url), texts: input });
+        const index = (globalThis.__translateReqs ??= []).length;
+        globalThis.__translateReqs.push({ url: String(url), texts: input, prompt: userText, responseFormat: body.response_format, at: Date.now() });
+        const ctl = globalThis.__translateFor?.({ texts: input, prompt: userText, index }) ?? {};
+        if (ctl.hold) {
+          await new Promise((resolve) => (globalThis.__translateHeldList ??= []).push(resolve));
+        }
         if (globalThis.__translateHold) {
           globalThis.__translateGate ??= new Promise((resolve) => {
             globalThis.__releaseTranslate = () => {
@@ -457,16 +483,25 @@ async function installMockModel(sw) {
           globalThis.__translateHeld = (globalThis.__translateHeld ?? 0) + 1;
           await globalThis.__translateGate;
         }
-        if (globalThis.__translateDelayMs) {
+        const delayMs = ctl.delayMs ?? globalThis.__translateDelayMs;
+        if (delayMs) {
           await new Promise((resolve, reject) => {
-            const t = setTimeout(resolve, globalThis.__translateDelayMs);
+            const t = setTimeout(resolve, delayMs);
             init.signal?.addEventListener("abort", () => {
               clearTimeout(t);
               reject(new DOMException("aborted", "AbortError"));
             }, { once: true });
           });
         }
-        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations: input.map((t) => (globalThis.__translateEcho && t.includes(globalThis.__translateEcho) ? t : `번역:${t}`)) }) } }] }), {
+        if (ctl.networkError) throw new TypeError("Failed to fetch");
+        if (ctl.status) {
+          return new Response(JSON.stringify({ error: { message: "모의 번역 오류" } }), { status: ctl.status, headers: { "content-type": "application/json" } });
+        }
+        const prefix = ctl.prefix ?? "번역:";
+        const g = globalThis.__translateGlossary;
+        const glossary = ctl.glossary ?? (typeof g === "function" ? g({ texts: input, prompt: userText, index }) : g) ?? [];
+        const translations = input.map((t) => (globalThis.__translateEcho && t.includes(globalThis.__translateEcho) ? t : `${prefix}${t}`));
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ translations, glossary }) } }] }), {
           headers: { "content-type": "application/json" },
         });
       }

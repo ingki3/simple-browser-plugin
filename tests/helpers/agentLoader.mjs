@@ -14,7 +14,7 @@ const ESBUILD = new URL("../../package.json", import.meta.url).href;
 const WRAP = {
   "background/storage.ts": ["getSettings"],
   "background/savedPagesStore.ts": ["candidatesMessage"],
-  "background/loginSecrets.ts": ["maskMessagesForModel", "maskSyncMessages"],
+  "background/loginSecrets.ts": ["maskMessagesForModel", "maskSyncMessages", "maskStringForModel", "containsSecret"],
   "background/debug.ts": ["debugLog"],
   "lib/providers/index.ts": ["providerAdapter", "providerTimeout"],
   "lib/settings.ts": ["targetKey"],

@@ -62,12 +62,25 @@ import { useSettings } from "../sidepanel/hooks/useSettings";
 import { FieldHelp } from "./fields/FieldHelp";
 import { activeModel, mergeSettingsPatch } from "@/lib/settings";
 import { mergeVoicePatch } from "@/lib/voice";
+import { isTranslationStyle, TRANSLATION_STYLES, type TranslationStyle } from "@/lib/translationProtocol";
 import { VoiceInputField } from "./fields/VoiceInputField";
 
 const SAVE_DELAY_MS = 600;
 const CUSTOM_MODEL = "__custom__";
 const CUSTOM_LANG = "__custom__";
 // 번역할 언어 목록(#130). 값은 BCP-47 코드.
+// 번역 문체 표시 이름(#302). 일본어 대상일 때는 plain=だ·である체, 나머지=です·ます체.
+const TRANSLATION_STYLE_NAMES: Record<TranslationStyle, string> = {
+  plain: "해라체(~다)",
+  polite: "해요체(~요)",
+  formal: "합쇼체(~습니다)",
+};
+function translationStyleName(style: TranslationStyle, targetLang: string): string {
+  const ja = targetLang.trim().toLowerCase().split(/[-_]/)[0] === "ja";
+  if (!ja) return TRANSLATION_STYLE_NAMES[style];
+  return `${TRANSLATION_STYLE_NAMES[style]} — 일본어는 ${style === "plain" ? "だ·である체" : "です·ます체"}`;
+}
+
 const TRANSLATION_LANGS: ReadonlyArray<readonly [string, string]> = [
   ["ko", "한국어"],
   ["en", "영어"],
@@ -778,6 +791,24 @@ export function SettingsPage() {
                   placeholder="언어 코드(예: nl, pl, ar)"
                 />
               )}
+            </label>
+
+            <label className="field">
+              <span className="field-label">{KO.translationStyleLabel}</span>
+              {/* 번역 문체(#302). 일본어 대상이면 일본어 문체 이름을 함께 보인다(번역 언어 코드의 앞부분으로만 판단). */}
+              <select
+                value={draft.translationStyle}
+                onChange={(e) => {
+                  if (isTranslationStyle(e.target.value)) update({ translationStyle: e.target.value });
+                }}
+              >
+                {TRANSLATION_STYLES.map((style) => (
+                  <option key={style} value={style}>
+                    {translationStyleName(style, draft.translationTargetLang)}
+                  </option>
+                ))}
+              </select>
+              <FieldHelp summary={KO.translationStyleHelp}>{KO.translationStyleMore}</FieldHelp>
             </label>
 
             <label className="field">

@@ -94,6 +94,10 @@ export const KO = {
   systemPromptLabel: "항상 지킬 요청",
   systemPromptHelp: "모든 대화에 덧붙입니다(예: 답은 한국어로 짧게). 안전 규칙과 도구 사용 규칙은 바뀌지 않습니다.",
   translationLangLabel: "번역할 언어",
+  translationStyleLabel: "번역 문체",
+  translationStyleHelp: "한국어·일본어로 번역할 때 문장 끝을 이 문체로 맞춥니다. 다른 언어는 글 전체의 어조만 맞춥니다.",
+  translationStyleMore:
+    "번역을 시작할 때의 문체로 그 번역이 끝날 때까지 옮깁니다. 이미 번역한 문장은 다시 번역하지 않으므로, 문체를 바꾼 뒤 기존 문장에도 반영하려면 페이지를 새로고침하고 다시 번역해 주세요.",
   downloadFolderLabel: "저장 폴더 이름",
   downloadFolderHelp: "이미지·첨부 파일·캡처를 다운로드 폴더 안의 이 이름 폴더에 저장합니다.",
   maxToolHopsLabel: "한 요청의 최대 단계",
