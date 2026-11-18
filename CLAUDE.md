@@ -28,7 +28,7 @@ main 대상 PR(릴리스)은 여기에 "확장 하네스"까지 통과해야 머
 1. `dev`에서 feature branch를 만들어 작업한다(`git checkout -b <브랜치> origin/dev`). 시작하기 전에 코드 그래프로 관련 코드를 찾는다(위 "코드 그래프").
 2. 변경 후 `npm test`, `npm run typecheck`, `npm run build`를 통과시킨다.
 3. 커밋한다. 리뷰는 커밋된 상태만 대상으로 한다.
-4. **`codex-reviewer` 에이전트로 리뷰를 받는다.** (Codex CLI, gpt-6.1-sol)
+4. **`codex-reviewer` 에이전트로 리뷰를 받는다.** (Codex CLI, gpt-6.2-astra)
    - CHANGES_REQUESTED면 P0/P1을 고치고 커밋한 뒤 다시 리뷰한다. PASS까지 반복한다.
    - P2/P3 권고는 반영하거나, 반영하지 않으면 PR 본문에 이유를 적는다.
    - 리뷰 후 커밋을 추가하면 그 커밋은 다시 리뷰해야 한다.
@@ -57,7 +57,7 @@ main 대상 PR(릴리스)은 여기에 "확장 하네스"까지 통과해야 머
 
 리뷰를 직접 돌리려면: `.claude/scripts/codex-review.sh [base]` (기본 dev).
 모델·추론 강도·시간 제한은 `CODEX_REVIEW_MODEL`, `CODEX_REVIEW_EFFORT`, `CODEX_REVIEW_TIMEOUT`
-환경변수로 바꿀 수 있다(기본 gpt-6.1-sol, high, 540초).
+환경변수로 바꿀 수 있다(기본 gpt-6.2-astra, high, 540초).
 
 ## 작업 기록과 에이전트 역할 (필수)
 
