@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 현재 브랜치의 커밋된 변경을 Codex CLI(gpt-6.1-sol)로 리뷰한다.
+# 현재 브랜치의 커밋된 변경을 Codex CLI(gpt-6.2-astra)로 리뷰한다.
 # PASS면 HEAD SHA를 .git/codex-review-passed에 기록하고, require-codex-review 훅은
 # 이 기록이 있는 커밋에 대해서만 gh pr create / gh pr merge를 허용한다.
 #
@@ -8,7 +8,7 @@
 set -euo pipefail
 
 BASE="${1:-dev}"
-MODEL="${CODEX_REVIEW_MODEL:-gpt-6.1-sol}"
+MODEL="${CODEX_REVIEW_MODEL:-gpt-6.2-astra}"
 EFFORT="${CODEX_REVIEW_EFFORT:-high}"
 # 리뷰어 에이전트의 Bash 호출 제한(10분) 안에 끝나도록 9분으로 둔다.
 TIMEOUT_S="${CODEX_REVIEW_TIMEOUT:-540}"
