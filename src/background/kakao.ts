@@ -256,6 +256,9 @@ async function connectInner(): Promise<KakaoStatus> {
       chk.why === "error" ? "카카오 로그인이 끝나지 않았습니다(취소했거나 동의하지 않음)." : "카카오 로그인 응답이 올바르지 않아 연결하지 않았습니다.",
     );
   }
+  // 로그인 창을 기다리는 사이 끊기·지우기·키 바꾸기·새 시도가 있었으면 코드를 교환하지 않는다(취소된 시도의 키로 카카오에 요청하지 않게).
+  const still = await serial(async () => start.attempt === attemptSeq && (await load()).epoch === start.epoch);
+  if (!still) fail("stale", "연결하는 사이 설정이 바뀌어(연결 끊기·다른 연결·키 바꾸기) 이 로그인은 쓰지 않았습니다.");
   const res = await kauthPost({
     grant_type: "authorization_code",
     client_id: start.restKey,

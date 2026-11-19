@@ -420,3 +420,26 @@ test("오류 문구: 고정 문구, 이미 간 개수, too_long은 200자·5개 
   assert.ok(kakaoSendErrorText("needs_login", 1).includes("카카오 로그인이 끝났습니다. 설정에서 다시 연결하세요"));
   assert.ok(kakaoSendErrorText("not_connected", 0).includes("카카오톡이 연결돼 있지 않습니다"));
 });
+
+// ---- 리뷰 보완(#310 코드 리뷰 P2) ----
+
+test("카카오 나누기: 줄바꿈 우선 경계가 이모지 때문에 모자라면 줄바꿈 없이 다시 나눈다(200·200·200·200·150)", () => {
+  const t = `${"가".repeat(149)}\n${"나".repeat(199)}😀${"다".repeat(599)}`;
+  assert.equal(t.length, 950);
+  assert.equal(splitWhole(t, 200, 5, { fitParts: true }), null, "fitParts만으로는 못 담는 경우");
+  okParts(t, splitKakao(t));
+  assert.deepEqual(splitKakao(t).map((p) => p.length), [200, 200, 200, 200, 150]);
+});
+
+test("응답 판정: 동의 철회(-402)는 consent, 조각 보내기는 needs_login으로 기록", async () => {
+  assert.equal(classifyMemo(403, { code: -402, msg: "insufficient scopes" }), "consent");
+  const { st, deps } = partStore(["ok", "consent"]);
+  assert.deepEqual(await sendKakaoParts(["a", "b", "c"], new AbortController().signal, deps), { sent: 1, outcome: "needs_login" });
+  assert.equal(st.marked, 1);
+  assert.equal(st.refreshes, 0, "동의 철회는 갱신으로 고치지 않음");
+});
+
+test("오류 문구: 보내는 중 연결이 바뀌면 이미 간 개수를 알린다", () => {
+  assert.ok(kakaoSendErrorText("connection_changed", 1).includes("앞의 1개 메시지는 이미 갔습니다"));
+  assert.ok(kakaoSendErrorText("connection_changed", 0).includes("보내지 않았습니다"));
+});

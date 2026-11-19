@@ -133,7 +133,8 @@ export function validAppKey(raw: string): boolean {
 // 잘림 없이 200자 조각 5개 안에 나눈다(이으면 원문). 줄바꿈 경계는 남은 글이 남은 조각에 담길 때만 쓴다. 담을 수 없으면 null.
 export function splitKakao(text: string): string[] | null {
   if (text.length > SEND_TO_KAKAO_MAX) return null;
-  return splitWhole(text, KAKAO_MAX_TEXT, KAKAO_MAX_PARTS, { fitParts: true });
+  // 줄바꿈을 먼저 고른 경계가 뒤에서 서로게이트 쌍 때문에 한 글자씩 모자라면 담지 못할 수 있다 — 그때는 줄바꿈 없이 상한에서만 자른다.
+  return splitWhole(text, KAKAO_MAX_TEXT, KAKAO_MAX_PARTS, { fitParts: true }) ?? splitWhole(text, KAKAO_MAX_TEXT, KAKAO_MAX_PARTS, { noBreaks: true });
 }
 
 // 나에게 보내기 요청 본문(application/x-www-form-urlencoded). 버튼 글자는 넣지 않는다(링크는 필수라 저장한 주소).
@@ -142,13 +143,15 @@ export function memoBody(part: string, linkUrl: string): string {
   return new URLSearchParams({ template_object: JSON.stringify(template) }).toString();
 }
 
-export type MemoResult = "ok" | "unauthorized" | "quota" | "failed";
+export type MemoResult = "ok" | "unauthorized" | "consent" | "quota" | "failed";
 
-// 나에게 보내기 응답 판정: 200이고 result_code 0만 성공. 401(또는 code -401)은 토큰 무효, 429(또는 code -10)는 쿼터 초과.
+// 나에게 보내기 응답 판정: 200이고 result_code 0만 성공. 401(또는 code -401)은 토큰 무효, code -402는 동의 철회(talk_message —
+// 다시 로그인해 동의해야 함), 429(또는 code -10)는 쿼터 초과.
 export function classifyMemo(status: number, body: unknown): MemoResult {
   const b = body && typeof body === "object" ? (body as { result_code?: unknown; code?: unknown }) : {};
   if (status === 200 && b.result_code === 0) return "ok";
   if (status === 401 || b.code === -401) return "unauthorized";
+  if (b.code === -402) return "consent";
   if (status === 429 || b.code === -10) return "quota";
   return "failed";
 }
@@ -197,6 +200,11 @@ export async function sendKakaoParts(parts: readonly string[], signal: AbortSign
           await deps.markNeedsLogin();
           return { sent, outcome: "needs_login" };
         }
+      }
+      // 동의를 철회했으면 갱신으로 고칠 수 없다 — 다시 로그인(동의)해야 한다.
+      if (r === "consent") {
+        await deps.markNeedsLogin();
+        return { sent, outcome: "needs_login" };
       }
       if (r !== "ok") return { sent, outcome: signal.aborted ? "aborted" : "send_failed" };
     } catch {
@@ -328,7 +336,9 @@ export function kakaoSendErrorText(why: KakaoSendWhy, sent: number): string {
     case "too_long":
       return `카카오톡은 한 메시지 ${KAKAO_MAX_TEXT}자, ${KAKAO_MAX_PARTS}개(${SEND_TO_KAKAO_MAX}자)까지입니다. 요약해서 다시 보내세요.`;
     case "connection_changed":
-      return "승인한 뒤 카카오 연결이 바뀌어(연결 끊기·다시 연결·키 바꾸기) 보내지 않았습니다. 다시 요청하세요.";
+      return sent > 0
+        ? `보내는 사이 카카오 연결이 바뀌어(연결 끊기·다시 연결·키 바꾸기) 멈췄습니다.${already} 남은 부분만 다시 요청하세요.`
+        : "승인한 뒤 카카오 연결이 바뀌어(연결 끊기·다시 연결·키 바꾸기) 보내지 않았습니다. 다시 요청하세요.";
     case "send_failed":
       return `카카오톡으로 보내지 못했습니다.${already}`;
     case "aborted":

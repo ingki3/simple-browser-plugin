@@ -293,14 +293,15 @@ function isLowSurrogate(c: number): boolean {
 // 조각이 maxParts를 넘거나 조건을 맞출 수 없으면 null(보내지 않는다).
 // opts.fitParts(카카오톡 #310 — 한도가 짧아 줄바꿈에서 자르면 조각이 모자랄 수 있다): 줄바꿈 경계는 그 뒤에 남는 글이 남은 조각 수에
 // 담길 때만 쓰고, 아니면 max에서 자른다(서로게이트 쌍을 가르지 않음). 주지 않으면(텔레그램) 지금 동작 그대로다.
-export function splitWhole(text: string, max = TELEGRAM_MAX_TEXT, maxParts = TELEGRAM_MAX_PARTS, opts: { fitParts?: boolean } = {}): string[] | null {
+// opts.noBreaks: 줄바꿈 경계를 쓰지 않고 늘 max에서 자른다(카카오 나누기의 대체 — fitParts로 담지 못할 때).
+export function splitWhole(text: string, max = TELEGRAM_MAX_TEXT, maxParts = TELEGRAM_MAX_PARTS, opts: { fitParts?: boolean; noBreaks?: boolean } = {}): string[] | null {
   if (!text.trim()) return null;
   const out: string[] = [];
   let rest = text;
   while (rest.length > max) {
     if (out.length + 1 >= maxParts) return null;
     let cut = rest.lastIndexOf("\n", max - 1) + 1;
-    if (opts.fitParts && rest.length - cut > (maxParts - out.length - 1) * max) cut = 0;
+    if (opts.noBreaks || (opts.fitParts && rest.length - cut > (maxParts - out.length - 1) * max)) cut = 0;
     if (cut < max / 2) {
       cut = max;
       if (isHighSurrogate(rest.charCodeAt(cut - 1))) cut -= 1;
