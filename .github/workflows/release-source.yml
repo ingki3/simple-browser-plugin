@@ -6,6 +6,9 @@ name: 릴리스 출처
 #   PR의 코드는 받지 않고(checkout 없음) 이벤트 값만 비교하므로 pull_request_target의 쓰기 토큰·비밀이 PR 코드에 닿지 않는다.
 # - edited: 열린 PR의 base를 dev에서 main으로 바꿔도 다시 검사한다.
 # - 브랜치·저장소 이름은 PR을 연 사람이 정하는 값이라 셸에 바로 넣지 않고 env로 넘긴다.
+# 한계: 이 검사는 관리자·에이전트가 기능 PR을 main으로 잘못 여는 실수를 막는 가드다. PR 쪽 워크플로가 같은 이름의
+# 작업을 만들어 성공으로 보고하면(예: GitHub이 pull_request_target을 생략하는 SHA 모양 head 브랜치) 이름만으로는 구별되지
+# 않는다. 의도적 우회는 관리자 승인·머지(브랜치 보호)가 막고, 더 강하게 하려면 저장소 규칙의 필수 워크플로나 전용 앱으로 바꾼다.
 on:
   pull_request_target:
     branches: [main]
