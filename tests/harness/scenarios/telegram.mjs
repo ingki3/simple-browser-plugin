@@ -61,6 +61,8 @@ export async function installTelegram(h) {
       }
       if (method === "editMessageText" || method === "answerCallbackQuery") (globalThis.__tg.edits ??= []).push({ method, body });
       if (method === "getUpdates") {
+        // failPoll(#307): 받기를 그 상태 코드(401·409)로 거절한다.
+        if (globalThis.__tg.failPoll) return new Response(JSON.stringify({ ok: false, error_code: globalThis.__tg.failPoll }), { status: globalThis.__tg.failPoll, headers: { "content-type": "application/json" } });
         const take = () => globalThis.__tg.updates.filter((x) => x.update_id >= (body.offset ?? 0));
         if (!take().length && body.timeout) await new Promise((r) => setTimeout(r, 300));
         // 기다리는 사이 들어온 업데이트도 돌려준다(버리지 않음).
@@ -120,6 +122,36 @@ const toolLog = (h) => h.sw.evaluate(() => globalThis.__toolLog.map((t) => `${t.
 
 const sent = (h) => h.sw.evaluate(() => globalThis.__tg.sent.map((m) => m.text));
 
+// keepalive(#145·#222·#307): 알람이 있는지, 확장 API 호출(getPlatformInfo — 20초 핑) 수. installPings는 한 번만 감싸고 수를 0으로 돌린다.
+const heartbeat = (h) => h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")));
+async function installPings(h) {
+  await h.sw.evaluate(() => {
+    if (!globalThis.__pingsHooked) {
+      globalThis.__pingsHooked = true;
+      const orig = chrome.runtime.getPlatformInfo.bind(chrome.runtime);
+      chrome.runtime.getPlatformInfo = (...a) => {
+        globalThis.__pings = (globalThis.__pings ?? 0) + 1;
+        return orig(...a);
+      };
+    }
+    globalThis.__pings = 0;
+  });
+}
+const pings = (h) => h.sw.evaluate(() => globalThis.__pings);
+const heartbeatGone = (h, label) => waitUntil(async () => !(await heartbeat(h)), { timeoutMs: 5000, intervalMs: 200, label });
+// 놓은 뒤 21초 동안 핑이 없어야 한다(20초 핑 타이머가 멎었는지).
+async function noPingsFor21s(h, label) {
+  const at = await pings(h);
+  await h.panel.waitForTimeout(21_000);
+  const later = await pings(h);
+  expect(later === at, `${label}: 놓은 뒤에는 호출하지 않음(${at}→${later})`);
+}
+// 대화용 참조 로그(#307, from 뒤의 것만): "on" / "off · 만료|drop|수신 중지".
+const idleHoldLogs = (h, from = 0) => h.logs.slice(from).filter((l) => l.startsWith("[SBP remote:idle_hold]")).map((l) => l.slice("[SBP remote:idle_hold] ".length));
+const waitIdleLog = (h, from, line, ms = 10_000) =>
+  waitUntil(() => idleHoldLogs(h, from).includes(line), { timeoutMs: ms, intervalMs: 100, label: `대화용 참조 로그 '${line}'`, detail: () => JSON.stringify(idleHoldLogs(h, from)) });
+const tuneIdleHold = (h, t) => h.sw.evaluate((t) => globalThis.__sbpTelegram.idleHold(t), t);
+
 export async function connect(h) {
   await installTelegram(h);
   const saved = await ask(h, { kind: "telegram_save_token", token: TOKEN });
@@ -178,6 +210,8 @@ export const remoteBlockedCalls = (h) => [
     args: { title: "막힘 확인", url: `${h.base2}/watch`, check: "열렸는지", then: "알려 줘", intervalMinutes: 30 },
   },
   { tool: "send_to_telegram", args: { text: "원격에서 보내기 시도" } },
+  // send_to_kakao(#310): 원격 요청이 사용자의 카카오톡으로 글을 내보내지 않는다(연결 여부와 관계없이 승인 경로 전에 거절).
+  { tool: "send_to_kakao", args: { text: "원격에서 카카오로 보내기 시도" } },
   // read_links_in_tabs(#293): 로그인된 탭으로 링크를 여는 것은 원격 요청으로 하지 않는다(카드·질문 전에 거절, 탭을 열지 않음).
   { tool: "read_links_in_tabs", args: { urls: [`${h.base2}/watch`] } },
 ];
@@ -250,32 +284,24 @@ export default [
     },
   },
   {
-    name: "답 보내기(#145·#222): 보내는 동안 서비스 워커를 붙잡고(알람과 20초마다 확장 API 호출), 끝나면 놓는다 — 열린 설정 화면의 최근 요청도 바뀐다",
+    name: "답 보내기(#145·#222·#307): 보내는 동안 서비스 워커를 붙잡고(알람과 20초마다 확장 API 호출), 답을 보낸 뒤에도 대화용 참조로 붙잡다가 /new면 놓는다 — 열린 설정 화면의 최근 요청도 바뀐다",
     async run(h) {
       await connect(h);
       const opts = await h.openOptions("model");
       // 확장 API 호출(getPlatformInfo)을 센다(#222 — 30초 알람이 1분으로 올림되는 Chrome 116~119에서도 붙잡는지).
-      await h.sw.evaluate(() => {
-        const orig = chrome.runtime.getPlatformInfo.bind(chrome.runtime);
-        globalThis.__pings = 0;
-        chrome.runtime.getPlatformInfo = (...a) => {
-          globalThis.__pings += 1;
-          return orig(...a);
-        };
-      });
+      await installPings(h);
+      const from = h.logs.length;
       await h.sw.evaluate(() => {
         globalThis.__tg.holdReply = new Promise((r) => (globalThis.__tg.release = r));
         globalThis.__steps = [{ text: "붙잡은 답" }];
       });
       await deliver(h, "느린 답 요청");
       await waitUntil(() => h.sw.evaluate(() => globalThis.__tg.holding), { timeoutMs: 15_000, intervalMs: 200, label: "답을 보내는 중" });
-      const during = await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")));
-      expect(during, "보내는 동안 keepalive 알람");
-      const pings = () => h.sw.evaluate(() => globalThis.__pings);
-      const first = await pings();
+      expect(await heartbeat(h), "보내는 동안 keepalive 알람");
+      const first = await pings(h);
       expect(first >= 1, `붙잡자마자 확장 API 호출(${first})`);
       await h.panel.waitForTimeout(21_000);
-      const later = await pings();
+      const later = await pings(h);
       expect(later >= first + 1, `20초 뒤 다시 호출(${first}→${later})`);
       await h.sw.evaluate(() => {
         globalThis.__tg.holdReply = null;
@@ -283,12 +309,116 @@ export default [
       });
       const r = await waitReply(h, 1);
       expect(r.includes("붙잡은 답"), `답(${JSON.stringify(r)})`);
-      await waitUntil(async () => !(await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")))), { timeoutMs: 5000, intervalMs: 200, label: "끝나면 keepalive를 놓음" });
-      const released = await pings();
+      // 대화가 이어질 수 있는 동안(받아들인 마지막 요청 뒤 1시간)은 답을 보낸 뒤에도 붙잡는다(#307).
+      await h.panel.waitForTimeout(1000);
+      expect(await heartbeat(h), "답을 보낸 뒤에도 대화용 참조로 알람 유지");
+      const afterReply = await pings(h);
       await h.panel.waitForTimeout(21_000);
-      expect((await pings()) === released, "놓은 뒤에는 호출하지 않음");
+      expect((await pings(h)) >= afterReply + 1, "답을 보낸 뒤에도 20초마다 호출");
+      expect(JSON.stringify(idleHoldLogs(h, from)) === JSON.stringify(["on"]), `대화용 참조는 한 번 잡음(${JSON.stringify(idleHoldLogs(h, from))})`);
+      await deliver(h, "/new");
+      await heartbeatGone(h, "/new 뒤 keepalive를 놓음");
+      await waitIdleLog(h, from, "off · drop", 2000);
+      await noPingsFor21s(h, "/new");
       // 오래 열어 둔 설정 화면이 최근 요청(recent)을 다시 읽는다.
       await waitUntil(async () => (await opts.locator("body").innerText()).includes("느린 답 요청"), { timeoutMs: 5000, intervalMs: 200, label: "설정 화면의 최근 요청" });
+    },
+  },
+  {
+    name: "대화용 참조(#307)가 먼저 만료돼도 답 보내기의 참조는 남아, 보내는 동안 붙잡고 끝나면 놓는다",
+    async run(h) {
+      await connect(h);
+      await installPings(h);
+      await tuneIdleHold(h, { ms: 3000 });
+      try {
+        const from = h.logs.length;
+        await h.sw.evaluate(() => {
+          globalThis.__tg.holdReply = new Promise((r) => (globalThis.__tg.release = r));
+          globalThis.__steps = [{ text: "늦게 보낸 답" }];
+        });
+        await deliver(h, "느린 답 요청");
+        await waitUntil(() => h.sw.evaluate(() => globalThis.__tg.holding), { timeoutMs: 15_000, intervalMs: 200, label: "답을 보내는 중" });
+        await waitIdleLog(h, from, "off · 만료", 8000);
+        expect(await heartbeat(h), "대화용 참조가 만료돼도 보내는 동안 알람 유지");
+        // 만료 뒤 핑이 한 번 더 오면 바로 놓는다(21초를 다 기다리면 실제 보내기 한도 25초에 바짝 붙어 느린 CI에서 흔들린다).
+        const at = await pings(h);
+        await waitUntil(async () => (await pings(h)) >= at + 1, { timeoutMs: 22_000, intervalMs: 200, label: "만료 뒤에도 보내는 동안 20초마다 호출", detail: async () => `${at}→${await pings(h)}` });
+        expect(await heartbeat(h), "핑이 온 때에도 보내는 동안 알람 유지");
+        await h.sw.evaluate(() => {
+          globalThis.__tg.holdReply = null;
+          globalThis.__tg.release();
+        });
+        const r = await waitReply(h, 1);
+        expect(r.includes("늦게 보낸 답"), `답(${JSON.stringify(r)})`);
+        await heartbeatGone(h, "보내기가 끝나면 keepalive를 놓음");
+        await noPingsFor21s(h, "보내기 끝");
+        expect(JSON.stringify(idleHoldLogs(h, from)) === JSON.stringify(["on", "off · 만료"]), `로그(${JSON.stringify(idleHoldLogs(h, from))})`);
+      } finally {
+        await tuneIdleHold(h, { ms: undefined });
+      }
+    },
+  },
+  {
+    name: "대화용 참조(#307): 바빠서 받지 않은 요청은 기한을 늘리지 않는다",
+    async run(h) {
+      await connect(h);
+      await tuneIdleHold(h, { ms: 8000 });
+      try {
+        const from = h.logs.length;
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ text: "늦은 답", delayMs: 7000 }];
+        });
+        const t0 = Date.now();
+        await deliver(h, "첫 요청");
+        await h.panel.waitForTimeout(4000);
+        await deliver(h, "바쁠 때 온 요청");
+        const busy = await waitSent(h, 1, 3000);
+        expect(busy[0]?.includes("앞의 요청을 처리하고 있습니다"), `바쁘다는 답(${JSON.stringify(busy)})`);
+        await waitIdleLog(h, from, "off · 만료", 12_000);
+        const at = Date.now() - t0;
+        // 두 번째 요청이 늘렸다면 4초 + 8초 = 12초 뒤에야 만료된다.
+        expect(at < 10_500, `첫 요청 기준으로 만료(${at}ms)`);
+        expect(JSON.stringify(idleHoldLogs(h, from)) === JSON.stringify(["on", "off · 만료"]), `로그(${JSON.stringify(idleHoldLogs(h, from))})`);
+        await waitReply(h, 2, 10_000);
+        await heartbeatGone(h, "답을 보낸 뒤 놓음(이미 만료)");
+      } finally {
+        await tuneIdleHold(h, { ms: undefined });
+      }
+    },
+  },
+  {
+    name: "대화용 참조(#307): /stop은 놓지 않고(대화 유지), 받기가 401로 멈추면 놓는다",
+    async run(h) {
+      await connect(h);
+      const from = h.logs.length;
+      await h.sw.evaluate(() => {
+        globalThis.__steps = [{ text: "멈출 답", delayMs: 3000 }];
+      });
+      await deliver(h, "멈출 요청");
+      await h.panel.waitForTimeout(500);
+      await deliver(h, "/stop");
+      const s = await waitSent(h, 1, 5000);
+      expect(s[0] === "멈췄습니다.", `멈춤(${JSON.stringify(s)})`);
+      await waitUntil(async () => (await ask(h, { kind: "telegram_status" })).data.recent[0]?.status === "stopped", { timeoutMs: 8000, intervalMs: 200, label: "요청이 멈춤으로 끝남" });
+      await h.panel.waitForTimeout(1500);
+      expect(await heartbeat(h), "/stop 뒤에도 대화용 참조로 알람 유지");
+      expect(JSON.stringify(idleHoldLogs(h, from)) === JSON.stringify(["on"]), `/stop은 놓지 않음(${JSON.stringify(idleHoldLogs(h, from))})`);
+      // 받기가 401(토큰 무효)로 멈추면 이어질 요청이 없으니 놓는다.
+      await h.sw.evaluate(() => {
+        globalThis.__tg.failPoll = 401;
+      });
+      try {
+        await h.sw.evaluate(() => globalThis.__sbpTelegram.poll());
+        const st = await ask(h, { kind: "telegram_status" });
+        expect(st.data.status === "stopped_auth", `수신 중지(${JSON.stringify(st.data.status)})`);
+        await waitIdleLog(h, from, "off · 수신 중지", 3000);
+        await heartbeatGone(h, "401 뒤 keepalive를 놓음");
+      } finally {
+        await h.sw.evaluate(() => {
+          globalThis.__tg.failPoll = 0;
+        });
+        await ask(h, { kind: "telegram_clear" });
+      }
     },
   },
   {
@@ -349,7 +479,9 @@ export default [
       expect((await tabTitles(h)).includes("결제됨"), "결제까지 눌림");
 
       // 같은 대화의 다음 요청: 맡긴 작업은 그 요청까지만 — 맡기지 않고 부른 첫 동작으로 다시 묻는다. 거절하면 하지 않는다.
+      // 대화용 참조(#307)로 대화가 이어져도 승인은 이어지지 않는다(앞 맥락은 모델 요청에 남는다).
       await h.sw.evaluate(() => {
+        globalThis.__modelReqs = [];
         globalThis.__tg.sent = [];
         globalThis.__steps = [{ tool: "find_clickables", args: {} }, { click: "적용" }, { text: "안 함" }];
         globalThis.__toolLog = [];
@@ -365,6 +497,8 @@ export default [
       // (첫 기록은 앞 요청의 마지막 도구 결과다 — 모의 모델이 요청마다 마지막 결과를 남긴다.)
       expect(log2.at(-1) === "click_element:remote_user_denied" && !(await tabTitles(h)).includes("적용됨"), `거절(${log2.join(",")})`);
       expect(r2.length === 1 && r2[0] === "정리", `도구 없이 마무리(${JSON.stringify(r2)})`);
+      const carried = await h.sw.evaluate(() => JSON.stringify(globalThis.__modelReqs[0]?.body?.messages ?? []).includes("적용 누르고 결제해 줘"));
+      expect(carried, "다음 요청의 모델 요청에 앞 요청 맥락이 이어짐");
     },
   },
   {
@@ -429,7 +563,7 @@ export default [
     },
   },
   {
-    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·read_links_in_tabs를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·send_to_kakao·read_links_in_tabs를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
     pages2: { "/": `<title>shop</title><p>상품</p>` },
     async run(h) {
       await connect(h);

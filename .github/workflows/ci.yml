@@ -3,6 +3,7 @@ name: CI
 # 머지 조건(브랜치 보호의 필수 검사):
 # - dev 대상 PR : 단위 테스트·타입 검사·빌드
 # - main 대상 PR(릴리스): 위 항목 + 확장 하네스(dist를 Chrome for Testing에 올려 시나리오 실행)
+#   + 릴리스 출처 검사(release-source.yml: 이 저장소의 dev에서 온 PR만 main에 들어간다, #312)
 on:
   pull_request:
     branches: [dev, main]

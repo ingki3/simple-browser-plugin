@@ -41,11 +41,11 @@ npm run build        # dist/ 생성 → chrome://extensions에서 "압축해제�
 
 ## PR 절차
 
-1. 저장소를 fork하고, `dev`에서 브랜치를 만듭니다(`git checkout -b feat/your-change origin/dev`).
+1. 저장소를 fork하고(이때 "main 브랜치만 복사"를 끕니다. 이미 main만 복사했다면 원본 저장소를 `upstream`으로 더해 `git fetch upstream dev` 뒤 `upstream/dev`에서 시작합니다), `dev`에서 브랜치를 만듭니다(`git checkout -b feat/your-change origin/dev`).
 2. 고친 뒤 `npm test`, `npm run typecheck`, `npm run build`를 통과시킵니다.
    - content script, 승인 판정, 도구 결과를 바꿨다면 `npm run harness`도 돌립니다.
    - 새 동작에는 `tests/harness/scenarios/`에 시나리오를 더합니다.
-3. **`dev` 대상**으로 PR을 엽니다. 무엇을 왜 바꿨는지와 어떻게 확인했는지 적어 주세요. CI(단위 테스트·타입 검사·빌드)를 통과해야 합니다.
-4. 관리자가 리뷰한 뒤 squash로 머지합니다. 릴리스는 `dev` → `main` PR로 묶어 내고, main에 `vX.X.XX` 태그를 달면 설치용 ZIP이 Releases에 올라갑니다.
+3. **`dev` 대상**으로 PR을 엽니다. 웹에서 열 때는 base를 `dev`로 골라 주세요(기본 브랜치가 `main`이라 그대로 두면 main으로 잡힙니다). 무엇을 왜 바꿨는지와 어떻게 확인했는지 적어 주세요. 이슈를 해결하는 PR이면 본문에 `Closes #번호`를 넣어 주세요(릴리스 때 이슈가 닫힙니다). 이미 main으로 열었다면 base를 `dev`로 바꾼 뒤 PR을 닫았다 다시 열어 CI를 다시 돌립니다. CI(단위 테스트·타입 검사·빌드)를 통과해야 합니다.
+4. 관리자가 리뷰한 뒤 squash로 머지합니다. 릴리스는 `dev` → `main` PR로 묶어 내고(main 대상 PR은 이 저장소의 `dev`에서만 받습니다), main에 `vX.X.XX` 태그를 달면 설치용 ZIP이 Releases에 올라갑니다.
 
 버전 형식은 `X.X.XX`이며, 릴리스마다 수정 번호를 1 올립니다. `package.json`, `package-lock.json`, `manifest.config.ts`를 함께 바꿉니다. 기능 PR에서는 올리지 않아도 됩니다.

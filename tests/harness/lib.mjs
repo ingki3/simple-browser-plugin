@@ -37,6 +37,19 @@ const DEFAULT_PAGE = `<title>shop</title><body><main>
 <p id=out></p></main>`;
 
 
+// 시험용 사본을 만들어 그 폴더를 돌려준다: 자동 로그인의 KeePassXC 연결(nativeMessaging)은 선택 권한이라 권한 대화상자가 뜬다.
+// 사본의 manifest에서만 필수 권한으로 옮겨 대화상자 없이 시험한다(배포 빌드는 그대로). rawChrome.mjs도 쓴다.
+export function prepareExtension() {
+  const ext = mkdtempSync(join(tmpdir(), "sbp-ext-"));
+  cpSync(EXT, ext, { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(ext, "manifest.json"), "utf8"));
+  // 방문 기록(#175, history)도 같은 이유로 사본에서만 필수 권한으로 옮긴다(권한 거절 분기는 패널의 permissions 대역으로 시험).
+  manifest.permissions = [...new Set([...(manifest.permissions ?? []), "nativeMessaging", "history"])];
+  manifest.optional_permissions = (manifest.optional_permissions ?? []).filter((p) => p !== "nativeMessaging" && p !== "history");
+  writeFileSync(join(ext, "manifest.json"), JSON.stringify(manifest));
+  return ext;
+}
+
 // onWorker(sw): 서비스 워커를 잡은 직후, 시험 페이지·패널을 열기 전에 부른다(격리 시나리오가 워커 전역 대역을 먼저 걸 때, #263 R6).
 export async function startHarness({ onWorker } = {}) {
   const { chromium } = await import("playwright-core");
@@ -79,15 +92,7 @@ export async function startHarness({ onWorker } = {}) {
   await new Promise((r) => srv2.listen(0, "localhost", r));
   const base = `http://127.0.0.1:${srv.address().port}`;
   const base2 = `http://localhost:${srv2.address().port}`;
-  // 시험용 사본: 자동 로그인의 KeePassXC 연결(nativeMessaging)은 선택 권한이라 권한 대화상자가 뜬다. 사본의 manifest에서만
-  // 필수 권한으로 옮겨 대화상자 없이 시험한다(배포 빌드는 그대로).
-  const ext = mkdtempSync(join(tmpdir(), "sbp-ext-"));
-  cpSync(EXT, ext, { recursive: true });
-  const manifest = JSON.parse(readFileSync(join(ext, "manifest.json"), "utf8"));
-  // 방문 기록(#175, history)도 같은 이유로 사본에서만 필수 권한으로 옮긴다(권한 거절 분기는 패널의 permissions 대역으로 시험).
-  manifest.permissions = [...new Set([...(manifest.permissions ?? []), "nativeMessaging", "history"])];
-  manifest.optional_permissions = (manifest.optional_permissions ?? []).filter((p) => p !== "nativeMessaging" && p !== "history");
-  writeFileSync(join(ext, "manifest.json"), JSON.stringify(manifest));
+  const ext = prepareExtension();
   const userDataDir = mkdtempSync(join(tmpdir(), "sbp-harness-"));
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     executablePath: chrome,
@@ -300,7 +305,7 @@ export async function startHarness({ onWorker } = {}) {
 // 동작)로 답한다. __onPlanReq(body): 답하기 전에 부르는 훅(문서 바꾸기 등). __planHold: 켜져 있으면 __releasePlan()까지 붙잡는다.
 // region·full은 __regionReqs·__fullReqs와 __draftReqs에 남기고 __draftFor(user, kind)가 있으면 그 값, 없으면 __draft로 답한다
 // (값이 {__httpStatus: n}이면 그 HTTP 오류로 답한다).
-async function installMockModel(sw) {
+export async function installMockModel(sw) {
   // 서비스 워커에 분류 함수를 넣는다(소스 그대로 — 바깥 이름에 기대지 않는 함수).
   await sw.evaluate(`globalThis.__requestParts = ${requestParts.toString()}; globalThis.__repeatRequestKind = ${repeatRequestKind.toString()};`);
   await sw.evaluate(() => {

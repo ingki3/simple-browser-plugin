@@ -11,6 +11,8 @@ import { MAX_TAB_LINK_READS_PER_TURN } from "@/lib/linkTabs";
 import { chosenDownloads, discardDownloadCall, setChosenDownloads } from "../downloadChoices";
 import { discardTelegramSend } from "../telegramSender";
 import { MAX_TELEGRAM_SENDS_PER_TURN } from "@/lib/telegram";
+import { discardKakaoSend } from "../kakaoSender";
+import { MAX_KAKAO_SENDS_PER_TURN } from "@/lib/kakao";
 import { makeOffer, makeOfferResult } from "../savedPagesStore";
 import { candidateIdsOf } from "@/lib/savedPages";
 import { AGENT_MAX_TOKENS } from "@/lib/models";
@@ -117,7 +119,8 @@ export interface AgentSink {
 }
 // send_to_telegram(#210): 원격 대화에서는 답이 이미 그 채널로 가고, 원격 요청이 연결한 텔레그램으로 글을 내보내지 않게(작업을 맡긴 뒤에도).
 // read_links_in_tabs(#293): 로그인된 탭으로 링크를 여는 것은 사용자가 링크를 누른 것과 같아 원격 요청으로는 하지 않는다(맡긴 뒤에도).
-const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page", "send_to_telegram", "read_links_in_tabs"]);
+// send_to_kakao(#310): 원격 요청이 사용자의 카카오톡으로 글을 내보내지 않게(텔레그램과 같다).
+const REMOTE_BLOCKED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>(["sign_in", "open_saved_link", "schedule_repeat_task", "remember_page", "send_to_telegram", "send_to_kakao", "read_links_in_tabs"]);
 const MAX_OTHER_TAB_READS_PER_TURN = 2;
 
 // 턴 시작 옵션. tabId·site: 반복 작업의 이어서 진행(#138). expect: 페이지 제안 실행(#173) — 확인한 탭·주소·문서.
@@ -1178,7 +1181,7 @@ export class ChatAgent {
     turn: number,
     turnTab: TurnTab,
     record: RecordRun,
-    reads: { documents: number; otherTabs: number; telegramSends: number; tabLinkReads: number },
+    reads: { documents: number; otherTabs: number; telegramSends: number; kakaoSends: number; tabLinkReads: number },
   ): Promise<boolean> {
     const toolName = fc.function.name as ToolName;
     // 경로 레시피(#297) 턴 제외 4·5번: 관측 전용이 아닌 호출은 "허락 없는 자동 실행"에서 카드 없이 실행됐을 때만(그림자 판정,
@@ -1198,7 +1201,7 @@ export class ChatAgent {
     turn: number,
     turnTab: TurnTab,
     record: RecordRun,
-    reads: { documents: number; otherTabs: number; telegramSends: number; tabLinkReads: number },
+    reads: { documents: number; otherTabs: number; telegramSends: number; kakaoSends: number; tabLinkReads: number },
     shadow: { auto: boolean },
   ): Promise<boolean> {
     const toolName = fc.function.name as ToolName;
@@ -1246,6 +1249,11 @@ export class ChatAgent {
     // 텔레그램으로 보내기(#210)는 한 요청에 몇 번까지만(모델 반복 호출·스팸 방지). 카드에서 거절한 호출도 센다.
     if (toolName === "send_to_telegram" && ++reads.telegramSends > MAX_TELEGRAM_SENDS_PER_TURN) {
       failCall(`한 요청에서 텔레그램으로 보내기는 최대 ${MAX_TELEGRAM_SENDS_PER_TURN}번입니다. 더 보내지 말고 지금까지 한 일을 답하세요.`, argsKey);
+      return true;
+    }
+    // 카카오톡으로 보내기(#310)도 한 요청에 몇 번까지(텔레그램과 따로 센다). 카드에서 거절한 호출도 센다.
+    if (toolName === "send_to_kakao" && ++reads.kakaoSends > MAX_KAKAO_SENDS_PER_TURN) {
+      failCall(`한 요청에서 카카오톡으로 보내기는 최대 ${MAX_KAKAO_SENDS_PER_TURN}번입니다. 더 보내지 말고 지금까지 한 일을 답하세요.`, argsKey);
       return true;
     }
     // 로그인된 탭으로 링크 읽기(#293)는 한 요청에 2번까지(카드를 연달아 띄우지 않게). 카드에서 거절한 호출도 센다.
@@ -1795,6 +1803,7 @@ export class ChatAgent {
     discardTabLinkCall(callId);
     discardDownloadCall(callId);
     discardTelegramSend(callId);
+    discardKakaoSend(callId);
     if (this.remote) {
       // 원격 대화에서 승인이 필요해 하지 않은 호출.
       this.remoteRefusedTurn = call.turn;
@@ -1967,7 +1976,7 @@ export class ChatAgent {
       runs.push({ tool, argsKey, ok, resultKey: fingerprint(result), summary, changed: extra.changed === true, cancelled: extra.cancelled });
     };
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
-    const reads = { documents: 0, otherTabs: 0, telegramSends: 0, tabLinkReads: 0 };
+    const reads = { documents: 0, otherTabs: 0, telegramSends: 0, kakaoSends: 0, tabLinkReads: 0 };
     // 생각만 하다 응답 상한에 걸려 빈 답이 나오면 생각을 줄여 한 번 더 시도한다(턴마다 한 번).
     let lengthRetried = false;
     let lowReasoning = false;

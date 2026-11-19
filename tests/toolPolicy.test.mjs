@@ -21,6 +21,8 @@ test("only page-reading tools that never change the page are allowed without app
     "click_element", "fill_form_fields", "download_images", "download_files", "capture_page", "read_document", "google_drive_search", "google_sheets_append_rows",
     // 모델이 만든 글을 텔레그램(내 채팅)으로 보낸다(#210). 결과는 고정 값이라 외부 데이터가 아니다.
     "send_to_telegram",
+    // 카카오톡 나와의 채팅으로 보낸다(#310). 텔레그램과 같은 분류.
+    "send_to_kakao",
     // 링크를 로그인된 탭으로 연다(#293 — 링크를 누른 것과 같음).
     "read_links_in_tabs"]) {
     assert.equal(needsApprovalWhenProtected(name), true, name);

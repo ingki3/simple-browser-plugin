@@ -3,6 +3,7 @@ import { isNavigationSafeUrl } from "./sanitize";
 import { checkFileUrl } from "./fileFormat";
 import { QUERY_DOM_ATTRS } from "./modelText";
 import { sendToTelegramArgs } from "./telegramSendArgs";
+import { sendToKakaoArgs } from "./kakaoSendArgs";
 
 export const describePageArgs = z.object({}).strict();
 
@@ -290,6 +291,7 @@ export const toolArgsSchemas = {
   schedule_repeat_task: scheduleRepeatTaskArgs,
   remember_page: z.object({}).strict(),
   send_to_telegram: sendToTelegramArgs,
+  send_to_kakao: sendToKakaoArgs,
 } as const;
 
 export type ToolArgs = {

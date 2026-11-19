@@ -57,6 +57,7 @@ Chrome의 확장 권한은 설치할 때 한꺼번에 알립니다. 각 권한�
 | `debugger` | **실제 마우스 입력으로 클릭**. 스크립트 클릭에 반응하지 않는 사이트용 | 설정 → 동작에서 켰을 때만. 누르는 동안 "디버깅 중" 막대가 뜹니다. Chrome이 이 권한을 나중에 요청하는 방식을 허용하지 않아 설치 때 함께 알립니다 |
 | `nativeMessaging`(선택) | KeePassXC 자동 로그인 | 설정에서 켤 때 따로 묻습니다 |
 | `history`(선택) | 방문 기록에서 기억할 페이지 찾기(패널 위 🕘) | 누를 때 따로 묻습니다. 거절하면 기록을 읽지 않습니다 |
+| `identity`(선택) | 카카오톡 나에게 보내기의 카카오 로그인 창 | 설정에서 "카카오 연결"을 누를 때 따로 묻습니다. 거절하면 연결하지 않습니다(Google 연동 빌드는 위의 필수 `identity`를 씀) |
 
 무엇을 어디로 보내는지는 [개인정보처리방침](privacy.md)에 있습니다. 대화와 페이지 내용은 설정에서 고른 AI 서비스 한 곳으로만 보냅니다. 텔레그램·MCP 연동을 켜면 그 요청의 답과 승인 질문이 그쪽으로도 갑니다(아래). 그 밖의 서버로 보내는 일은 없습니다.
 
@@ -144,7 +145,7 @@ Node.js 22가 필요합니다.
 ```bash
 git clone https://github.com/ingki3/simple-browser-plugin.git
 cd simple-browser-plugin
-git checkout main   # 안정 버전. 기본 브랜치 dev는 개발 중인 코드입니다
+git checkout main   # 안정 버전(기본 브랜치). dev는 개발 중인 코드입니다
 npm ci
 npm run build
 ```

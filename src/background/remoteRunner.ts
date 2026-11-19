@@ -3,10 +3,21 @@
 import { SETTINGS_KEY, type Settings } from "@/lib/messages";
 import { normalizeSettings } from "@/lib/settings";
 import type { RemoteApprover } from "@/lib/remoteApproval";
+import { IdleHold, type IdleHoldReason } from "@/lib/idleHold";
 import { ChatAgent, type AgentChannel, type AgentSink, type TurnOutcome } from "./agent/chatAgent";
+import { beginKeepalive, endKeepalive } from "./keepalive";
+import { debugLog } from "./debug";
 
 // 이 시간 동안 요청이 없으면 다음 요청은 새 대화로 시작한다.
 const IDLE_RESET_MS = 60 * 60_000;
+
+// 하네스용(#307, 서비스 워커 안에서만 보인다): 대화용 참조의 기한을 짧게 하거나(ms) 끈다(off — 유휴 생존 시나리오의 대조).
+// 새 대화로 시작하는 기준(IDLE_RESET_MS)은 바꾸지 않는다.
+interface IdleHoldTuning {
+  ms?: number;
+  off?: boolean;
+}
+export const idleHoldTuning: IdleHoldTuning = {};
 
 // 원격 대화의 이벤트는 패널로 가지 않는다(최종 답은 sendUserTurn의 결과로만 쓴다).
 const sink: AgentSink = { postMessage: () => {} };
@@ -32,12 +43,28 @@ export class RemoteRunner {
   // 실행 슬롯. 멈춰도(stopping) 실행이 실제로 끝날 때까지 비우지 않는다(멈추는 중인 도구와 다음 요청이 겹치지 않게).
   private slot: { id: string; agent: ChatAgent; stopping: boolean; abort: AbortController } | null = null;
 
+  // 대화용 참조(#307, holdWhileIdle일 때만): 받아들인 마지막 요청 뒤 IDLE_RESET_MS 동안 서비스 워커를 붙잡아, 대화(메모리)가
+  // 유휴 종료로 사라지지 않게 한다. 만료는 참조만 놓는다 — 대화를 버리지 않고 실행 중인 요청도 멈추지 않는다(다음 요청이 새
+  // 대화인지는 지금처럼 run()이 lastAt으로 정하고, 실행 중에는 start()의 핑과 턴·전송 참조가 따로 붙잡는다).
+  private readonly idleHold: IdleHold | null;
+
   // perRequest: 요청마다 새 대화로 시작하고, 끝나면 그 대화를 닫는다(MCP — 호출이 서로 독립이고, 앞 요청의 외부 본문 보호·
   // 남은 페이지 번역이 다음 요청이나 다리가 끝난 뒤까지 이어지지 않게).
+  // holdWhileIdle: 대화가 이어질 수 있는 동안 서비스 워커를 붙잡는다(텔레그램 — #307).
   constructor(
     private readonly channel: AgentChannel,
-    private readonly opts: { perRequest?: boolean } = {},
+    private readonly opts: { perRequest?: boolean; holdWhileIdle?: boolean } = {},
   ) {
+    this.idleHold = opts.holdWhileIdle
+      ? new IdleHold({
+          begin: beginKeepalive,
+          end: endKeepalive,
+          setTimer: (fn, ms) => setTimeout(fn, ms),
+          clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+          ms: () => idleHoldTuning.ms ?? IDLE_RESET_MS,
+          log: (state, reason) => debugLog("remote:idle_hold", reason ? `${state} · ${reason}` : state),
+        })
+      : null;
     // 설정에서 제공자·키·모델·실행 방식을 바꾸면 원격 대화에도 알린다(그 대화가 연 페이지 번역을 멈추는 등, 패널 대화와 같게).
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes[SETTINGS_KEY] && this.session) {
@@ -66,6 +93,12 @@ export class RemoteRunner {
     this.stop();
     this.session?.agent.abort();
     this.session = null;
+    this.idleHold?.release("drop");
+  }
+
+  // 대화용 참조만 놓는다(텔레그램 수신이 401·409로 중지된 것이 확정됐을 때 — 대화는 버리지 않는다, #307).
+  releaseIdleHold(reason: IdleHoldReason): void {
+    this.idleHold?.release(reason);
   }
 
   // 이 대화에서 맡긴 작업을 거둔다(텔레그램으로 묻기를 끄면 — 다시 켜도 새로 묻게). 묻는 중인 맡기기 질문은 채널이 거둔다.
@@ -86,6 +119,8 @@ export class RemoteRunner {
     }
     const cur = this.session;
     cur.lastAt = Date.now();
+    // 슬롯을 얻은 요청만 기한을 늘린다(바빠서 거절한 요청은 위에서 null로 끝난다). 새 대화로 바뀌었어도 참조는 하나다.
+    if (!idleHoldTuning.off) this.idleHold?.renew();
     const id = crypto.randomUUID();
     const abort = new AbortController();
     this.slot = { id, agent: cur.agent, stopping: false, abort };

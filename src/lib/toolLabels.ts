@@ -35,6 +35,7 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   schedule_repeat_task: "반복 작업 등록",
   remember_page: "이 페이지 기억하기",
   send_to_telegram: "텔레그램으로 보내기",
+  send_to_kakao: "카카오톡으로 보내기",
 };
 
 // 이름은 모델이 준 글자일 수 있다(인자 검증 실패 결과 등). 등록한 이름만 바꾸고(__proto__ 같은 상속 속성 제외) 나머지는 그대로.

@@ -1,5 +1,5 @@
 import { defineManifest } from "@crxjs/vite-plugin";
-import { googleManifestParts } from "./src/lib/manifestGoogle.ts";
+import { googleManifestParts, optionalPermissions } from "./src/lib/manifestGoogle.ts";
 
 // Google Workspace 통합(Sheets/Docs/Drive)을 쓰려면 여기에 client_id만 붙여넣고
 // 다시 빌드·재설치하세요. 비워두면 해당 기능만 비활성화됩니다.
@@ -16,7 +16,7 @@ export default defineManifest({
   name: "간편 브라우저 도우미",
   short_name: "간편 도우미",
   description: "사이드 패널에서 말로 시키는 브라우저 도우미. 페이지 요약·번역, 입력칸 채우기, 클릭·이동, 파일 읽기와 저장을 대신합니다.",
-  version: "0.2.53",
+  version: "0.2.54",
   icons: {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -66,7 +66,8 @@ export default defineManifest({
   ],
   // 자동 로그인의 KeePassXC 연결(native messaging). 설정에서 켤 때만 요청한다.
   // 방문 기록에서 기억할 페이지 찾기(#175, history)도 설정에서 누를 때만 요청한다.
-  optional_permissions: ["nativeMessaging", "history"],
+  // 카카오톡 나에게 보내기(#310)의 카카오 로그인(identity — launchWebAuthFlow)도 설정에서 '카카오 연결'을 누를 때만 요청한다(Google 빌드는 이미 필수).
+  optional_permissions: optionalPermissions(["nativeMessaging", "history"], GOOGLE),
   host_permissions: ["<all_urls>"],
   // read_document의 문서 변환기(docling.rs-wasm)가 offscreen 문서의 Worker에서 WebAssembly를 쓴다. MV3는 'wasm-unsafe-eval'만 따로 허용할 수 있다.
   content_security_policy: {

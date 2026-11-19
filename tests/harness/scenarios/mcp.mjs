@@ -127,6 +127,29 @@ const FORM192 = `<title>신청</title>
 
 export default [
   {
+    name: "MCP 요청은 대화용 참조(#307)를 잡지 않는다: 답을 보내면 keepalive를 놓는다",
+    async run(h) {
+      // 앞 시나리오의 텔레그램 대화가 잡은 참조가 남지 않게 지운다(토큰 지우기는 대화를 버린다).
+      await ask(h, { kind: "telegram_clear" });
+      const bridge = await askReady(h);
+      try {
+        await h.sw.evaluate(() => {
+          globalThis.__steps = [{ text: "MCP 답" }];
+        });
+        const from = h.logs.length;
+        bridge.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_task", arguments: { request: "인사해 줘" } } });
+        const res = await bridge.reply(2);
+        expect(JSON.stringify(res).includes("MCP 답"), `답(${JSON.stringify(res).slice(0, 200)})`);
+        await waitUntil(async () => !(await h.sw.evaluate(async () => !!(await chrome.alarms.get("openrouter-heartbeat")))), { timeoutMs: 5000, intervalMs: 200, label: "MCP 답 뒤 keepalive를 놓음" });
+        const lines = h.logs.slice(from).filter((l) => l.startsWith("[SBP remote:idle_hold]"));
+        expect(!lines.length, `대화용 참조 로그 없음(${lines.join(" | ")})`);
+      } finally {
+        bridge.stop();
+        await ask(h, { kind: "mcp_set", enabled: false });
+      }
+    },
+  },
+  {
     name: "원격 요청이 직접 조작할 사이트에서 클릭하면 손 넘기기 카드 대신 거절로 풀리고 표시·감시를 거둔다(MCP, 물을 수 있어도 — #263 단계 5)",
     pages2: { "/m": `<title>예매</title><main><button style="width:160px;height:50px" onclick="document.getElementById('out').textContent='눌림'">조회하기</button><p id=out></p></main>` },
     async run(h) {
@@ -158,7 +181,7 @@ export default [
     },
   },
   {
-    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·read_links_in_tabs를 쓰지 않는다(물을 수 있어도 elicitation·패널 카드 없음)",
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·send_to_kakao·read_links_in_tabs를 쓰지 않는다(물을 수 있어도 elicitation·패널 카드 없음)",
     async run(h) {
       const bridge = await askReady(h);
       try {
