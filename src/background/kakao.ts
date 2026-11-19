@@ -7,18 +7,22 @@
 import {
   checkRedirect,
   classifyMemo,
+  KAKAO_API_ORIGIN,
   KAKAO_MEMO_URL,
+  KAKAO_SCOPE,
   KAKAO_TEST_TEXT,
   KAKAO_TOKEN_URL,
   kakaoAuthorizeUrl,
   kakaoErrorCode,
   memoBody,
+  kakaoUserOk,
   needsRefresh,
   parseRefreshResponse,
   parseTokenResponse,
   prepareKakaoSend,
   refreshExpired,
   runKakaoSend,
+  scopeAgreed,
   sendKakaoParts,
   validAppKey,
   validLinkUrl,
@@ -195,6 +199,20 @@ async function kauthPost(params: Record<string, string>): Promise<{ status: numb
   }
 }
 
+// kapi GET(사용자 정보·동의 내역). 상태와 JSON만 돌려주고, 부르는 쪽은 판정에 필요한 값만 본다(저장·로그 없음). 연결 실패면 null.
+async function kapiGet(pathAndQuery: string, token: string): Promise<{ status: number; body: unknown } | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_LIMIT_MS);
+  try {
+    const res = await fetch(`${KAKAO_API_ORIGIN}${pathAndQuery}`, { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 class KakaoConnectError extends Error {
   constructor(
     readonly why: string,
@@ -280,6 +298,18 @@ async function connectInner(): Promise<KakaoStatus> {
         : "카카오 토큰 응답이 올바르지 않아 연결하지 않았습니다.",
     );
   }
+  const access = parsed.tokens.accessToken;
+  // 토큰 응답에 scope가 없으면(필수 항목이 아님) 동의 내역 조회로 talk_message 동의를 확인한다.
+  if (!parsed.scopeKnown) {
+    const sc = await kapiGet(`/v2/user/scopes?scopes=${encodeURIComponent(JSON.stringify([KAKAO_SCOPE]))}`, access);
+    if (!sc || sc.status !== 200 || !scopeAgreed(sc.body, KAKAO_SCOPE)) {
+      fail("scope_lookup", "카카오톡 메시지 전송에 동의해야 합니다. 다시 연결하고 동의 화면에서 '카카오톡 메시지 전송'을 켜세요.");
+    }
+  }
+  // 사용자 정보 조회로 연결을 확정한다(자동 연결 앱은 첫 로그인 뒤 24시간 안에 부르지 않으면 카카오가 연결을 해제한다). 회원번호 확인만 하고
+  // 응답의 다른 정보는 쓰지도 저장하지도 않는다.
+  const me = await kapiGet("/v2/user/me", access);
+  if (!me || me.status !== 200 || !kakaoUserOk(me.body)) fail("user_me", "카카오 계정 연결을 확인하지 못해 연결하지 않았습니다. 잠시 뒤 다시 시도하세요.");
   // 모든 검사가 끝난 뒤에만, 이 시도가 마지막 시도이고 세대가 시작 때와 같을 때 한 번에 저장한다.
   const saved = await update((cur) => {
     if (start.attempt !== attemptSeq || cur.epoch !== start.epoch) return null;
@@ -331,7 +361,8 @@ async function doRefresh(epoch: number): Promise<"ok" | "needs_login" | "failed"
   if (res.status !== 200) return "failed";
   const next = parseRefreshResponse(res.body, Date.now(), cur);
   if (!next) return "failed";
-  const saved = await update((s) => (s.refreshToken === cur.refreshToken ? { ...s, ...next, status: "idle" } : null), epoch);
+  // 상태(status)는 그대로 둔다: 갱신을 기다리는 사이 다른 보내기가 동의 철회(needs_login)를 기록했으면 갱신으로 되살리지 않는다.
+  const saved = await update((s) => (s.refreshToken === cur.refreshToken ? { ...s, ...next } : null), epoch);
   return saved ? "ok" : "failed";
 }
 
@@ -400,6 +431,7 @@ export async function kakaoTestSend(): Promise<KakaoStatus> {
   const res = await sendKakaoParts([KAKAO_TEST_TEXT], r.conn, partDeps(r.s.epoch, r.conn));
   debugLog("kakao:test_send", res.outcome, res.outcome === "done" ? "info" : "warn");
   if (res.outcome === "needs_login") throw new Error("카카오 로그인이 끝났습니다. 다시 연결하세요.");
+  if (res.outcome === "uncertain") throw new Error("카카오톡 응답을 받지 못했습니다. 시험 메시지가 왔는지 카카오톡에서 확인하세요.");
   if (res.outcome === "connection_changed" || res.outcome === "aborted") throw new Error("보내는 사이 카카오 연결이 바뀌어 멈췄습니다.");
   if (res.outcome !== "done") throw new Error("카카오톡으로 시험 메시지를 보내지 못했습니다. 콘솔의 웹 도메인에 링크 주소의 도메인을 등록했는지 확인하세요.");
   return statusOf((await readQueued()).s);

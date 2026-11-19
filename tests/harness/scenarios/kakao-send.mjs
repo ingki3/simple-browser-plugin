@@ -25,6 +25,11 @@ export async function installKakao(h) {
       tokenScope: "profile_nickname talk_message",
       refreshFail: false,
       codeSeq: 0,
+      // 사용자 정보 조회(연결 확정)·동의 내역 조회(토큰 응답에 scope가 없을 때).
+      userMe: 0,
+      userMeFail: false,
+      scopeReqs: 0,
+      scopesAgreed: true,
     };
     if (!globalThis.__kkFetchInstalled) {
       globalThis.__kkFetchInstalled = true;
@@ -43,7 +48,8 @@ export async function installKakao(h) {
               expires_in: 21599,
               refresh_token: `fake-refresh-${p.get("code")}`,
               refresh_token_expires_in: 5183999,
-              scope: kk.tokenScope,
+              // tokenScope가 null이면 scope를 빼고 답한다(필수 항목이 아님).
+              ...(kk.tokenScope === null ? {} : { scope: kk.tokenScope }),
             });
           }
           if (p.get("grant_type") === "refresh_token") {
@@ -54,6 +60,14 @@ export async function installKakao(h) {
             return json(200, { token_type: "bearer", access_token: `fake-access-refreshed-${globalThis.__kkTokenSeq}`, expires_in: 21599 });
           }
           return json(400, { error: "unsupported_grant_type" });
+        }
+        if (u.startsWith("https://kapi.kakao.com/v2/user/me")) {
+          kk.userMe += 1;
+          return kk.userMeFail ? json(401, { code: -401, msg: "사용자 정보 원문" }) : json(200, { id: 1234567890, kakao_account: { profile: { nickname: "가짜 이름" } } });
+        }
+        if (u.startsWith("https://kapi.kakao.com/v2/user/scopes")) {
+          kk.scopeReqs += 1;
+          return json(200, { id: 1234567890, scopes: [{ id: "talk_message", display_name: "카카오톡 메시지 전송", type: "PRIVACY", using: true, agreed: kk.scopesAgreed, revocable: true }] });
         }
         if (u.startsWith("https://kapi.kakao.com/") || u.startsWith("https://kauth.kakao.com/")) {
           const p = new URLSearchParams(String(init?.body ?? ""));
@@ -124,6 +138,8 @@ async function connect(h, opt) {
   const c = await optSend(opt, { kind: "kakao_connect" });
   expect(c?.ok && c.data.connected && c.data.connectedAt > 0, `연결(${JSON.stringify(c)})`);
   expect(Object.keys(c.data).sort().join(",") === "connected,connectedAt,hasKey,linkSet,needsLogin", `허용한 필드만(${Object.keys(c.data)})`);
+  expect((await kk(h)).userMe === 1, "연결 확정에 사용자 정보 조회 한 번");
+  expect(!JSON.stringify(await stored(h)).includes("가짜 이름"), "사용자 정보는 저장하지 않음");
   await clearKk(h);
   return opt;
 }
@@ -342,14 +358,39 @@ export default [
       const noScope = await optSend(opt, { kind: "kakao_connect" });
       expect(noScope?.ok === false && noScope.error.includes("카카오톡 메시지 전송에 동의해야 합니다"), `동의 없음(${JSON.stringify(noScope)})`);
       expect(!(await stored(h)).accessToken, "저장 안 됨(동의 없음)");
+      // 토큰 응답에 scope가 없으면 동의 내역 조회로 확인한다: 동의하지 않았으면 연결하지 않는다.
+      await h.sw.evaluate(() => {
+        globalThis.__kk.tokenScope = null;
+        globalThis.__kk.scopesAgreed = false;
+      });
+      const noScopeField = await optSend(opt, { kind: "kakao_connect" });
+      expect(noScopeField?.ok === false && noScopeField.error.includes("동의해야 합니다") && (await kk(h)).scopeReqs === 1, `scope 없음·미동의(${JSON.stringify(noScopeField)})`);
+      expect(!(await stored(h)).accessToken, "저장 안 됨(동의 내역 미동의)");
+      // 사용자 정보 조회가 실패하면 연결하지 않는다(카카오 원문 없음).
+      await h.sw.evaluate(() => {
+        globalThis.__kk.scopesAgreed = true;
+        globalThis.__kk.userMeFail = true;
+      });
+      const meFail = await optSend(opt, { kind: "kakao_connect" });
+      expect(meFail?.ok === false && meFail.error.includes("계정 연결을 확인하지 못해") && !meFail.error.includes("원문"), `사용자 정보 실패(${JSON.stringify(meFail)})`);
+      expect(!(await stored(h)).accessToken, "저장 안 됨(사용자 정보 실패)");
+      // scope가 없어도 동의 내역에서 동의했으면 연결된다.
+      await h.sw.evaluate(() => {
+        globalThis.__kk.userMeFail = false;
+      });
+      const viaScopes = await optSend(opt, { kind: "kakao_connect" });
+      expect(viaScopes?.ok && viaScopes.data.connected, `동의 내역으로 연결(${JSON.stringify(viaScopes)})`);
+      await optSend(opt, { kind: "kakao_disconnect" });
       const flows = (await kk(h)).flows;
       expect(flows.every((f) => f.origin === "https://kauth.kakao.com" && f.path === "/oauth/authorize" && f.clientId === KEY && f.scope === "talk_message" && f.redirect === `https://${h.extId}.chromiumapp.org/`), `인증 주소(${JSON.stringify(flows)})`);
 
       // 정상 연결 뒤, 설정 페이지에서 보낸 시험 전송은 고정 문구로 간다.
       await h.sw.evaluate(() => {
         globalThis.__kk.tokenScope = "talk_message";
+        globalThis.__kk.userMe = 0;
       });
       const ok = await optSend(opt, { kind: "kakao_connect" });
+      expect((await kk(h)).userMe === 1, "연결 확정에 사용자 정보 조회");
       expect(ok?.ok && ok.data.connected, `연결(${JSON.stringify(ok)})`);
       await clearKk(h);
       const test1 = await optSend(opt, { kind: "kakao_test_send" });

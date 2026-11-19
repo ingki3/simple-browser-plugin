@@ -1,9 +1,8 @@
 // 카카오톡 "나에게 보내기"(#310)의 순수 함수: 인증 주소·돌아온 주소 검사, 토큰 응답 해석·갱신 판단, 글 나누기, 메시지 본문,
 // 조각 보내기(401이면 한 번 갱신 뒤 다시), 미리보기 준비·실행 판단. 네트워크·저장·연결 신호는 src/background/kakao.ts.
-// npm test(Node 타입 제거 실행)로 시험하므로 .ts 확장자를 붙인 lib 모듈만 불러온다.
+// npm test(Node 타입 제거 실행)로 시험하므로 다른 모듈을 불러오지 않는다.
 // 받는 곳은 로그인한 사용자 자신(나와의 채팅)으로 고정이다(인자로 바꿀 수 없다). 승인은 미리보기 때의 연결 세대에 묶고, 실행 때 원문을
 // 다시 가려 승인한 글과 같을 때만 보낸다(send_to_telegram #210과 같은 흐름).
-import { splitWhole } from "./telegram.ts";
 
 export const KAKAO_AUTH_ORIGIN = "https://kauth.kakao.com";
 export const KAKAO_API_ORIGIN = "https://kapi.kakao.com";
@@ -61,15 +60,17 @@ export interface KakaoTokens {
 const isToken = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 4096 && !/\s/.test(v);
 const isSeconds = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
 
-// 코드 교환 응답 해석. 토큰 형식이 틀리면 format, 동의 범위(scope)에 talk_message가 없으면 scope(저장하지 않는다).
-export function parseTokenResponse(body: unknown, now: number): { ok: true; tokens: KakaoTokens } | { ok: false; why: "format" | "scope" } {
+// 코드 교환 응답 해석. 토큰 형식이 틀리면 format, 동의 범위(scope)가 있는데 talk_message가 없으면 scope(저장하지 않는다).
+// scope는 응답의 필수 항목이 아니라(카카오 문서) 없으면 scopeKnown=false — 부르는 쪽이 동의 내역 조회(/v2/user/scopes)로 확인한다.
+export function parseTokenResponse(body: unknown, now: number): { ok: true; tokens: KakaoTokens; scopeKnown: boolean } | { ok: false; why: "format" | "scope" } {
   if (!body || typeof body !== "object") return { ok: false, why: "format" };
   const b = body as Record<string, unknown>;
   if (!isToken(b.access_token) || !isSeconds(b.expires_in) || !isToken(b.refresh_token) || !isSeconds(b.refresh_token_expires_in)) return { ok: false, why: "format" };
-  const scopes = typeof b.scope === "string" ? b.scope.split(/\s+/) : [];
-  if (!scopes.includes(KAKAO_SCOPE)) return { ok: false, why: "scope" };
+  const scopeKnown = typeof b.scope === "string";
+  if (scopeKnown && !(b.scope as string).split(/\s+/).includes(KAKAO_SCOPE)) return { ok: false, why: "scope" };
   return {
     ok: true,
+    scopeKnown,
     tokens: {
       accessToken: b.access_token,
       accessExpiresAt: now + b.expires_in * 1000,
@@ -77,6 +78,19 @@ export function parseTokenResponse(body: unknown, now: number): { ok: true; toke
       refreshExpiresAt: now + b.refresh_token_expires_in * 1000,
     },
   };
+}
+
+// 동의 내역 조회(GET /v2/user/scopes) 응답에서 그 항목에 동의했는지.
+export function scopeAgreed(body: unknown, id: string): boolean {
+  const list = body && typeof body === "object" ? (body as { scopes?: unknown }).scopes : undefined;
+  return Array.isArray(list) && list.some((x) => !!x && typeof x === "object" && (x as { id?: unknown }).id === id && (x as { agreed?: unknown }).agreed === true);
+}
+
+// 사용자 정보 조회(GET /v2/user/me) 응답이 연결된 사용자인지(회원번호 id만 본다 — 다른 정보는 쓰지도 저장하지도 않는다).
+// 자동 연결 앱은 첫 로그인 뒤 24시간 안에 사용자 정보 조회를 부르지 않으면 카카오가 연결을 해제한다(가입 미완료 정리).
+export function kakaoUserOk(body: unknown): boolean {
+  const id = body && typeof body === "object" ? (body as { id?: unknown }).id : undefined;
+  return typeof id === "number" && Number.isFinite(id);
 }
 
 // 갱신 응답 해석. 새 리프레시 토큰이 오면(만료가 가까울 때) 그것으로 바꾸고, 없으면 지금 것을 그대로 둔다.
@@ -130,11 +144,47 @@ export function validAppKey(raw: string): boolean {
 
 // ---- 글 나누기·메시지 본문 ----
 
-// 잘림 없이 200자 조각 5개 안에 나눈다(이으면 원문). 줄바꿈 경계는 남은 글이 남은 조각에 담길 때만 쓴다. 담을 수 없으면 null.
-export function splitKakao(text: string): string[] | null {
-  if (text.length > SEND_TO_KAKAO_MAX) return null;
-  // 줄바꿈을 먼저 고른 경계가 뒤에서 서로게이트 쌍 때문에 한 글자씩 모자라면 담지 못할 수 있다 — 그때는 줄바꿈 없이 상한에서만 자른다.
-  return splitWhole(text, KAKAO_MAX_TEXT, KAKAO_MAX_PARTS, { fitParts: true }) ?? splitWhole(text, KAKAO_MAX_TEXT, KAKAO_MAX_PARTS, { noBreaks: true });
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+
+// 잘림 없이 200자 조각 5개 안에 나눈다: 이으면 원문, 조각마다 200자 이하, 공백·줄바꿈만 있는 조각 없음, 서로게이트 쌍을 가르지 않음.
+// 담을 수 있는 나누기가 하나라도 있으면 찾는다(뒤에서부터 "여기서 시작하면 최소 몇 조각"을 계산한 뒤 앞에서 고른다). 고를 때는
+// 남은 조각에 담기는 경계 중 줄바꿈 바로 뒤(조각이 절반 이상일 때)를 먼저, 없으면 가장 긴 조각을 고른다. 담을 수 없으면 null.
+// (텔레그램 splitWhole과 같은 계약이지만 한도가 짧아 줄바꿈·공백·이모지 경계 때문에 조각이 모자라지 않게 따로 둔다 — #310 리뷰.)
+export function splitKakao(text: string, max = KAKAO_MAX_TEXT, maxParts = KAKAO_MAX_PARTS): string[] | null {
+  const n = text.length;
+  if (!text.trim() || n > max * maxParts) return null;
+  // nextSolid[i]: i 이상에서 처음 나오는 공백 아닌 글자 위치(없으면 n).
+  const nextSolid = new Array<number>(n + 1).fill(n);
+  for (let i = n - 1; i >= 0; i--) nextSolid[i] = /\s/.test(text[i]) ? nextSolid[i + 1] : i;
+  const okCut = (j: number) => j === n || !(isHigh(text.charCodeAt(j - 1)) && isLow(text.charCodeAt(j)));
+  // need[i]: text[i:]를 담는 최소 조각 수(못 담으면 Infinity).
+  const need = new Array<number>(n + 1).fill(Infinity);
+  need[n] = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = Math.min(n, i + max); j > i; j--) {
+      if (nextSolid[i] >= j || !okCut(j)) continue;
+      if (need[j] + 1 < need[i]) need[i] = need[j] + 1;
+    }
+  }
+  if (need[0] > maxParts) return null;
+  const out: string[] = [];
+  let i = 0;
+  while (i < n) {
+    const left = maxParts - out.length - 1;
+    let pick = -1;
+    let breakPick = -1;
+    for (let j = Math.min(n, i + max); j > i; j--) {
+      if (nextSolid[i] >= j || !okCut(j) || need[j] > left) continue;
+      if (pick < 0) pick = j;
+      if (breakPick < 0 && text[j - 1] === "\n" && j - i >= max / 2) breakPick = j;
+    }
+    const j = breakPick >= 0 ? breakPick : pick;
+    if (j < 0) return null;
+    out.push(text.slice(i, j));
+    i = j;
+  }
+  return out;
 }
 
 // 나에게 보내기 요청 본문(application/x-www-form-urlencoded). 버튼 글자는 넣지 않는다(링크는 필수라 저장한 주소).
@@ -170,20 +220,29 @@ export interface KakaoPartDeps {
   post(token: string, linkUrl: string, part: string, signal: AbortSignal): Promise<MemoResult>;
 }
 
-export type KakaoPartsOutcome = "done" | "needs_login" | "connection_changed" | "send_failed" | "aborted";
+// uncertain: 요청을 보냈는데 응답을 받지 못했다(그 조각이 갔는지 알 수 없다 — 다시 보내면 겹칠 수 있다).
+export type KakaoPartsOutcome = "done" | "needs_login" | "connection_changed" | "send_failed" | "aborted" | "uncertain";
 
 // 조각을 차례로 보낸다. 401이면 그 조각만 한 보내기 안에서 한 번 갱신해 다시 보내고, 다시 401이거나 갱신이 거절되면 needs_login.
 // 쿼터 초과는 다시 보내지 않는다. 신호가 끊기면 aborted(보내는 중 끊겨 생긴 예외 포함). 실패 사유를 합치지 않고 돌려준다.
 export async function sendKakaoParts(parts: readonly string[], signal: AbortSignal, deps: KakaoPartDeps): Promise<{ sent: number; outcome: KakaoPartsOutcome }> {
   let sent = 0;
   let refreshed = false;
+  // 지금 조각의 요청을 보낸 뒤 응답을 기다리는 중인지(그때 난 예외는 도착 여부를 알 수 없다).
+  let inFlight = false;
+  const post = async (token: string, linkUrl: string, part: string): Promise<MemoResult> => {
+    inFlight = true;
+    const r = await deps.post(token, linkUrl, part, signal);
+    inFlight = false;
+    return r;
+  };
   for (const part of parts) {
     if (signal.aborted) return { sent, outcome: "aborted" };
     try {
       let t = await deps.token();
       if (!t.ok) return { sent, outcome: t.why };
       if (signal.aborted) return { sent, outcome: "aborted" };
-      let r = await deps.post(t.token, t.linkUrl, part, signal);
+      let r = await post(t.token, t.linkUrl, part);
       if (r === "unauthorized") {
         if (refreshed) {
           await deps.markNeedsLogin();
@@ -195,7 +254,7 @@ export async function sendKakaoParts(parts: readonly string[], signal: AbortSign
         if (signal.aborted) return { sent, outcome: "aborted" };
         t = await deps.token();
         if (!t.ok) return { sent, outcome: t.why };
-        r = await deps.post(t.token, t.linkUrl, part, signal);
+        r = await post(t.token, t.linkUrl, part);
         if (r === "unauthorized") {
           await deps.markNeedsLogin();
           return { sent, outcome: "needs_login" };
@@ -208,7 +267,7 @@ export async function sendKakaoParts(parts: readonly string[], signal: AbortSign
       }
       if (r !== "ok") return { sent, outcome: signal.aborted ? "aborted" : "send_failed" };
     } catch {
-      return { sent, outcome: signal.aborted ? "aborted" : "send_failed" };
+      return { sent, outcome: inFlight ? "uncertain" : signal.aborted ? "aborted" : "send_failed" };
     }
     sent++;
   }
@@ -243,7 +302,7 @@ export interface PreparedKakaoSend {
   conn: AbortSignal;
 }
 
-export type KakaoSendWhy = "not_connected" | "needs_login" | "mask_failed" | "mask_changed" | "too_long" | "connection_changed" | "send_failed" | "aborted";
+export type KakaoSendWhy = "not_connected" | "needs_login" | "mask_failed" | "mask_changed" | "too_long" | "connection_changed" | "send_failed" | "aborted" | "uncertain";
 
 function hasLogin(s: KakaoSendState): boolean {
   return !!s.restKey && !!s.linkUrl && !!s.accessToken && !!s.refreshToken;
@@ -343,5 +402,7 @@ export function kakaoSendErrorText(why: KakaoSendWhy, sent: number): string {
       return `카카오톡으로 보내지 못했습니다.${already}`;
     case "aborted":
       return `중단되어 보내기를 멈췄습니다.${already}`;
+    case "uncertain":
+      return `카카오톡 응답을 받지 못해 ${sent + 1}번째 메시지가 갔는지 알 수 없습니다.${already} 카카오톡을 확인한 뒤 필요하면 남은 부분만 다시 요청하세요.`;
   }
 }

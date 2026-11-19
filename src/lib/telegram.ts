@@ -291,17 +291,13 @@ function isLowSurrogate(c: number): boolean {
 // 빈 글을 거절한다). 남은 글이 max를 넘으면 max 안의 마지막 줄바꿈 바로 뒤에서 자르고(줄바꿈은 앞 조각 끝에 남는다), 그 위치가
 // max/2보다 앞이면 max에서 자른다(서로게이트 쌍을 가르지 않음). 남는 뒤 글이 공백뿐이면 경계를 마지막 공백 아닌 글자 앞으로 옮긴다.
 // 조각이 maxParts를 넘거나 조건을 맞출 수 없으면 null(보내지 않는다).
-// opts.fitParts(카카오톡 #310 — 한도가 짧아 줄바꿈에서 자르면 조각이 모자랄 수 있다): 줄바꿈 경계는 그 뒤에 남는 글이 남은 조각 수에
-// 담길 때만 쓰고, 아니면 max에서 자른다(서로게이트 쌍을 가르지 않음). 주지 않으면(텔레그램) 지금 동작 그대로다.
-// opts.noBreaks: 줄바꿈 경계를 쓰지 않고 늘 max에서 자른다(카카오 나누기의 대체 — fitParts로 담지 못할 때).
-export function splitWhole(text: string, max = TELEGRAM_MAX_TEXT, maxParts = TELEGRAM_MAX_PARTS, opts: { fitParts?: boolean; noBreaks?: boolean } = {}): string[] | null {
+export function splitWhole(text: string, max = TELEGRAM_MAX_TEXT, maxParts = TELEGRAM_MAX_PARTS): string[] | null {
   if (!text.trim()) return null;
   const out: string[] = [];
   let rest = text;
   while (rest.length > max) {
     if (out.length + 1 >= maxParts) return null;
     let cut = rest.lastIndexOf("\n", max - 1) + 1;
-    if (opts.noBreaks || (opts.fitParts && rest.length - cut > (maxParts - out.length - 1) * max)) cut = 0;
     if (cut < max / 2) {
       cut = max;
       if (isHighSurrogate(rest.charCodeAt(cut - 1))) cut -= 1;

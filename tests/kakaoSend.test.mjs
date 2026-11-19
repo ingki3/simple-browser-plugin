@@ -23,6 +23,8 @@ import {
   prepareKakaoSend,
   refreshExpired,
   runKakaoSend,
+  scopeAgreed,
+  kakaoUserOk,
   sendKakaoParts,
   splitKakao,
   validAppKey,
@@ -98,10 +100,14 @@ test("토큰 응답: 만료 시각 계산, scope에 talk_message가 없으면 �
   const body = { access_token: "AT1", expires_in: 21599, refresh_token: "RT1", refresh_token_expires_in: 5183999, scope: "profile_nickname talk_message" };
   assert.deepEqual(parseTokenResponse(body, now), {
     ok: true,
+    scopeKnown: true,
     tokens: { accessToken: "AT1", accessExpiresAt: now + 21599_000, refreshToken: "RT1", refreshExpiresAt: now + 5183999_000 },
   });
   assert.deepEqual(parseTokenResponse({ ...body, scope: "profile_nickname" }, now), { ok: false, why: "scope" });
-  assert.deepEqual(parseTokenResponse({ ...body, scope: undefined }, now), { ok: false, why: "scope" });
+  // scope는 필수 항목이 아니다 — 없으면 동의 내역 조회로 확인하라고 알린다(scopeKnown false).
+  const noScope = parseTokenResponse({ ...body, scope: undefined }, now);
+  assert.equal(noScope.ok, true);
+  assert.equal(noScope.scopeKnown, false);
   assert.deepEqual(parseTokenResponse({ ...body, scope: "talk_messages" }, now), { ok: false, why: "scope" }, "낱말 일부가 아닌 정확한 범위");
   for (const bad of [null, "x", { ...body, access_token: "" }, { ...body, expires_in: "1" }, { ...body, refresh_token: undefined }, { ...body, access_token: "a b" }]) {
     assert.deepEqual(parseTokenResponse(bad, now), { ok: false, why: "format" }, JSON.stringify(bad));
@@ -164,7 +170,7 @@ test("카카오 나누기: 한글 100자 아홉 줄(908자)은 5개 안에 담�
   const p = splitKakao(t);
   okParts(t, p);
   assert.ok(p.length <= 5, `${p.length}개`);
-  // 같은 글을 텔레그램 방식(fitParts 없이)으로 200자 5개에 나누면 줄바꿈 경계 때문에 담지 못한다(이번에 보완한 경우).
+  // 같은 글을 텔레그램 방식으로 200자 5개에 나누면 줄바꿈 경계 때문에 담지 못한다(카카오 나누기를 따로 둔 이유).
   assert.equal(splitWhole(t, 200, 5), null);
 });
 
@@ -178,7 +184,7 @@ test("카카오 나누기: 넉넉하면 줄바꿈 경계를 그대로 쓰고, �
   okParts(all, splitKakao(all));
 });
 
-test("텔레그램 splitWhole 기존 결과는 그대로(fitParts 없이)", () => {
+test("텔레그램 splitWhole 기존 결과는 그대로", () => {
   const t = `${"a".repeat(3000)}\n\n${"b".repeat(2000)}`;
   assert.deepEqual(splitWhole(t), [`${"a".repeat(3000)}\n\n`, "b".repeat(2000)]);
   assert.deepEqual(splitWhole("a".repeat(TELEGRAM_MAX_TEXT * 2)).map((x) => x.length), [4096, 4096]);
@@ -273,7 +279,7 @@ test("조각 보내기: 쿼터 초과(429)는 다시 보내지 않고 send_faile
   assert.equal(b.st.posts.length, 1);
 });
 
-test("조각 보내기: 토큰을 읽지 못하면 그 사유, 중단되면 aborted, 보내는 중 끊겨 생긴 예외도 aborted", async () => {
+test("조각 보내기: 토큰을 읽지 못하면 그 사유, 보내기 전 중단이면 aborted, 요청 중 끊겨 생긴 예외는 uncertain", async () => {
   const a = partStore([]);
   let n = 0;
   a.deps.token = async () => (++n === 2 ? { ok: false, why: "connection_changed" } : { ok: true, token: "AT1", linkUrl: "https://example.com/" });
@@ -289,7 +295,8 @@ test("조각 보내기: 토큰을 읽지 못하면 그 사유, 중단되면 abor
     ctl2.abort();
     throw new Error("aborted");
   };
-  assert.deepEqual(await sendKakaoParts(["a", "b"], ctl2.signal, c.deps), { sent: 0, outcome: "aborted" });
+  // 요청을 보낸 뒤 끊겼으면 그 조각이 갔는지 알 수 없다(uncertain — 다시 보내면 겹칠 수 있음).
+  assert.deepEqual(await sendKakaoParts(["a", "b"], ctl2.signal, c.deps), { sent: 0, outcome: "uncertain" });
 });
 
 // ---- 준비·실행 ----
@@ -423,10 +430,9 @@ test("오류 문구: 고정 문구, 이미 간 개수, too_long은 200자·5개 
 
 // ---- 리뷰 보완(#310 코드 리뷰 P2) ----
 
-test("카카오 나누기: 줄바꿈 우선 경계가 이모지 때문에 모자라면 줄바꿈 없이 다시 나눈다(200·200·200·200·150)", () => {
+test("카카오 나누기: 줄바꿈 우선 경계가 이모지 때문에 모자라는 글도 담는다(200·200·200·200·150)", () => {
   const t = `${"가".repeat(149)}\n${"나".repeat(199)}😀${"다".repeat(599)}`;
   assert.equal(t.length, 950);
-  assert.equal(splitWhole(t, 200, 5, { fitParts: true }), null, "fitParts만으로는 못 담는 경우");
   okParts(t, splitKakao(t));
   assert.deepEqual(splitKakao(t).map((p) => p.length), [200, 200, 200, 200, 150]);
 });
@@ -442,4 +448,56 @@ test("응답 판정: 동의 철회(-402)는 consent, 조각 보내기는 needs_l
 test("오류 문구: 보내는 중 연결이 바뀌면 이미 간 개수를 알린다", () => {
   assert.ok(kakaoSendErrorText("connection_changed", 1).includes("앞의 1개 메시지는 이미 갔습니다"));
   assert.ok(kakaoSendErrorText("connection_changed", 0).includes("보내지 않았습니다"));
+});
+
+test("카카오 나누기: 긴 공백 덩어리가 있어도 담을 수 있으면 담는다(가 200 + 공백 250 + 나 200)", () => {
+  const t = `${"가".repeat(200)}${" ".repeat(250)}${"나".repeat(200)}`;
+  const p = splitKakao(t);
+  okParts(t, p);
+  assert.ok(p.length <= 5);
+  assert.equal(splitKakao(" ".repeat(300)), null, "공백뿐이면 null");
+  assert.equal(splitKakao(`${"가".repeat(200)}${" ".repeat(801)}`), null, "1000자를 넘으면 null");
+});
+
+test("카카오 나누기: 무작위 글(공백·줄바꿈·이모지 섞임)은 담으면 늘 계약을 지킨다", () => {
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+  const pieces = ["가", "a", " ", "\n", "😀", "  ", "\n\n"];
+  for (let k = 0; k < 300; k++) {
+    let t = "";
+    const len = Math.floor(rnd() * 1000);
+    while (t.length < len) t += pieces[Math.floor(rnd() * pieces.length)];
+    if (t.length > 1000) t = t.slice(0, isLone(t.slice(0, 1000)) ? 999 : 1000);
+    const p = splitKakao(t);
+    if (p) okParts(t, p);
+    else assert.ok(!t.trim() || t.length > 1000, `담지 못함(${t.length}자)`);
+  }
+});
+
+test("동의 내역·사용자 정보 판정: talk_message 동의, 회원번호만 본다", () => {
+  assert.equal(scopeAgreed({ id: 1, scopes: [{ id: "talk_message", agreed: true }] }, "talk_message"), true);
+  assert.equal(scopeAgreed({ scopes: [{ id: "talk_message", agreed: false }] }, "talk_message"), false);
+  assert.equal(scopeAgreed({ scopes: [{ id: "profile_nickname", agreed: true }] }, "talk_message"), false);
+  assert.equal(scopeAgreed(null, "talk_message"), false);
+  assert.equal(kakaoUserOk({ id: 1234567890, kakao_account: {} }), true);
+  assert.equal(kakaoUserOk({ id: "1" }), false);
+  assert.equal(kakaoUserOk(null), false);
+});
+
+test("조각 보내기: 요청을 보낸 뒤 응답을 받지 못하면 uncertain(그 조각은 세지 않고 갔는지 모른다고 알림)", async () => {
+  const a = partStore([]);
+  let n = 0;
+  a.deps.post = async () => {
+    if (++n === 2) throw new Error("network");
+    return "ok";
+  };
+  assert.deepEqual(await sendKakaoParts(["a", "b", "c"], new AbortController().signal, a.deps), { sent: 1, outcome: "uncertain" });
+  const text = kakaoSendErrorText("uncertain", 1);
+  assert.ok(text.includes("2번째 메시지가 갔는지 알 수 없습니다") && text.includes("앞의 1개 메시지는 이미 갔습니다"), text);
+  // 토큰 읽기에서 난 예외(보내기 전)는 send_failed.
+  const b = partStore([]);
+  b.deps.token = async () => {
+    throw new Error("x");
+  };
+  assert.deepEqual(await sendKakaoParts(["a"], new AbortController().signal, b.deps), { sent: 0, outcome: "send_failed" });
 });
