@@ -5,7 +5,7 @@ AI 모델은 직접 고릅니다: OpenRouter(여러 회사 모델), OpenAI, Goog
 
 **[최신 버전 받기](https://github.com/ingki3/simple-browser-plugin/releases/latest)** · [설치 안내](docs/install.md) · [English](README.en.md) · Chrome 116 이상 · MIT 라이선스
 
-> 안정 버전은 Releases(main 브랜치)입니다. 저장소의 기본 브랜치 `dev`는 개발 중인 코드입니다.
+> 안정 버전은 Releases와 저장소의 기본 브랜치 `main`입니다. `dev` 브랜치는 개발 중인 코드입니다.
 > 화면은 한국어만 지원합니다.
 
 ## 무엇을 할 수 있나요

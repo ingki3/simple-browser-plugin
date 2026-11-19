@@ -1,0 +1,36 @@
+name: 릴리스 출처
+
+# main의 필수 검사 "릴리스 출처 검사"(#312). main 대상 PR은 이 저장소의 dev에서 온 것만 통과한다.
+# 기본 브랜치가 main이라 웹에서 PR을 열면 base가 main으로 잡히기 쉽다.
+# - pull_request_target: PR이 아니라 base(main)에 있는 이 파일로 실행한다. PR이 이 검사를 고쳐 스스로 통과할 수 없다.
+#   PR의 코드는 받지 않고(checkout 없음) 이벤트 값만 비교하므로 pull_request_target의 쓰기 토큰·비밀이 PR 코드에 닿지 않는다.
+# - edited: 열린 PR의 base를 dev에서 main으로 바꿔도 다시 검사한다.
+# - 브랜치·저장소 이름은 PR을 연 사람이 정하는 값이라 셸에 바로 넣지 않고 env로 넘긴다.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: release-source-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  release-source:
+    name: 릴리스 출처 검사
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: dev에서 온 PR인지 확인
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REF" != "dev" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::main 대상 PR은 이 저장소의 dev 브랜치에서만 열 수 있습니다. 기능 PR은 base를 dev로 바꿔 주세요."
+            exit 1
+          fi
+          echo "출처 확인: $BASE_REPO 의 dev"

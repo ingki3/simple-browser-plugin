@@ -24,7 +24,7 @@ README는 처음 쓰는 사람을 위한 안내로 두고, 기능을 더하면 �
 (GitHub 보호: PR 필수, 관리자 포함, force push·삭제 불가, 대화 해결 필수, 새 push 시 승인 무효화). 기본 브랜치는 `main`이다(#312).
 기능 PR은 base를 `dev`로 지정해야 한다(웹에서 열면 기본이 main으로 잡힌다).
 GitHub Actions CI(`.github/workflows/ci.yml`)가 필수 검사다: dev·main 대상 PR은 "단위 테스트·타입 검사·빌드",
-main 대상 PR(릴리스)은 여기에 "확장 하네스"와 "릴리스 출처 검사"(이 저장소의 dev에서 온 PR만 통과)까지 통과해야
+main 대상 PR(릴리스)은 여기에 "확장 하네스"와 "릴리스 출처 검사"(이 저장소의 dev에서 온 PR만 통과. `release-source.yml`, `pull_request_target`이라 main에 있는 판정으로 돈다)까지 통과해야
 머지된다(브랜치는 base 최신이어야 함).
 이슈는 릴리스(main 머지) 때 닫힌다: 기능 PR 본문에 `Closes #N`을 반드시 적는다. squash 커밋 메시지가 PR 제목·본문이라
 그 줄이 dev 커밋에 남고, 기본 브랜치인 main에 들어갈 때 이슈가 닫힌다.

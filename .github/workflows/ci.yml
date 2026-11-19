@@ -3,7 +3,7 @@ name: CI
 # 머지 조건(브랜치 보호의 필수 검사):
 # - dev 대상 PR : 단위 테스트·타입 검사·빌드
 # - main 대상 PR(릴리스): 위 항목 + 확장 하네스(dist를 Chrome for Testing에 올려 시나리오 실행)
-#   + 릴리스 출처 검사(이 저장소의 dev에서 온 PR만 main에 들어간다, #312)
+#   + 릴리스 출처 검사(release-source.yml: 이 저장소의 dev에서 온 PR만 main에 들어간다, #312)
 on:
   pull_request:
     branches: [dev, main]
@@ -42,26 +42,6 @@ jobs:
           node scripts/checkManifest.mjs dist
           GOOGLE_OAUTH_CLIENT_ID=ci-check.apps.googleusercontent.com npm run build
           node scripts/checkManifest.mjs dist --google
-
-  # 기본 브랜치가 main이라 웹에서 PR을 열면 base가 main으로 잡힌다(#312). main에는 이 저장소의 dev만 올린다.
-  # 브랜치 이름은 PR을 연 사람이 정하는 값이라 셸에 바로 넣지 않고 env로 넘긴다.
-  release-source:
-    name: 릴리스 출처 검사
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: dev에서 온 PR인지 확인
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          BASE_REPO: ${{ github.repository }}
-        run: |
-          if [ "$HEAD_REF" != "dev" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-            echo "::error::main 대상 PR은 이 저장소의 dev 브랜치에서만 열 수 있습니다. 기능 PR은 base를 dev로 바꿔 주세요."
-            exit 1
-          fi
-          echo "출처 확인: $BASE_REPO 의 dev"
 
   harness:
     name: 확장 하네스 (main 대상 PR 전용)

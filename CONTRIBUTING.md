@@ -41,7 +41,7 @@ npm run build        # dist/ 생성 → chrome://extensions에서 "압축해제�
 
 ## PR 절차
 
-1. 저장소를 fork하고, `dev`에서 브랜치를 만듭니다(`git checkout -b feat/your-change origin/dev`).
+1. 저장소를 fork하고(이때 "main 브랜치만 복사"를 끕니다. 이미 main만 복사했다면 원본 저장소를 `upstream`으로 더해 `git fetch upstream dev` 뒤 `upstream/dev`에서 시작합니다), `dev`에서 브랜치를 만듭니다(`git checkout -b feat/your-change origin/dev`).
 2. 고친 뒤 `npm test`, `npm run typecheck`, `npm run build`를 통과시킵니다.
    - content script, 승인 판정, 도구 결과를 바꿨다면 `npm run harness`도 돌립니다.
    - 새 동작에는 `tests/harness/scenarios/`에 시나리오를 더합니다.
