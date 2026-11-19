@@ -64,6 +64,8 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   // 모델이 만든 글을 연결한 텔레그램 채팅으로 보낸다(#210 — 밖으로 보내므로 관측 전용이 아님, 외부 본문 보호 중에는 늘 묻는다).
   // 결과는 보낸 조각 수 같은 고정 값이라 외부 데이터를 들여오지 않는다.
   send_to_telegram: ACTION,
+  // 모델이 만든 글을 카카오톡 나와의 채팅으로 보낸다(#310 — send_to_telegram과 같은 분류).
+  send_to_kakao: ACTION,
 };
 
 // 외부 본문 보호가 켜진 대화에서 이 도구 호출에 승인 카드가 필요한지(관측 전용이 아니면 모두).

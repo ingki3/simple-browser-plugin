@@ -40,6 +40,9 @@ OpenRouter를 고르면 OpenRouter가 고른 모델의 회사로 다시 전달�
   페이지 내용을 보고 AI가 쓴 글, 자동 로그인 값은 가림, 1000자까지)도 함께 갑니다. 이 글에는 페이지의 글자가 들어갈 수 있고 텔레그램 서버에 남습니다.
   텔레그램을 연결해 두면, 패널에서 결과를 텔레그램으로 보내 달라고 요청했을 때 AI가 쓴 그 글(자동 로그인 값은 가림, 8000자까지)이 연결한 채팅으로 갑니다.
   이 글에는 페이지의 글자(편집 중인 글자 포함 가능)가 들어갈 수 있고 텔레그램 서버에 남습니다. 실행 방식이 '모든 동작에 승인'이면 보내기 전에 글 전체를 보여 줍니다.
+- **카카오톡 나에게 보내기**: 설정에서 연결해 두고 패널에서 결과를 카카오톡으로 보내 달라고 요청하면, AI가 쓴 그 글(자동 로그인 값은 가림, 1000자까지)이
+  카카오 서버를 거쳐 로그인한 사용자 자신의 카카오톡 "나와의 채팅"으로 갑니다. 이 글에는 페이지의 글자(편집 중인 글자 포함 가능)가 들어갈 수 있습니다.
+  연결할 때 카카오 로그인이 카카오 서버와 오가고(연결 확인을 위해 사용자 정보 조회를 한 번 부르지만 회원번호만 확인하고 다른 정보는 쓰거나 저장하지 않음), 넣은 앱 키·토큰은 이 브라우저에만 저장됩니다. 실행 방식이 '모든 동작에 승인'이면 보내기 전에 글 전체를 보여 줍니다.
 - **MCP 연동**: 최종 답과 승인 질문(위 텔레그램과 같은 범위)이 이 컴퓨터의 다리 프로그램(127.0.0.1, 암호화)을 거쳐 사용자가 등록한 AI 도구로 갑니다. "MCP 클라이언트가 묻지 못하면 텔레그램으로 묻기"를 켜면 그 승인 질문과 MCP 요청 글 앞부분(120자)이 텔레그램으로 갑니다.
   그 도구가 자기 AI 서비스로 보낼 수 있습니다.
 - **자동 로그인(KeePassXC)**: 이 컴퓨터의 KeePassXC에서 아이디·비밀번호(켠 사이트는 일회용 코드)를 받아 그 로그인 페이지의 칸에 넣고
@@ -119,6 +122,9 @@ own policy: [OpenRouter](https://openrouter.ai/privacy), [OpenAI](https://openai
 
 - **Telegram**: requests, final answers, approval questions (request text, planned steps, destination URLs, names of targets to click, fields and values to fill (only the length for passwords), addresses of files or links to read or save, the screen to capture),
   and repeat-task alerts go through Telegram's servers to the single Telegram chat the user paired.
+- **KakaoTalk "send to me"**: when connected and the user asks in the panel to send a result to KakaoTalk, the text the AI wrote (auto sign-in
+  values masked, up to 1000 characters) goes through Kakao's servers to the user's own "chat with myself". Connecting runs a Kakao login; the app
+  keys and tokens are stored only in this browser.
 - **MCP**: final answers and approval questions (same scope as Telegram above) go through the local bridge on this computer (127.0.0.1, encrypted) to the AI tool the
   user registered. That tool may send them to its own AI service. If "ask via Telegram when the MCP client cannot ask" is on, those approval
   questions and the first 120 characters of the MCP request go to Telegram.

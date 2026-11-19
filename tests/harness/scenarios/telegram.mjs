@@ -210,6 +210,8 @@ export const remoteBlockedCalls = (h) => [
     args: { title: "막힘 확인", url: `${h.base2}/watch`, check: "열렸는지", then: "알려 줘", intervalMinutes: 30 },
   },
   { tool: "send_to_telegram", args: { text: "원격에서 보내기 시도" } },
+  // send_to_kakao(#310): 원격 요청이 사용자의 카카오톡으로 글을 내보내지 않는다(연결 여부와 관계없이 승인 경로 전에 거절).
+  { tool: "send_to_kakao", args: { text: "원격에서 카카오로 보내기 시도" } },
   // read_links_in_tabs(#293): 로그인된 탭으로 링크를 여는 것은 원격 요청으로 하지 않는다(카드·질문 전에 거절, 탭을 열지 않음).
   { tool: "read_links_in_tabs", args: { urls: [`${h.base2}/watch`] } },
 ];
@@ -561,7 +563,7 @@ export default [
     },
   },
   {
-    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·read_links_in_tabs를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
+    name: "원격 요청에서는 sign_in·open_saved_link·schedule_repeat_task·send_to_telegram·send_to_kakao·read_links_in_tabs를 쓰지 않는다(텔레그램 질문·패널 카드 없음)",
     pages2: { "/": `<title>shop</title><p>상품</p>` },
     async run(h) {
       await connect(h);

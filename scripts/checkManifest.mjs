@@ -34,6 +34,9 @@ if (wantGoogle) {
 } else if (hasIdentity || hasOauth) {
   errors.push(`Google 연동 없는 빌드인데 identity(${hasIdentity})·oauth2(${hasOauth})가 있습니다.`);
 }
+// 같은 권한이 필수·선택에 함께 있지 않다(#310 — Google 빌드는 identity가 필수라 카카오 연결용 선택 권한에 넣지 않는다).
+const both = (m.optional_permissions ?? []).filter((p) => perms.includes(p));
+if (both.length) errors.push(`같은 권한이 필수·선택에 함께 있습니다: ${both.join(", ")}`);
 if (wantVersion && m.version !== wantVersion) errors.push(`manifest version ${m.version} ≠ ${wantVersion}`);
 
 // web_accessible_resources는 두지 않는다(#215 — 웹 페이지가 고정 주소로 설치 여부를 알 수 있다). content script는 한 파일로 묶는다.

@@ -1,5 +1,6 @@
 import { McpField } from "./fields/McpField";
 import { TelegramField } from "./fields/TelegramField";
+import { KakaoField } from "./fields/KakaoField";
 import { RepeatTasksField } from "./fields/RepeatTasksField";
 import { useEffect, useRef, useState } from "react";
 import { SETTINGS_SECTIONS, SETTINGS_SECTION_LABELS, settingsSectionOf, type SettingsSection } from "@/lib/settingsSections";
@@ -637,6 +638,8 @@ export function SettingsPage() {
             </label>
             <h3 className="settings-sub">텔레그램 연동 (선택)</h3>
             <TelegramField />
+            <h3 className="settings-sub">카카오톡 나에게 보내기 (선택)</h3>
+            <KakaoField />
             <h3 className="settings-sub">MCP 연동 (선택)</h3>
             <McpField />
             <h3 className="settings-sub">Google 연결 (선택 · 직접 빌드 필요)</h3>
