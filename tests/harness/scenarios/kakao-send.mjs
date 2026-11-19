@@ -30,6 +30,11 @@ export async function installKakao(h) {
       userMeFail: false,
       scopeReqs: 0,
       scopesAgreed: true,
+      // 동의 내역 조회를 500으로 답한다(조회 실패 — 다시 시도 안내).
+      scopesFail: false,
+      // 코드 교환 응답을 __kk.releaseToken()까지 보류한다(교환 중 끊기).
+      holdToken: false,
+      releaseToken: null,
     };
     if (!globalThis.__kkFetchInstalled) {
       globalThis.__kkFetchInstalled = true;
@@ -42,6 +47,7 @@ export async function installKakao(h) {
           const p = new URLSearchParams(String(init?.body ?? ""));
           kk.tokenReqs.push({ grant: p.get("grant_type"), clientId: p.get("client_id"), hasSecret: p.has("client_secret"), code: p.get("code"), redirect: p.get("redirect_uri"), method: init?.method });
           if (p.get("grant_type") === "authorization_code") {
+            if (kk.holdToken) await new Promise((r) => (kk.releaseToken = r));
             return json(200, {
               token_type: "bearer",
               access_token: `fake-access-${p.get("code")}`,
@@ -67,6 +73,7 @@ export async function installKakao(h) {
         }
         if (u.startsWith("https://kapi.kakao.com/v2/user/scopes")) {
           kk.scopeReqs += 1;
+          if (kk.scopesFail) return json(500, { msg: "서버 오류 원문" });
           return json(200, { id: 1234567890, scopes: [{ id: "talk_message", display_name: "카카오톡 메시지 전송", type: "PRIVACY", using: true, agreed: kk.scopesAgreed, revocable: true }] });
         }
         if (u.startsWith("https://kapi.kakao.com/") || u.startsWith("https://kauth.kakao.com/")) {
@@ -363,6 +370,17 @@ export default [
         globalThis.__kk.tokenScope = null;
         globalThis.__kk.scopesAgreed = false;
       });
+      // 동의 내역 조회가 실패하면(500) 동의를 요청하지 않고 다시 시도하라고 한다.
+      await h.sw.evaluate(() => {
+        globalThis.__kk.scopesFail = true;
+      });
+      const lookupFail = await optSend(opt, { kind: "kakao_connect" });
+      expect(lookupFail?.ok === false && lookupFail.error.includes("동의 내역을 확인하지 못해") && !lookupFail.error.includes("동의해야") && !lookupFail.error.includes("원문"), `조회 실패(${JSON.stringify(lookupFail)})`);
+      expect(!(await stored(h)).accessToken, "저장 안 됨(조회 실패)");
+      await h.sw.evaluate(() => {
+        globalThis.__kk.scopesFail = false;
+        globalThis.__kk.scopeReqs = 0;
+      });
       const noScopeField = await optSend(opt, { kind: "kakao_connect" });
       expect(noScopeField?.ok === false && noScopeField.error.includes("동의해야 합니다") && (await kk(h)).scopeReqs === 1, `scope 없음·미동의(${JSON.stringify(noScopeField)})`);
       expect(!(await stored(h)).accessToken, "저장 안 됨(동의 내역 미동의)");
@@ -460,6 +478,26 @@ export default [
       expect(rb?.ok === false, `앞 시도 거절(${JSON.stringify(rb)})`);
       const s = await stored(h);
       expect(s.accessToken === "fake-access-C3" && s.refreshToken === "fake-refresh-C3", `C의 토큰(${s.accessToken})`);
+
+      // 3) 코드 교환 응답을 기다리는 사이 끊으면, 교환이 끝나도 뒤따르는 사용자 정보 조회를 부르지 않고 저장하지 않는다.
+      await h.sw.evaluate(() => {
+        globalThis.__kk.hold = false;
+        globalThis.__kk.holdToken = true;
+        globalThis.__kk.userMe = 0;
+      });
+      const before = (await kk(h)).tokenReqs.length;
+      const e = optSend(opt, { kind: "kakao_connect" });
+      await waitUntil(async () => (await kk(h)).tokenReqs.length > before, { label: "코드 교환 요청" });
+      const d2 = await optSend(opt, { kind: "kakao_disconnect" });
+      expect(d2?.ok, "교환 중 끊기");
+      await h.sw.evaluate(() => {
+        globalThis.__kk.holdToken = false;
+        globalThis.__kk.releaseToken?.();
+      });
+      const re = await e;
+      expect(re?.ok === false && re.error.includes("이 로그인은 쓰지 않았습니다"), `교환 뒤 거절(${JSON.stringify(re)})`);
+      expect((await kk(h)).userMe === 0, "사용자 정보 조회를 부르지 않음");
+      expect(!(await stored(h)).accessToken, "저장 안 됨(교환 중 끊기)");
     }),
   },
   {

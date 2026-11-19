@@ -23,7 +23,7 @@ import {
   prepareKakaoSend,
   refreshExpired,
   runKakaoSend,
-  scopeAgreed,
+  scopeAgreement,
   kakaoUserOk,
   sendKakaoParts,
   splitKakao,
@@ -207,7 +207,6 @@ test("메시지 본문: 기본 텍스트 템플릿 JSON(link에 저장한 주소
 test("응답 판정: 200·result_code 0만 성공, 401·-401은 토큰 무효, 429·-10은 쿼터", () => {
   assert.equal(classifyMemo(200, { result_code: 0 }), "ok");
   assert.equal(classifyMemo(200, { result_code: 1 }), "failed");
-  assert.equal(classifyMemo(200, null), "failed");
   assert.equal(classifyMemo(401, { code: -401 }), "unauthorized");
   assert.equal(classifyMemo(400, { code: -401 }), "unauthorized");
   assert.equal(classifyMemo(429, null), "quota");
@@ -474,11 +473,12 @@ test("카카오 나누기: 무작위 글(공백·줄바꿈·이모지 섞임)은
   }
 });
 
-test("동의 내역·사용자 정보 판정: talk_message 동의, 회원번호만 본다", () => {
-  assert.equal(scopeAgreed({ id: 1, scopes: [{ id: "talk_message", agreed: true }] }, "talk_message"), true);
-  assert.equal(scopeAgreed({ scopes: [{ id: "talk_message", agreed: false }] }, "talk_message"), false);
-  assert.equal(scopeAgreed({ scopes: [{ id: "profile_nickname", agreed: true }] }, "talk_message"), false);
-  assert.equal(scopeAgreed(null, "talk_message"), false);
+test("동의 내역·사용자 정보 판정: 동의함·안 함·응답 이상(다시 시도), 회원번호만 본다", () => {
+  assert.equal(scopeAgreement({ id: 1, scopes: [{ id: "talk_message", agreed: true }] }, "talk_message"), "agreed");
+  assert.equal(scopeAgreement({ scopes: [{ id: "talk_message", agreed: false }] }, "talk_message"), "not_agreed");
+  assert.equal(scopeAgreement({ scopes: [{ id: "profile_nickname", agreed: true }] }, "talk_message"), "not_agreed");
+  assert.equal(scopeAgreement(null, "talk_message"), "invalid");
+  assert.equal(scopeAgreement({ msg: "internal error" }, "talk_message"), "invalid");
   assert.equal(kakaoUserOk({ id: 1234567890, kakao_account: {} }), true);
   assert.equal(kakaoUserOk({ id: "1" }), false);
   assert.equal(kakaoUserOk(null), false);
@@ -500,4 +500,25 @@ test("조각 보내기: 요청을 보낸 뒤 응답을 받지 못하면 uncertai
     throw new Error("x");
   };
   assert.deepEqual(await sendKakaoParts(["a"], new AbortController().signal, b.deps), { sent: 0, outcome: "send_failed" });
+});
+
+test("카카오 나누기: 남은 글이 한 메시지에 담기면 마지막 조각으로(가 100 + 줄바꿈 + 나 10 = 111자는 한 메시지)", () => {
+  const t = `${"가".repeat(100)}\n${"나".repeat(10)}`;
+  assert.deepEqual(splitKakao(t), [t]);
+  // 앞 조각 뒤에 남은 글이 200자 안이면 그것도 한 조각으로.
+  const t2 = `${"가".repeat(150)}\n${"나".repeat(150)}\n${"다".repeat(20)}`;
+  const p2 = splitKakao(t2);
+  okParts(t2, p2);
+  assert.equal(p2.length, 2, JSON.stringify(p2.map((x) => x.length)));
+  // 텔레그램 splitWhole은 그대로(한도 안이면 한 조각 — 원래 동작).
+  assert.deepEqual(splitWhole(t, 200, 5), [t]);
+});
+
+test("응답 판정: 200인데 본문을 읽지 못하면 uncertain(갔는지 확인하라고 알림), 조각 보내기도 uncertain", async () => {
+  assert.equal(classifyMemo(200, null), "uncertain");
+  assert.equal(classifyMemo(200, "x"), "uncertain");
+  assert.equal(classifyMemo(200, { result_code: 1 }), "failed");
+  const { st, deps } = partStore(["ok", "uncertain"]);
+  assert.deepEqual(await sendKakaoParts(["a", "b", "c"], new AbortController().signal, deps), { sent: 1, outcome: "uncertain" });
+  assert.equal(st.posts.length, 2, "다시 보내지 않음");
 });

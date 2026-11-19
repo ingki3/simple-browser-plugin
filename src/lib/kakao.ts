@@ -80,10 +80,11 @@ export function parseTokenResponse(body: unknown, now: number): { ok: true; toke
   };
 }
 
-// 동의 내역 조회(GET /v2/user/scopes) 응답에서 그 항목에 동의했는지.
-export function scopeAgreed(body: unknown, id: string): boolean {
+// 동의 내역 조회(GET /v2/user/scopes) 응답 판정: 그 항목에 동의함 / 올바른 응답인데 동의하지 않음 / 응답이 올바르지 않음(다시 시도).
+export function scopeAgreement(body: unknown, id: string): "agreed" | "not_agreed" | "invalid" {
   const list = body && typeof body === "object" ? (body as { scopes?: unknown }).scopes : undefined;
-  return Array.isArray(list) && list.some((x) => !!x && typeof x === "object" && (x as { id?: unknown }).id === id && (x as { agreed?: unknown }).agreed === true);
+  if (!Array.isArray(list)) return "invalid";
+  return list.some((x) => !!x && typeof x === "object" && (x as { id?: unknown }).id === id && (x as { agreed?: unknown }).agreed === true) ? "agreed" : "not_agreed";
 }
 
 // 사용자 정보 조회(GET /v2/user/me) 응답이 연결된 사용자인지(회원번호 id만 본다 — 다른 정보는 쓰지도 저장하지도 않는다).
@@ -171,6 +172,11 @@ export function splitKakao(text: string, max = KAKAO_MAX_TEXT, maxParts = KAKAO_
   const out: string[] = [];
   let i = 0;
   while (i < n) {
+    // 남은 글이 한 메시지에 담기면 그대로 마지막 조각으로(줄바꿈 경계 때문에 메시지를 더 만들지 않는다).
+    if (n - i <= max && nextSolid[i] < n) {
+      out.push(text.slice(i));
+      break;
+    }
     const left = maxParts - out.length - 1;
     let pick = -1;
     let breakPick = -1;
@@ -193,13 +199,15 @@ export function memoBody(part: string, linkUrl: string): string {
   return new URLSearchParams({ template_object: JSON.stringify(template) }).toString();
 }
 
-export type MemoResult = "ok" | "unauthorized" | "consent" | "quota" | "failed";
+export type MemoResult = "ok" | "unauthorized" | "consent" | "quota" | "uncertain" | "failed";
 
 // 나에게 보내기 응답 판정: 200이고 result_code 0만 성공. 401(또는 code -401)은 토큰 무효, code -402는 동의 철회(talk_message —
 // 다시 로그인해 동의해야 함), 429(또는 code -10)는 쿼터 초과.
 export function classifyMemo(status: number, body: unknown): MemoResult {
   const b = body && typeof body === "object" ? (body as { result_code?: unknown; code?: unknown }) : {};
   if (status === 200 && b.result_code === 0) return "ok";
+  // 200인데 본문을 읽지 못했으면(응답이 중간에 끊김 등) 갔는지 알 수 없다 — 실패로 보고 다시 보내면 겹칠 수 있다.
+  if (status === 200 && (!body || typeof body !== "object")) return "uncertain";
   if (status === 401 || b.code === -401) return "unauthorized";
   if (b.code === -402) return "consent";
   if (status === 429 || b.code === -10) return "quota";
@@ -265,6 +273,7 @@ export async function sendKakaoParts(parts: readonly string[], signal: AbortSign
         await deps.markNeedsLogin();
         return { sent, outcome: "needs_login" };
       }
+      if (r === "uncertain") return { sent, outcome: "uncertain" };
       if (r !== "ok") return { sent, outcome: signal.aborted ? "aborted" : "send_failed" };
     } catch {
       return { sent, outcome: inFlight ? "uncertain" : signal.aborted ? "aborted" : "send_failed" };

@@ -22,7 +22,7 @@ import {
   prepareKakaoSend,
   refreshExpired,
   runKakaoSend,
-  scopeAgreed,
+  scopeAgreement,
   sendKakaoParts,
   validAppKey,
   validLinkUrl,
@@ -275,8 +275,9 @@ async function connectInner(): Promise<KakaoStatus> {
     );
   }
   // 로그인 창을 기다리는 사이 끊기·지우기·키 바꾸기·새 시도가 있었으면 코드를 교환하지 않는다(취소된 시도의 키로 카카오에 요청하지 않게).
-  const still = await serial(async () => start.attempt === attemptSeq && (await load()).epoch === start.epoch);
-  if (!still) fail("stale", "연결하는 사이 설정이 바뀌어(연결 끊기·다른 연결·키 바꾸기) 이 로그인은 쓰지 않았습니다.");
+  // 이 시도가 아직 마지막 시도이고 세대가 시작 때와 같은지(저장 큐를 거쳐 — 앞선 끊기·키 바꾸기 저장이 끝난 뒤의 상태).
+  const stillCurrent = () => serial(async () => start.attempt === attemptSeq && (await load()).epoch === start.epoch);
+  if (!(await stillCurrent())) fail("stale", "연결하는 사이 설정이 바뀌어(연결 끊기·다른 연결·키 바꾸기) 이 로그인은 쓰지 않았습니다.");
   const res = await kauthPost({
     grant_type: "authorization_code",
     client_id: start.restKey,
@@ -299,12 +300,16 @@ async function connectInner(): Promise<KakaoStatus> {
     );
   }
   const access = parsed.tokens.accessToken;
-  // 토큰 응답에 scope가 없으면(필수 항목이 아님) 동의 내역 조회로 talk_message 동의를 확인한다.
+  // 코드 교환을 기다리는 사이 끊기·지우기·키 바꾸기·새 시도가 있었으면 뒤따르는 조회(동의 내역·사용자 정보)를 부르지 않고 멈춘다.
+  if (!(await stillCurrent())) fail("stale", "연결하는 사이 설정이 바뀌어(연결 끊기·다른 연결·키 바꾸기) 이 로그인은 쓰지 않았습니다.");
+  // 토큰 응답에 scope가 없으면(필수 항목이 아님) 동의 내역 조회로 talk_message 동의를 확인한다. 조회가 실패하면 다시 시도하라고 하고,
+  // 올바른 응답에서 동의하지 않았을 때만 동의를 요청한다.
   if (!parsed.scopeKnown) {
     const sc = await kapiGet(`/v2/user/scopes?scopes=${encodeURIComponent(JSON.stringify([KAKAO_SCOPE]))}`, access);
-    if (!sc || sc.status !== 200 || !scopeAgreed(sc.body, KAKAO_SCOPE)) {
-      fail("scope_lookup", "카카오톡 메시지 전송에 동의해야 합니다. 다시 연결하고 동의 화면에서 '카카오톡 메시지 전송'을 켜세요.");
-    }
+    const agreement = sc && sc.status === 200 ? scopeAgreement(sc.body, KAKAO_SCOPE) : "invalid";
+    if (agreement === "invalid") fail("scope_lookup", "카카오 동의 내역을 확인하지 못해 연결하지 않았습니다. 잠시 뒤 다시 시도하세요.");
+    if (agreement === "not_agreed") fail("scope", "카카오톡 메시지 전송에 동의해야 합니다. 다시 연결하고 동의 화면에서 '카카오톡 메시지 전송'을 켜세요.");
+    if (!(await stillCurrent())) fail("stale", "연결하는 사이 설정이 바뀌어(연결 끊기·다른 연결·키 바꾸기) 이 로그인은 쓰지 않았습니다.");
   }
   // 사용자 정보 조회로 연결을 확정한다(자동 연결 앱은 첫 로그인 뒤 24시간 안에 부르지 않으면 카카오가 연결을 해제한다). 회원번호 확인만 하고
   // 응답의 다른 정보는 쓰지도 저장하지도 않는다.
