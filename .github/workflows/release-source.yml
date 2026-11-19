@@ -30,7 +30,7 @@ jobs:
           BASE_REPO: ${{ github.repository }}
         run: |
           if [ "$HEAD_REF" != "dev" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-            echo "::error::main 대상 PR은 이 저장소의 dev 브랜치에서만 열 수 있습니다. 기능 PR은 base를 dev로 바꿔 주세요."
+            echo "::error::main 대상 PR은 이 저장소의 dev 브랜치에서만 열 수 있습니다. 기능 PR은 base를 dev로 바꾼 뒤 PR을 닫았다 다시 열어 CI를 다시 돌려 주세요."
             exit 1
           fi
           echo "출처 확인: $BASE_REPO 의 dev"
