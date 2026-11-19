@@ -338,9 +338,10 @@ export default [
         await waitUntil(() => h.sw.evaluate(() => globalThis.__tg.holding), { timeoutMs: 15_000, intervalMs: 200, label: "답을 보내는 중" });
         await waitIdleLog(h, from, "off · 만료", 8000);
         expect(await heartbeat(h), "대화용 참조가 만료돼도 보내는 동안 알람 유지");
+        // 만료 뒤 핑이 한 번 더 오면 바로 놓는다(21초를 다 기다리면 실제 보내기 한도 25초에 바짝 붙어 느린 CI에서 흔들린다).
         const at = await pings(h);
-        await h.panel.waitForTimeout(21_000);
-        expect((await pings(h)) >= at + 1, "만료 뒤에도 보내는 동안 20초마다 호출");
+        await waitUntil(async () => (await pings(h)) >= at + 1, { timeoutMs: 22_000, intervalMs: 200, label: "만료 뒤에도 보내는 동안 20초마다 호출", detail: async () => `${at}→${await pings(h)}` });
+        expect(await heartbeat(h), "핑이 온 때에도 보내는 동안 알람 유지");
         await h.sw.evaluate(() => {
           globalThis.__tg.holdReply = null;
           globalThis.__tg.release();
