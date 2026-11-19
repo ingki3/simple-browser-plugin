@@ -5,7 +5,7 @@ You choose the AI model: OpenRouter (many vendors), OpenAI, Google Gemini, Anthr
 
 **[Download the latest release](https://github.com/ingki3/simple-browser-plugin/releases/latest)** · [Install guide (Korean)](docs/install.md) · [한국어](README.md) · Chrome 116+ · MIT license
 
-> The stable version is on Releases (`main` branch). The repository's default branch `dev` is work in progress.
+> The stable version is on Releases and the repository's default branch `main`. The `dev` branch is work in progress.
 > **The user interface is Korean only.** You can still ask in English. Answers usually follow your language. To make sure, add "Always answer in English." under 설정 → 고급 → 항상 지킬 요청 (Settings → Advanced → Standing request).
 
 ## What it can do

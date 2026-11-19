@@ -145,7 +145,7 @@ Node.js 22가 필요합니다.
 ```bash
 git clone https://github.com/ingki3/simple-browser-plugin.git
 cd simple-browser-plugin
-git checkout main   # 안정 버전. 기본 브랜치 dev는 개발 중인 코드입니다
+git checkout main   # 안정 버전(기본 브랜치). dev는 개발 중인 코드입니다
 npm ci
 npm run build
 ```

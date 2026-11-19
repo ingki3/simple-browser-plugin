@@ -21,9 +21,13 @@ README는 처음 쓰는 사람을 위한 안내로 두고, 기능을 더하면 �
 ## 개발 워크플로 (필수)
 
 브랜치는 **feature → dev → main** 순서로 PR을 통해서만 진행한다. `dev`·`main` 모두 보호 브랜치라 직접 push할 수 없다
-(GitHub 보호: PR 필수, 관리자 포함, force push·삭제 불가, 대화 해결 필수, 새 push 시 승인 무효화). 기본 브랜치는 `dev`다.
+(GitHub 보호: PR 필수, 관리자 포함, force push·삭제 불가, 대화 해결 필수, 새 push 시 승인 무효화). 기본 브랜치는 `main`이다(#312).
+기능 PR은 base를 `dev`로 지정해야 한다(웹에서 열면 기본이 main으로 잡힌다).
 GitHub Actions CI(`.github/workflows/ci.yml`)가 필수 검사다: dev·main 대상 PR은 "단위 테스트·타입 검사·빌드",
-main 대상 PR(릴리스)은 여기에 "확장 하네스"까지 통과해야 머지된다(브랜치는 base 최신이어야 함).
+main 대상 PR(릴리스)은 여기에 "확장 하네스"와 "릴리스 출처 검사"(이 저장소의 dev에서 온 PR만 통과. `release-source.yml`, `pull_request_target`이라 main에 있는 판정으로 돈다)까지 통과해야
+머지된다(브랜치는 base 최신이어야 함).
+이슈는 릴리스(main 머지) 때 닫힌다: 기능 PR 본문에 `Closes #N`을 반드시 적는다. squash 커밋 메시지가 PR 제목·본문이라
+그 줄이 dev 커밋에 남고, 기본 브랜치인 main에 들어갈 때 이슈가 닫힌다.
 
 1. `dev`에서 feature branch를 만들어 작업한다(`git checkout -b <브랜치> origin/dev`). 시작하기 전에 코드 그래프로 관련 코드를 찾는다(위 "코드 그래프").
 2. 변경 후 `npm test`, `npm run typecheck`, `npm run build`를 통과시킨다.
@@ -32,7 +36,7 @@ main 대상 PR(릴리스)은 여기에 "확장 하네스"까지 통과해야 머
    - CHANGES_REQUESTED면 P0/P1을 고치고 커밋한 뒤 다시 리뷰한다. PASS까지 반복한다.
    - P2/P3 권고는 반영하거나, 반영하지 않으면 PR 본문에 이유를 적는다.
    - 리뷰 후 커밋을 추가하면 그 커밋은 다시 리뷰해야 한다.
-5. PASS 후 push하고 **`dev` 대상** PR을 만든다. PR 본문에 리뷰 결과(PASS, 반영한 지적 사항)를 적는다. squash로 머지한다.
+5. PASS 후 push하고 **`dev` 대상** PR을 만든다. PR 본문에 리뷰 결과(PASS, 반영한 지적 사항)와 `Closes #N`을 적는다. squash로 머지한다.
 6. 릴리스: 사용자가 원하면(또는 기능 묶음이 끝나면) `dev`에서 버전을 올린 뒤(아래 "버전 관리") **`dev` → `main`** PR을 만들고
    merge commit으로 머지한다. 머지한 뒤 main을 받아 태그를 달고, 코드 그래프를 갱신한다(`graphify update .`).
 
