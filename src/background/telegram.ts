@@ -28,7 +28,7 @@ import {
 } from "@/lib/telegram";
 import { setTelegramSender } from "./telegramSender";
 import type { RemoteApprover, RemoteAskResult, RemoteQuestion } from "@/lib/remoteApproval";
-import { RemoteRunner } from "./remoteRunner";
+import { idleHoldTuning, RemoteRunner } from "./remoteRunner";
 import { maskStringForModel } from "./loginSecrets";
 import { onRepeatTriggered } from "./repeatTasks";
 import { debugLog } from "./debug";
@@ -333,7 +333,9 @@ async function pollOnce(timeoutS: number): Promise<PollResult> {
     const status = err instanceof TgError ? err.status : 0;
     // 401: 토큰 무효, 409: 다른 곳(웹훅·다른 폴러)이 같은 봇을 쓴다. 알람이 다시 켜지 않는다.
     const stop = status === 401 ? "stopped_auth" : status === 409 ? "stopped_conflict" : null;
-    await update((cur) => ({ ...cur, status: stop ?? cur.status, failures: stop ? cur.failures : cur.failures + 1 }), epoch);
+    const saved = await update((cur) => ({ ...cur, status: stop ?? cur.status, failures: stop ? cur.failures : cur.failures + 1 }), epoch);
+    // 지금 연결 세대에서 수신 중지가 확정됐으면 대화용 참조를 놓는다(대화는 버리지 않는다 — #307). 받지 못하니 이어질 요청도 없다.
+    if (stop && saved) runner.releaseIdleHold("수신 중지");
     debugLog("telegram:poll_error", String(status), "warn");
     return stop ? "stopped" : "error";
   } finally {
@@ -414,7 +416,9 @@ const HELP = [
 
 // ---- 실행 ----
 
-const runner = new RemoteRunner("telegram");
+// holdWhileIdle(#307): 받아들인 마지막 요청 뒤 1시간(대화가 이어지는 동안) 서비스 워커를 붙잡는다 — 패널이 숨겨져 다른 이벤트가
+// 없어도 대화(메모리)가 유휴 종료로 사라지지 않게. /new·연결 끊기·토큰 변경·수신 중지면 놓는다.
+const runner = new RemoteRunner("telegram", { holdWhileIdle: true });
 // 연결 세대마다 하나. 연결 끊기·토큰 바꾸기·지우기에서 끊어, 진행 중인 결과 보내기(가림·나눠 보내기·재시도 포함)를 멈춘다.
 let connAbort = new AbortController();
 // 답을 보내는 중(가림·나눠 보내기·재시도)인 요청 수. 그동안에는 다음 요청을 받지 않는다(답이 섞이거나 순서가 뒤바뀌지 않게).
@@ -807,4 +811,8 @@ onRepeatTriggered(async (t) => {
 });
 
 // 하네스(tests/harness/scenarios/telegram.mjs)가 알람을 기다리지 않고 받기를 부르는 진입점. 서비스 워커 안에서만 보인다.
-(globalThis as { __sbpTelegram?: unknown }).__sbpTelegram = { poll: () => receive(0) };
+// idleHold: 대화용 참조의 기한(ms)을 짧게 하거나 끈다(off — 유휴 생존 시나리오의 대조, #307). 새 대화 기준(1시간)은 그대로다.
+(globalThis as { __sbpTelegram?: unknown }).__sbpTelegram = {
+  poll: () => receive(0),
+  idleHold: (t: { ms?: number; off?: boolean }) => Object.assign(idleHoldTuning, t),
+};

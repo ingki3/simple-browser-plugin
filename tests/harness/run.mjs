@@ -28,7 +28,13 @@ for (const f of files) {
   const mod = await import(pathToFileURL(join(here, "scenarios", f)).href);
   for (const s of mod.default) all.push({ group: f.replace(/\.mjs$/, ""), ...s });
 }
-const chosen = all.filter((s) => !filter || `${s.group} ${s.name}`.includes(filter));
+// explicit: true인 시나리오(#307 유휴 생존처럼 몇 분씩 기다리는 것)는 묶음 이름을 그대로 주거나(`npm run harness idle-survival`)
+// HARNESS_LONG=1일 때만 돈다 — 전체 실행·이름 일부("telegram")로는 건너뛴다(건너뛴 것은 알린다).
+const long = !!process.env.HARNESS_LONG;
+const matched = all.filter((s) => !filter || `${s.group} ${s.name}`.includes(filter));
+const chosen = matched.filter((s) => !s.explicit || long || filter === s.group);
+const skipped = matched.filter((s) => !chosen.includes(s));
+for (const s of skipped) console.log(`- [${s.group}] ${s.name} (건너뜀: 오래 걸려 이름으로만 — npm run harness ${s.group} 또는 HARNESS_LONG=1)`);
 if (!chosen.length) {
   console.error(`'${filter}'에 맞는 시나리오가 없습니다.`);
   process.exit(1);
@@ -37,9 +43,25 @@ if (!chosen.length) {
 // 공용 하네스(브라우저·워커 하나)는 격리하지 않는 시나리오가 처음 필요할 때 띄운다.
 // isolate: true인 시나리오(#263 R6 — 모듈 캐시 등 워커 상태가 앞 시나리오에 물들면 안 되는 것)는 새 프로필·새 서비스 워커로 따로 돌리고 닫는다.
 // 그런 시나리오는 onWorker(sw)로 워커가 뜬 직후(시험 페이지를 열기 전) 대역을 건다.
+// standalone: true인 시나리오(#307 — Playwright가 붙지 않은 브라우저가 필요한 것)는 하네스를 띄우지 않고 run()을 바로 부른다
+// (브라우저는 시나리오가 rawChrome.mjs로 직접 띄우고 닫는다).
 let shared = null;
 const rows = [];
 for (const s of chosen) {
+  if (s.standalone) {
+    const t0 = Date.now();
+    let status = "PASS";
+    let detail = "";
+    try {
+      await s.run(null);
+    } catch (err) {
+      status = err instanceof Fail ? "FAIL" : "ERROR";
+      detail = err instanceof Error ? err.message : String(err);
+    }
+    rows.push({ group: s.group, name: s.name, status, ms: Date.now() - t0, detail });
+    console.log(`${status === "PASS" ? "✓" : "✗"} [${s.group}] ${s.name} (${Date.now() - t0}ms)${detail ? `\n    ${detail}` : ""}`);
+    continue;
+  }
   const own = s.isolate ? await startHarness({ onWorker: s.onWorker }) : null;
   const h = own ?? (shared ??= await startHarness());
   h.pages.clear();
