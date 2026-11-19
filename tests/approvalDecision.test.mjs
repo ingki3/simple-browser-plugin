@@ -159,6 +159,27 @@ test("send_to_telegram: ask→카드, task→맡긴 작업, auto→자동, 보�
   assert.equal(held.chatGrant.offer, false);
 });
 
+// send_to_kakao(#310): send_to_telegram과 같은 판정(미리보기는 autoBlock null — 받는 곳이 사용자 자신으로 고정).
+test("send_to_kakao: ask→카드, task→맡긴 작업, auto→자동, 보호 중 auto→카드·task→맡긴 작업, 대화 허락·링크 허락 제안 없음", () => {
+  const kk = (over) => input({ toolName: "send_to_kakao", pageUrl: undefined, trusted: new Set(), preview: { autoBlock: null }, ...over });
+  const cases = [
+    [{}, "card"],
+    [{ taskMode: true }, "task"],
+    [{ autoApprove: true }, "auto"],
+    [{ autoApprove: true, guarded: true }, "card"],
+    [{ taskMode: true, guarded: true }, "task"],
+    [{ guarded: true }, "card"],
+  ];
+  for (const [over, mode] of cases) {
+    const d = decideApproval(kk(over));
+    assert.equal(d.mode, mode, JSON.stringify(over));
+    assert.equal(d.chatGrant.offer, false, `대화 허락 제안 없음 ${JSON.stringify(over)}`);
+    assert.equal(d.chatGrant.covered, false);
+    assert.equal(d.linkOffer, false);
+    assert.equal(d.urlOffer, false);
+  }
+});
+
 // read_links_in_tabs(#293): 새 예외 없이 기존 판정 그대로. 미리보기는 고정 autoBlock(로그인된 탭으로 여는 읽기는 늘 확인)만 준다.
 test("read_links_in_tabs: ask·auto→카드, task→맡긴 작업, 보호 중 task→맡긴 작업, 대화 허락·링크 허락 제안 없음", async () => {
   const { TAB_LINK_AUTO_BLOCK } = await import("../src/lib/linkTabs.ts");

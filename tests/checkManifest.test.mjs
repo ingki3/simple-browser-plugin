@@ -34,3 +34,11 @@ test("web_accessible_resources가 남아 있으면 실패", () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /web_accessible_resources가 있습니다/);
 });
+
+test("같은 권한이 필수·선택에 함께 있으면 실패(#310 — Google 빌드의 identity)", () => {
+  const ok = '!function(){}();';
+  const dup = check({ permissions: ["identity"], oauth2: { client_id: "x" }, optional_permissions: ["history", "identity"] }, ok);
+  assert.notEqual(dup.status, 0);
+  assert.match(dup.stderr, /필수·선택에 함께/);
+  assert.equal(check({ optional_permissions: ["history", "identity"] }, ok).status, 0, "기본 빌드의 선택 identity는 통과");
+});

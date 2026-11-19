@@ -21,7 +21,8 @@ test("버전: package.json·package-lock.json·manifest가 같고 X.X.XX 형식"
 test("권한: 방문 기록(history)은 선택 권한에만 있다(#175)", () => {
   const src = read("manifest.config.ts");
   const required = src.match(/\n\s*permissions:\s*\[([\s\S]*?)\]/)?.[1] ?? "";
-  const optional = src.match(/\n\s*optional_permissions:\s*\[([^\]]*)\]/)?.[1] ?? "";
+  // 선택 권한은 optionalPermissions([...], GOOGLE)로 만든다(#310 — Google 빌드가 아니면 identity를 더한다, tests/manifestGoogle.test.mjs).
+  const optional = src.match(/\n\s*optional_permissions:\s*(?:optionalPermissions\()?\[([^\]]*)\]/)?.[1] ?? "";
   assert.ok(!/"history"/.test(required), "필수 권한에 history가 없어야 한다");
   assert.ok(/"history"/.test(optional), "선택 권한에 history가 있어야 한다");
 });

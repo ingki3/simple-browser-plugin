@@ -237,7 +237,12 @@ export default [
     async run(h) {
       const perms = await h.sw.evaluate(() => chrome.runtime.getManifest().permissions ?? []);
       expect(!perms.includes("identity") && !perms.includes("activeTab"), `권한(${perms.join(",")})`);
-      expect(await h.sw.evaluate(() => typeof chrome.identity === "undefined"), "identity API가 없어야 한다");
+      // identity는 카카오 연결(#310)용 선택 권한이다 — 권한을 받기 전에는 API가 없다.
+      const optional = await h.sw.evaluate(() => chrome.runtime.getManifest().optional_permissions ?? []);
+      expect(optional.includes("identity"), `선택 권한에 identity(${optional.join(",")})`);
+      const granted = await h.sw.evaluate(() => chrome.permissions.contains({ permissions: ["identity"] }));
+      expect(!granted, "identity 권한을 받기 전");
+      expect(await h.sw.evaluate(() => typeof chrome.identity === "undefined"), "권한을 받기 전에는 identity API가 없어야 한다");
       const opt = await h.openOptions("model");
       const send = (m) => opt.evaluate(async (msg) => chrome.runtime.sendMessage(msg), m);
       const status = await send({ kind: "google_status" });
