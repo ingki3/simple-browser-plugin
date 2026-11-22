@@ -409,11 +409,16 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
     // 20개를 넘으면 끝까지 보지 못했다는 표시를 넣는다(늘 묻게 된다).
     ...(pingUrls.length ? { pingUrls: pingUrls.length > 20 ? [...pingUrls.slice(0, 20), "about:too-many-pings"] : pingUrls } : {}),
     ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
-    ...(declaresDelete(el, [control, linked], form) ? { deleteMethod: true } : {}),
+    // 삭제·확인할 수 없는 요청 신호는 화면상 감싼 양식(outerForm — form 속성으로 다른 양식에 딸린 칸)도 함께 본다(#316).
+    ...(declaresDelete(el, [control, linked], form) || (!!outerForm && declaresDelete(el, [control, linked], outerForm)) ? { deleteMethod: true } : {}),
     // 누른 제출 버튼·클릭으로 바뀌는 checkbox·radio의 name=value, 양식의 숨은 칸, htmx 요청 주소의 삭제 단서(#62).
-    ...(deleteParamOf(el, control, [control, linked], form) ? { deleteParam: true } : {}),
+    ...(deleteParamOf(el, control, [control, linked], form) || (!!outerForm && deleteParamOf(el, control, [control, linked], outerForm))
+      ? { deleteParam: true }
+      : {}),
     // 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·요청 변형 속성 — #62 fail-closed).
-    ...(opaqueRequestOf(el, control, [control, linked], form) ? { opaqueRequest: true } : {}),
+    ...(opaqueRequestOf(el, control, [control, linked], form) || (!!outerForm && opaqueRequestOf(el, control, [control, linked], outerForm))
+      ? { opaqueRequest: true }
+      : {}),
     // 누르면 일으킬 수 있는 htmx GET 요청의 목적지(hx-get hx-trigger="click" 등 — 승인 판정이 목적지로 본다).
     ...(() => {
       const requestUrls = requestUrlsOf(el, control, [control, linked], form);

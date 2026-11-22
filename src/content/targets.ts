@@ -873,8 +873,11 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
   // elsewhere(t): 그 트리거가 다른 목록을 명시적으로 가리킨다(aria-controls·owns가 이 목록 밖의 목록을, 또는 활성 항목이 다른 선택지를).
   const elsewhere = (t: HTMLElement) => {
     for (const { ref } of ariaRefs(t)) {
-      // 이 목록을 담은 요소(래퍼) 또는 이 목록 자신.
-      if (ref === popup || composedWithinNode(ref, popup)) continue;
+      if (ref === popup) continue;
+      // 그 자체로 별도 팝업(상위 메뉴 등)이면 이 목록을 담아도 다른 목록이다(중첩 메뉴의 바깥 버튼).
+      if (POPUP_ROLES.has((ref.getAttribute("role") ?? "").trim().toLowerCase())) return true;
+      // 이 목록을 담은 요소(팝업 역할이 없는 래퍼).
+      if (composedWithinNode(ref, popup)) continue;
       // 같은 목록의 선택지(그 선택지 자신이거나 가장 가까운 팝업이 이 팝업). 목록 안이라도 다른 팝업 경계(하위 메뉴) 너머는 다른 목록이다.
       if (sameListChoice(ref)) continue;
       if (listish(ref)) return true;
@@ -928,8 +931,9 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     if (actives.length > 1) return fail("many");
     const a = actives[0];
     if (expanded.some((b) => claims(b, a))) return fail("many");
-    const near = nearestTrigger(popup, expanded);
-    if (near && near.trigger !== a) return fail("many");
+    // 목록과 같은 묶음(가장 가까운, 트리거를 품은 조상)에 a 말고 다른 트리거가 있거나 그 묶음을 다 볼 수 없으면 소유가 겹칠 수 있다.
+    const g = groupTriggersOf(popup, expanded);
+    if (g === "hidden" || (g && g.some((t) => t !== a))) return fail("many");
     if (elsewhere(a) || !newPathOk(a, activeRefOf(a))) return fail("none");
     return make("linked", a, "activedescendant");
   }
@@ -966,8 +970,48 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
 
 const NEAREST_CLIMB = 6;
 
+// 한 번의 탐색(같은 expanded 배열) 안에서 팝업별 묶음 검사를 재사용한다(#316 — 선택지마다 같은 하위 트리를 다시 훑지 않게).
+// 실행 직전 재검사는 expandedTriggers()로 새 배열을 만들므로 새로 계산한다.
+type NearestResult = { trigger: HTMLElement; group: Element } | null;
+const nearestCache = new WeakMap<HTMLElement[], Map<Element, NearestResult>>();
+const groupCache = new WeakMap<HTMLElement[], Map<Element, Element[] | "hidden" | null>>();
+
+function cached<T>(store: WeakMap<HTMLElement[], Map<Element, T>>, expanded: HTMLElement[], popup: Element, make: () => T): T {
+  let m = store.get(expanded);
+  if (!m) {
+    m = new Map();
+    store.set(expanded, m);
+  }
+  if (m.has(popup)) return m.get(popup) as T;
+  const v = make();
+  m.set(popup, v);
+  return v;
+}
+
+// 팝업에서 위로 6단계 안에 트리거를 품는 첫 묶음의 트리거들(펼침 여부 무관). 그런 묶음이 없거나 body에 닿으면 null,
+// 안을 모두 볼 수 없으면 "hidden".
+function groupTriggersOf(popup: Element, expanded: HTMLElement[]): Element[] | "hidden" | null {
+  return cached(groupCache, expanded, popup, () => {
+    let group: Element | null = popup.parentElement;
+    for (let depth = 0; group && depth < NEAREST_CLIMB; depth++, group = group.parentElement) {
+      const doc = group.ownerDocument;
+      if (group === doc.body || group === doc.documentElement) return null;
+      if (hasHiddenTree(group)) return "hidden";
+      const all = Array.from(group.querySelectorAll("*"));
+      if (all.some(hasHiddenTree)) return "hidden";
+      const triggers = all.filter((e) => isTrigger(e) && !popup.contains(e));
+      if (triggers.length) return triggers;
+    }
+    return null;
+  });
+}
+
 // 선택지 팝업과 같은 묶음 안의 유일한 트리거(관계 nearest의 증명 조건)와 그 묶음. 정할 수 없으면 null.
-function nearestTrigger(popup: Element, expanded: HTMLElement[]): { trigger: HTMLElement; group: Element } | null {
+function nearestTrigger(popup: Element, expanded: HTMLElement[]): NearestResult {
+  return cached(nearestCache, expanded, popup, () => nearestTriggerNow(popup, expanded));
+}
+
+function nearestTriggerNow(popup: Element, expanded: HTMLElement[]): NearestResult {
   let group: Element | null = popup.parentElement;
   for (let depth = 0; group && depth < NEAREST_CLIMB; depth++, group = group.parentElement) {
     const doc = group.ownerDocument;

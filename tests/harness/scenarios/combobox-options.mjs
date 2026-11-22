@@ -43,9 +43,10 @@ function page(o = {}) {
     outside: `<form id=f action="/a"><input type=email name=email aria-label=메일 value="me@example.com"></form><div role=dialog>`,
     outsideNoAttr: `<form id=f action="/a"><input type=email name=email aria-label=메일 value="me@example.com"></form><div role=dialog>`,
     payment: `<form id=b action="/b"></form><form id=pay action="/x"><p>결제 금액 10,000원</p>`,
+    deleteOuter: `<form id=b action="/b"></form><form id=dl action="/x"><input type=hidden name=_method value=DELETE>`,
   }[formMode];
-  const formClose = { "": "</form>", outside: "</div>", outsideNoAttr: "</div>", payment: "</form>" }[formMode];
-  const formAttr = formMode === "outside" ? "form=f" : formMode === "payment" ? "form=b" : "";
+  const formClose = { "": "</form>", outside: "</div>", outsideNoAttr: "</div>", payment: "</form>", deleteOuter: "</form>" }[formMode];
+  const formAttr = formMode === "outside" ? "form=f" : formMode === "payment" || formMode === "deleteOuter" ? "form=b" : "";
   const choiceRole = menuRole ? "menuitem" : "option";
   const popupRole = menuRole ? "menu" : "listbox";
   return `<title>규칙</title><main>
@@ -138,6 +139,8 @@ async function cardThenNoClick(h, path, name, opts) {
 
 // 뺀 선택지(클릭 id 없음) 확인.
 function excluded(r, names, total, { noOptions = false } = {}) {
+  const t = lastTool(r, "find_clickables");
+  expect(t && !t.error && (Array.isArray(t.result) || Array.isArray(t.result?.items)), `find_clickables가 성공해야 한다(${JSON.stringify(t).slice(0, 300)})`);
   if (noOptions) expect(options(r).filter((o) => o.role === "option").length === 0, `선택지 id가 하나도 없어야 한다(${JSON.stringify(options(r)).slice(0, 300)})`);
   for (const n of names) expect(!optNamed(r, n), `'${n}'은 클릭 대상이 아니어야 한다(${JSON.stringify(found(r)).slice(0, 300)})`);
   if (total !== undefined) {
@@ -267,6 +270,42 @@ export default [
     async run(h) {
       const { r, seen } = await pick(h, "/g7", "Emails");
       expect(seen.length === 1 && r.out === "Emails", `결제 양식이라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
+    },
+  },
+  {
+    name: "6c4: form 속성으로 다른 양식에 딸린 트리거라도 화면상 감싼 양식의 삭제 신호(_method=DELETE)로 aria-controls 연결 선택지를 카드로 묻는다",
+    pages: P("/g8", { portal: true, formMode: "deleteOuter" }),
+    async run(h) {
+      const { r, seen } = await pick(h, "/g8", "Emails");
+      expect(seen.length === 1 && r.out === "Emails", `삭제 신호라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
+    },
+  },
+  {
+    name: "부정 10k: 목록의 묶음에 다른 펼친 버튼과 접힌 보조 메뉴 버튼이 함께 있으면(묶음 추정 불가) 묶음 밖 트리거의 activedescendant로 묶지 않는다",
+    pages: {
+      "/x6": `<title>묶음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=k0 aria-label=Include>
+<form action="/pay"><p>결제 금액</p><div id=grp><button type=button aria-haspopup=listbox aria-expanded=true>B열기</button><button type=button aria-haspopup=menu aria-expanded=false>더보기</button></div></form>
+<div id=grp2></div><p id=out></p></main>
+<script>document.getElementById("grp").insertAdjacentHTML("beforeend", '<div role=listbox><div role=option id=k0>K0</div><div role=option id=k1>K1</div></div>');</script>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findC, { text: "끝" }], { path: "/x6" });
+      excluded(r, ["K0", "K1"]);
+    },
+  },
+  {
+    name: "부정 10l: 바깥 버튼이 상위 메뉴 자체를 aria-controls로 가리키면 그 안 하위 메뉴 항목을 activedescendant로 바깥 버튼에 묶지 않는다",
+    pages: {
+      "/x7": `<title>중첩</title><main><button id=ob aria-haspopup=menu aria-expanded=true aria-controls=outer aria-activedescendant=s0>파일</button>
+<div role=menu id=outer><div role=menuitem>새로 만들기</div><div role=menu id=sub><div role=menuitem id=s0>S0</div><div role=menuitem id=s1>S1</div></div></div>
+<button aria-haspopup=listbox aria-expanded=true>필터</button><p id=out></p></main>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findC, { text: "끝" }], { path: "/x7" });
+      excluded(r, ["S0", "S1"]);
+      expect(optNamed(r, "새로 만들기")?.listFor === "파일", `바깥 메뉴 항목은 바깥 버튼(${JSON.stringify(optNamed(r, "새로 만들기"))})`);
     },
   },
   {
@@ -555,8 +594,8 @@ function panelPage(kind) {
 
 function submenuPage(controlsSub) {
   return `<title>메뉴</title><main><button id=mt aria-haspopup=menu aria-expanded=true aria-activedescendant=y0 ${controlsSub ? "aria-controls=xm" : ""}>메뉴</button>
+<button aria-haspopup=listbox aria-expanded=true>필터</button><p id=out></p></main>
 <div id=portal><div role=menu><div role=menuitem id=y0>Y0</div><div role=menuitem id=y1>Y1</div>
 <div role=menu id=xm><div role=menuitem id=x0>X0</div></div></div></div>
-<button aria-haspopup=listbox aria-expanded=true>필터</button><p id=out></p></main>
 <script>window.__picks=0;for(const o of document.querySelectorAll("[role=menuitem]"))o.addEventListener("click",()=>{window.__picks++;document.getElementById("out").textContent=o.textContent;});</script>`;
 }
