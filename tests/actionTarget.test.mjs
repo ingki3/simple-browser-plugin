@@ -62,8 +62,20 @@ test("sameBase: 모델용 묶음 문맥과 상태도 비교한다(#43 B)", () =>
 
 test("clickCard: 선택지의 트리거를 보여 준다", () => {
   const opt = { ...link, tag: "div", role: "option", name: "빨강", href: "" };
-  const trigger = { ...link, tag: "div", role: "combobox", name: "색상 선택", href: "" };
+  const trigger = { ...link, tag: "div", role: "combobox", name: "색상 선택", modelName: "색상 선택", href: "" };
   assert.match(clickCard({ ...opt, trigger }).details, /열린 목록의 트리거: 선택 상자 '색상 선택'/);
+});
+
+test("clickCard: 트리거 이름은 모델용 이름만 쓴다 — 이름 없는 입력 칸의 값은 카드에 없다(#316, #43)", () => {
+  const opt = { ...link, tag: "div", role: "option", name: "Everyone", href: "" };
+  // 원문 이름(name)은 이름 없는 input이면 값으로 대체된다. 모델용 이름(modelName)은 값을 담지 않는다.
+  const trigger = { ...link, tag: "input", role: "combobox", name: "비밀값-316", modelName: "", href: "" };
+  const d = clickCard({ ...opt, trigger }).details;
+  assert.match(d, /열린 목록의 트리거: 선택 상자 \(이름 없음\)/);
+  assert.doesNotMatch(d, /비밀값-316/);
+  const named = clickCard({ ...opt, trigger: { ...trigger, modelName: "Include" } }).details;
+  assert.match(named, /열린 목록의 트리거: 선택 상자 'Include'/);
+  assert.doesNotMatch(named, /비밀값-316/);
 });
 
 test("sameApproved: 목록 순번은 같아야 하고 항목 수는 늘어도 된다", () => {

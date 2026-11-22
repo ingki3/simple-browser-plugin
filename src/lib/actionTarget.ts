@@ -270,7 +270,11 @@ export function clickCard(info: TargetInfo): { summary: string; details: string 
   const lines = [`대상: ${label} ${name}`, `위치: ${placeLine(info)}`];
   if (info.context && info.context !== info.name) lines.push(`행 내용: '${clip(info.context, 100)}'`);
   if (info.href) lines.push(`주소: ${clip(info.href, 300)}`);
-  if (info.trigger) lines.push(`열린 목록의 트리거: ${roleLabel(info.trigger)} '${clip(info.trigger.name, 60)}'`);
+  // 트리거 이름은 모델용 이름(modelName — 입력 칸 값 제외, #43). 원문 이름(name)은 이름 없는 입력 칸이면 값으로 대체된다(#316).
+  if (info.trigger) {
+    const tn = info.trigger.modelName ?? "";
+    lines.push(`열린 목록의 트리거: ${roleLabel(info.trigger)} ${tn ? `'${clip(tn, 60)}'` : "(이름 없음)"}`);
+  }
   // 체크 위젯(role=checkbox·switch·radio, menuitemcheckbox 등)은 지금 상태를 보여 준다(누르면 반대로 바뀐다).
   const checked = info.states?.checked;
   if (checked !== undefined) lines.push(`지금 상태: ${checked === "true" ? "체크됨" : checked === "mixed" ? "일부 체크" : "체크 안 됨"}`);

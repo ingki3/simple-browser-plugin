@@ -1,5 +1,5 @@
 import type { RegionSpec } from "./repeatPlan";
-import type { ZeroDiag } from "./clickQuery";
+import type { UnrelatedDiag, ZeroDiag } from "./clickQuery";
 import type { ResumeMissing } from "./panelLink";
 import type { HrefTooLong } from "./clickResult";
 import type { VoiceInputPatch, VoiceInputSettings } from "./voice";
@@ -135,6 +135,8 @@ export type FindClickablesResponse =
       items: ClickableElement[];
       unfiltered: number;
       unrelatedChoices: number;
+      // 뺀 선택지의 이유별 수(#316, 디버그 로그 전용 — 모델 결과에는 넣지 않는다).
+      unrelatedDiag?: UnrelatedDiag;
       longHrefs: number;
       // query로 0개일 때의 진단 수(#242, 글자 없음). 화면 글자로 다시 맞춰 찾은 수(screenText).
       zeroDiag?: ZeroDiag;
@@ -148,6 +150,7 @@ export type FindClickablesResponse =
       omittedItems: number;
       scanLimited: boolean;
       unrelatedChoices: number;
+      unrelatedDiag?: UnrelatedDiag;
       longHrefs: number;
       // 항목이 0개이고 region을 줬을 때, region만 빼면 남는 항목 수(#234 — 있을 때만). Limited면 탐색 상한 안에서 센 수.
       region?: PageRegion;

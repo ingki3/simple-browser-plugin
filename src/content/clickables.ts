@@ -1,7 +1,7 @@
 import type { ClickableElement, FindClickablesResponse, ListItem, PageRegion } from "@/lib/messages";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
-import { clickMatchScore, emptyZeroDiag, queryTerms, type ZeroDiag } from "@/lib/clickQuery";
+import { clickMatchScore, emptyZeroDiag, queryTerms, type UnrelatedDiag, type ZeroDiag } from "@/lib/clickQuery";
 import { resultHref, resultRole } from "@/lib/clickResult";
 import { getAccessibleRoots, isTag } from "./docs";
 import { composedContains } from "./composed";
@@ -56,6 +56,7 @@ import {
   takeApproved,
   type ItemBinding,
   type Relation,
+  type RelationWhy,
   type TargetKind,
 } from "./targets";
 import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
@@ -191,11 +192,21 @@ function enclosingControlTexts(el: HTMLElement): string {
 // 입력 칸이 든 조상(최대 6단계). 클릭 처리기가 그 칸들을 읽어 보내는 양식 없는 화면을 잡는다.
 function submitScopes(el: HTMLElement): FormlessScope[] {
   const control = activatedControl(el) ?? labelControl(el);
-  const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
+  const enclosing = closestAcross(el, "form") as HTMLFormElement | null;
+  const form = (control as HTMLInputElement | null)?.form ?? ownForm(el) ?? enclosing;
   // 버튼·링크의 처리기는 자기 양식이 아니라 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있으니
   // (목적지가 있는 링크도 클릭 처리기에서 이동을 취소하고 제출할 수 있다) 바깥 범위의 양식 칸까지 본다.
   const outer = formlessScopes(el).map((s) => ({ ...s, includeFormFields: true }));
-  return form ? [{ node: form, includeFormFields: true }, ...outer] : outer;
+  // form 속성으로 다른 양식에 딸린 칸이면 화면상 감싼 양식도 범위에 넣는다(#316 — 그 양식의 위험을 빼지 않게).
+  const extra = enclosing && enclosing !== form ? [{ node: enclosing, includeFormFields: true }] : [];
+  return form ? [{ node: form, includeFormFields: true }, ...extra, ...outer] : outer;
+}
+
+// 양식에 딸린 요소(input·select·textarea 등) 자신이 속한 양식(form 속성으로 바깥 양식에 연결한 것 포함, #316 — 선택지의 트리거가
+// 텍스트 콤보박스일 때 그 양식의 위험을 놓치지 않게). 그 밖은 null.
+function ownForm(el: HTMLElement): HTMLFormElement | null {
+  if (!["input", "select", "textarea", "button", "fieldset", "output", "object"].includes(el.localName)) return null;
+  return (el as HTMLInputElement).form ?? null;
 }
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
@@ -311,7 +322,10 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
   // label이 연결한 컨트롤(checkbox·radio 포함)도 누르면 작동하므로 그 양식과, 작동 뒤 실릴 값을 본다.
   const linked = control ? null : labelControl(el);
   const linkedForm = linked && "form" in linked ? ((linked as HTMLInputElement).form ?? null) : null;
-  const form = control?.form ?? linkedForm ?? (closestAcross(el, "form") as HTMLFormElement | null);
+  const enclosingForm = closestAcross(el, "form") as HTMLFormElement | null;
+  // 제출 목적지는 실제로 딸린 양식(form 속성 포함). 위험(결제·개인정보) 검사는 화면상 감싼 양식도 함께 본다(#316).
+  const form = control?.form ?? linkedForm ?? ownForm(el) ?? enclosingForm;
+  const outerForm = enclosingForm && enclosingForm !== form ? enclosingForm : null;
   const submitTo = formDestination(control ?? el, form);
   const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
   // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
@@ -361,6 +375,7 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
     // 작동할 컨트롤(제출 버튼, 또는 label이 연결한 checkbox·radio) 자신이 실을 개인정보 값도 본다.
     submitsPersonal:
       (!!form && formHasPersonalValues(form)) ||
+      (!!outerForm && formHasPersonalValues(outerForm)) ||
       // 양식 없는 화면(대화상자의 로그인 칸 + Continue 버튼 등)은 버튼 주변 입력 칸 묶음을 본다.
       // 양식 안 버튼도 같은 대화상자·화면의 다른 양식(처리기가 requestSubmit할 수 있다)을 함께 본다.
       personalValuedInScopes(submitScopes(el)).length > 0 ||
@@ -374,6 +389,7 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
     // 결제 문구가 있으면(name="confirm_order") 결제 동작으로 본다.
     paymentContext:
       inPaymentContext(el, form) ||
+      (!!outerForm && inPaymentContext(el, outerForm)) ||
       [control, linked].some(
         (c) =>
           !!c &&
@@ -442,12 +458,27 @@ interface Candidate {
 
 // 후보 하나를 만든다(보이는 것·편집 영역 제외·비활성 제외·선택지는 트리거 관계가 정해질 때만). 아니면 null.
 // list·items 모드가 같은 규칙을 쓴다.
+// 펼친 트리거 목록(한 번의 탐색에서 처음 필요할 때 한 번 모은다)과 관계를 정하지 못한 이유별 수(#316 진단).
+interface ExpandedRef {
+  list: HTMLElement[] | null;
+  why: RelationWhy;
+}
+
+function newExpandedRef(): ExpandedRef {
+  return { list: null, why: { depth: 0, many: 0, none: 0 } };
+}
+
+// 뺀 선택지가 있으면 진단 수(#316 — 디버그 로그 전용, 글자 없음).
+function unrelatedDiagOf(ref: ExpandedRef, unrelated: number): { unrelatedDiag: UnrelatedDiag } | Record<string, never> {
+  return unrelated > 0 ? { unrelatedDiag: { expanded: ref.list?.length ?? 0, ...ref.why } } : {};
+}
+
 // 선택지인데 펼친 트리거와의 관계를 정하지 못해 뺀 것은 "unrelated"(수를 알린다, 리뷰 #2).
 // rej: 뺀 이유별 수(#242 0개 진단). 주면 센다.
 function safeCandidate(
   node: HTMLElement,
   seen: Set<HTMLElement>,
-  expandedRef: { list: HTMLElement[] | null },
+  expandedRef: ExpandedRef,
   rej?: ZeroDiag["rejected"],
 ): Candidate | null | "unrelated" {
   // 진짜 checkbox·radio: 보이면 그 칸, 숨겼으면 대신 보여 주는 label을 누른다(그 label은 누르면 이 칸이 작동한다).
@@ -487,7 +518,7 @@ function safeCandidate(
   let relation: Relation | null = null;
   if (isChoice(el)) {
     expandedRef.list ??= expandedTriggers();
-    relation = choiceRelation(CLICK_KIND, el, expandedRef.list);
+    relation = choiceRelation(CLICK_KIND, el, expandedRef.list, expandedRef.why);
     if (!relation) return "unrelated";
   }
   return { el, text, href, tag, role, region: detectRegion(el), inViewport: rectInViewport(el), relation };
@@ -527,6 +558,7 @@ export function findClickablesCounted(args: FindClickablesArgs): FindClickablesR
       longHrefs: r.longHrefs,
       ...(r.zeroDiag ? { zeroDiag: r.zeroDiag } : {}),
       ...(r.screenText ? { screenText: r.screenText } : {}),
+      ...(r.unrelatedDiag ? { unrelatedDiag: r.unrelatedDiag } : {}),
     };
   });
 }
@@ -538,6 +570,7 @@ function collectClickables(args: FindClickablesArgs, within?: Element): {
   longHrefs: number;
   zeroDiag?: ZeroDiag;
   screenText?: number;
+  unrelatedDiag?: UnrelatedDiag;
 } {
   const limit = Math.min(args.limit ?? 50, 200);
   // within을 넘겼는데 요소가 아니면(잘못된 값) 범위를 넓히지 않고 아무것도 돌려주지 않는다.
@@ -550,7 +583,7 @@ function collectClickables(args: FindClickablesArgs, within?: Element): {
   const full = () => !ranked && found.length >= limit;
   // 같은 요소만 합친다(한 문서의 querySelectorAll은 요소를 한 번씩만 준다). 글자·주소가 같아도 다른 요소면 따로
   // 돌려준다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼). 모델은 묶음 문맥(context)으로 구분한다.
-  const expandedRef: { list: HTMLElement[] | null } = { list: null };
+  const expandedRef = newExpandedRef();
   // 이미 돌려준 요소(숨긴 checkbox의 label이 다른 선택자로도 잡히는 경우 등 — 한 번만).
   const seen = new Set<HTMLElement>();
   // 찾기 조건만 빼면 돌려줄 수 있었던 요소 수(조건에 맞은 것 포함).
@@ -652,7 +685,15 @@ function collectClickables(args: FindClickablesArgs, within?: Element): {
       ...(byScreen.has(c.el) ? { matchedBy: "screenText" as const } : {}),
     };
   });
-  return { items, unfiltered, unrelated, longHrefs, ...(zeroDiag ? { zeroDiag } : {}), ...(screenText ? { screenText } : {}) };
+  return {
+    items,
+    unfiltered,
+    unrelated,
+    longHrefs,
+    ...(zeroDiag ? { zeroDiag } : {}),
+    ...(screenText ? { screenText } : {}),
+    ...unrelatedDiagOf(expandedRef, unrelated),
+  };
 }
 
 // 0개 진단에서 다시 볼 후보 상한과 글자 노드 순회 상한(#242).
@@ -845,7 +886,7 @@ function itemInViewport(item: Element, cands: Candidate[]): boolean {
 // 항목 모드의 (i) 후보 수집 ~ (iii) 항목 글자·필터·점수. 대상 id는 발급하지 않는다(collectItems가 남은 항목에만).
 function itemCandidates(args: FindClickablesArgs) {
   const terms = queryTerms(args.query);
-  const expandedRef: { list: HTMLElement[] | null } = { list: null };
+  const expandedRef = newExpandedRef();
   const seen = new Set<HTMLElement>();
   const cands: Candidate[] = [];
   let scanLimited = false;
@@ -918,12 +959,12 @@ function itemCandidates(args: FindClickablesArgs) {
     return b.score > 0;
   });
   if (terms.length) kept.sort((a, b) => b.score - a.score || a.order - b.order);
-  return { terms, cands, unrelated, scanLimited, outside, unfiltered, kept };
+  return { terms, cands, unrelated, scanLimited, outside, unfiltered, kept, diag: unrelatedDiagOf(expandedRef, unrelated) };
 }
 
 function collectItems(args: FindClickablesArgs): FindClickablesResponse {
   const limit = Math.min(args.limit ?? 20, 60);
-  const { terms, cands, unrelated, scanLimited, outside, unfiltered, kept } = itemCandidates(args);
+  const { terms, cands, unrelated, scanLimited, outside, unfiltered, kept, diag } = itemCandidates(args);
   // (iv) 제한·예산. (v) 남은 항목의 대상만 id 발급(선택지 관계 전달, 항목 결합).
   const items: ListItem[] = [];
   let used = 0;
@@ -984,6 +1025,7 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
     omittedItems: kept.length - items.length,
     scanLimited,
     unrelatedChoices: unrelated,
+    ...diag,
     longHrefs,
     ...(regionless && args.region ? { region: args.region, ...regionless } : {}),
   };
