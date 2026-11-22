@@ -409,6 +409,32 @@ export default [
     },
   },
   {
+    name: "6c10: 칸을 감싼 label 안의 입력 칸 트리거도 화면상 감싼 결제 양식의 위험을 합쳐 카드로 묻는다",
+    pages: P("/g14", { portal: true, formMode: "payment", script: `const lb = document.createElement("label"); inp.before(lb); lb.append(inp);` }),
+    async run(h) {
+      const { r, seen } = await pick(h, "/g14", "Emails");
+      expect(seen.length === 1 && r.out === "Emails", `결제 양식이라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
+    },
+  },
+  {
+    name: "부정 10t·10u: 여러 겹 바깥에서 목록을 품은 펼친 트리거, 또는 가리킨 래퍼 안의 닫힌 shadow root가 있으면 activedescendant로 묶지 않는다",
+    pages: {
+      "/x15": `<title>깊음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=d0 aria-label=Include><p id=out></p></main>
+<div role=combobox aria-expanded=true aria-haspopup=listbox aria-label="휴지통으로"><div><div><div><div><div><div><div><div><div role=listbox><div role=option id=d0>D0</div><div role=option id=d1>D1</div></div></div></div></div></div></div></div></div></div></div>`,
+      "/x16": `<title>닫힌</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=pnl aria-activedescendant=e0 aria-label=Include>
+<div id=pnl><div id=host></div><div role=listbox><div role=option id=e0>E0</div><div role=option id=e1>E1</div></div></div>
+<button aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul><p id=out></p></main>
+<script>document.getElementById("host").attachShadow({ mode: "closed" }).innerHTML = '<button aria-haspopup=listbox aria-expanded=true>작업</button>';</script>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      let r = await h.turn([findC, { text: "끝" }], { path: "/x15" });
+      excluded(r, ["D0", "D1"]);
+      r = await h.turn([findC, { text: "끝" }], { path: "/x16" });
+      excluded(r, ["E0", "E1"]);
+    },
+  },
+  {
     name: "부정 9h: visibility:collapse 트리거는 activedescendant 연결에 쓰지 않고, 카드 동안 collapse로 바뀌어도 누르지 않는다",
     pages: {
       ...P("/vc", { controls: "dangling", active: 0, listId: false, script: `inp.style.visibility = "collapse";` }),

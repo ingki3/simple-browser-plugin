@@ -939,11 +939,17 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     // 충돌은 실제로 펼친 트리거로만 본다(접힌 보조 버튼 하나로 정상 선택지를 빼지 않게). a 자신의 aria-controls·owns가 이 목록을
     // 담은 요소를 가리키면(명시적 래퍼 연결과 활성 항목이 일치) 묶음 추정보다 강한 근거라 묶음 검사를 하지 않는다(다른 트리거의 참조는 claims가 본다).
     // 단 그 래퍼 안에 다른 펼친 트리거가 있으면(공통 패널 — 목록 옆의 삭제 버튼) 묶음 검사를 그대로 한다.
+    // 목록(과 래퍼)을 감싼 다른 펼친 트리거(목록을 품은 '휴지통으로' 콤보박스 등)가 있으면 묶음 깊이와 관계없이 충돌이다.
+    if (expanded.some((t) => t !== a && composedWithinNode(t, popup))) return fail("many");
+    // 래퍼 안을 모두 볼 수 있을 때만(닫힌 shadow root 등 — 그 안의 펼친 트리거를 모을 수 없다) 묶음 검사를 건너뛴다.
     const ownsWrapper = ariaRefs(a).some(
-      ({ ref }) => ref !== popup && composedWithinNode(ref, popup) && !expanded.some((t) => t !== a && composedWithinNode(ref, t)),
-    ) &&
-      // 목록(과 래퍼)을 감싼 다른 펼친 트리거(목록을 품은 '휴지통으로' 콤보박스 등)가 있어도 묶음 검사를 그대로 한다.
-      !expanded.some((t) => t !== a && composedWithinNode(t, popup));
+      ({ ref }) =>
+        ref !== popup &&
+        composedWithinNode(ref, popup) &&
+        !hasHiddenTree(ref) &&
+        !Array.from(ref.querySelectorAll("*")).some(hasHiddenTree) &&
+        !expanded.some((t) => t !== a && composedWithinNode(ref, t)),
+    );
     const g = ownsWrapper ? null : groupTriggersOf(popup, expanded);
     if (g === "hidden" || (g && g.some((t) => t !== a))) return fail("many");
     if (elsewhere(a) || !newPathOk(a, activeRefOf(a))) return fail("none");

@@ -324,7 +324,9 @@ function withToggleRisk(el: HTMLElement, risk: ClickRisk): ClickRisk {
 // label은 지금까지처럼 그 컨트롤의 양식만 본다(승인 예외 판정 deleteMethodExplained 등과 같은 양식을 보게 — 바꾸지 않음).
 function clickOnlyRisk(el: HTMLElement): ClickRisk {
   const base = clickRiskCore(el);
-  if (activatedControl(el) || labelControl(el)) return base;
+  // label이 다른 컨트롤을 대신 누르는 경우만 뺀다(칸을 감싼 label 안의 칸 자신은 labelControl이 자기를 돌려준다).
+  const viaLabel = labelControl(el);
+  if (activatedControl(el) || (viaLabel && viaLabel !== el)) return base;
   const own = ownForm(el);
   const enclosing = closestAcross(el, "form") as HTMLFormElement | null;
   if (!own || !enclosing || enclosing === own) return base;
