@@ -297,11 +297,37 @@ export default [
   },
   {
     name: "부정: form 속성으로 다른 양식에 딸린 트리거의 activedescendant는 쓰지 않는다(연결 없는 포털 목록이라 기존처럼 뺀다)",
-    pages: P("/k3", { controls: "dangling", active: 0, listId: false, script: `inp.setAttribute("form", "f");` }),
+    pages: {
+      ...P("/k3", { controls: "dangling", active: 0, listId: false, script: `document.body.insertAdjacentHTML("beforeend", "<form id=g></form>"); inp.setAttribute("form", "g");` }),
+      ...P("/k4", { controls: "dangling", active: 0, listId: false, script: `inp.setAttribute("form", "f");` }),
+    },
     async run(h) {
       await h.settings({ runMode: "auto" });
       const r = await h.turn([findC, { text: "끝" }], { path: "/k3" });
       excluded(r, NAMES, 10);
+      // 대조: 감싼 양식과 같은 양식을 form 속성으로 명시하면 그대로 연결한다.
+      const r2 = await h.turn([findC, { text: "끝" }], { path: "/k4" });
+      expect(options(r2).filter((o) => o.role === "option").length === 10, `같은 양식이면 연결(${JSON.stringify(options(r2)).slice(0, 200)})`);
+    },
+  },
+
+  {
+    name: "부정: aria-controls 없는 대화상자 버튼의 남은 activedescendant도 무시하고 안쪽 메뉴 버튼(카드)에 묶는다 · 활성 항목 둘이면 '연결 여럿'",
+    pages: {
+      "/k5": `<title>D</title><main>
+<button aria-haspopup=dialog aria-expanded=true aria-activedescendant=mi>관리</button>
+<div role=dialog><button aria-haspopup=menu aria-expanded=true>삭제</button>
+<ul role=menu><li role=menuitem id=mi>선택 항목</li></ul></div><p id=out></p></main>`,
+      "/k6": `<title>둘</title><main><input role=combobox aria-expanded=true aria-activedescendant=j0 aria-label=가><input role=combobox aria-expanded=true aria-activedescendant=j0 aria-label=나><p id=out></p></main>
+<div role=listbox><div role=option id=j0>J0</div><div role=option id=j1>J1</div></div>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      let r = await h.turn([findC, { text: "끝" }], { path: "/k5" });
+      expect(optNamed(r, "선택 항목")?.listFor === "삭제", `안쪽 메뉴 버튼에 묶음(${JSON.stringify(optNamed(r, "선택 항목"))})`);
+      r = await h.turn([findC, { text: "끝" }], { path: "/k6" });
+      excluded(r, ["J0", "J1"]);
+      expect(unrelatedLine(r).includes("연결 여럿 2"), `진단 줄(${unrelatedLine(r)})`);
     },
   },
 

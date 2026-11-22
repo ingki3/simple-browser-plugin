@@ -760,7 +760,15 @@ function activeRefOf(trigger: Element): Element | null {
 // aria-activedescendant 연결(#316, 명시적 ARIA 참조): 활성 항목이 이 선택지이거나, 같은 팝업 역할 요소(listbox·menu) 안의 선택지면 연결 후보.
 // 트리거가 aria-controls·aria-owns로 풀리는 참조를 가졌으면 모두 이 목록·선택지 자체여야 한다(목록을 담은 요소·대화상자·다른 목록을 가리키면
 // 세지 않음 — 대화상자를 연 버튼의 남은 활성 항목 등). 형제 관계(역할 없는 목록의 다른 항목)만으로는 세지 않는다.
+// 목록을 여는 트리거 종류만(구조 속성): role=combobox, 또는 aria-haspopup이 listbox·menu·true. 대화상자·tree·grid를 여는 트리거의 활성 항목은 보지 않는다.
+const LIST_POPUP_VALUES = new Set(["listbox", "menu", "true"]);
+function opensList(trigger: Element): boolean {
+  if ((trigger.getAttribute("role") ?? "").trim().toLowerCase() === "combobox") return true;
+  return LIST_POPUP_VALUES.has((trigger.getAttribute("aria-haspopup") ?? "").trim().toLowerCase());
+}
+
 function activeLink(trigger: Element, popup: Element, el: HTMLElement): boolean {
+  if (!opensList(trigger)) return false;
   const ref = activeRefOf(trigger);
   if (!ref || !isChoice(ref as HTMLElement)) return false;
   const same = ref === el || (popup !== el && popupOf(ref as HTMLElement) === popup);
@@ -771,9 +779,13 @@ function activeLink(trigger: Element, popup: Element, el: HTMLElement): boolean 
 // activedescendant 연결을 쓸 수 있는지(#316): 다른 펼친 트리거가 이 목록·선택지를 가리키거나 목록을 담은 요소를 가리키지 않고(그 트리거가
 // 연 목록일 수 있다 — 기존 래퍼 판정·위험 정보를 밀어내지 않게), 트리거가 form 속성으로 다른 양식에 딸리지 않을 때(그 양식의 위험은 클릭
 // 위험 판정이 보지 않는다). 아니면 activedescendant를 무시하고 기존 판정(래퍼·unlinked·묶음 추정 — 카드)을 그대로 쓴다.
+// 같은 묶음의 다른 펼친 트리거가 그 목록을 연 것으로 보이면(기존 묶음 추정이 다른 트리거를 지목) 역시 쓰지 않는다.
 function activeLinkUsable(trigger: HTMLElement, popup: Element, el: HTMLElement, expanded: HTMLElement[]): boolean {
-  if (trigger.hasAttribute("form")) return false;
-  return !expanded.some((t) => t !== trigger && ariaRefs(t).some(({ ref }) => ref === popup || ref === el || ref.contains(popup)));
+  const owner = "form" in trigger ? ((trigger as HTMLInputElement).form ?? null) : null;
+  if (owner && owner !== trigger.closest("form")) return false;
+  if (expanded.some((t) => t !== trigger && ariaRefs(t).some(({ ref }) => ref === popup || ref === el || ref.contains(popup)))) return false;
+  const near = nearestTrigger(popup, expanded);
+  return !near || near === trigger;
 }
 
 // 선택지의 관계. 정할 수 없으면 null. why: null인 이유를 센다(진단).
@@ -819,7 +831,8 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
   if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null, "unlinked");
   const near = nearestTrigger(popup, expanded);
   if (near) return make("nearest", near, null, "group");
-  return fail("none");
+  // 활성 항목 후보가 여럿이었으면 참조 충돌로 센다(진단).
+  return fail(actives.length > 1 ? "many" : "none");
 }
 
 const NEAREST_CLIMB = 6;
