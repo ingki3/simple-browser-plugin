@@ -195,10 +195,10 @@ export function describeBlockedClick(reason: string, first?: FirstBlock | null, 
   }
   const head = `실제 입력 클릭을 도중에 막았습니다(${reason}).${facts.length ? ` ${facts.join(". ")}.` : ""}`;
   if (opts.changed && pressDelivered(first)) {
-    const at = first ? PHASE_LABEL[first.event] : undefined;
+    // 막힌 단계는 앞의 사실 문장(“… 단계에서 막음”)이 알린다. 그 단계의 입력도 가드보다 먼저 건 페이지 리스너는 받았을 수 있다.
     return (
       head +
-      ` 가드를 통과해 사이트에 전달된 입력: ${passedPress(first).join(", ")}.${at ? ` ${at}부터는 보내지 않았습니다.` : ""}` +
+      ` 가드를 통과해 사이트에 전달된 입력: ${passedPress(first).join(", ")}.` +
       " 이 클릭의 관측 구간(누르기 직전부터)에 화면 변화가 있었습니다(effect). 누를 때 바로 동작하는 위젯(목록·메뉴 열기, 항목 고르기)이면 이미 반영됐을 수 있습니다." +
       " 같은 클릭을 바로 되풀이하지 말고 find_clickables(또는 describe_page)로 지금 화면을 다시 관측하세요. 원하는 결과가 이미 있으면 다시 누르지 마세요."
     );

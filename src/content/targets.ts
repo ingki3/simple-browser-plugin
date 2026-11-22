@@ -582,8 +582,9 @@ function fullInfo(
 // - nearest: 연결이 없고 펼쳐진 트리거가 둘 이상일 때, 선택지의 팝업에서 위로 6단계 안에 트리거를 품는 첫 묶음(조상)이 트리거를
 //   정확히 하나(그것이 펼쳐짐)와 그 팝업 하나만 담고 다 볼 수 있으면(숨은 트리 없음) 그 트리거(출발·도착처럼 칸마다 목록을
 //   붙이는 자동완성, #네이버 지도). 구조로 추정한 관계라 실행 방식과 관계없이 늘 승인 카드로 묻는다(approvalDecision).
-// - #316: aria-activedescendant가 그 선택지(또는 같은 listbox·menu의 선택지)를 가리키는 펼친 트리거도 linked의 직접 연결로 센다
-//   (그 트리거가 aria-controls·owns로 다른 곳만 가리키면 세지 않음). 직접 연결 수에 함께 세므로 둘 이상이면 정하지 않는다.
+// - #316: aria-controls·owns 연결이 없을 때, aria-activedescendant가 그 선택지(또는 같은 listbox·menu의 선택지)를 가리키는 펼친 트리거가
+//   정확히 하나이고 쓸 수 있으면(activeLinkUsable) linked. 쓸 수 없으면 무시하고 아래 판정을 그대로 쓴다. controls·owns 연결이 있는데
+//   다른 트리거의 활성 항목도 이 목록을 가리키면 정하지 않는다.
 // - 그 밖(위로도 정할 수 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
 // 관계는 찾을 때·승인 카드 때·실행 직전·스크롤과 포커스 뒤에 다시 계산해 같아야 한다.
 // ---------------------------------------------------------------------------
@@ -756,16 +757,23 @@ function activeRefOf(trigger: Element): Element | null {
   return root.getElementById?.(id) ?? null;
 }
 
-// aria-activedescendant 연결(#316, 명시적 ARIA 참조): 활성 항목이 이 선택지이거나, 같은 팝업 역할 요소(listbox·menu) 안의 선택지면 연결.
-// 트리거가 aria-controls·aria-owns로 풀리는 참조를 가졌는데 그 어느 것도 이 목록(또는 선택지)이거나 이 목록을 담지 않으면 세지 않는다
-// (다른 곳을 가리키는 트리거의 남은 활성 항목으로 묶지 않게). 형제 관계(역할 없는 목록의 다른 항목)만으로는 세지 않는다.
+// aria-activedescendant 연결(#316, 명시적 ARIA 참조): 활성 항목이 이 선택지이거나, 같은 팝업 역할 요소(listbox·menu) 안의 선택지면 연결 후보.
+// 트리거가 aria-controls·aria-owns로 풀리는 참조를 가졌으면 모두 이 목록·선택지 자체여야 한다(목록을 담은 요소·대화상자·다른 목록을 가리키면
+// 세지 않음 — 대화상자를 연 버튼의 남은 활성 항목 등). 형제 관계(역할 없는 목록의 다른 항목)만으로는 세지 않는다.
 function activeLink(trigger: Element, popup: Element, el: HTMLElement): boolean {
   const ref = activeRefOf(trigger);
   if (!ref || !isChoice(ref as HTMLElement)) return false;
   const same = ref === el || (popup !== el && popupOf(ref as HTMLElement) === popup);
   if (!same) return false;
-  const refs = ariaRefs(trigger);
-  return !refs.length || refs.some(({ ref: r }) => r === popup || r === el || r.contains(popup));
+  return ariaRefs(trigger).every(({ ref: r }) => r === popup || r === el);
+}
+
+// activedescendant 연결을 쓸 수 있는지(#316): 다른 펼친 트리거가 이 목록·선택지를 가리키거나 목록을 담은 요소를 가리키지 않고(그 트리거가
+// 연 목록일 수 있다 — 기존 래퍼 판정·위험 정보를 밀어내지 않게), 트리거가 form 속성으로 다른 양식에 딸리지 않을 때(그 양식의 위험은 클릭
+// 위험 판정이 보지 않는다). 아니면 activedescendant를 무시하고 기존 판정(래퍼·unlinked·묶음 추정 — 카드)을 그대로 쓴다.
+function activeLinkUsable(trigger: HTMLElement, popup: Element, el: HTMLElement, expanded: HTMLElement[]): boolean {
+  if (trigger.hasAttribute("form")) return false;
+  return !expanded.some((t) => t !== trigger && ariaRefs(t).some(({ ref }) => ref === popup || ref === el || ref.contains(popup)));
 }
 
 // 선택지의 관계. 정할 수 없으면 null. why: null인 이유를 센다(진단).
@@ -779,12 +787,13 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     if (why) why[k] += 1;
     return null;
   };
-  // 명시적 연결: aria-controls·aria-owns가 이 목록·선택지를 가리키거나, aria-activedescendant가 이 선택지(같은 목록의 선택지)를 가리킴.
-  // 트리거마다 한 번(controls·owns가 먼저).
-  const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" | "activedescendant" }> = [];
+  // 명시적 연결: aria-controls·aria-owns가 이 목록·선택지를 가리킴(기존). aria-activedescendant 후보는 따로 모은다(#316).
+  const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
+  const actives: HTMLElement[] = [];
   for (const t of expanded) {
-    const via = linkVia(t, [popup, el]) ?? (activeLink(t, popup, el) ? "activedescendant" : null);
+    const via = linkVia(t, [popup, el]);
     if (via) linked.push({ trigger: t, via });
+    else if (activeLink(t, popup, el)) actives.push(t);
   }
   const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"], basis: RelationBasis): Relation => ({
     mode,
@@ -795,8 +804,16 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     nested: trigger ? nestedTrigger(trigger) : false,
     popup: new WeakRef(popup),
   });
-  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via, linked[0].via);
+  if (linked.length === 1) {
+    // 다른 트리거의 활성 항목도 이 목록을 가리키면 어느 위젯의 목록인지 충돌(좁히기만).
+    if (actives.length) return fail("many");
+    return make("linked", linked[0].trigger, linked[0].via, linked[0].via);
+  }
   if (linked.length > 1) return fail("many");
+  // activedescendant 연결은 후보가 하나이고 쓸 수 있을 때만. 아니면 무시하고 아래 기존 판정을 그대로 쓴다.
+  if (actives.length === 1 && activeLinkUsable(actives[0], popup, el, expanded)) {
+    return make("linked", actives[0], "activedescendant", "activedescendant");
+  }
   const wrapped = wrapperLink(expanded, popup);
   if (wrapped) return make("linked", wrapped, "controls", "wrapper");
   if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null, "unlinked");

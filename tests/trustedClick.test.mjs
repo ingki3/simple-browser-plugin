@@ -137,7 +137,7 @@ test("describeBlockedClick changed: 누르기 전달 + 관측 구간 변화면 �
   const b = fb({ event: "pointerup", seenBefore: ["pointerdown", "mousedown"], targetConnected: true, targetShown: true });
   const t = describeBlockedClick("글자가 'Show options' → ''", b, { changed: true });
   assert.match(t, /^실제 입력 클릭을 도중에 막았습니다\(글자가 'Show options' → ''\)\. 떼기\(pointerup\) 단계에서 막음\./);
-  assert.match(t, /전달된 입력: pointerdown, mousedown\. 떼기\(pointerup\)부터는 보내지 않았습니다/);
+  assert.match(t, /전달된 입력: pointerdown, mousedown\. 이 클릭의 관측 구간/);
   assert.match(t, /관측 구간\(누르기 직전부터\)에 화면 변화가 있었습니다/);
   assert.match(t, /find_clickables/);
   assert.match(t, /다시 누르지 마세요/);
@@ -145,17 +145,17 @@ test("describeBlockedClick changed: 누르기 전달 + 관측 구간 변화면 �
   assert.doesNotMatch(describeBlockedClick("확인 시간이 지남", b, { changed: true }), /대상이 바뀌/);
   // a1형: mousedown은 전달로 말하지 않는다.
   const a1 = describeBlockedClick("다른 요소에 닿음", fb(), { changed: true });
-  assert.match(a1, /전달된 입력: pointerdown\. 누르기\(mousedown\)부터는/);
+  assert.match(a1, /누르기\(mousedown\) 단계에서 막음.*전달된 입력: pointerdown\. /);
   assert.match(a1, /문서에서 떨어졌습니다/);
   // click 차단: 떼기까지 전달.
   assert.match(
     describeBlockedClick("r", fb({ event: "click", seenBefore: ["pointerdown", "mousedown", "pointerup", "mouseup"], targetConnected: true, targetShown: true }), { changed: true }),
-    /전달된 입력: pointerdown, mousedown, pointerup, mouseup\. 클릭\(click\)부터는/,
+    /전달된 입력: pointerdown, mousedown, pointerup, mouseup\. /,
   );
   // 단계 라벨이 없는 첫 차단(확인 중 오류·만료)에서도 깨지지 않는다.
   const odd = describeBlockedClick("확인 중 오류", fb({ event: "확인 중 오류", seenBefore: ["pointerdown"], targetConnected: true, targetShown: true }), { changed: true });
   assert.match(odd, /전달된 입력: pointerdown\. 이 클릭의 관측 구간/);
-  assert.doesNotMatch(odd, /undefined|부터는/);
+  assert.doesNotMatch(odd, /undefined/);
   // 변화 없음·전달 아님이면 기존 문구와 같다.
   assert.equal(describeBlockedClick("x", b, { changed: false }), describeBlockedClick("x", b));
   const a2 = fb({ event: "pointerup", seenBefore: [] });
