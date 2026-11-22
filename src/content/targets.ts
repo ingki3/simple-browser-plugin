@@ -873,6 +873,8 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     return !!r && sameListChoice(r);
   };
   // elsewhere(t): 그 트리거가 다른 목록을 명시적으로 가리킨다(aria-controls·owns가 이 목록 밖의 목록을, 또는 활성 항목이 다른 선택지를).
+  // 참조 요소별 listish 결과(한 번의 탐색 안 재사용 — 선택지마다 같은 큰 참조 영역을 다시 훑지 않게).
+  const isListish = (ref: Element) => cached(listishCache, expanded, ref, () => listish(ref));
   const elsewhere = (t: HTMLElement) => {
     for (const { ref } of ariaRefs(t)) {
       if (ref === popup) continue;
@@ -882,7 +884,7 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
       if (composedWithinNode(ref, popup)) continue;
       // 같은 목록의 선택지(그 선택지 자신이거나 가장 가까운 팝업이 이 팝업). 목록 안이라도 다른 팝업 경계(하위 메뉴) 너머는 다른 목록이다.
       if (sameListChoice(ref)) continue;
-      if (listish(ref)) return true;
+      if (isListish(ref)) return true;
     }
     const r = activeRefOf(t);
     return !!r && isChoice(r as HTMLElement) && !sameListChoice(r);
@@ -939,7 +941,9 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     // 단 그 래퍼 안에 다른 펼친 트리거가 있으면(공통 패널 — 목록 옆의 삭제 버튼) 묶음 검사를 그대로 한다.
     const ownsWrapper = ariaRefs(a).some(
       ({ ref }) => ref !== popup && composedWithinNode(ref, popup) && !expanded.some((t) => t !== a && composedWithinNode(ref, t)),
-    );
+    ) &&
+      // 목록(과 래퍼)을 감싼 다른 펼친 트리거(목록을 품은 '휴지통으로' 콤보박스 등)가 있어도 묶음 검사를 그대로 한다.
+      !expanded.some((t) => t !== a && composedWithinNode(t, popup));
     const g = ownsWrapper ? null : groupTriggersOf(popup, expanded);
     if (g === "hidden" || (g && g.some((t) => t !== a))) return fail("many");
     if (elsewhere(a) || !newPathOk(a, activeRefOf(a))) return fail("none");
@@ -983,6 +987,7 @@ const NEAREST_CLIMB = 6;
 type NearestResult = { trigger: HTMLElement; group: Element } | null;
 const nearestCache = new WeakMap<HTMLElement[], Map<Element, NearestResult>>();
 const groupCache = new WeakMap<HTMLElement[], Map<Element, Element[] | "hidden" | null>>();
+const listishCache = new WeakMap<HTMLElement[], Map<Element, boolean>>();
 
 function cached<T>(store: WeakMap<HTMLElement[], Map<Element, T>>, expanded: HTMLElement[], popup: Element, make: () => T): T {
   let m = store.get(expanded);

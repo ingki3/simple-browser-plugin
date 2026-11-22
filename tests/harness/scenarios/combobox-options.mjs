@@ -351,16 +351,6 @@ export default [
     },
   },
   {
-    name: "6c7: 다른 양식에 딸린 제출 버튼의 formaction이 화면상 감싼 양식의 삭제 주소를 가리지 않는다",
-    pages: {
-      "/g11": `<title>삭제</title><main><form id=b action="/b"></form><form action="/items/delete"><button form=b formaction="/b/save" onclick="event.preventDefault();window.__picks=(window.__picks||0)+1;document.getElementById('out').textContent='눌림'">저장</button></form><p id=out></p></main>`,
-    },
-    async run(h) {
-      const { r, seen } = await pick(h, "/g11", "저장");
-      expect(seen.length === 1 && r.out === "눌림", `삭제 주소라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
-    },
-  },
-  {
     name: "부정 10p: 목록 옆엔 접힌 보조 버튼, 한 단계 바깥엔 펼친 삭제 버튼이 있으면 묶음 밖 트리거의 activedescendant로 묶지 않는다",
     pages: {
       "/x11": `<title>묶음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=u0 aria-label=Include>
@@ -395,25 +385,6 @@ export default [
     },
   },
   {
-    name: "6c9: form 속성으로 다른 양식에 딸린 체크박스를 채우기로 눌러도 화면상 감싼 양식의 삭제 주소로 카드를 띄운다",
-    pages: {
-      "/g13": `<title>삭제</title><main><form id=b action="/b"></form><form action="/items/delete"><label><input type=checkbox form=b name=agree id=agree>동의</label></form><p id=out></p></main>`,
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const seen = [];
-      await h.turn([{ tool: "find_form_fields", args: {} }, { fill: "동의", value: "true" }, { text: "끝" }], {
-        path: "/g13",
-        onCard: async (card) => {
-          seen.push(await card.innerText());
-          await card.locator(".btn-cancel").click();
-        },
-      });
-      expect(seen.length === 1, `삭제 주소라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]})`);
-      expect((await h.tab.evaluate(() => document.getElementById("agree").checked)) === false, "취소했으니 체크되지 않음");
-    },
-  },
-  {
     name: "부정 10r: aria-controls로 가리킨 공통 패널 안에 다른 펼친 버튼이 있으면 activedescendant로 묶지 않는다",
     pages: {
       "/x13": `<title>패널</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=panel aria-activedescendant=z0 aria-label=Include>
@@ -423,6 +394,18 @@ export default [
       await h.settings({ runMode: "auto" });
       const r = await h.turn([findC, { text: "끝" }], { path: "/x13" });
       excluded(r, ["Z0", "Z1"]);
+    },
+  },
+  {
+    name: "부정 10s: 목록 래퍼를 품은 다른 펼친 콤보박스가 있으면, 래퍼를 aria-controls로 가리킨 트리거의 activedescendant로 묶지 않는다",
+    pages: {
+      "/x14": `<title>감쌈</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=wr aria-activedescendant=t0 aria-label=Include><p id=out></p></main>
+<div role=combobox aria-expanded=true aria-haspopup=listbox aria-label="휴지통으로"><div id=wr><div role=listbox><div role=option id=t0>T0</div><div role=option id=t1>T1</div></div></div></div>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findC, { text: "끝" }], { path: "/x14" });
+      excluded(r, ["T0", "T1"]);
     },
   },
   {

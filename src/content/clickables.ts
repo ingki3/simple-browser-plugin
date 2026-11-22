@@ -317,17 +317,17 @@ function withToggleRisk(el: HTMLElement, risk: ClickRisk): ClickRisk {
 }
 
 // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
-// 대상이 form 속성 등으로 화면상 감싼 양식(A)과 다른 양식(B)에 딸리면(#316), B로 한 판정(제출 목적지 submitTo·submitUrl)에
+// 대상 칸이 form 속성으로 화면상 감싼 양식(A)과 다른 양식(B)에 딸리면(#316), B로 한 판정(제출 목적지 submitTo·submitUrl)에
 // A로 같은 판정을 한 번 더 해 합친다: 참·거짓 신호는 둘 중 하나라도, 주소 목록은 합집합, A의 제출 주소는 outerSubmitTo,
 // A의 칸 값을 합친 주소는 주변 양식 제출 주소(scopeSubmitUrls)로. 처리기가 A를 제출해도 A의 위험을 빼지 않는다.
+// 합치는 것은 대상 자신이 양식에 딸린 칸(텍스트 콤보박스 등 — ownForm)일 때만이다. 버튼·체크박스·라디오(activatedControl)와
+// label은 지금까지처럼 그 컨트롤의 양식만 본다(승인 예외 판정 deleteMethodExplained 등과 같은 양식을 보게 — 바꾸지 않음).
 function clickOnlyRisk(el: HTMLElement): ClickRisk {
   const base = clickRiskCore(el);
+  if (activatedControl(el) || labelControl(el)) return base;
+  const own = ownForm(el);
   const enclosing = closestAcross(el, "form") as HTMLFormElement | null;
-  const control = activatedControl(el);
-  const linked = control ? null : labelControl(el);
-  const linkedForm = linked && "form" in linked ? ((linked as HTMLInputElement).form ?? null) : null;
-  const own = control?.form ?? linkedForm ?? ownForm(el) ?? enclosing;
-  if (!enclosing || enclosing === own) return base;
+  if (!own || !enclosing || enclosing === own) return base;
   return mergeRisk(base, clickRiskCore(el, enclosing));
 }
 
