@@ -936,7 +936,10 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     // 목록과 같은 묶음(가장 가까운, 트리거를 품은 조상)에 a 말고 다른 트리거가 있거나 그 묶음을 다 볼 수 없으면 소유가 겹칠 수 있다.
     // 충돌은 실제로 펼친 트리거로만 본다(접힌 보조 버튼 하나로 정상 선택지를 빼지 않게). a 자신의 aria-controls·owns가 이 목록을
     // 담은 요소를 가리키면(명시적 래퍼 연결과 활성 항목이 일치) 묶음 추정보다 강한 근거라 묶음 검사를 하지 않는다(다른 트리거의 참조는 claims가 본다).
-    const ownsWrapper = ariaRefs(a).some(({ ref }) => ref !== popup && composedWithinNode(ref, popup));
+    // 단 그 래퍼 안에 다른 펼친 트리거가 있으면(공통 패널 — 목록 옆의 삭제 버튼) 묶음 검사를 그대로 한다.
+    const ownsWrapper = ariaRefs(a).some(
+      ({ ref }) => ref !== popup && composedWithinNode(ref, popup) && !expanded.some((t) => t !== a && composedWithinNode(ref, t)),
+    );
     const g = ownsWrapper ? null : groupTriggersOf(popup, expanded);
     if (g === "hidden" || (g && g.some((t) => t !== a))) return fail("many");
     if (elsewhere(a) || !newPathOk(a, activeRefOf(a))) return fail("none");

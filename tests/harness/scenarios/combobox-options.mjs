@@ -46,9 +46,10 @@ function page(o = {}) {
     deleteOuter: `<form id=b action="/b"></form><form id=dl action="/x"><input type=hidden name=_method value=DELETE>`,
     deleteAction: `<form id=b action="/b"></form><form id=dl action="/items/delete">`,
     redirectOuter: `<form id=b action="/b"></form><form id=dl action="/x"><input type=hidden name=next value="https://other.example/landing">`,
+    altSubmitOuter: `<form id=b action="/b"></form><form id=dl action="/x"><button type=submit formaction="https://other.example/collect">보내기</button>`,
   }[formMode];
-  const formClose = { "": "</form>", outside: "</div>", outsideNoAttr: "</div>", payment: "</form>", deleteOuter: "</form>", deleteAction: "</form>", redirectOuter: "</form>" }[formMode];
-  const formAttr = formMode === "outside" ? "form=f" : ["payment", "deleteOuter", "deleteAction", "redirectOuter"].includes(formMode) ? "form=b" : "";
+  const formClose = { "": "</form>", outside: "</div>", outsideNoAttr: "</div>", payment: "</form>", deleteOuter: "</form>", deleteAction: "</form>", redirectOuter: "</form>", altSubmitOuter: "</form>" }[formMode];
+  const formAttr = formMode === "outside" ? "form=f" : ["payment", "deleteOuter", "deleteAction", "redirectOuter", "altSubmitOuter"].includes(formMode) ? "form=b" : "";
   const choiceRole = menuRole ? "menuitem" : "option";
   const popupRole = menuRole ? "menu" : "listbox";
   return `<title>규칙</title><main>
@@ -383,6 +384,45 @@ export default [
     async run(h) {
       const { r, seen } = await pick(h, "/x12", "V1");
       expect(optNamed(r, "V0")?.listFor === "Include" && seen.length === 0 && r.out === "V1", `연결(cards=${seen.length}, out='${r.out}', ${JSON.stringify(options(r)).slice(0, 200)})`);
+    },
+  },
+  {
+    name: "6c8: 화면상 감싼 양식의 다른 제출 버튼이 다른 사이트 formaction을 가지면 aria-controls 연결 선택지도 카드로 묻는다",
+    pages: P("/g12", { portal: true, formMode: "altSubmitOuter" }),
+    async run(h) {
+      const { r, seen } = await pick(h, "/g12", "Emails");
+      expect(seen.length === 1 && r.out === "Emails", `다른 사이트 제출이라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
+    },
+  },
+  {
+    name: "6c9: form 속성으로 다른 양식에 딸린 체크박스를 채우기로 눌러도 화면상 감싼 양식의 삭제 주소로 카드를 띄운다",
+    pages: {
+      "/g13": `<title>삭제</title><main><form id=b action="/b"></form><form action="/items/delete"><label><input type=checkbox form=b name=agree id=agree>동의</label></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const seen = [];
+      await h.turn([{ tool: "find_form_fields", args: {} }, { fill: "동의", value: "true" }, { text: "끝" }], {
+        path: "/g13",
+        onCard: async (card) => {
+          seen.push(await card.innerText());
+          await card.locator(".btn-cancel").click();
+        },
+      });
+      expect(seen.length === 1, `삭제 주소라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]})`);
+      expect((await h.tab.evaluate(() => document.getElementById("agree").checked)) === false, "취소했으니 체크되지 않음");
+    },
+  },
+  {
+    name: "부정 10r: aria-controls로 가리킨 공통 패널 안에 다른 펼친 버튼이 있으면 activedescendant로 묶지 않는다",
+    pages: {
+      "/x13": `<title>패널</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=panel aria-activedescendant=z0 aria-label=Include>
+<div id=panel><button type=button aria-haspopup=listbox aria-expanded=true>항목 삭제</button><div><div role=listbox><div role=option id=z0>Z0</div><div role=option id=z1>Z1</div></div></div></div><p id=out></p></main>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findC, { text: "끝" }], { path: "/x13" });
+      excluded(r, ["Z0", "Z1"]);
     },
   },
   {

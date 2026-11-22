@@ -317,22 +317,48 @@ function withToggleRisk(el: HTMLElement, risk: ClickRisk): ClickRisk {
 }
 
 // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
+// 대상이 form 속성 등으로 화면상 감싼 양식(A)과 다른 양식(B)에 딸리면(#316), B로 한 판정(제출 목적지 submitTo·submitUrl)에
+// A로 같은 판정을 한 번 더 해 합친다: 참·거짓 신호는 둘 중 하나라도, 주소 목록은 합집합, A의 제출 주소는 outerSubmitTo,
+// A의 칸 값을 합친 주소는 주변 양식 제출 주소(scopeSubmitUrls)로. 처리기가 A를 제출해도 A의 위험을 빼지 않는다.
 function clickOnlyRisk(el: HTMLElement): ClickRisk {
+  const base = clickRiskCore(el);
+  const enclosing = closestAcross(el, "form") as HTMLFormElement | null;
+  const control = activatedControl(el);
+  const linked = control ? null : labelControl(el);
+  const linkedForm = linked && "form" in linked ? ((linked as HTMLInputElement).form ?? null) : null;
+  const own = control?.form ?? linkedForm ?? ownForm(el) ?? enclosing;
+  if (!enclosing || enclosing === own) return base;
+  return mergeRisk(base, clickRiskCore(el, enclosing));
+}
+
+const RISK_FLAGS = ["submitsPersonal", "paymentContext", "insideControl", "download", "deleteMethod", "deleteParam", "opaqueRequest"] as const;
+const RISK_LISTS = ["scopeSubmitUrls", "scopeFormActions", "aroundFormActions", "choiceUrls", "pingUrls", "requestUrls", "deleteChoices"] as const;
+
+function mergeRisk(base: ClickRisk, alt: ClickRisk): ClickRisk {
+  const out: Record<string, unknown> = { ...base };
+  for (const k of RISK_FLAGS) if ((alt as Record<string, unknown>)[k]) out[k] = true;
+  const add = (k: string, extra: string[]) => {
+    const now = ((out[k] as string[] | undefined) ?? []).slice();
+    for (const u of extra) if (u && !now.includes(u)) now.push(u);
+    if (now.length) out[k] = now;
+  };
+  for (const k of RISK_LISTS) add(k, ((alt as Record<string, unknown>)[k] as string[] | undefined) ?? []);
+  add("scopeSubmitUrls", alt.submitUrl ? [alt.submitUrl] : []);
+  if (alt.submitTo && alt.submitTo !== base.submitTo) out.outerSubmitTo = alt.submitTo;
+  return out as ClickRisk;
+}
+
+// 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
+function clickRiskCore(el: HTMLElement, forced?: HTMLFormElement): ClickRisk {
   const control = activatedControl(el);
   // label이 연결한 컨트롤(checkbox·radio 포함)도 누르면 작동하므로 그 양식과, 작동 뒤 실릴 값을 본다.
   const linked = control ? null : labelControl(el);
   const linkedForm = linked && "form" in linked ? ((linked as HTMLInputElement).form ?? null) : null;
-  const enclosingForm = closestAcross(el, "form") as HTMLFormElement | null;
-  // 제출 목적지는 실제로 딸린 양식(form 속성 포함). 위험(결제·개인정보) 검사는 화면상 감싼 양식도 함께 본다(#316).
-  const form = control?.form ?? linkedForm ?? ownForm(el) ?? enclosingForm;
-  const outerForm = enclosingForm && enclosingForm !== form ? enclosingForm : null;
-  const submitTo = formDestination(control ?? el, form);
-  // 화면상 감싼 양식(outerForm)의 제출 주소도 삭제·결제·사이트 판정에 싣는다(#316).
-  // 감싼 양식 자신의 action이다(누른 버튼의 formaction은 그 버튼이 딸린 양식 B의 것이라 쓰지 않는다 — 양식 요소는 제출자가 아니다).
-  const outerSubmitTo = outerForm ? formDestination(outerForm, outerForm) : "";
-  // 감싼 양식의 지금 칸 값을 합친 제출 주소(값에 실린 바깥 주소 — 리다이렉트 매개변수 판정). 주변 양식 제출 주소(scopeSubmitUrls)로 싣는다.
-  const outerSubmitUrl = outerForm && outerSubmitTo ? formSubmissionUrl(outerForm, outerSubmitTo, null) : "";
-  const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
+  // 실제로 딸린 양식(form 속성 포함). forced: 화면상 감싼 양식으로 같은 판정을 한 번 더 할 때(#316 — clickOnlyRisk가 합친다).
+  const form = forced ?? control?.form ?? linkedForm ?? ownForm(el) ?? (closestAcross(el, "form") as HTMLFormElement | null);
+  // forced면 그 양식 자신의 action이다(누른 버튼의 formaction은 그 버튼이 딸린 다른 양식의 것 — 양식 요소는 제출자가 아니다).
+  const submitTo = forced ? formDestination(forced, forced) : formDestination(control ?? el, form);
+  const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, forced ? null : (control ?? linked)) : "";
   // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
   const ancestorHref = enclosingLinkHref(el);
   // 대상이 클릭 이벤트 경로의 다른 컨트롤(버튼·버튼 역할·summary·label·인라인 클릭 처리기) 안에 있는지.
@@ -380,7 +406,6 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
     // 작동할 컨트롤(제출 버튼, 또는 label이 연결한 checkbox·radio) 자신이 실을 개인정보 값도 본다.
     submitsPersonal:
       (!!form && formHasPersonalValues(form)) ||
-      (!!outerForm && formHasPersonalValues(outerForm)) ||
       // 양식 없는 화면(대화상자의 로그인 칸 + Continue 버튼 등)은 버튼 주변 입력 칸 묶음을 본다.
       // 양식 안 버튼도 같은 대화상자·화면의 다른 양식(처리기가 requestSubmit할 수 있다)을 함께 본다.
       personalValuedInScopes(submitScopes(el)).length > 0 ||
@@ -394,7 +419,6 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
     // 결제 문구가 있으면(name="confirm_order") 결제 동작으로 본다.
     paymentContext:
       inPaymentContext(el, form) ||
-      (!!outerForm && inPaymentContext(el, outerForm)) ||
       [control, linked].some(
         (c) =>
           !!c &&
@@ -404,30 +428,21 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
           }),
       ),
     ...(submitTo ? { submitTo } : {}),
-    ...(outerSubmitTo ? { outerSubmitTo } : {}),
     ...(submitUrl ? { submitUrl } : {}),
     ...(ancestorHref ? { ancestorHref } : {}),
     ...(insideControl ? { insideControl: true } : {}),
     ...(outerText ? { outerText } : {}),
-    ...(() => {
-      const urls = outerSubmitUrl && !scopeForms.changed.includes(outerSubmitUrl) ? [...scopeForms.changed, outerSubmitUrl] : scopeForms.changed;
-      return urls.length ? { scopeSubmitUrls: urls } : {};
-    })(),
+    ...(scopeForms.changed.length ? { scopeSubmitUrls: scopeForms.changed } : {}),
     ...(scopeForms.actions.length ? { scopeFormActions: scopeForms.actions } : {}),
     ...(choiceUrls.length ? { choiceUrls } : {}),
     // 20개를 넘으면 끝까지 보지 못했다는 표시를 넣는다(늘 묻게 된다).
     ...(pingUrls.length ? { pingUrls: pingUrls.length > 20 ? [...pingUrls.slice(0, 20), "about:too-many-pings"] : pingUrls } : {}),
     ...(closestAcross(el, "a[download], area[download]") ? { download: true } : {}),
-    // 삭제·확인할 수 없는 요청 신호는 화면상 감싼 양식(outerForm — form 속성으로 다른 양식에 딸린 칸)도 함께 본다(#316).
-    ...(declaresDelete(el, [control, linked], form) || (!!outerForm && declaresDelete(el, [control, linked], outerForm)) ? { deleteMethod: true } : {}),
+    ...(declaresDelete(el, [control, linked], form) ? { deleteMethod: true } : {}),
     // 누른 제출 버튼·클릭으로 바뀌는 checkbox·radio의 name=value, 양식의 숨은 칸, htmx 요청 주소의 삭제 단서(#62).
-    ...(deleteParamOf(el, control, [control, linked], form) || (!!outerForm && deleteParamOf(el, control, [control, linked], outerForm))
-      ? { deleteParam: true }
-      : {}),
+    ...(deleteParamOf(el, control, [control, linked], form) ? { deleteParam: true } : {}),
     // 확인할 수 없는 htmx 요청(GET 아님·from: 리스너·요청 변형 속성 — #62 fail-closed).
-    ...(opaqueRequestOf(el, control, [control, linked], form) || (!!outerForm && opaqueRequestOf(el, control, [control, linked], outerForm))
-      ? { opaqueRequest: true }
-      : {}),
+    ...(opaqueRequestOf(el, control, [control, linked], form) ? { opaqueRequest: true } : {}),
     // 누르면 일으킬 수 있는 htmx GET 요청의 목적지(hx-get hx-trigger="click" 등 — 승인 판정이 목적지로 본다).
     ...(() => {
       const requestUrls = requestUrlsOf(el, control, [control, linked], form);

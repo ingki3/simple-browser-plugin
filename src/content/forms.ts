@@ -1133,6 +1133,8 @@ function toggleClickRisk(el: HTMLElement, risk: FieldRisk): FieldRisk {
     paymentContext: !!risk.paymentContext || !!click.paymentContext,
     ...(outerText ? { outerText } : {}),
     ...(click.ancestorHref ? { ancestorHref: click.ancestorHref } : {}),
+    // 화면상 감싼 양식의 제출 주소(#316 — 칸이 form 속성으로 다른 양식에 딸릴 때). 클릭 판정과 같게 삭제·사이트 판정에 쓴다.
+    ...(click.outerSubmitTo ? { outerSubmitTo: click.outerSubmitTo } : {}),
     ...(click.insideControl ? { insideControl: true } : {}),
     ...(click.pingUrls?.length ? { pingUrls: click.pingUrls } : {}),
     ...(click.download ? { download: true } : {}),
