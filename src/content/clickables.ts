@@ -192,21 +192,11 @@ function enclosingControlTexts(el: HTMLElement): string {
 // 입력 칸이 든 조상(최대 6단계). 클릭 처리기가 그 칸들을 읽어 보내는 양식 없는 화면을 잡는다.
 function submitScopes(el: HTMLElement): FormlessScope[] {
   const control = activatedControl(el) ?? labelControl(el);
-  const enclosing = closestAcross(el, "form") as HTMLFormElement | null;
-  const form = (control as HTMLInputElement | null)?.form ?? ownForm(el) ?? enclosing;
+  const form = (control as HTMLInputElement | null)?.form ?? (closestAcross(el, "form") as HTMLFormElement | null);
   // 버튼·링크의 처리기는 자기 양식이 아니라 같은 대화상자·화면의 다른 양식을 requestSubmit할 수 있으니
   // (목적지가 있는 링크도 클릭 처리기에서 이동을 취소하고 제출할 수 있다) 바깥 범위의 양식 칸까지 본다.
   const outer = formlessScopes(el).map((s) => ({ ...s, includeFormFields: true }));
-  // form 속성으로 다른 양식에 딸린 칸이면 화면상 감싼 양식도 범위에 넣는다(#316 — 그 양식의 위험을 빼지 않게).
-  const extra = enclosing && enclosing !== form ? [{ node: enclosing, includeFormFields: true }] : [];
-  return form ? [{ node: form, includeFormFields: true }, ...extra, ...outer] : outer;
-}
-
-// 양식에 딸린 요소(input·select·textarea 등) 자신이 속한 양식(form 속성으로 바깥 양식에 연결한 것 포함, #316 — 선택지의 트리거가
-// 텍스트 콤보박스일 때 그 양식의 위험을 놓치지 않게). 그 밖은 null.
-function ownForm(el: HTMLElement): HTMLFormElement | null {
-  if (!["input", "select", "textarea", "button", "fieldset", "output", "object"].includes(el.localName)) return null;
-  return (el as HTMLInputElement).form ?? null;
+  return form ? [{ node: form, includeFormFields: true }, ...outer] : outer;
 }
 
 // 누르면 실제로 작동하는 양식 컨트롤: 자신 또는 감싼 button·제출 input(<button form=f><span>다음</span></button>).
@@ -317,50 +307,14 @@ function withToggleRisk(el: HTMLElement, risk: ClickRisk): ClickRisk {
 }
 
 // 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
-// 대상 칸이 form 속성으로 화면상 감싼 양식(A)과 다른 양식(B)에 딸리면(#316), B로 한 판정(제출 목적지 submitTo·submitUrl)에
-// A로 같은 판정을 한 번 더 해 합친다: 참·거짓 신호는 둘 중 하나라도, 주소 목록은 합집합, A의 제출 주소는 outerSubmitTo,
-// A의 칸 값을 합친 주소는 주변 양식 제출 주소(scopeSubmitUrls)로. 처리기가 A를 제출해도 A의 위험을 빼지 않는다.
-// 합치는 것은 대상 자신이 양식에 딸린 칸(텍스트 콤보박스 등 — ownForm)일 때만이다. 버튼·체크박스·라디오(activatedControl)와
-// label은 지금까지처럼 그 컨트롤의 양식만 본다(승인 예외 판정 deleteMethodExplained 등과 같은 양식을 보게 — 바꾸지 않음).
 function clickOnlyRisk(el: HTMLElement): ClickRisk {
-  const base = clickRiskCore(el);
-  // label이 다른 컨트롤을 대신 누르는 경우만 뺀다(칸을 감싼 label 안의 칸 자신은 labelControl이 자기를 돌려준다).
-  const viaLabel = labelControl(el);
-  if (activatedControl(el) || (viaLabel && viaLabel !== el)) return base;
-  const own = ownForm(el);
-  const enclosing = closestAcross(el, "form") as HTMLFormElement | null;
-  if (!own || !enclosing || enclosing === own) return base;
-  return mergeRisk(base, clickRiskCore(el, enclosing));
-}
-
-const RISK_FLAGS = ["submitsPersonal", "paymentContext", "insideControl", "download", "deleteMethod", "deleteParam", "opaqueRequest"] as const;
-const RISK_LISTS = ["scopeSubmitUrls", "scopeFormActions", "aroundFormActions", "choiceUrls", "pingUrls", "requestUrls", "deleteChoices"] as const;
-
-function mergeRisk(base: ClickRisk, alt: ClickRisk): ClickRisk {
-  const out: Record<string, unknown> = { ...base };
-  for (const k of RISK_FLAGS) if ((alt as Record<string, unknown>)[k]) out[k] = true;
-  const add = (k: string, extra: string[]) => {
-    const now = ((out[k] as string[] | undefined) ?? []).slice();
-    for (const u of extra) if (u && !now.includes(u)) now.push(u);
-    if (now.length) out[k] = now;
-  };
-  for (const k of RISK_LISTS) add(k, ((alt as Record<string, unknown>)[k] as string[] | undefined) ?? []);
-  add("scopeSubmitUrls", alt.submitUrl ? [alt.submitUrl] : []);
-  if (alt.submitTo && alt.submitTo !== base.submitTo) out.outerSubmitTo = alt.submitTo;
-  return out as ClickRisk;
-}
-
-// 개인정보·비밀번호·결제 값이 채워진 양식 안의 버튼이면 제출로 본다(제출 버튼이 아니어도 스크립트로 보내는 양식이 있어 넓게 잡는다).
-function clickRiskCore(el: HTMLElement, forced?: HTMLFormElement): ClickRisk {
   const control = activatedControl(el);
   // label이 연결한 컨트롤(checkbox·radio 포함)도 누르면 작동하므로 그 양식과, 작동 뒤 실릴 값을 본다.
   const linked = control ? null : labelControl(el);
   const linkedForm = linked && "form" in linked ? ((linked as HTMLInputElement).form ?? null) : null;
-  // 실제로 딸린 양식(form 속성 포함). forced: 화면상 감싼 양식으로 같은 판정을 한 번 더 할 때(#316 — clickOnlyRisk가 합친다).
-  const form = forced ?? control?.form ?? linkedForm ?? ownForm(el) ?? (closestAcross(el, "form") as HTMLFormElement | null);
-  // forced면 그 양식 자신의 action이다(누른 버튼의 formaction은 그 버튼이 딸린 다른 양식의 것 — 양식 요소는 제출자가 아니다).
-  const submitTo = forced ? formDestination(forced, forced) : formDestination(control ?? el, form);
-  const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, forced ? null : (control ?? linked)) : "";
+  const form = control?.form ?? linkedForm ?? (closestAcross(el, "form") as HTMLFormElement | null);
+  const submitTo = formDestination(control ?? el, form);
+  const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
   // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
   const ancestorHref = enclosingLinkHref(el);
   // 대상이 클릭 이벤트 경로의 다른 컨트롤(버튼·버튼 역할·summary·label·인라인 클릭 처리기) 안에 있는지.

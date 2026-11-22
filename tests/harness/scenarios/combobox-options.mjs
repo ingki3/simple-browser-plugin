@@ -1,8 +1,8 @@
 // 누를 때(mousedown) 목록을 여는 조합 상자(react-select 5.x 형태, #316).
 // - 열기 표시기("Show options")를 실제 입력으로 누르면 mousedown에서 목록이 열리며 표시기 이름이 바뀌어 떼기에서 막힌다 →
 //   "누르기 전달·관측 구간 변화 — 다시 관측"으로 따로 알린다(가드는 그대로 막음).
-// - 선택지와 트리거의 관계: aria-controls(5.8+ 그대로), aria-activedescendant 연결, 종류 추정(연결 없음·포털 — 늘 카드),
-//   충돌·숨김·근거 변화에서는 빼거나 누르지 않는다.
+// - 선택지와 트리거의 관계는 명시적 ARIA 연결만 넓힌다: aria-controls·aria-owns(기존), aria-activedescendant(#316).
+//   연결이 없는 포털 목록은 지금처럼 빼고 그 수를 알린다(구조 추정은 하지 않음 — 별도 이슈).
 // react-select 실제 마크업(5.10): input role=combobox aria-haspopup=true aria-autocomplete=list aria-expanded
 // aria-activedescendant(Apple 기기는 없음) aria-controls=<id>-listbox(열렸을 때만), MenuList role=listbox id=<id>-listbox,
 // Option role=option id=<id>-option-N. menuPortalTarget이면 Menu를 body 쪽에 그린다.
@@ -34,32 +34,17 @@ function page(o = {}) {
     around = ["", ""],
     extra = "",
     script = "",
-    // formMode: "" 기본(컨트롤이 양식 f 안) | "outside"(트리거·목록은 대화상자 안, 트리거가 form=f로 대화상자 밖 양식 f(메일 값 있음)에 연결)
-    //   | "outsideNoAttr"(같은 배치, form 속성 없음 — 대조) | "payment"(컨트롤이 결제 문구가 있는 양식 pay 안, 트리거는 form=b로 빈 양식 b에 연결).
-    formMode = "",
   } = o;
-  const formOpen = {
-    "": `<form id=f action="/a">`,
-    outside: `<form id=f action="/a"><input type=email name=email aria-label=메일 value="me@example.com"></form><div role=dialog>`,
-    outsideNoAttr: `<form id=f action="/a"><input type=email name=email aria-label=메일 value="me@example.com"></form><div role=dialog>`,
-    payment: `<form id=b action="/b"></form><form id=pay action="/x"><p>결제 금액 10,000원</p>`,
-    deleteOuter: `<form id=b action="/b"></form><form id=dl action="/x"><input type=hidden name=_method value=DELETE>`,
-    deleteAction: `<form id=b action="/b"></form><form id=dl action="/items/delete">`,
-    redirectOuter: `<form id=b action="/b"></form><form id=dl action="/x"><input type=hidden name=next value="https://other.example/landing">`,
-    altSubmitOuter: `<form id=b action="/b"></form><form id=dl action="/x"><button type=submit formaction="https://other.example/collect">보내기</button>`,
-  }[formMode];
-  const formClose = { "": "</form>", outside: "</div>", outsideNoAttr: "</div>", payment: "</form>", deleteOuter: "</form>", deleteAction: "</form>", redirectOuter: "</form>", altSubmitOuter: "</form>" }[formMode];
-  const formAttr = formMode === "outside" ? "form=f" : ["payment", "deleteOuter", "deleteAction", "redirectOuter", "altSubmitOuter"].includes(formMode) ? "form=b" : "";
   const choiceRole = menuRole ? "menuitem" : "option";
   const popupRole = menuRole ? "menu" : "listbox";
   return `<title>규칙</title><main>
-${formOpen}
+<form id=f action="/a">
 ${wrapCtl[0]}<div id=ctl style="display:flex;width:320px;border:1px solid #999">
-<input id=inp role=combobox aria-expanded=false aria-haspopup=true aria-autocomplete=list ${label} ${formAttr} style="flex:1;height:30px">
+<input id=inp role=combobox aria-expanded=false aria-haspopup=true aria-autocomplete=list ${label} style="flex:1;height:30px">
 <div id=ind role=button aria-label="Show options" style="width:40px;height:32px;background:#ddd"><svg width=20 height=20><path d="M0 0L10 10" stroke=black /></svg></div>
 </div>
 <div id=inl></div>${wrapCtl[1]}
-${formClose}
+</form>
 ${menu ? `<button id=mb aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul>` : ""}
 ${extra}
 <p id=out></p></main>
@@ -182,7 +167,7 @@ export default [
     },
   },
 
-  // ---- B. 관계 ----
+  // ---- B. 명시적 ARIA 연결 ----
   {
     name: "aria-controls 있음(5.8+) + 포털: 연결로 보고 자동 실행으로 카드 없이 고른다",
     pages: P("/b", {}),
@@ -192,11 +177,12 @@ export default [
     },
   },
   {
-    name: "activedescendant + 목록 role 있음(id 없음·aria-controls는 없는 id) + 포털: 10개 모두 연결, 카드 없이 고른다",
+    name: "activedescendant + 목록 role 있음(id 없음·aria-controls는 없는 id) + 포털: 같은 목록 10개 모두 연결, 카드 없이 고른다",
     pages: P("/c", { controls: "dangling", active: 0, listId: false }),
     async run(h) {
       const { r, seen } = await pick(h, "/c", "Country");
-      expect(options(r).filter((o) => o.role === "option").length === 10, `10개(${JSON.stringify(options(r)).slice(0, 200)})`);
+      const opts = options(r).filter((o) => o.role === "option");
+      expect(opts.length === 10 && opts.every((o) => o.listFor === "Include"), `10개·listFor(${JSON.stringify(opts).slice(0, 200)})`);
       expect(seen.length === 0 && r.out === "Country", `카드 없이 고름(cards=${seen.length}, out='${r.out}')`);
     },
   },
@@ -205,267 +191,67 @@ export default [
     pages: P("/d", { controls: "dangling", active: 0, listId: false }),
     async run(h) {
       const a = await pick(h, "/d", "Country", { mode: "ask", before: () => document.getElementById("inp").setAttribute("aria-activedescendant", "react-select-3-option-5") });
-      expect(a.r.out === "Country" && (await picks(h)) === 1, `같은 목록 안 이동은 누름(out='${a.r.out}')`);
+      expect(a.seen.length === 1 && a.r.out === "Country" && (await picks(h)) === 1, `같은 목록 안 이동은 누름(out='${a.r.out}')`);
       await cardThenNoClick(h, "/d", "Country", { mode: "ask", before: () => document.getElementById("inp").setAttribute("aria-activedescendant", "") });
     },
   },
   {
-    name: "연결 전혀 없음(macOS 형태) + 포털: 종류 추정으로 선택지를 보이고 자동 실행에서도 카드로 묻는다",
-    pages: P("/e", { controls: "" }),
+    name: "근거 재검사: 카드 동안 연결 근거가 aria-controls에서 activedescendant로 바뀌면 누르지 않는다",
+    pages: P("/e", { active: 0 }),
     async run(h) {
-      const { r, seen } = await pick(h, "/e", "Emails");
-      const opts = options(r).filter((o) => o.role === "option");
-      expect(opts.length === 10 && opts.every((o) => o.listFor === "Include"), `10개·listFor(${JSON.stringify(opts).slice(0, 200)})`);
-      expect(seen.length === 1 && seen[0].includes("구조로 추정") && seen[0].includes("'Include'"), `카드(${seen[0]})`);
-      expect(r.out === "Emails", `승인하면 고름(out='${r.out}')`);
-      await noSecret(h, r, seen);
+      await cardThenNoClick(h, "/e", "Emails", { mode: "ask", before: () => document.getElementById("inp").removeAttribute("aria-controls") });
     },
   },
   {
-    name: "근거 변화 6a: 묶음 추정(group) 상태에서 카드 동안 묶음에 대화상자 버튼을 더해 종류 추정(kind)으로 바뀌면 누르지 않는다",
-    pages: P("/g", { controls: "", portal: false }),
-    async run(h) {
-      const { seen } = await cardThenNoClick(h, "/g", "Emails", {
-        before: () => document.getElementById("ctl").insertAdjacentHTML("beforeend", "<button type=button aria-haspopup=dialog aria-expanded=true>설정</button>"),
-      });
-      expect(seen[0].includes("구조로 추정"), `카드(${seen[0]})`);
-    },
-  },
-  {
-    name: "근거 변화 6b: 종류 추정 카드 동안 같은 목록을 다른 부모로 옮기면 누르지 않는다",
-    pages: P("/g2", { controls: "" }),
-    async run(h) {
-      await cardThenNoClick(h, "/g2", "Emails", { before: () => document.getElementById("portal2").append(document.querySelector("#menuhost [role=listbox]")) });
-    },
-  },
-  {
-    name: "근거 변화 6c: 종류 추정 카드 동안 트리거 양식의 제출 주소가 바뀌면 누르지 않는다",
-    pages: P("/g3", { controls: "" }),
-    async run(h) {
-      await cardThenNoClick(h, "/g3", "Emails", { before: () => document.getElementById("f").setAttribute("action", "/b") });
-    },
-  },
-  {
-    name: "근거 변화 6d: 종류 추정 카드 동안 종류가 맞는 펼친 트리거가 하나 더 생기면 누르지 않는다",
-    pages: P("/g4", { controls: "" }),
-    async run(h) {
-      await cardThenNoClick(h, "/g4", "Emails", {
-        before: () => document.querySelector("main").insertAdjacentHTML("beforeend", "<button aria-haspopup=listbox aria-expanded=true>필터</button>"),
-      });
-    },
-  },
-  {
-    name: "근거 변화 6c2: 트리거 입력 칸이 form 속성으로 대화상자 밖 양식에 연결되면 그 양식의 개인정보로 카드를 띄우고(속성 없으면 카드 없음), 카드 동안 제출 주소가 바뀌면 누르지 않는다",
-    pages: {
-      ...P("/g5", { controls: "dangling", active: 0, listId: false, portal: false, formMode: "outside" }),
-      ...P("/g6", { controls: "dangling", active: 0, listId: false, portal: false, formMode: "outsideNoAttr" }),
-    },
-    async run(h) {
-      const { seen } = await cardThenNoClick(h, "/g5", "Emails", { before: () => document.getElementById("f").setAttribute("action", "/b") });
-      expect(seen[0].includes("개인정보"), `개인정보 양식이라 자동 실행에서도 카드(${seen[0]})`);
-      const c = await pick(h, "/g6", "Emails");
-      expect(c.seen.length === 0 && c.r.out === "Emails", `대조: form 속성이 없으면 카드 없이 고름(cards=${c.seen.length}, out='${c.r.out}')`);
-    },
-  },
-  {
-    name: "6c3: form 속성으로 다른 양식에 딸린 트리거라도 화면상 감싼 결제 양식의 위험을 보아 aria-controls 연결 선택지도 카드로 묻는다",
-    pages: P("/g7", { portal: true, formMode: "payment" }),
-    async run(h) {
-      const { r, seen } = await pick(h, "/g7", "Emails");
-      expect(seen.length === 1 && r.out === "Emails", `결제 양식이라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
-    },
-  },
-  {
-    name: "6c4: form 속성으로 다른 양식에 딸린 트리거라도 화면상 감싼 양식의 삭제 신호(_method=DELETE)로 aria-controls 연결 선택지를 카드로 묻는다",
-    pages: P("/g8", { portal: true, formMode: "deleteOuter" }),
-    async run(h) {
-      const { r, seen } = await pick(h, "/g8", "Emails");
-      expect(seen.length === 1 && r.out === "Emails", `삭제 신호라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
-    },
-  },
-  {
-    name: "부정 10k: 목록의 묶음에 다른 펼친 버튼과 접힌 보조 메뉴 버튼이 함께 있으면(묶음 추정 불가) 묶음 밖 트리거의 activedescendant로 묶지 않는다",
-    pages: {
-      "/x6": `<title>묶음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=k0 aria-label=Include>
-<form action="/pay"><p>결제 금액</p><div id=grp><button type=button aria-haspopup=listbox aria-expanded=true>B열기</button><button type=button aria-haspopup=menu aria-expanded=false>더보기</button></div></form>
-<div id=grp2></div><p id=out></p></main>
-<script>document.getElementById("grp").insertAdjacentHTML("beforeend", '<div role=listbox><div role=option id=k0>K0</div><div role=option id=k1>K1</div></div>');</script>`,
-    },
+    name: "역할 없는 목록: activedescendant가 가리킨 항목만 연결하고 형제는 뺀다(다른 펼친 트리거가 있을 때)",
+    pages: P("/r", { controls: "", active: 0, listRole: false, listId: false }),
     async run(h) {
       await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/x6" });
-      excluded(r, ["K0", "K1"]);
+      const r = await h.turn([findC, { text: "끝" }], { path: "/r" });
+      expect(optNamed(r, "Everyone")?.listFor === "Include", `가리킨 항목은 연결(${JSON.stringify(found(r)).slice(0, 300)})`);
+      excluded(r, NAMES.slice(1));
     },
   },
   {
-    name: "부정 10l: 바깥 버튼이 상위 메뉴 자체를 aria-controls로 가리키면 그 안 하위 메뉴 항목을 activedescendant로 바깥 버튼에 묶지 않는다",
-    pages: {
-      "/x7": `<title>중첩</title><main><button id=ob aria-haspopup=menu aria-expanded=true aria-controls=outer aria-activedescendant=s0>파일</button>
-<div role=menu id=outer><div role=menuitem>새로 만들기</div><div role=menu id=sub><div role=menuitem id=s0>S0</div><div role=menuitem id=s1>S1</div></div></div>
-<button aria-haspopup=listbox aria-expanded=true>필터</button><p id=out></p></main>`,
-    },
+    name: "메뉴 버튼의 menuitem은 aria-controls로 그 버튼에 연결한다",
+    pages: P("/m", {}),
     async run(h) {
       await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/x7" });
-      excluded(r, ["S0", "S1"]);
-      expect(optNamed(r, "새로 만들기")?.listFor === "파일", `바깥 메뉴 항목은 바깥 버튼(${JSON.stringify(optNamed(r, "새로 만들기"))})`);
+      const r = await h.turn([findC, { text: "끝" }], { path: "/m" });
+      expect(optNamed(r, "도구 항목")?.listFor === "도구", `메뉴 항목은 메뉴 버튼(${JSON.stringify(optNamed(r, "도구 항목"))})`);
     },
   },
+
+  // ---- C. 관계없는 선택지는 계속 뺀다 ----
   {
-    name: "6c5: form 속성으로 다른 양식에 딸린 트리거라도 화면상 감싼 양식의 삭제 주소(action)로 aria-controls 연결 선택지를 카드로 묻는다",
-    pages: P("/g9", { portal: true, formMode: "deleteAction" }),
-    async run(h) {
-      const { r, seen } = await pick(h, "/g9", "Emails");
-      expect(seen.length === 1 && r.out === "Emails", `삭제 주소라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
-    },
-  },
-  {
-    name: "부정 10m·10n: 목록을 직접 감싼 펼친 콤보박스가 있거나, 트리거가 다른 tree를 가리키면 activedescendant로 묶지 않는다",
-    pages: {
-      "/x8": `<title>감쌈</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=w0 aria-label=Include><p id=out></p></main>
-<div role=combobox aria-expanded=true aria-haspopup=listbox aria-label="휴지통으로"><div role=listbox><div role=option id=w0>W0</div><div role=option id=w1>W1</div></div></div>`,
-      ...P("/x9", { controls: "tr", active: 0, extra: "<ul role=tree id=tr><li role=treeitem>T1</li></ul>" }),
-    },
+    name: "부정: 연결 없는 포털 목록은 다른 펼친 트리거가 있으면 빼고, 두 모드 모두 이유별 수를 로그에만 남긴다",
+    pages: P("/n1", { controls: "" }),
     async run(h) {
       await h.settings({ runMode: "auto" });
-      let r = await h.turn([findC, { text: "끝" }], { path: "/x8" });
-      excluded(r, ["W0", "W1"]);
-      r = await h.turn([findC, { text: "끝" }], { path: "/x9" });
-      excluded(r, NAMES);
-    },
-  },
-  {
-    name: "10o: 같은 묶음에 접힌 보조 메뉴 버튼이 있어도 펼친 콤보박스의 activedescendant 연결은 유지한다",
-    pages: P("/x10", { controls: "dangling", active: 0, listId: false, portal: false, script: `document.getElementById("ctl").insertAdjacentHTML("beforeend", "<button type=button aria-haspopup=menu aria-expanded=false>더보기</button>");` }),
-    async run(h) {
-      const { r, seen } = await pick(h, "/x10", "Country");
-      expect(options(r).filter((o) => o.role === "option").length === 10 && seen.length === 0 && r.out === "Country", `연결 유지(cards=${seen.length}, out='${r.out}', ${JSON.stringify(options(r)).slice(0, 200)})`);
-    },
-  },
-  {
-    name: "6c6: form 속성으로 다른 양식에 딸린 트리거라도 화면상 감싼 양식의 칸 값에 실린 다른 사이트 주소로 카드를 띄운다",
-    pages: P("/g10", { portal: true, formMode: "redirectOuter" }),
-    async run(h) {
-      const { r, seen } = await pick(h, "/g10", "Emails");
-      expect(seen.length === 1 && r.out === "Emails", `다른 사이트 주소라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
-    },
-  },
-  {
-    name: "부정 10p: 목록 옆엔 접힌 보조 버튼, 한 단계 바깥엔 펼친 삭제 버튼이 있으면 묶음 밖 트리거의 activedescendant로 묶지 않는다",
-    pages: {
-      "/x11": `<title>묶음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=u0 aria-label=Include>
-<div id=outer><button type=button aria-haspopup=listbox aria-expanded=true>항목 삭제</button><div id=inner><button type=button aria-haspopup=menu aria-expanded=false>더보기</button>
-<div role=listbox><div role=option id=u0>U0</div><div role=option id=u1>U1</div></div></div></div><p id=out></p></main>`,
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/x11" });
-      excluded(r, ["U0", "U1"]);
-    },
-  },
-  {
-    name: "10q: aria-controls로 자기 목록을 감싼 요소를 가리키고 활성 항목도 그 목록이면, 같은 화면의 다른 메뉴 버튼이 있어도 연결한다",
-    pages: {
-      "/x12": `<title>래퍼</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=wrap aria-activedescendant=v0 aria-label=Include>
-<div id=wrap><div role=listbox><div role=option id=v0>V0</div><div role=option id=v1>V1</div></div></div>
-<button aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul><p id=out></p></main>
-<script>window.__picks=0;for(const o of document.querySelectorAll("[role=option]"))o.addEventListener("click",()=>{window.__picks++;document.getElementById("out").textContent=o.textContent;});</script>`,
-    },
-    async run(h) {
-      const { r, seen } = await pick(h, "/x12", "V1");
-      expect(optNamed(r, "V0")?.listFor === "Include" && seen.length === 0 && r.out === "V1", `연결(cards=${seen.length}, out='${r.out}', ${JSON.stringify(options(r)).slice(0, 200)})`);
-    },
-  },
-  {
-    name: "6c8: 화면상 감싼 양식의 다른 제출 버튼이 다른 사이트 formaction을 가지면 aria-controls 연결 선택지도 카드로 묻는다",
-    pages: P("/g12", { portal: true, formMode: "altSubmitOuter" }),
-    async run(h) {
-      const { r, seen } = await pick(h, "/g12", "Emails");
-      expect(seen.length === 1 && r.out === "Emails", `다른 사이트 제출이라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
-    },
-  },
-  {
-    name: "부정 10r: aria-controls로 가리킨 공통 패널 안에 다른 펼친 버튼이 있으면 activedescendant로 묶지 않는다",
-    pages: {
-      "/x13": `<title>패널</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=panel aria-activedescendant=z0 aria-label=Include>
-<div id=panel><button type=button aria-haspopup=listbox aria-expanded=true>항목 삭제</button><div><div role=listbox><div role=option id=z0>Z0</div><div role=option id=z1>Z1</div></div></div></div><p id=out></p></main>`,
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/x13" });
-      excluded(r, ["Z0", "Z1"]);
-    },
-  },
-  {
-    name: "부정 10s: 목록 래퍼를 품은 다른 펼친 콤보박스가 있으면, 래퍼를 aria-controls로 가리킨 트리거의 activedescendant로 묶지 않는다",
-    pages: {
-      "/x14": `<title>감쌈</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=wr aria-activedescendant=t0 aria-label=Include><p id=out></p></main>
-<div role=combobox aria-expanded=true aria-haspopup=listbox aria-label="휴지통으로"><div id=wr><div role=listbox><div role=option id=t0>T0</div><div role=option id=t1>T1</div></div></div></div>`,
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/x14" });
-      excluded(r, ["T0", "T1"]);
-    },
-  },
-  {
-    name: "6c10: 칸을 감싼 label 안의 입력 칸 트리거도 화면상 감싼 결제 양식의 위험을 합쳐 카드로 묻는다",
-    pages: P("/g14", { portal: true, formMode: "payment", script: `const lb = document.createElement("label"); inp.before(lb); lb.append(inp);` }),
-    async run(h) {
-      const { r, seen } = await pick(h, "/g14", "Emails");
-      expect(seen.length === 1 && r.out === "Emails", `결제 양식이라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
-    },
-  },
-  {
-    name: "부정 10t·10u: 여러 겹 바깥에서 목록을 품은 펼친 트리거, 또는 가리킨 래퍼 안의 닫힌 shadow root가 있으면 activedescendant로 묶지 않는다",
-    pages: {
-      "/x15": `<title>깊음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=d0 aria-label=Include><p id=out></p></main>
-<div role=combobox aria-expanded=true aria-haspopup=listbox aria-label="휴지통으로"><div><div><div><div><div><div><div><div><div role=listbox><div role=option id=d0>D0</div><div role=option id=d1>D1</div></div></div></div></div></div></div></div></div></div></div>`,
-      "/x16": `<title>닫힌</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=pnl aria-activedescendant=e0 aria-label=Include>
-<div id=pnl><div id=host></div><div role=listbox><div role=option id=e0>E0</div><div role=option id=e1>E1</div></div></div>
-<button aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul><p id=out></p></main>
-<script>document.getElementById("host").attachShadow({ mode: "closed" }).innerHTML = '<button aria-haspopup=listbox aria-expanded=true>작업</button>';</script>`,
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      let r = await h.turn([findC, { text: "끝" }], { path: "/x15" });
-      excluded(r, ["D0", "D1"]);
-      r = await h.turn([findC, { text: "끝" }], { path: "/x16" });
-      excluded(r, ["E0", "E1"]);
-    },
-  },
-  {
-    name: "부정 9h: visibility:collapse 트리거는 activedescendant 연결에 쓰지 않고, 카드 동안 collapse로 바뀌어도 누르지 않는다",
-    pages: {
-      ...P("/vc", { controls: "dangling", active: 0, listId: false, script: `inp.style.visibility = "collapse";` }),
-      ...P("/vc2", { controls: "dangling", active: 0, listId: false }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/vc" });
-      excluded(r, NAMES, undefined, { noOptions: true });
-      await cardThenNoClick(h, "/vc2", "Emails", { mode: "ask", before: () => (document.getElementById("inp").style.visibility = "collapse") });
-    },
-  },
-  {
-    name: "부정 7·12:종류가 맞는 펼친 트리거가 둘이면 빼고, 두 모드 모두 이유별 수를 로그에 남긴다(모델 결과에는 없음)",
-    pages: P("/n2", { controls: "", extra: "<button aria-haspopup=listbox aria-expanded=true>필터</button>" }),
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/n2" });
+      const r = await h.turn([findC, { text: "끝" }], { path: "/n1" });
       excluded(r, NAMES, 10);
       const line = unrelatedLine(r);
-      expect(line.includes("연결 여럿 10") && line.includes("깊이 한도 0") && line.includes("연결 없음 0"), `진단 줄(${line})`);
+      expect(line.includes("펼친 트리거 2") && line.includes("연결 없음 10") && line.includes("연결 여럿 0") && line.includes("깊이 한도 0"), `진단 줄(${line})`);
       expect(!JSON.stringify(r.tools).includes("unrelatedDiag"), "모델 결과에 진단이 없어야 한다");
-      const r2 = await h.turn([findItems, { text: "끝" }], { path: "/n2" });
+      const r2 = await h.turn([findItems, { text: "끝" }], { path: "/n1" });
       const fresh = r2.logs.slice(r.logs.length).find((l) => l.includes("find_clickables:unrelated")) ?? "";
-      expect(fresh.includes("연결 여럿 10"), `items 모드 진단 줄(${fresh})`);
+      expect(fresh.includes("연결 없음 10"), `items 모드 진단 줄(${fresh})`);
       expect(!JSON.stringify(r2.tools).includes("unrelatedDiag"), "items 모드 모델 결과에 진단이 없어야 한다");
     },
   },
   {
-    name: "부정 8: 유일한 트리거가 다른 목록을 aria-controls로 가리키면 포털 목록의 항목을 그 트리거에 묶지 않는다",
-    pages: P("/n3", { controls: "xl", extra: "<ul role=listbox id=xl><li role=option>X1</li></ul>" }),
+    name: "부정: 다른 트리거도 같은 목록을 aria-controls로 가리키면(연결 둘) 빼고 '연결 여럿'으로 센다",
+    pages: P("/n2", { controls: "", active: 0, extra: `<button aria-haspopup=listbox aria-expanded=true aria-controls=${LB}>보기</button>` }),
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findC, { text: "끝" }], { path: "/n2" });
+      excluded(r, NAMES, 10);
+      expect(unrelatedLine(r).includes("연결 여럿 10"), `진단 줄(${unrelatedLine(r)})`);
+    },
+  },
+  {
+    name: "부정: 트리거가 aria-controls로 다른 목록을 가리키면 남은 activedescendant로 포털 목록을 묶지 않는다",
+    pages: P("/n3", { controls: "xl", active: 0, extra: "<ul role=listbox id=xl><li role=option>X1</li></ul>" }),
     async run(h) {
       await h.settings({ runMode: "auto" });
       const r = await h.turn([findC, { text: "끝" }], { path: "/n3" });
@@ -473,207 +259,18 @@ export default [
       expect(optNamed(r, "X1")?.listFor === "Include", `X1은 연결(${JSON.stringify(optNamed(r, "X1"))})`);
     },
   },
+
+  // ---- D. 입력값 보호 ----
   {
-    name: "부정 9a·9d: 종류 추정 트리거가 opacity:0 조상 안이거나, 목록이 opacity:0 조상 안이면 뺀다",
+    name: "aria-labelledby만 있거나 이름 없는 트리거 입력 칸의 값은 카드·결과·로그에 없다(#43)",
     pages: {
-      ...P("/h1", { controls: "", wrapCtl: ['<div style="opacity:0">', "</div>"] }),
-      ...P("/h4", { controls: "", around: ['<div style="opacity:0">', "</div>"] }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      for (const path of ["/h1", "/h4"]) {
-        const r = await h.turn([findC, { text: "끝" }], { path });
-        excluded(r, NAMES);
-      }
-    },
-  },
-  {
-    name: "부정 9b·9c: 숨은 펼친 combobox + 보이는 것(모호), aria-hidden 조상 안의 activedescendant 트리거는 쓰지 않는다",
-    pages: {
-      ...P("/h2", { controls: "", extra: "<div hidden><input role=combobox aria-expanded=true aria-label=숨은칸></div>" }),
-      ...P("/h3", { controls: "", active: 0, wrapCtl: ['<div aria-hidden="true">', "</div>"] }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      for (const path of ["/h2", "/h3"]) {
-        const r = await h.turn([findC, { text: "끝" }], { path });
-        excluded(r, NAMES);
-      }
-    },
-  },
-  {
-    name: "부정 9e: 닫힌 shadow root의 slot에 배치된 트리거는 표시·위험 경로를 확인할 수 없어 쓰지 않고, 열린 root는 종류 추정으로 쓴다",
-    pages: {
-      ...P("/s1", { controls: "", wrapCtl: ["<div id=host>", "</div>"], script: `document.getElementById("host").attachShadow({ mode: "closed" }).innerHTML = '<div style="opacity:0"><slot></slot></div>';` }),
-      ...P("/s2", { controls: "", wrapCtl: ["<div id=host>", "</div>"], script: `document.getElementById("host").attachShadow({ mode: "closed" }).innerHTML = '<div><slot></slot></div>';` }),
-      ...P("/s3", { controls: "", wrapCtl: ["<div id=host>", "</div>"], script: `document.getElementById("host").attachShadow({ mode: "closed" }).innerHTML = '<div role=dialog aria-modal=true><h2>결제</h2><slot></slot></div>';` }),
-      ...P("/s4", { controls: "", active: 0, wrapCtl: ["<div id=host>", "</div>"], script: `document.getElementById("host").attachShadow({ mode: "closed" }).innerHTML = '<div><slot></slot></div>';` }),
-      ...P("/s5", { controls: "", wrapCtl: ["<div id=host>", "</div>"], script: `document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<div><slot></slot></div>';` }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      for (const path of ["/s1", "/s2", "/s3", "/s4"]) {
-        const r = await h.turn([findC, { text: "끝" }], { path });
-        excluded(r, NAMES);
-      }
-      const r = await h.turn([findC, { text: "끝" }], { path: "/s5" });
-      expect(optNamed(r, "Emails")?.listFor === "Include", `열린 root는 종류 추정(${JSON.stringify(found(r)).slice(0, 300)})`);
-    },
-  },
-  {
-    name: "부정 9f·9g: 같은 출처 iframe 바깥 조상이 숨으면 쓰지 않고, 카드 동안 트리거가 숨겨지면 누르지 않는다",
-    pages: {
-      "/fr": `<title>바깥</title><main><div style="opacity:0"><iframe src="/fr-in" style="width:900px;height:400px"></iframe></div><p id=out></p></main>`,
-      ...P("/fr-in", { controls: "" }),
-      ...P("/hg", { controls: "", wrapCtl: ["<div id=wrap>", "</div>"] }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/fr" });
-      excluded(r, NAMES, undefined, { noOptions: true });
-      await cardThenNoClick(h, "/hg", "Emails", { before: () => (document.getElementById("wrap").style.opacity = "0") });
-    },
-  },
-  {
-    name: "부정 9f2: 같은 출처 iframe 자체가 visibility:hidden이면 안쪽 activedescendant 연결을 쓰지 않고, 카드 동안 숨겨도 누르지 않는다",
-    pages: {
-      "/fv": `<title>바깥</title><main><iframe id=fr src="/fv-in" style="width:900px;height:400px;visibility:hidden"></iframe><p id=out></p></main>`,
-      "/fs": `<title>바깥</title><main><iframe id=fr src="/fv-in" style="width:900px;height:400px"></iframe><p id=out></p></main>`,
-      ...P("/fv-in", { controls: "dangling", active: 0, listId: false }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/fv" });
-      excluded(r, NAMES, undefined, { noOptions: true });
-      const { r: r2, seen } = await pick(h, "/fs", "Emails", { mode: "ask", before: () => (document.getElementById("fr").style.visibility = "hidden") });
-      expect(seen.length === 1, `카드가 한 번 떠야 한다(cards=${seen.length})`);
-      const c = lastTool(r2, "click_element");
-      expect(c && (c.error || c.result?.effect?.dom?.aborted || c.result?.error), `클릭 결과가 실패여야 한다(${JSON.stringify(c).slice(0, 300)})`);
-      const n = await h.tab.evaluate(() => document.getElementById("fr").contentWindow.__picks);
-      expect(n === 0, `누르지 않음(picks=${n})`);
-    },
-  },
-  {
-    name: "부정 10c2: 트리거가 shadow host 안에 그린 다른 목록을 가리키면 activedescendant로 묶지 않고, 카드 동안 그렇게 바뀌어도 누르지 않는다",
-    pages: {
-      ...P("/w1", { controls: "xh", active: 0, extra: "<div id=xh></div>", script: `document.getElementById("xh").attachShadow({ mode: "open" }).innerHTML = '<ul role=listbox><li role=option>X1</li></ul>';` }),
-      ...P("/w2", { controls: "", active: 0, extra: "<div id=xh></div>", script: `document.getElementById("xh").attachShadow({ mode: "open" }).innerHTML = '<ul role=listbox><li role=option>X1</li></ul>';` }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/w1" });
-      excluded(r, NAMES);
-      await cardThenNoClick(h, "/w2", "Emails", { mode: "ask", before: () => document.getElementById("inp").setAttribute("aria-controls", "xh") });
-    },
-  },
-  {
-    name: "부정 10a·10b·10c:다른 트리거가 목록을 감싼 요소·목록을 가리키거나, 트리거 자신이 다른 목록을 가리키면 activedescendant로 묶지 않는다",
-    pages: {
-      ...P("/x1", { controls: "", active: 0, extra: "<button aria-haspopup=menu aria-expanded=true aria-controls=portal>보기</button>" }),
-      ...P("/x2", { controls: "", active: 0, extra: `<button aria-haspopup=listbox aria-expanded=true aria-controls=${LB}>보기</button>` }),
-      ...P("/x3", { controls: "xl", active: 0, extra: "<ul role=listbox id=xl><li role=option>X1</li></ul>" }),
-      ...P("/x4", { controls: "portal xl", active: 0, extra: "<ul role=listbox id=xl><li role=option>X1</li></ul>" }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      for (const path of ["/x1", "/x2", "/x3", "/x4"]) {
-        const r = await h.turn([findC, { text: "끝" }], { path });
-        excluded(r, NAMES);
-      }
-    },
-  },
-  {
-    name: "부정 10d: 목록이 다른 펼친 버튼과 같은 묶음 안이면 묶음 밖 트리거의 activedescendant로 묶지 않는다",
-    pages: {
-      "/x5": `<title>묶음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=g0 aria-label=Include>
-<div id=grp><button aria-haspopup=listbox aria-expanded=true>B열기</button><div role=listbox><div role=option id=g0>G0</div><div role=option id=g1>G1</div></div></div>
-<button aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul><p id=out></p></main>`,
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/x5" });
-      excluded(r, ["G0", "G1"]);
-    },
-  },
-  {
-    name: "부정 10e·10f: 카드 동안 충돌이 생기면 누르지 않고, 다른 트리거가 활성 항목 자체를 aria-owns로 가리키면 그 목록 항목을 묶지 않는다",
-    pages: {
-      ...P("/y1", { controls: "", active: 0, extra: "<button id=bb aria-haspopup=menu aria-expanded=true>보기</button>" }),
-      ...P("/y2", { controls: "", active: 0, extra: `<button aria-haspopup=menu aria-expanded=true aria-owns=${OPT(0)}>보기</button>` }),
-    },
-    async run(h) {
-      // 10e: activedescendant 연결 항목의 카드(확인 모드) 동안 다른 트리거가 목록을 감싼 요소를 가리키게 함.
-      await cardThenNoClick(h, "/y1", "Emails", { mode: "ask", before: () => document.getElementById("bb").setAttribute("aria-controls", "portal") });
-      // 10f 대기 중: 둘째 항목 카드 동안 다른 트리거가 첫 항목을 aria-owns로 가리킴.
-      await cardThenNoClick(h, "/y1", "Emails", { mode: "ask", before: () => document.getElementById("bb").setAttribute("aria-owns", "react-select-3-option-0") });
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/y2" });
-      excluded(r, ["Everyone", "Emails"]);
-    },
-  },
-  {
-    name: "10g·10h·10i: 열린 slot 래퍼·같은 종류 버튼이 연 패널 안의 콤보박스는 묶지 않고, 대화상자 버튼이면 묶으며, 자기 aria-owns와 일치하면 묶는다",
-    pages: {
-      // 10g: 열린 shadow root 안의 펼친 버튼 B가 slot을 감싼 패널을 가리키고, 그 slot에 목록(light DOM)이 배치됨.
-      "/z1": `<title>slot</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=q0 aria-label=Include>
-<div id=host><div role=listbox><div role=option id=q0>Q0</div><div role=option id=q1>Q1</div></div></div>
-<button aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul><p id=out></p></main>
-<script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<button aria-haspopup=menu aria-expanded=true aria-controls=pnl>패널</button><div id=pnl><slot></slot></div>';</script>`,
-      // 10h: listbox 종류 버튼 B가 연 패널 안에 콤보박스 A와 목록이 함께 있음 → 뺌. 대조(dialog 버튼) → A로 연결.
-      "/z2": panelPage("listbox"),
-      "/z3": panelPage("dialog"),
-      // 10i: A의 aria-owns와 activedescendant가 같은 목록의 첫 항목.
-      ...P("/z4", { controls: OPT(0), active: 0 }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      let r = await h.turn([findC, { text: "끝" }], { path: "/z1" });
-      excluded(r, ["Q0", "Q1"]);
-      r = await h.turn([findC, { text: "끝" }], { path: "/z2" });
-      excluded(r, ["P0", "P1"]);
-      r = await h.turn([findC, { text: "끝" }], { path: "/z3" });
-      expect(optNamed(r, "P1")?.listFor === "Include", `대화상자 버튼이면 연결(${JSON.stringify(found(r)).slice(0, 300)})`);
-      const seen = [];
-      r = await h.turn([findC, { click: "P1" }, { text: "끝" }], { path: "/z3", onCard: approveAfter(h, seen) });
-      expect(seen.length === 0 && r.out === "P1", `카드 없이 고름(cards=${seen.length}, out='${r.out}')`);
-      r = await h.turn([findC, { text: "끝" }], { path: "/z4" });
-      expect(optNamed(r, "Everyone") && optNamed(r, "Emails"), `첫째·둘째 모두(${JSON.stringify(found(r)).slice(0, 300)})`);
-    },
-  },
-  {
-    name: "부정 10j: 트리거가 하위 메뉴를 aria-controls로 가리키면 바깥 메뉴 항목을 activedescendant로 묶지 않는다(카드 동안 바뀌어도 누르지 않음)",
-    pages: { "/j1": submenuPage(true), "/j2": submenuPage(false) },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/j1" });
-      excluded(r, ["Y1"]);
-      await cardThenNoClick(h, "/j2", "Y1", { mode: "ask", before: () => document.getElementById("mt").setAttribute("aria-controls", "xm") });
-    },
-  },
-  {
-    name: "11: 메뉴 버튼의 menuitem은 그 버튼에 연결하고, 연결 없는 포털 메뉴는 aria-haspopup=true 콤보박스가 있으면(모호) 뺀다",
-    pages: {
-      ...P("/m1", { controls: "" }),
-      ...P("/m2", { controls: "", menu: false, menuRole: true, extra: "<button aria-haspopup=menu aria-expanded=true>더보기</button>" }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      let r = await h.turn([findC, { text: "끝" }], { path: "/m1" });
-      expect(optNamed(r, "도구 항목")?.listFor === "도구", `메뉴 항목은 메뉴 버튼(${JSON.stringify(optNamed(r, "도구 항목"))})`);
-      r = await h.turn([findC, { text: "끝" }], { path: "/m2" });
-      excluded(r, NAMES);
-    },
-  },
-  {
-    name: "13: 이름 없는·aria-labelledby만 있는 트리거 입력 칸의 값은 카드·결과·로그에 없다(#43)",
-    pages: {
-      ...P("/v1", { controls: "", label: 'aria-labelledby="lbl"', extra: "<span id=lbl>Include</span>" }),
-      ...P("/v2", { controls: "", label: "" }),
+      ...P("/v1", { label: 'aria-labelledby="lbl"', extra: "<span id=lbl>Include</span>" }),
+      ...P("/v2", { label: "" }),
       ...P("/v3", { controls: "dangling", active: 0, listId: false, label: "" }),
     },
     async run(h) {
-      for (const [path, mode] of [["/v1", "auto"], ["/v2", "auto"], ["/v3", "ask"]]) {
-        const { r, seen } = await pick(h, path, "Emails", { mode });
+      for (const path of ["/v1", "/v2", "/v3"]) {
+        const { r, seen } = await pick(h, path, "Emails", { mode: "ask" });
         expect(seen.length === 1 && r.out === "Emails", `${path} 카드 후 고름(cards=${seen.length}, out='${r.out}')`);
         if (path !== "/v1") expect(seen[0].includes("(이름 없음)"), `${path} 트리거 이름 없음(${seen[0]})`);
         const r2 = await h.turn([findItems, { text: "끝" }], { path });
@@ -682,46 +279,4 @@ export default [
       }
     },
   },
-  {
-    name: "14: 역할 없는 목록은 activedescendant가 가리킨 항목만 — 다른 트리거 있음·없음·같은 묶음 모두",
-    pages: {
-      ...P("/r1", { controls: "", active: 0, listRole: false, listId: false }),
-      ...P("/r2", { controls: "", active: 0, listRole: false, listId: false, menu: false }),
-      ...P("/r3", { controls: "", active: 0, listRole: false, listId: false, portal: false }),
-    },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      for (const path of ["/r1", "/r2", "/r3"]) {
-        const r = await h.turn([findC, { text: "끝" }], { path });
-        expect(optNamed(r, "Everyone"), `${path} 가리킨 항목은 나옴(${JSON.stringify(found(r)).slice(0, 300)})`);
-        excluded(r, NAMES.slice(1));
-      }
-    },
-  },
-  {
-    name: "15: 다른 펼친 버튼이 aria-owns로 포털 목록의 래퍼를 가리키면 종류 추정하지 않고, 카드 동안 생기면 누르지 않는다",
-    pages: { ...P("/o1", { controls: "", script: `document.getElementById("mb").setAttribute("aria-owns", "portal");` }), ...P("/o2", { controls: "" }) },
-    async run(h) {
-      await h.settings({ runMode: "auto" });
-      const r = await h.turn([findC, { text: "끝" }], { path: "/o1" });
-      excluded(r, NAMES);
-      await cardThenNoClick(h, "/o2", "Emails", { before: () => document.getElementById("mb").setAttribute("aria-owns", "portal") });
-    },
-  },
 ];
-
-function panelPage(kind) {
-  return `<title>패널</title><main><button aria-haspopup=${kind} aria-expanded=true aria-controls=pnl>필터 열기</button>
-<div id=pnl><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=p0 aria-label=Include>
-<div role=listbox><div role=option id=p0>P0</div><div role=option id=p1>P1</div></div></div>
-<button aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul><p id=out></p></main>
-<script>window.__picks=0;for(const o of document.querySelectorAll("[role=option]"))o.addEventListener("click",()=>{window.__picks++;document.getElementById("out").textContent=o.textContent;});</script>`;
-}
-
-function submenuPage(controlsSub) {
-  return `<title>메뉴</title><main><button id=mt aria-haspopup=menu aria-expanded=true aria-activedescendant=y0 ${controlsSub ? "aria-controls=xm" : ""}>메뉴</button>
-<button aria-haspopup=listbox aria-expanded=true>필터</button><p id=out></p></main>
-<div id=portal><div role=menu><div role=menuitem id=y0>Y0</div><div role=menuitem id=y1>Y1</div>
-<div role=menu id=xm><div role=menuitem id=x0>X0</div></div></div></div>
-<script>window.__picks=0;for(const o of document.querySelectorAll("[role=menuitem]"))o.addEventListener("click",()=>{window.__picks++;document.getElementById("out").textContent=o.textContent;});</script>`;
-}

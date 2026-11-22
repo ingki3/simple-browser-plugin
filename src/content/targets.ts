@@ -20,7 +20,6 @@ import {
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
-import { choiceKindOf, kindMatch } from "@/lib/choiceKind";
 import { cleanModelText } from "@/lib/modelText";
 import { groupLabelInfo, inProtectedArea, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo, type TextInfo } from "./modelText";
 
@@ -54,7 +53,7 @@ export interface TargetKind {
   deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
   // deleteMethod(구조 선언)에 대한 같은 예외(#62).
   deleteMethodExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "outerSubmitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
 interface Entry {
@@ -583,9 +582,8 @@ function fullInfo(
 // - nearest: 연결이 없고 펼쳐진 트리거가 둘 이상일 때, 선택지의 팝업에서 위로 6단계 안에 트리거를 품는 첫 묶음(조상)이 트리거를
 //   정확히 하나(그것이 펼쳐짐)와 그 팝업 하나만 담고 다 볼 수 있으면(숨은 트리 없음) 그 트리거(출발·도착처럼 칸마다 목록을
 //   붙이는 자동완성, #네이버 지도). 구조로 추정한 관계라 실행 방식과 관계없이 늘 승인 카드로 묻는다(approvalDecision).
-// - #316: 직접 연결이 없으면 aria-activedescendant 연결(linked — 활성 항목이 그 선택지·같은 목록의 선택지이고 충돌·숨김·다른 목록 지목이 없을 때),
-//   그리고 위가 모두 안 되면 종류 추정(nearest, basis kind — ARIA 역할·aria-haspopup로 종류가 맞는 펼친 트리거가 정확히 하나일 때, 늘 카드).
-//   unlinked·group도 고른 트리거가 다른 목록을 가리키면 뺀다. 자세한 조건은 choiceRelation과 docs/architecture.md.
+// - #316: aria-activedescendant가 그 선택지(또는 같은 listbox·menu의 선택지)를 가리키는 펼친 트리거도 linked의 직접 연결로 센다
+//   (그 트리거가 aria-controls·owns로 다른 곳만 가리키면 세지 않음). 직접 연결 수에 함께 세므로 둘 이상이면 정하지 않는다.
 // - 그 밖(위로도 정할 수 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
 // 관계는 찾을 때·승인 카드 때·실행 직전·스크롤과 포커스 뒤에 다시 계산해 같아야 한다.
 // ---------------------------------------------------------------------------
@@ -593,8 +591,8 @@ function fullInfo(
 const CHOICE_ROLES = new Set(["option", "menuitem", "menuitemradio", "menuitemcheckbox"]);
 const POPUP_ROLES = new Set(["listbox", "menu", "menubar"]);
 
-// 관계의 근거(#316). 같은 mode라도 근거가 바뀌면(묶음 → 종류) 다른 관계다.
-export type RelationBasis = "controls" | "owns" | "activedescendant" | "wrapper" | "unlinked" | "group" | "kind";
+// 관계의 근거(#316). 같은 mode·via라도 근거가 바뀌면(래퍼 연결 → 직접 연결 등) 다른 관계로 본다.
+export type RelationBasis = "controls" | "owns" | "activedescendant" | "wrapper" | "unlinked" | "group";
 
 // choiceRelation이 null을 돌려준 이유별 수(#316 진단 — 디버그 로그에 수만). 한 선택지당 하나만 올라간다.
 export interface RelationWhy {
@@ -607,8 +605,6 @@ export interface Relation {
   mode: "linked" | "unlinked" | "nearest";
   via: "controls" | "owns" | "activedescendant" | null;
   basis: RelationBasis;
-  // 근거 요소(group: 묶음 조상, kind: 선택지 팝업의 parentNode). 실행 직전에도 같아야 한다.
-  anchor: WeakRef<Node> | null;
   trigger: WeakRef<HTMLElement> | null;
   triggerBase: TargetInfo | null;
   // 트리거 자신이 다른 목록 안의 항목인지(중첩 메뉴). 실행 직전에도 같아야 한다.
@@ -752,70 +748,6 @@ function hasHiddenTree(el: Element): boolean {
   }
 }
 
-// ---- #316: aria-activedescendant 연결·종류 추정에 쓰는 구조 검사 ----
-
-// 요소의 shadow root(닫힌 것 포함).
-function shadowRootOf(el: Element): ShadowRoot | null {
-  if (el.shadowRoot) return el.shadowRoot;
-  try {
-    return (chrome.dom?.openOrClosedShadowRoot?.(el as HTMLElement) as ShadowRoot | null | undefined) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// 요소에서 최상위 문서까지의 실제 표시 경로(composedParent — 열린 slot·shadow host·같은 출처 frame 요소). ok=false: 경로를 끝까지
-// 확인할 수 없음 — 부모가 shadow host인데 받는 slot이 없음(닫힌 root의 slot 배치·배치 안 됨: 표시도, eventParent로 모으는 트리거 위험도
-// 확인할 수 없다), 문서에서 떨어짐, 교차 출처 frame, 깊이 한도.
-function displayPath(el: Element): { chain: Element[]; ok: boolean } {
-  const chain: Element[] = [];
-  for (let cur: Element | null = el, depth = 0; cur; depth++) {
-    if (depth >= 500) return { chain, ok: false };
-    chain.push(cur);
-    const parent = cur.parentElement;
-    if (!(cur as HTMLElement).assignedSlot && parent && shadowRootOf(parent)) return { chain, ok: false };
-    const next = composedParent(cur);
-    if (!next) {
-      const doc = cur.ownerDocument;
-      if (cur !== doc.documentElement) return { chain, ok: false };
-      const view = doc.defaultView;
-      return { chain, ok: !!view && view === view.top };
-    }
-    cur = next;
-  }
-  return { chain, ok: false };
-}
-
-// 엄격한 표시(#316): 상자가 있고, 표시 경로 전체에 display:none·opacity:0·aria-hidden=true가 없고 자신이 visibility:hidden이 아님.
-// 경로를 확인할 수 없으면 보이지 않는 것으로 본다.
-function strictlyShown(el: Element): boolean {
-  const { chain, ok } = displayPath(el);
-  if (!ok) return false;
-  const rect = el.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return false;
-  for (const cur of chain) {
-    if ((cur.getAttribute("aria-hidden") ?? "").trim().toLowerCase() === "true") return false;
-    const st = cur.ownerDocument.defaultView?.getComputedStyle(cur);
-    if (!st) return false;
-    if (st.display === "none" || st.opacity === "0") return false;
-    // 자신, 그리고 문서 경계를 넘을 때의 frame 요소(안쪽 문서의 visibility·크기는 바깥 frame이 숨어도 그대로라)는 상자와 visibility를 본다.
-    if (cur === el || cur.localName === "iframe" || cur.localName === "frame") {
-      // visible만(hidden·collapse 모두 보이지 않음 — collapse는 상자를 남길 수 있다).
-      if (st.visibility !== "visible") return false;
-      const r = cur.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) return false;
-    }
-  }
-  return true;
-}
-
-// node가 anc의 합성 자손(또는 anc 자신)인지(열린 slot·shadow host·같은 출처 frame을 넘는다). DOM contains도 함께 본다.
-function composedWithinNode(anc: Element, node: Element): boolean {
-  if (anc === node || anc.contains(node)) return true;
-  for (let cur: Element | null = node, depth = 0; cur && depth < 500; cur = composedParent(cur), depth++) if (cur === anc) return true;
-  return false;
-}
-
 // 트리거의 aria-activedescendant가 가리키는 요소(트리거와 같은 Document/ShadowRoot에서 푼다). 빈 값·없는 id면 null.
 function activeRefOf(trigger: Element): Element | null {
   const id = (trigger.getAttribute("aria-activedescendant") ?? "").trim();
@@ -824,21 +756,16 @@ function activeRefOf(trigger: Element): Element | null {
   return root.getElementById?.(id) ?? null;
 }
 
-// 다른 팝업으로 보는 역할: listbox·menu·menubar와 tree·grid·treegrid(aria-haspopup 종류로 구분하는 팝업)와 그 항목.
-const OTHER_POPUP_ROLES = new Set([...POPUP_ROLES, "tree", "grid", "treegrid"]);
-const LISTISH_SELECTOR = ["listbox", "menu", "menubar", "tree", "grid", "treegrid", "option", "menuitem", "menuitemradio", "menuitemcheckbox", "treeitem"]
-  .map((r) => `[role="${r}" i]`)
-  .join(", ");
-
-// 참조가 목록(팝업 역할 요소·선택지, 또는 그것을 담은 요소)인지. 상태 영역처럼 목록이 아닌 참조는 아니다.
-// 안을 모두 볼 수 없으면(shadow root·slot·frame — querySelector가 보지 못함) 목록일 수 있는 것으로 본다(새 관계를 채택하지 않는 쪽).
-function listish(ref: Element): boolean {
-  const role = (ref.getAttribute("role") ?? "").trim().toLowerCase();
-  if (OTHER_POPUP_ROLES.has(role) || CHOICE_ROLES.has(role) || role === "treeitem") return true;
-  if (ref.querySelector(LISTISH_SELECTOR)) return true;
-  if (hasHiddenTree(ref)) return true;
-  for (const d of ref.querySelectorAll("*")) if (hasHiddenTree(d)) return true;
-  return false;
+// aria-activedescendant 연결(#316, 명시적 ARIA 참조): 활성 항목이 이 선택지이거나, 같은 팝업 역할 요소(listbox·menu) 안의 선택지면 연결.
+// 트리거가 aria-controls·aria-owns로 풀리는 참조를 가졌는데 그 어느 것도 이 목록(또는 선택지)이거나 이 목록을 담지 않으면 세지 않는다
+// (다른 곳을 가리키는 트리거의 남은 활성 항목으로 묶지 않게). 형제 관계(역할 없는 목록의 다른 항목)만으로는 세지 않는다.
+function activeLink(trigger: Element, popup: Element, el: HTMLElement): boolean {
+  const ref = activeRefOf(trigger);
+  if (!ref || !isChoice(ref as HTMLElement)) return false;
+  const same = ref === el || (popup !== el && popupOf(ref as HTMLElement) === popup);
+  if (!same) return false;
+  const refs = ariaRefs(trigger);
+  return !refs.length || refs.some(({ ref: r }) => r === popup || r === el || r.contains(popup));
 }
 
 // 선택지의 관계. 정할 수 없으면 null. why: null인 이유를 센다(진단).
@@ -852,187 +779,36 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     if (why) why[k] += 1;
     return null;
   };
-  const make = (mode: Relation["mode"], trigger: HTMLElement | null, basis: RelationBasis, anchor: Node | null = null): Relation => ({
+  // 명시적 연결: aria-controls·aria-owns가 이 목록·선택지를 가리키거나, aria-activedescendant가 이 선택지(같은 목록의 선택지)를 가리킴.
+  // 트리거마다 한 번(controls·owns가 먼저).
+  const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" | "activedescendant" }> = [];
+  for (const t of expanded) {
+    const via = linkVia(t, [popup, el]) ?? (activeLink(t, popup, el) ? "activedescendant" : null);
+    if (via) linked.push({ trigger: t, via });
+  }
+  const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"], basis: RelationBasis): Relation => ({
     mode,
-    via: basis === "controls" || basis === "owns" || basis === "activedescendant" ? basis : basis === "wrapper" ? "controls" : null,
+    via,
     basis,
-    anchor: anchor ? new WeakRef(anchor) : null,
     trigger: trigger ? new WeakRef(trigger) : null,
     triggerBase: trigger ? baseInfo(kind, trigger) : null,
     nested: trigger ? nestedTrigger(trigger) : false,
     popup: new WeakRef(popup),
   });
-  // 팝업 역할 요소(listbox·menu) 안의 선택지인지(아니면 popup은 선택지 자신 — 역할 없는 목록).
-  const realPopup = popup !== el;
-  const choiceKind = choiceKindOf(implicitRole(el)) ?? "listbox";
-  // 같은 목록 안의 선택지 참조: 그 선택지 자신이거나, 같은 팝업 역할 요소 안의 선택지.
-  const sameListChoice = (r: Element) => r === el || (realPopup && isChoice(r as HTMLElement) && popupOf(r as HTMLElement) === popup);
-  // active(t): 트리거의 활성 항목이 이 선택지이거나 같은 목록의 선택지(형제 관계만으로는 세지 않는다).
-  const isActive = (t: HTMLElement) => {
-    const r = activeRefOf(t);
-    return !!r && sameListChoice(r);
-  };
-  // elsewhere(t): 그 트리거가 다른 목록을 명시적으로 가리킨다(aria-controls·owns가 이 목록 밖의 목록을, 또는 활성 항목이 다른 선택지를).
-  // 참조 요소별 listish 결과(한 번의 탐색 안 재사용 — 선택지마다 같은 큰 참조 영역을 다시 훑지 않게).
-  const isListish = (ref: Element) => cached(listishCache, expanded, ref, () => listish(ref));
-  const elsewhere = (t: HTMLElement) => {
-    for (const { ref } of ariaRefs(t)) {
-      if (ref === popup) continue;
-      // 그 자체로 별도 팝업(상위 메뉴·tree·grid 등)이면 이 목록을 담아도 다른 목록이다(중첩 메뉴의 바깥 버튼).
-      if (OTHER_POPUP_ROLES.has((ref.getAttribute("role") ?? "").trim().toLowerCase())) return true;
-      // 이 목록을 담은 요소(팝업 역할이 없는 래퍼).
-      if (composedWithinNode(ref, popup)) continue;
-      // 같은 목록의 선택지(그 선택지 자신이거나 가장 가까운 팝업이 이 팝업). 목록 안이라도 다른 팝업 경계(하위 메뉴) 너머는 다른 목록이다.
-      if (sameListChoice(ref)) continue;
-      if (isListish(ref)) return true;
-    }
-    const r = activeRefOf(t);
-    return !!r && isChoice(r as HTMLElement) && !sameListChoice(r);
-  };
-  // 선택지의 표시 경로(합성 조상 — 목록 위 판정에 쓴다).
-  const elPath = displayPath(el);
-  const popupAt = elPath.chain.indexOf(popup);
-  const abovePopup = popupAt >= 0 ? elPath.chain.slice(popupAt + 1) : [];
-  // claims(b, a): 다른 트리거 b가 이 목록을 명시적으로 건드린다(목록 안 — 팝업·선택지·다른 항목, 또는 목록 위 — 팝업을 담은 요소).
-  // 목록 위 참조가 a까지 담고 b의 팝업 종류가 맞지 않으면(a가 든 대화상자를 연 버튼) 충돌로 보지 않는다.
-  const claims = (b: HTMLElement, a: HTMLElement) => {
-    if (b === a) return false;
-    const refs = ariaRefs(b).map((r) => r.ref);
-    const active = activeRefOf(b);
-    if (active) refs.push(active);
-    for (const r of refs) {
-      if (r === popup || r === el || composedWithinNode(popup, r)) return true;
-      if (abovePopup.includes(r) || composedWithinNode(r, popup)) {
-        const panel = composedWithinNode(r, a);
-        if (panel && kindMatch(b.getAttribute("role"), b.getAttribute("aria-haspopup"), choiceKind) === "no") continue;
-        return true;
-      }
-    }
-    return false;
-  };
-  // 새 경로(activedescendant·kind)의 공통 조건: 트리거·선택지(·참조 항목)가 엄격히 보이고 같은 트리 루트, 선택지 경로를 확인할 수 있음.
-  const newPathOk = (t: HTMLElement, ref: Element | null) => {
-    if (!elPath.ok || popupAt < 0) return false;
-    const root = el.getRootNode();
-    if (t.getRootNode() !== root || popup.getRootNode() !== root || (ref && ref.getRootNode() !== root)) return false;
-    return strictlyShown(t) && strictlyShown(el) && (!ref || ref === el || strictlyShown(ref));
-  };
-
-  const direct: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
-  for (const t of expanded) {
-    const via = linkVia(t, [popup, el]);
-    if (via) direct.push({ trigger: t, via });
-  }
-  const actives = expanded.filter(isActive);
-  if (direct.length === 1) {
-    // 다른 트리거의 활성 항목이 이 목록을 가리키면 어느 위젯의 목록인지 충돌(#316 — 좁히기만).
-    if (actives.some((t) => t !== direct[0].trigger)) return fail("many");
-    return make("linked", direct[0].trigger, direct[0].via);
-  }
-  if (direct.length > 1) return fail("many");
-  // aria-activedescendant 연결(#316): 활성 항목을 가진 트리거가 있으면 이 단계에서 결론을 낸다.
-  if (actives.length) {
-    if (actives.length > 1) return fail("many");
-    const a = actives[0];
-    if (expanded.some((b) => claims(b, a))) return fail("many");
-    // 목록과 같은 묶음(가장 가까운, 트리거를 품은 조상)에 a 말고 다른 트리거가 있거나 그 묶음을 다 볼 수 없으면 소유가 겹칠 수 있다.
-    // 충돌은 실제로 펼친 트리거로만 본다(접힌 보조 버튼 하나로 정상 선택지를 빼지 않게). a 자신의 aria-controls·owns가 이 목록을
-    // 담은 요소를 가리키면(명시적 래퍼 연결과 활성 항목이 일치) 묶음 추정보다 강한 근거라 묶음 검사를 하지 않는다(다른 트리거의 참조는 claims가 본다).
-    // 단 그 래퍼 안에 다른 펼친 트리거가 있으면(공통 패널 — 목록 옆의 삭제 버튼) 묶음 검사를 그대로 한다.
-    // 목록(과 래퍼)을 감싼 다른 펼친 트리거(목록을 품은 '휴지통으로' 콤보박스 등)가 있으면 묶음 깊이와 관계없이 충돌이다.
-    if (expanded.some((t) => t !== a && composedWithinNode(t, popup))) return fail("many");
-    // 래퍼 안을 모두 볼 수 있을 때만(닫힌 shadow root 등 — 그 안의 펼친 트리거를 모을 수 없다) 묶음 검사를 건너뛴다.
-    const ownsWrapper = ariaRefs(a).some(
-      ({ ref }) =>
-        ref !== popup &&
-        composedWithinNode(ref, popup) &&
-        !hasHiddenTree(ref) &&
-        !Array.from(ref.querySelectorAll("*")).some(hasHiddenTree) &&
-        !expanded.some((t) => t !== a && composedWithinNode(ref, t)),
-    );
-    const g = ownsWrapper ? null : groupTriggersOf(popup, expanded);
-    if (g === "hidden" || (g && g.some((t) => t !== a))) return fail("many");
-    if (elsewhere(a) || !newPathOk(a, activeRefOf(a))) return fail("none");
-    return make("linked", a, "activedescendant");
-  }
+  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via, linked[0].via);
+  if (linked.length > 1) return fail("many");
   const wrapped = wrapperLink(expanded, popup);
-  if (wrapped) return make("linked", wrapped, "wrapper");
-  if (expanded.length <= 1) {
-    const only = expanded[0] ?? null;
-    // 그 트리거가 다른 목록을 명시하면 이 선택지와 묶지 않는다(#316 — 좁히기만).
-    if (only && elsewhere(only)) return fail("none");
-    return make("unlinked", only, "unlinked");
-  }
+  if (wrapped) return make("linked", wrapped, "controls", "wrapper");
+  if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null, "unlinked");
   const near = nearestTrigger(popup, expanded);
-  if (near) {
-    if (elsewhere(near.trigger)) return fail("none");
-    return make("nearest", near.trigger, "group", near.group);
-  }
-  // 종류 추정(#316): 펼친 트리거 중 이 선택지 종류의 목록을 열 수 있는 것이 정확히 하나(알 수 없는 것 없음). 늘 카드(nearest).
-  const matches: HTMLElement[] = [];
-  let maybe = 0;
-  for (const t of expanded) {
-    const m = kindMatch(t.getAttribute("role"), t.getAttribute("aria-haspopup"), choiceKind);
-    if (m === "match") matches.push(t);
-    else if (m === "maybe") maybe += 1;
-  }
-  if (matches.length > 1 || maybe > 0) return fail("many");
-  if (matches.length !== 1) return fail("none");
-  const k = matches[0];
-  const anchor = popup.parentNode;
-  if (!anchor || composedWithinNode(popup, k) || nestedTrigger(k) || elsewhere(k)) return fail("none");
-  if (expanded.some((b) => claims(b, k))) return fail("many");
-  if (!newPathOk(k, null)) return fail("none");
-  return make("nearest", k, "kind", anchor);
+  if (near) return make("nearest", near, null, "group");
+  return fail("none");
 }
 
 const NEAREST_CLIMB = 6;
 
-// 한 번의 탐색(같은 expanded 배열) 안에서 팝업별 묶음 검사를 재사용한다(#316 — 선택지마다 같은 하위 트리를 다시 훑지 않게).
-// 실행 직전 재검사는 expandedTriggers()로 새 배열을 만들므로 새로 계산한다.
-type NearestResult = { trigger: HTMLElement; group: Element } | null;
-const nearestCache = new WeakMap<HTMLElement[], Map<Element, NearestResult>>();
-const groupCache = new WeakMap<HTMLElement[], Map<Element, Element[] | "hidden" | null>>();
-const listishCache = new WeakMap<HTMLElement[], Map<Element, boolean>>();
-
-function cached<T>(store: WeakMap<HTMLElement[], Map<Element, T>>, expanded: HTMLElement[], popup: Element, make: () => T): T {
-  let m = store.get(expanded);
-  if (!m) {
-    m = new Map();
-    store.set(expanded, m);
-  }
-  if (m.has(popup)) return m.get(popup) as T;
-  const v = make();
-  m.set(popup, v);
-  return v;
-}
-
-// 팝업에서 위로 6단계 안에 펼친 트리거를 품는 첫 묶음의 펼친 트리거들. 그런 묶음이 없거나 body에 닿으면 null,
-// 안을 모두 볼 수 없으면 "hidden".
-function groupTriggersOf(popup: Element, expanded: HTMLElement[]): Element[] | "hidden" | null {
-  return cached(groupCache, expanded, popup, () => {
-    let group: Element | null = popup.parentElement;
-    for (let depth = 0; group && depth < NEAREST_CLIMB; depth++, group = group.parentElement) {
-      const doc = group.ownerDocument;
-      if (group === doc.body || group === doc.documentElement) return null;
-      if (hasHiddenTree(group)) return "hidden";
-      const all = Array.from(group.querySelectorAll("*"));
-      if (all.some(hasHiddenTree)) return "hidden";
-      // 묶음 요소 자신도 후보다(목록을 직접 감싼 콤보박스). 접힌 트리거만 있는 단계면 바깥 묶음까지 계속 본다
-      // (접힌 보조 버튼이 한 단계 바깥의 실제 트리거를 가리지 않게).
-      const triggers = [group, ...all].filter((e) => isTrigger(e) && !popup.contains(e) && expanded.includes(e as HTMLElement));
-      if (triggers.length) return triggers;
-    }
-    return null;
-  });
-}
-
-// 선택지 팝업과 같은 묶음 안의 유일한 트리거(관계 nearest의 증명 조건)와 그 묶음. 정할 수 없으면 null.
-function nearestTrigger(popup: Element, expanded: HTMLElement[]): NearestResult {
-  return cached(nearestCache, expanded, popup, () => nearestTriggerNow(popup, expanded));
-}
-
-function nearestTriggerNow(popup: Element, expanded: HTMLElement[]): NearestResult {
+// 선택지 팝업과 같은 묶음 안의 유일한 트리거(관계 nearest의 증명 조건). 정할 수 없으면 null.
+function nearestTrigger(popup: Element, expanded: HTMLElement[]): HTMLElement | null {
   let group: Element | null = popup.parentElement;
   for (let depth = 0; group && depth < NEAREST_CLIMB; depth++, group = group.parentElement) {
     const doc = group.ownerDocument;
@@ -1052,7 +828,7 @@ function nearestTriggerNow(popup: Element, expanded: HTMLElement[]): NearestResu
       if (p === popup || popup.contains(p)) continue;
       if (POPUP_ROLES.has((p.getAttribute("role") ?? "").trim().toLowerCase()) || p.localName === "dialog") return null;
     }
-    return { trigger: t, group };
+    return t;
   }
   return null;
 }
@@ -1066,7 +842,6 @@ export function relationTrigger(relation: Relation | null): HTMLElement | null {
 function relationDifference(before: Relation, now: Relation | null): string | null {
   if (!now) return "선택지를 연 위젯을 정할 수 없게 됨";
   if (before.mode !== now.mode || before.via !== now.via || before.basis !== now.basis) return "선택지와 트리거의 연결이 바뀜";
-  if ((before.anchor?.deref() ?? null) !== (now.anchor?.deref() ?? null)) return "선택지와 트리거의 연결이 바뀜";
   if (before.popup.deref() !== now.popup.deref()) return "선택지 목록이 바뀜";
   if ((before.trigger?.deref() ?? null) !== (now.trigger?.deref() ?? null)) return "펼쳐진 트리거가 바뀜";
   if (before.nested !== now.nested) return "펼쳐진 트리거가 다른 목록 안으로 옮겨짐";
@@ -1512,7 +1287,6 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, afterWri
   }
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
-  if ((now.outerSubmitTo ?? "") !== (info.outerSubmitTo ?? "")) return "양식 제출 주소가 바뀜";
   if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";
   // 입력 칸은 묶음 안의 앞선 입력이 같은 양식 값을 바꾸므로 제출 주소의 값 부분은 비교하지 않는다
   // (기존 값에 실린 바깥 주소는 승인 카드 판정 때 이미 본다). 클릭은 값이 바뀌면 멈춘다.

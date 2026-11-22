@@ -319,7 +319,6 @@ export async function buildToolPreview(
         linkHrefs: infos
           .flatMap((info) => [
             info.submitTo ?? "",
-            info.outerSubmitTo ?? "",
             info.submitUrl ?? "",
             ...(info.choiceUrls ?? []),
             ...(info.scopeSubmitUrls ?? []),
@@ -456,7 +455,6 @@ export async function buildToolPreview(
           .flatMap((t) => [
             t.href,
             t.submitTo ?? "",
-            t.outerSubmitTo ?? "",
             t.submitUrl ?? "",
             t.ancestorHref ?? "",
             ...(t.choiceUrls ?? []),
