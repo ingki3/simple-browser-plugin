@@ -51,6 +51,7 @@ export function destructiveClickBlock(targets: TargetInfo[]): string | null {
       t.href,
       t.ancestorHref ?? "",
       t.submitTo ?? "",
+      t.outerSubmitTo ?? "",
       ...(t.pingUrls ?? []),
       ...(t.choiceUrls ?? []),
       // 클릭·입력이 일으킬 htmx GET 요청의 목적지.
@@ -134,7 +135,7 @@ export function autoApproveBlock(
   if (tool === "fill_form_fields") {
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
-      actions = [t.submitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
+      actions = [t.submitTo ?? "", t.outerSubmitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
       // 숨긴 checkbox·radio를 보이는 label로 표시하는 칸(#56)은 늘 묻는다. 사용자가 보는 label과 그 주변의 위험 신호를
       // 그 위험 신호를 칸 쪽에서 빠짐없이 모으기 어렵다(구조 판정 — 더 묻는 쪽).
       if (t.proxy) return "보이지 않는 칸(보이는 라벨로 표시) 입력";
@@ -159,7 +160,7 @@ export function autoApproveBlock(
       if (t.submitsPersonal) return "개인정보가 채워진 양식의 칸 입력";
       // 같은 이유로 결제·개인정보 주소로 제출되는(지금 값까지 합친 제출 주소 포함) 양식의 칸,
       // 결제·개인정보 주소를 가리키는 선택지가 있는 칸도 묻는다.
-      for (const url of [t.submitTo ?? "", ...(t.choiceUrls ?? []), ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])]) {
+      for (const url of [t.submitTo ?? "", t.outerSubmitTo ?? "", ...(t.choiceUrls ?? []), ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])]) {
         const why = urlBlock(url, "exact");
         if (why) return `${why}로 이어지는 칸 입력`;
       }
@@ -177,7 +178,7 @@ export function autoApproveBlock(
   }
   if (tool === "click_element") {
     for (const t of targets) {
-      actions = [t.submitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
+      actions = [t.submitTo ?? "", t.outerSubmitTo ?? "", ...(t.scopeFormActions ?? []), ...(t.aroundFormActions ?? [])];
       // 화면에서 숨긴 checkbox·radio를 대신 보여 주는 label을 누르는 클릭(#56)은 채우기의 대리 label 칸과 같이 늘 묻는다.
       if (t.proxy) return "보이지 않는 칸을 대신 보여 주는 라벨 클릭";
       // 실제로 작동하는 바깥 버튼·링크의 글자도 본다(<button>구매 <span>확인</span></button>의 span).
@@ -198,6 +199,7 @@ export function autoApproveBlock(
         t.href,
         t.ancestorHref ?? "",
         t.submitTo ?? "",
+        t.outerSubmitTo ?? "",
         ...(t.choiceUrls ?? []),
         ...(t.scopeFormActions ?? []),
         ...(t.aroundFormActions ?? []),
@@ -563,7 +565,7 @@ export function grantableLink(t: TargetInfo, pageUrl: string | undefined): boole
     return false;
   }
   if (!/^https?:$/.test(dest.protocol)) return false;
-  if (t.ancestorHref || t.submitTo || t.submitUrl || t.download || t.submitsPersonal) return false;
+  if (t.ancestorHref || t.submitTo || t.outerSubmitTo || t.submitUrl || t.download || t.submitsPersonal) return false;
   if (t.pingUrls?.length) return false;
   // 버튼·버튼 역할·인라인 클릭 처리기 안의 링크는 바깥 처리기가 이동을 취소하고 다른 동작(결제)을 할 수 있다.
   if (t.insideControl) return false;

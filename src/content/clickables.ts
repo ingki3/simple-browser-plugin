@@ -327,6 +327,8 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
   const form = control?.form ?? linkedForm ?? ownForm(el) ?? enclosingForm;
   const outerForm = enclosingForm && enclosingForm !== form ? enclosingForm : null;
   const submitTo = formDestination(control ?? el, form);
+  // 화면상 감싼 양식(outerForm)의 제출 주소도 삭제·결제·사이트 판정에 싣는다(#316).
+  const outerSubmitTo = outerForm ? formDestination(el, outerForm) : "";
   const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
   // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
   const ancestorHref = enclosingLinkHref(el);
@@ -399,6 +401,7 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
           }),
       ),
     ...(submitTo ? { submitTo } : {}),
+    ...(outerSubmitTo ? { outerSubmitTo } : {}),
     ...(submitUrl ? { submitUrl } : {}),
     ...(ancestorHref ? { ancestorHref } : {}),
     ...(insideControl ? { insideControl: true } : {}),

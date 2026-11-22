@@ -72,6 +72,8 @@ export interface TargetInfo {
   paymentContext?: boolean;
   // 양식 안 버튼이면 그 양식이 제출되는 주소(formaction 또는 form action을 절대 주소로). 사이트 경계 판정용.
   submitTo?: string;
+  // 대상이 form 속성으로 다른 양식에 딸렸을 때 화면상 감싼 양식의 제출 주소(#316). 삭제·결제·사이트 판정에 submitTo와 같이 쓴다.
+  outerSubmitTo?: string;
   // 지금 칸 값으로 제출하면 요청하는 주소(action + 칸 값 쿼리). 값에 실린 바깥 주소(리다이렉트 매개변수) 판정용.
   submitUrl?: string;
   // 선택 칸의 선택지 값 중 주소처럼 보이는 것(절대 주소로 푼 것). 사이트 경계 판정용.

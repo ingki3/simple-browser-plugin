@@ -54,7 +54,7 @@ export interface TargetKind {
   deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
   // deleteMethod(구조 선언)에 대한 같은 예외(#62).
   deleteMethodExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
-  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "outerSubmitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
 
 interface Entry {
@@ -824,7 +824,9 @@ function activeRefOf(trigger: Element): Element | null {
   return root.getElementById?.(id) ?? null;
 }
 
-const LISTISH_SELECTOR = ["listbox", "menu", "menubar", "option", "menuitem", "menuitemradio", "menuitemcheckbox"]
+// 다른 팝업으로 보는 역할: listbox·menu·menubar와 tree·grid·treegrid(aria-haspopup 종류로 구분하는 팝업)와 그 항목.
+const OTHER_POPUP_ROLES = new Set([...POPUP_ROLES, "tree", "grid", "treegrid"]);
+const LISTISH_SELECTOR = ["listbox", "menu", "menubar", "tree", "grid", "treegrid", "option", "menuitem", "menuitemradio", "menuitemcheckbox", "treeitem"]
   .map((r) => `[role="${r}" i]`)
   .join(", ");
 
@@ -832,7 +834,7 @@ const LISTISH_SELECTOR = ["listbox", "menu", "menubar", "option", "menuitem", "m
 // 안을 모두 볼 수 없으면(shadow root·slot·frame — querySelector가 보지 못함) 목록일 수 있는 것으로 본다(새 관계를 채택하지 않는 쪽).
 function listish(ref: Element): boolean {
   const role = (ref.getAttribute("role") ?? "").trim().toLowerCase();
-  if (POPUP_ROLES.has(role) || CHOICE_ROLES.has(role)) return true;
+  if (OTHER_POPUP_ROLES.has(role) || CHOICE_ROLES.has(role) || role === "treeitem") return true;
   if (ref.querySelector(LISTISH_SELECTOR)) return true;
   if (hasHiddenTree(ref)) return true;
   for (const d of ref.querySelectorAll("*")) if (hasHiddenTree(d)) return true;
@@ -874,8 +876,8 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
   const elsewhere = (t: HTMLElement) => {
     for (const { ref } of ariaRefs(t)) {
       if (ref === popup) continue;
-      // 그 자체로 별도 팝업(상위 메뉴 등)이면 이 목록을 담아도 다른 목록이다(중첩 메뉴의 바깥 버튼).
-      if (POPUP_ROLES.has((ref.getAttribute("role") ?? "").trim().toLowerCase())) return true;
+      // 그 자체로 별도 팝업(상위 메뉴·tree·grid 등)이면 이 목록을 담아도 다른 목록이다(중첩 메뉴의 바깥 버튼).
+      if (OTHER_POPUP_ROLES.has((ref.getAttribute("role") ?? "").trim().toLowerCase())) return true;
       // 이 목록을 담은 요소(팝업 역할이 없는 래퍼).
       if (composedWithinNode(ref, popup)) continue;
       // 같은 목록의 선택지(그 선택지 자신이거나 가장 가까운 팝업이 이 팝업). 목록 안이라도 다른 팝업 경계(하위 메뉴) 너머는 다른 목록이다.
@@ -933,7 +935,8 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     if (expanded.some((b) => claims(b, a))) return fail("many");
     // 목록과 같은 묶음(가장 가까운, 트리거를 품은 조상)에 a 말고 다른 트리거가 있거나 그 묶음을 다 볼 수 없으면 소유가 겹칠 수 있다.
     const g = groupTriggersOf(popup, expanded);
-    if (g === "hidden" || (g && g.some((t) => t !== a))) return fail("many");
+    // 충돌은 실제로 펼친 트리거로만 본다(접힌 보조 버튼 하나로 정상 선택지를 빼지 않게).
+    if (g === "hidden" || (g && g.some((t) => t !== a && expanded.includes(t as HTMLElement)))) return fail("many");
     if (elsewhere(a) || !newPathOk(a, activeRefOf(a))) return fail("none");
     return make("linked", a, "activedescendant");
   }
@@ -999,7 +1002,8 @@ function groupTriggersOf(popup: Element, expanded: HTMLElement[]): Element[] | "
       if (hasHiddenTree(group)) return "hidden";
       const all = Array.from(group.querySelectorAll("*"));
       if (all.some(hasHiddenTree)) return "hidden";
-      const triggers = all.filter((e) => isTrigger(e) && !popup.contains(e));
+      // 묶음 요소 자신도 후보다(목록을 직접 감싼 콤보박스).
+      const triggers = [group, ...all].filter((e) => isTrigger(e) && !popup.contains(e));
       if (triggers.length) return triggers;
     }
     return null;
@@ -1491,6 +1495,7 @@ function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, afterWri
   }
   if (now.paymentContext && !info.paymentContext) return "결제 화면으로 바뀜";
   if ((now.submitTo ?? "") !== (info.submitTo ?? "")) return "양식 제출 주소가 바뀜";
+  if ((now.outerSubmitTo ?? "") !== (info.outerSubmitTo ?? "")) return "양식 제출 주소가 바뀜";
   if ((now.ancestorHref ?? "") !== (info.ancestorHref ?? "")) return "감싼 링크 주소가 바뀜";
   // 입력 칸은 묶음 안의 앞선 입력이 같은 양식 값을 바꾸므로 제출 주소의 값 부분은 비교하지 않는다
   // (기존 값에 실린 바깥 주소는 승인 카드 판정 때 이미 본다). 클릭은 값이 바뀌면 멈춘다.
