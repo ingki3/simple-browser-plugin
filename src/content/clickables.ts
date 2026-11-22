@@ -328,7 +328,10 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
   const outerForm = enclosingForm && enclosingForm !== form ? enclosingForm : null;
   const submitTo = formDestination(control ?? el, form);
   // 화면상 감싼 양식(outerForm)의 제출 주소도 삭제·결제·사이트 판정에 싣는다(#316).
-  const outerSubmitTo = outerForm ? formDestination(el, outerForm) : "";
+  // 감싼 양식 자신의 action이다(누른 버튼의 formaction은 그 버튼이 딸린 양식 B의 것이라 쓰지 않는다 — 양식 요소는 제출자가 아니다).
+  const outerSubmitTo = outerForm ? formDestination(outerForm, outerForm) : "";
+  // 감싼 양식의 지금 칸 값을 합친 제출 주소(값에 실린 바깥 주소 — 리다이렉트 매개변수 판정). 주변 양식 제출 주소(scopeSubmitUrls)로 싣는다.
+  const outerSubmitUrl = outerForm && outerSubmitTo ? formSubmissionUrl(outerForm, outerSubmitTo, null) : "";
   const submitUrl = form && submitTo ? formSubmissionUrl(form, submitTo, control ?? linked) : "";
   // 링크 안의 요소(<a><span role=button>)를 누르면 바깥 링크가 열리므로 그 주소도 목적지로 본다.
   const ancestorHref = enclosingLinkHref(el);
@@ -406,7 +409,10 @@ function clickOnlyRisk(el: HTMLElement): ClickRisk {
     ...(ancestorHref ? { ancestorHref } : {}),
     ...(insideControl ? { insideControl: true } : {}),
     ...(outerText ? { outerText } : {}),
-    ...(scopeForms.changed.length ? { scopeSubmitUrls: scopeForms.changed } : {}),
+    ...(() => {
+      const urls = outerSubmitUrl && !scopeForms.changed.includes(outerSubmitUrl) ? [...scopeForms.changed, outerSubmitUrl] : scopeForms.changed;
+      return urls.length ? { scopeSubmitUrls: urls } : {};
+    })(),
     ...(scopeForms.actions.length ? { scopeFormActions: scopeForms.actions } : {}),
     ...(choiceUrls.length ? { choiceUrls } : {}),
     // 20개를 넘으면 끝까지 보지 못했다는 표시를 넣는다(늘 묻게 된다).

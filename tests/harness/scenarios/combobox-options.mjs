@@ -45,9 +45,10 @@ function page(o = {}) {
     payment: `<form id=b action="/b"></form><form id=pay action="/x"><p>결제 금액 10,000원</p>`,
     deleteOuter: `<form id=b action="/b"></form><form id=dl action="/x"><input type=hidden name=_method value=DELETE>`,
     deleteAction: `<form id=b action="/b"></form><form id=dl action="/items/delete">`,
+    redirectOuter: `<form id=b action="/b"></form><form id=dl action="/x"><input type=hidden name=next value="https://other.example/landing">`,
   }[formMode];
-  const formClose = { "": "</form>", outside: "</div>", outsideNoAttr: "</div>", payment: "</form>", deleteOuter: "</form>", deleteAction: "</form>" }[formMode];
-  const formAttr = formMode === "outside" ? "form=f" : ["payment", "deleteOuter", "deleteAction"].includes(formMode) ? "form=b" : "";
+  const formClose = { "": "</form>", outside: "</div>", outsideNoAttr: "</div>", payment: "</form>", deleteOuter: "</form>", deleteAction: "</form>", redirectOuter: "</form>" }[formMode];
+  const formAttr = formMode === "outside" ? "form=f" : ["payment", "deleteOuter", "deleteAction", "redirectOuter"].includes(formMode) ? "form=b" : "";
   const choiceRole = menuRole ? "menuitem" : "option";
   const popupRole = menuRole ? "menu" : "listbox";
   return `<title>규칙</title><main>
@@ -338,6 +339,50 @@ export default [
     async run(h) {
       const { r, seen } = await pick(h, "/x10", "Country");
       expect(options(r).filter((o) => o.role === "option").length === 10 && seen.length === 0 && r.out === "Country", `연결 유지(cards=${seen.length}, out='${r.out}', ${JSON.stringify(options(r)).slice(0, 200)})`);
+    },
+  },
+  {
+    name: "6c6: form 속성으로 다른 양식에 딸린 트리거라도 화면상 감싼 양식의 칸 값에 실린 다른 사이트 주소로 카드를 띄운다",
+    pages: P("/g10", { portal: true, formMode: "redirectOuter" }),
+    async run(h) {
+      const { r, seen } = await pick(h, "/g10", "Emails");
+      expect(seen.length === 1 && r.out === "Emails", `다른 사이트 주소라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
+    },
+  },
+  {
+    name: "6c7: 다른 양식에 딸린 제출 버튼의 formaction이 화면상 감싼 양식의 삭제 주소를 가리지 않는다",
+    pages: {
+      "/g11": `<title>삭제</title><main><form id=b action="/b"></form><form action="/items/delete"><button form=b formaction="/b/save" onclick="event.preventDefault();window.__picks=(window.__picks||0)+1;document.getElementById('out').textContent='눌림'">저장</button></form><p id=out></p></main>`,
+    },
+    async run(h) {
+      const { r, seen } = await pick(h, "/g11", "저장");
+      expect(seen.length === 1 && r.out === "눌림", `삭제 주소라 자동 실행에서도 카드(cards=${seen.length}, ${seen[0]}, out='${r.out}')`);
+    },
+  },
+  {
+    name: "부정 10p: 목록 옆엔 접힌 보조 버튼, 한 단계 바깥엔 펼친 삭제 버튼이 있으면 묶음 밖 트리거의 activedescendant로 묶지 않는다",
+    pages: {
+      "/x11": `<title>묶음</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-activedescendant=u0 aria-label=Include>
+<div id=outer><button type=button aria-haspopup=listbox aria-expanded=true>항목 삭제</button><div id=inner><button type=button aria-haspopup=menu aria-expanded=false>더보기</button>
+<div role=listbox><div role=option id=u0>U0</div><div role=option id=u1>U1</div></div></div></div><p id=out></p></main>`,
+    },
+    async run(h) {
+      await h.settings({ runMode: "auto" });
+      const r = await h.turn([findC, { text: "끝" }], { path: "/x11" });
+      excluded(r, ["U0", "U1"]);
+    },
+  },
+  {
+    name: "10q: aria-controls로 자기 목록을 감싼 요소를 가리키고 활성 항목도 그 목록이면, 같은 화면의 다른 메뉴 버튼이 있어도 연결한다",
+    pages: {
+      "/x12": `<title>래퍼</title><main><input id=inp role=combobox aria-expanded=true aria-haspopup=true aria-controls=wrap aria-activedescendant=v0 aria-label=Include>
+<div id=wrap><div role=listbox><div role=option id=v0>V0</div><div role=option id=v1>V1</div></div></div>
+<button aria-haspopup=menu aria-expanded=true aria-controls=m>도구</button><ul role=menu id=m><li role=menuitem>도구 항목</li></ul><p id=out></p></main>
+<script>window.__picks=0;for(const o of document.querySelectorAll("[role=option]"))o.addEventListener("click",()=>{window.__picks++;document.getElementById("out").textContent=o.textContent;});</script>`,
+    },
+    async run(h) {
+      const { r, seen } = await pick(h, "/x12", "V1");
+      expect(optNamed(r, "V0")?.listFor === "Include" && seen.length === 0 && r.out === "V1", `연결(cards=${seen.length}, out='${r.out}', ${JSON.stringify(options(r)).slice(0, 200)})`);
     },
   },
   {

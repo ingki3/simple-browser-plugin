@@ -934,9 +934,11 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     const a = actives[0];
     if (expanded.some((b) => claims(b, a))) return fail("many");
     // 목록과 같은 묶음(가장 가까운, 트리거를 품은 조상)에 a 말고 다른 트리거가 있거나 그 묶음을 다 볼 수 없으면 소유가 겹칠 수 있다.
-    const g = groupTriggersOf(popup, expanded);
-    // 충돌은 실제로 펼친 트리거로만 본다(접힌 보조 버튼 하나로 정상 선택지를 빼지 않게).
-    if (g === "hidden" || (g && g.some((t) => t !== a && expanded.includes(t as HTMLElement)))) return fail("many");
+    // 충돌은 실제로 펼친 트리거로만 본다(접힌 보조 버튼 하나로 정상 선택지를 빼지 않게). a 자신의 aria-controls·owns가 이 목록을
+    // 담은 요소를 가리키면(명시적 래퍼 연결과 활성 항목이 일치) 묶음 추정보다 강한 근거라 묶음 검사를 하지 않는다(다른 트리거의 참조는 claims가 본다).
+    const ownsWrapper = ariaRefs(a).some(({ ref }) => ref !== popup && composedWithinNode(ref, popup));
+    const g = ownsWrapper ? null : groupTriggersOf(popup, expanded);
+    if (g === "hidden" || (g && g.some((t) => t !== a))) return fail("many");
     if (elsewhere(a) || !newPathOk(a, activeRefOf(a))) return fail("none");
     return make("linked", a, "activedescendant");
   }
@@ -991,7 +993,7 @@ function cached<T>(store: WeakMap<HTMLElement[], Map<Element, T>>, expanded: HTM
   return v;
 }
 
-// 팝업에서 위로 6단계 안에 트리거를 품는 첫 묶음의 트리거들(펼침 여부 무관). 그런 묶음이 없거나 body에 닿으면 null,
+// 팝업에서 위로 6단계 안에 펼친 트리거를 품는 첫 묶음의 펼친 트리거들. 그런 묶음이 없거나 body에 닿으면 null,
 // 안을 모두 볼 수 없으면 "hidden".
 function groupTriggersOf(popup: Element, expanded: HTMLElement[]): Element[] | "hidden" | null {
   return cached(groupCache, expanded, popup, () => {
@@ -1002,8 +1004,9 @@ function groupTriggersOf(popup: Element, expanded: HTMLElement[]): Element[] | "
       if (hasHiddenTree(group)) return "hidden";
       const all = Array.from(group.querySelectorAll("*"));
       if (all.some(hasHiddenTree)) return "hidden";
-      // 묶음 요소 자신도 후보다(목록을 직접 감싼 콤보박스).
-      const triggers = [group, ...all].filter((e) => isTrigger(e) && !popup.contains(e));
+      // 묶음 요소 자신도 후보다(목록을 직접 감싼 콤보박스). 접힌 트리거만 있는 단계면 바깥 묶음까지 계속 본다
+      // (접힌 보조 버튼이 한 단계 바깥의 실제 트리거를 가리지 않게).
+      const triggers = [group, ...all].filter((e) => isTrigger(e) && !popup.contains(e) && expanded.includes(e as HTMLElement));
       if (triggers.length) return triggers;
     }
     return null;
