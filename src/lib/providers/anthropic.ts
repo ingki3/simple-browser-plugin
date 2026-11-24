@@ -120,7 +120,13 @@ export function anthropicMessages(messages: OpenRouterMessage[]): { system: stri
       // 이 제공자에서 받은 응답이면 받은 블록 배열을 그대로 돌려준다.
       const original = originalBlocks(m.reasoning_details);
       if (original) {
-        push("assistant", original);
+        // tool_use id는 기록의 호출 id(순서대로)로 맞춘다 — 받을 때 겹친 id를 새로 준 경우(#318) 결과(tool_result)와 짝이 맞게.
+        const ids = (m.tool_calls ?? []).map((c) => c.id);
+        let k = 0;
+        push(
+          "assistant",
+          original.map((b) => (b.type === "tool_use" && k < ids.length ? { ...b, id: ids[k++] } : b)),
+        );
         continue;
       }
       const blocks: Block[] = [

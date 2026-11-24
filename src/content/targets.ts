@@ -95,11 +95,14 @@ function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null,
       break;
     }
   }
-  const refs = [row, explicitRow, item?.ref.deref() ?? null, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
+  // 클릭 이벤트 경로의 가까운 두 조상(행 표시가 없는 일반 div 행 사이로 같은 노드를 옮기는 경우 — 코드 리뷰 2회차).
+  const up1 = eventParent(el);
+  const up2 = up1 ? eventParent(up1) : null;
+  const refs = [row, explicitRow, up1, up2, item?.ref.deref() ?? null, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
   const { tag, role, name, modelName, modelNameClipped, href, context, modelContext, region, inFrame, fieldType } = base;
   const key = fingerprint(
     canonicalJson({
-      tag, role, name, modelName, modelNameClipped, href, context, modelContext, region, inFrame, fieldType,
+      tag, role, name, modelName, modelNameClipped, href, submitTo: base.submitTo ?? null, context, modelContext, region, inFrame, fieldType,
       list: base.list?.index ?? null,
       item: item?.text ?? null,
       relation: relation ? [relation.mode, relation.via, relation.basis, relation.nested] : null,
