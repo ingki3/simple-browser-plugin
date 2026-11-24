@@ -20,7 +20,7 @@ export const KAKAO_FAKE = { KEY, CLIENT_SECRET, LINK };
 // - memoReplies: { status, body } 말고도 "throw"(요청을 기록한 뒤 거부)·"raw"(200 + JSON이 아닌 본문)를 넣을 수 있다.
 // - flowReject / flowAnswer("error" | "origin") / redirectUrl: 로그인 창 거부, 돌아올 주소 바꾸기, getRedirectURL 값 바꾸기.
 // - refreshUsedLatest / stateEchoed: 대역이 안에서 계산한 일치 여부만 내보낸다(토큰·state 값은 시나리오로 나가지 않는다).
-// - kakaoReads: chrome.storage.local.get("kakao") 횟수(보내기가 저장 상태를 읽었는지 — 제품 코드를 고치지 않고 본다).
+// - codePrefix: 로그인 창이 돌려주는 인가 코드의 앞부분(기본 "C" — 누출 검사는 고유한 값으로 바꿔 그 값 자체를 찾는다).
 export async function installKakao(h) {
   await h.sw.evaluate(() => {
     // 앞 시나리오가 남긴 보류는 풀고 새 게이트를 만든다(게이트는 __kk 밖에 둔다 — __kk는 값만 담아 그대로 읽어 온다).
@@ -35,14 +35,6 @@ export async function installKakao(h) {
       globalThis.__kkGates[name].open();
       globalThis.__kkGates[name] = mkGate();
     };
-    if (!globalThis.__kkGetInstalled) {
-      globalThis.__kkGetInstalled = true;
-      const origGet = chrome.storage.local.get.bind(chrome.storage.local);
-      chrome.storage.local.get = (...a) => {
-        if (a[0] === "kakao" && globalThis.__kk) globalThis.__kk.kakaoReads += 1;
-        return origGet(...a);
-      };
-    }
     globalThis.__kk = {
       holdRefresh: false,
       refreshWaiting: 0,
@@ -56,7 +48,7 @@ export async function installKakao(h) {
       lastRefreshIssued: null,
       refreshUsedLatest: null,
       stateEchoed: null,
-      kakaoReads: 0,
+      codePrefix: "C",
       tokenReqs: [],
       memo: [],
       flows: [],
@@ -164,7 +156,7 @@ export async function installKakao(h) {
         kk.flows.push({ origin: a.origin, path: a.pathname, clientId: a.searchParams.get("client_id"), scope: a.searchParams.get("scope"), redirect: a.searchParams.get("redirect_uri") });
         kk.stateEchoed = !!a.searchParams.get("state");
         if (kk.flowReject) throw new Error("The user did not approve access.");
-        const code = `C${++kk.codeSeq}`;
+        const code = `${kk.codePrefix}${++kk.codeSeq}`;
         const state = kk.badState ? "wrong-state" : a.searchParams.get("state");
         if (kk.flowAnswer === "error") return `${a.searchParams.get("redirect_uri")}?error=access_denied&state=${state}`;
         if (kk.flowAnswer === "origin") return `https://other.example/?code=${code}&state=${state}`;
@@ -209,10 +201,11 @@ export async function connect(h, opt) {
   opt ??= await h.openOptions("model");
   await installKakao(h);
   const saved = await optSend(opt, { kind: "kakao_save_keys", restKey: KEY, clientSecret: CLIENT_SECRET, linkUrl: LINK });
-  expect(saved?.ok && saved.data.hasKey && saved.data.linkSet && !saved.data.connected, `키 저장(${JSON.stringify(saved)})`);
+  // 실패 문구에 응답 전체를 넣지 않는다(#319 — 응답에 값이 섞이는 회귀가 있어도 하네스 출력에 남지 않게).
+  expect(saved?.ok && saved.data.hasKey && saved.data.linkSet && !saved.data.connected, `키 저장(ok=${saved?.ok})`);
   expect(!JSON.stringify(saved).includes(KEY) && !JSON.stringify(saved).includes(CLIENT_SECRET), "상태에 키·시크릿 없음");
   const c = await optSend(opt, { kind: "kakao_connect" });
-  expect(c?.ok && c.data.connected && c.data.connectedAt > 0, `연결(${JSON.stringify(c)})`);
+  expect(c?.ok && c.data.connected && c.data.connectedAt > 0, `연결(ok=${c?.ok})`);
   expect(Object.keys(c.data).sort().join(",") === "connected,connectedAt,hasKey,linkSet,needsLogin", `허용한 필드만(${Object.keys(c.data)})`);
   expect((await kk(h)).userMe === 1, "연결 확정에 사용자 정보 조회 한 번");
   expect(!JSON.stringify(await stored(h)).includes("가짜 이름"), "사용자 정보는 저장하지 않음");

@@ -15,7 +15,8 @@ const VERSION_KEY = "googleAuthVersion";
 // - tokenReply(interactive): getAuthToken 콜백에 넘길 값. { lastError } 를 주면 chrome.runtime.lastError로 실패시킨다.
 // - fetchReply(url, init): fetch 응답(Response) 또는 throw.
 function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () => FAKE_TOKEN, fetchReply = () => new Response("{}", { status: 200 }) } = {}) {
-  const calls = { getAuthToken: [], removeCached: [], storageSet: [], fetch: [] };
+  // order: 캐시 삭제·fetch·알림 저장이 일어난 순서(한 배열에 적는다).
+  const calls = { getAuthToken: [], removeCached: [], storageSet: [], fetch: [], order: [] };
   const runtime = {
     lastError: undefined,
     getManifest: () => (clientId ? { oauth2: { client_id: clientId, scopes: [] } } : {}),
@@ -26,6 +27,7 @@ function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () =
       local: {
         set: async (obj) => {
           calls.storageSet.push(Object.keys(obj));
+          calls.order.push("storageSet");
         },
       },
     },
@@ -45,6 +47,7 @@ function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () =
       },
       removeCachedAuthToken: ({ token }, cb) => {
         calls.removeCached.push(token);
+        calls.order.push("removeCached");
         cb();
       },
     };
@@ -52,6 +55,7 @@ function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () =
   globalThis.chrome = chromeStub;
   globalThis.fetch = async (url, init) => {
     calls.fetch.push({ url: String(url), init });
+    calls.order.push("fetch");
     return fetchReply(String(url), init);
   };
   return calls;
@@ -130,6 +134,8 @@ test("U4 clearGoogleToken: 캐시 삭제 → 폐기 요청 → 알림, 토큰이
   assert.equal(`${u.origin}${u.pathname}`, "https://oauth2.googleapis.com/revoke");
   assert.equal(c.fetch[0].init?.method, "POST");
   assert.deepEqual(c.storageSet, [[VERSION_KEY]]);
+  // 순서: 캐시 삭제 → 원격 폐기 → 알림(알림이 먼저 나가면 다른 설정 화면이 아직 남은 캐시를 읽는다).
+  assert.deepEqual(c.order, ["removeCached", "fetch", "storageSet"]);
 
   // 토큰이 없으면(조용한 조회 실패) 삭제·폐기 0회, 알림 1회.
   c = install({ tokenReply: () => ({ lastError: "OAuth2 not granted or revoked." }) });
@@ -157,6 +163,7 @@ test("U4 clearGoogleToken: 캐시 삭제 → 폐기 요청 → 알림, 토큰이
   assert.deepEqual(c.removeCached, [FAKE_TOKEN]);
   assert.equal(c.fetch.length, 1);
   assert.deepEqual(c.storageSet, [[VERSION_KEY]]);
+  assert.deepEqual(c.order, ["removeCached", "fetch", "storageSet"]);
 });
 
 test("U5 getGoogleConnectionState·isGoogleConfigured: 미설정이면 getAuthToken을 부르지 않고, 설정됐고 조용한 토큰이 성공하면 connected", async () => {

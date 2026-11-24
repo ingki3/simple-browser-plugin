@@ -97,8 +97,11 @@ const LEAK_MARKS = [
   ["클라이언트 시크릿", CLIENT_SECRET],
   ["액세스 토큰", "fake-access-"],
   ["리프레시 토큰", "fake-refresh-"],
-  ["인가 코드", "code=C"],
+  ["인가 코드(주소 꼴)", "code="],
+  ["인가 코드", "fake-code-"],
 ];
+// 인가 코드를 고유한 값으로 발급하게 한다(짧은 기본값 "C1"은 다른 글자와 구별할 수 없다). 이후 누출 검사는 그 값 자체를 찾는다.
+const uniqueCodes = (h) => setKk(h, { codePrefix: "fake-code-" });
 async function expectNoLeak(h, opt, responses) {
   const channels = {
     응답: JSON.stringify(responses),
@@ -118,7 +121,7 @@ async function reconnect(h, opt) {
   expect(saved?.ok === true, `키 저장(${brief(saved)})`);
   const c = await optSend(opt, { kind: "kakao_connect" });
   expect(c?.ok === true && c.data.connected === true, `연결(${brief(c)})`);
-  await setKk(h, { memo: [], tokenReqs: [], flows: [], refreshes: 0, refreshWaiting: 0, memoWaiting: 0, kakaoReads: 0 });
+  await setKk(h, { memo: [], tokenReqs: [], flows: [], refreshes: 0, refreshWaiting: 0, memoWaiting: 0 });
 }
 
 const testSend = (opt) => optSend(opt, { kind: "kakao_test_send" });
@@ -131,16 +134,18 @@ export default [
     run: guarded(async (h, track) => {
       const opt = await connect(h);
       await nearExpiry(h);
-      await setKk(h, { holdRefresh: true, kakaoReads: 0 });
+      await setKk(h, { holdRefresh: true });
       const p1 = track(testSend(opt));
       await waitUntil(async () => (await kk(h)).refreshWaiting >= 1, { label: "첫 보내기의 갱신 요청이 대역에 도착" });
-      const readsAfterFirst = (await kk(h)).kakaoReads;
       const p2 = track(testSend(opt));
-      // 둘째 보내기도 저장 상태(만료 임박)를 읽었는지: 시험 전송은 시작할 때 한 번, 토큰을 고를 때 한 번 읽는다.
-      await waitUntil(async () => (await kk(h)).kakaoReads >= readsAfterFirst + 2, { label: "둘째 보내기가 만료 임박 상태를 읽음" });
-      // 저장 큐를 한 번 거친다: 둘째 보내기가 따로 갱신을 시작했다면(합치기 회귀) 이 응답보다 먼저 큐에 들어가 요청까지 나간다.
-      const st = await within(optSend(opt, { kind: "kakao_status" }), 3000);
-      expect(st.done && st.v?.ok === true, `보류 중에도 상태 조회가 끝남(${brief(st)})`);
+      // 둘째 보내기가 만료 임박 상태를 읽고 갱신까지 갔는지는 저장 큐의 순서로 본다(고정 지연·읽기 횟수 세기 없이).
+      // 같은 설정 탭에서 뒤에 보낸 상태 조회는 둘째 보내기보다 늦게 도착하고, 저장 큐는 들어온 순서대로 돈다. 둘째 보내기는
+      // 큐를 거쳐 상태를 읽고(시작할 때·토큰을 고를 때) 갱신에 합류하므로, 상태 조회를 차례로 몇 번 끝내면 그 읽기들과 —
+      // 합치기가 빠졌다면 따로 시작한 갱신의 읽기·요청까지 — 모두 그 앞에서 끝난다. 읽는 횟수가 달라져도 넉넉하게 네 번 거친다.
+      for (let i = 0; i < 4; i++) {
+        const st = await within(optSend(opt, { kind: "kakao_status" }), 3000);
+        expect(st.done && st.v?.ok === true, `보류 중에도 상태 조회가 끝남(${i + 1}번째, ${brief(st)})`);
+      }
       const mid = await kk(h);
       expect(mid.refreshes === 1 && mid.refreshWaiting === 1, `보류 중 갱신 요청 1회(요청 ${mid.refreshes} / 대기 ${mid.refreshWaiting})`);
       expect(mid.memo.length === 0, `갱신 전에는 메모 0(${mid.memo.length})`);
@@ -158,6 +163,7 @@ export default [
     name: "카카오 인증 H2: 갱신을 기다리는 사이 끊기·재연결·키 바꾸기는 바로 끝나고, 늦게 끝난 옛 갱신(성공·400·401)은 새 상태를 건드리지 않는다",
     run: guarded(async (h, track) => {
       const opt = await connect(h);
+      await uniqueCodes(h);
       const responses = [];
       const changes = {
         끊기: () => optSend(opt, { kind: "kakao_disconnect" }),
@@ -443,6 +449,7 @@ export default [
     run: guarded(async (h) => {
       const opt = await h.openOptions("model");
       await installKakao(h);
+      await uniqueCodes(h);
       const responses = [];
       const reqs = async () => {
         const s = await kk(h);
@@ -456,7 +463,7 @@ export default [
         responses.push(r);
         expect(r?.ok === false && String(r.error).includes(includes), `${what}: 고정 문구(${brief(r)})`);
         const after = await storedInfo(h);
-        expect(!after?.hasAccess && (after?.epoch ?? 0) === (before?.epoch ?? 0), `${what}: 토큰 저장 없음·세대 불변(${before?.epoch} → ${after?.epoch})`);
+        expect(!after?.hasAccess && !after?.hasRefresh && (after?.epoch ?? 0) === (before?.epoch ?? 0), `${what}: 액세스·리프레시 토큰 저장 없음·세대 불변(액세스 ${!!after?.hasAccess} / 리프레시 ${!!after?.hasRefresh} / 세대 ${before?.epoch} → ${after?.epoch})`);
         const r1 = await reqs();
         const got = { flows: r1.flows - r0.flows, tokens: r1.tokens - r0.tokens, userMe: r1.userMe - r0.userMe };
         expect(got.flows === want.flows && got.tokens === want.tokens && got.userMe === 0, `${what}: 요청 수(로그인 창 ${got.flows} / 토큰 ${got.tokens} / 사용자 정보 ${got.userMe})`);
@@ -499,7 +506,7 @@ export default [
       expect(ok?.ok === true && ok.data.connected === true, `정상 연결(${brief(ok)})`);
       expect((await kk(h)).stateEchoed === true, "로그인 주소에 state가 있다");
       const after = await storedInfo(h);
-      expect(after.hasAccess && after.epoch === before.epoch + 1, `연결 저장·세대 +1(${before.epoch} → ${after.epoch})`);
+      expect(after.hasAccess && after.hasRefresh && after.epoch === before.epoch + 1, `연결 저장·세대 +1(${before.epoch} → ${after.epoch})`);
       await expectNoLeak(h, opt, responses);
     }),
   },
@@ -507,6 +514,7 @@ export default [
     name: "카카오 인증 H9: 연결 뒤 identity 권한이 사라져도 보내기·갱신은 되고, 응답·화면·로그에 키·시크릿·토큰이 없다",
     run: guarded(async (h) => {
       const opt = await connect(h);
+      await uniqueCodes(h);
       const responses = [];
       await h.sw.evaluate(() => {
         delete chrome.identity;
