@@ -340,6 +340,35 @@ export default [
     }),
   },
   {
+    // #319 ①의 리뷰에서 넘어온 보강: H4는 실패 종류마다 다시 연결해 세대를 바꾼다. 여기서는 다시 연결하지 않고 같은 세대에서 이어 보낸다.
+    name: "카카오 인증 H4b: 갱신이 일시 실패(500·형식 이상·연결 실패)한 뒤 같은 연결에서 다시 보내면 새 갱신이 나가고 보내진다",
+    run: guarded(async (h) => {
+      const opt = await connect(h);
+      const start = await storedInfo(h);
+      const soft = {
+        500: { status: 500, body: { msg: "서버 오류 원문" } },
+        "형식 이상": { status: 200, body: { token_type: "bearer" } },
+        "연결 실패": "network",
+      };
+      for (const [what, reply] of Object.entries(soft)) {
+        await nearExpiry(h);
+        await setKk(h, { memo: [], refreshes: 0, refreshReplies: [reply] });
+        const failed = await testSend(opt);
+        expect(failed?.ok === false && String(failed.error).startsWith(TEST_FAIL), `갱신 ${what}: 첫 보내기는 실패 안내(${brief(failed)})`);
+        let st = await kk(h);
+        expect(st.refreshes === 1 && st.memo.length === 0, `갱신 ${what}: 갱신 1회·메모 0(${st.refreshes} / ${st.memo.length})`);
+        // 다시 연결하지 않는다: 같은 세대·같은 토큰(만료 임박 그대로)으로 한 번 더 보낸다. 대역은 이번에는 기본 응답(성공)을 준다.
+        const again = await testSend(opt);
+        expect(again?.ok === true, `갱신 ${what}: 같은 연결에서 다시 보내면 성공(${brief(again)})`);
+        st = await kk(h);
+        expect(st.refreshes === 2, `갱신 ${what}: 새 갱신 요청이 나감(누적 ${st.refreshes})`);
+        expect(st.memo.length === 1 && /^Bearer fake-access-refreshed-\d+$/.test(st.memo[0].auth), `갱신 ${what}: 새 토큰으로 메모 1회(${st.memo.length})`);
+        const s = await storedInfo(h);
+        expect(s.status === "idle" && s.epoch === start.epoch, `갱신 ${what}: 세대·status 그대로(${start.epoch} → ${s.epoch} / ${s.status})`);
+      }
+    }),
+  },
+  {
     name: "카카오 인증 H5: 갱신 뒤 다시 401·동의 철회(-402)는 needs_login을 저장하고, 갱신을 기다리는 사이 기록된 needs_login은 늦은 갱신 성공이 되살리지 않는다",
     run: guarded(async (h, track) => {
       const opt = await connect(h);

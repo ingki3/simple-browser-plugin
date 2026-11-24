@@ -282,3 +282,14 @@ test("U7 googleFetch 실패: 401은 캐시 삭제 1회·재시도 없이 고정 
   await assert.rejects(auth.googleFetch("/v4/x"), (err) => err instanceof TypeError && err.message === "Failed to fetch");
   assert.equal(c.fetch.length, 1);
 });
+
+// #319 ①의 리뷰에서 넘어온 보강: U5는 성공 분기 뒤에 대역을 바꿔 알림 저장 0회를 실패 분기에서만 본다.
+test("U5b getGoogleConnectionState: 조용한 토큰이 성공한 분기에서도 알림을 저장하지 않는다", async () => {
+  const c = install();
+  assert.deepEqual(await auth.getGoogleConnectionState(), { configured: true, connected: true, clientId: FAKE_CLIENT_ID });
+  await tick();
+  assert.deepEqual(c.getAuthToken, [false]);
+  assert.deepEqual(c.storageSet, [], "성공한 상태 조회는 알림을 쓰지 않는다(쓰면 설정 화면이 다시 조회한다)");
+  assert.deepEqual(c.removeCached, []);
+  assert.equal(c.fetch.length, 0);
+});
