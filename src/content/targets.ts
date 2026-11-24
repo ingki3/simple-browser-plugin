@@ -91,7 +91,19 @@ interface Binding {
 //   바뀜)·호출마다 다른 승인 표시(consentCall·consentPersonal)·경고 표시(hidden)·목록 항목 수(더 불러오면 늚)). 넣을 필드를 고르지 않아
 //   주소·제출 목적지·제출 값·요청 주소처럼 승인 기술이 늘어도 다른 동작은 다른 대상으로 본다(더 묻는 쪽 — 셈을 덜 잇는다).
 //   항목 글자는 앞 준비와 이번 준비 모두에 항목이 있을 때만 비교한다(찾기 모드를 번갈아 써도 셈이 끊기지 않게).
-const BINDING_VOLATILE = ["states", "consentCall", "consentPersonal", "hidden"] as const;
+// 위험 판정용 파생 값(결제·개인정보·민감 칸·삭제 단서 — 일부는 낱말 판정 결과)도 뺀다: 낱말 판정이 이 셈(안내·멈춤)을 바꾸지 않게.
+const BINDING_VOLATILE = [
+  "states",
+  "consentCall",
+  "consentPersonal",
+  "hidden",
+  "paymentContext",
+  "personal",
+  "submitsPersonal",
+  "sensitive",
+  "deleteParam",
+  "deleteChoices",
+] as const;
 function stableInfo(info: TargetInfo): Record<string, unknown> {
   const out: Record<string, unknown> = { ...info };
   for (const k of BINDING_VOLATILE) delete out[k];
@@ -100,11 +112,16 @@ function stableInfo(info: TargetInfo): Record<string, unknown> {
   return out;
 }
 const BINDING_MAX_DEPTH = 64;
-function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null, item?: ItemBinding): Omit<Binding, "rev"> {
+// 경로 끝(문서 맨 위)까지 보지 못하면(깊이 한도) null — 다른 자리로 옮긴 것을 가릴 수 없어 같은 실패 셈에서 뺀다.
+function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null, item?: ItemBinding): Omit<Binding, "rev"> | null {
   const chain: Element[] = [];
-  for (let cur = eventParent(el); cur && chain.length < BINDING_MAX_DEPTH; cur = eventParent(cur)) chain.push(cur);
+  let cur = eventParent(el);
+  for (; cur && chain.length < BINDING_MAX_DEPTH; cur = eventParent(cur)) chain.push(cur);
+  if (cur) return null;
   const row = rowElement(el)?.row ?? null;
-  const refs = [...chain, row, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
+  // label이면 실제로 작동시킬 컨트롤(대리 label이 가리키는 숨은 checkbox·radio가 바뀌는 경우).
+  const control = el.localName === "label" ? (el as HTMLLabelElement).control : null;
+  const refs = [...chain, row, control, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
   const key = fingerprint(
     canonicalJson({
       ...stableInfo(base),
@@ -133,6 +150,11 @@ export function prepareBindingRev(id: string, el: HTMLElement, info: TargetInfo,
   const entry = registry.get(id);
   if (!entry) return undefined;
   const now = bindingOf(el, info, relation, item);
+  if (!now) {
+    // 회차는 계속 올린다(다음 준비의 회차가 앞 회차와 겹치지 않게). 빈 지문은 어떤 바인딩과도 같지 않다.
+    entry.binding = { refs: [], key: "", item: null, rev: (entry.binding?.rev ?? -1) + 1 };
+    return undefined;
+  }
   if (!entry.binding) entry.binding = { ...now, rev: 0 };
   else if (!sameBinding(entry.binding, now)) entry.binding = { ...now, rev: entry.binding.rev + 1 };
   // 같은 대상이고 이번에 항목 모드로 찾았으면 그 항목을 다음 비교의 기준으로 남긴다.

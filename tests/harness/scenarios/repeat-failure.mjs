@@ -186,6 +186,28 @@ const itemsFind = { tool: "find_clickables", args: { mode: "items" } };
 const SUBMITVAL = FORMACTION.replace('<form action="/noop" onsubmit="return false"><button id=b formaction="/edit/A"', '<form action="/detail" onsubmit="return false"><button id=b name=record value=A')
   .replace('b.setAttribute("formaction", "/edit/" + (recs[++n] ?? "Z"));', 'b.setAttribute("value", recs[++n] ?? "Z");');
 
+// 닫을 때마다 문서 제목이 결제 문구를 넣었다 뺐다 하는 변형(코드 리뷰 5회차 P1 — 낱말 판정이 셈을 바꾸지 않아야 함).
+const TITLE_TOGGLE = PAGE.replace("<title>반복 실패</title>", "<title>알림</title>").replace(
+  'out.textContent = "닫음 " + (++window.__dismiss);',
+  'out.textContent = "닫음 " + (++window.__dismiss); document.title = document.title === "알림" ? "결제 알림" : "알림";',
+);
+
+// 같은 label의 for만 바꿔 양식 밖의 다른 숨은 checkbox를 가리키는 변형(코드 리뷰 5회차 P2).
+const LABEL_SWAP = `<title>라벨</title><main>
+<input id=memo aria-label="메모">
+<button id=dismiss style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
+<input type=checkbox id=c1 style="position:absolute;opacity:0;width:1px;height:1px"><input type=checkbox id=c2 style="position:absolute;opacity:0;width:1px;height:1px">
+<label id=lb for=c1 style="display:inline-block;width:120px;height:32px;background:#ddd">선택</label>
+<p id=out></p>
+<script>
+memo.value = ${JSON.stringify(SECRET)};
+lb.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  lb.setAttribute("aria-label", "닫기");
+  setTimeout(() => { lb.removeAttribute("aria-label"); lb.htmlFor = lb.htmlFor === "c1" ? "c2" : "c1"; }, 300);
+});
+</script></main>`;
+
 const show = (callId) => ({ click: "Show options", ...(callId ? { callId } : {}) });
 const dismiss = { click: "Dismiss" };
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs ?? []);
@@ -533,6 +555,32 @@ export default [
       const fails = clickResults(r).filter((t) => t.result?.error);
       expect(fails.length >= 2 && fails[0].repeated === undefined && typeof fails[1].repeated === "string", `두 번째(항목 모드)에 안내(${fails.map((t) => !!t.repeated).join(",")})`);
       expect(r.logs.some((l) => l.includes("same_failure · click_element ×3")), "세 번째(목록 모드)에서 멈춤");
+    },
+  },
+  {
+    name: "닫을 때마다 문서 제목의 결제 문구가 바뀌어도 같은 대상의 같은 실패를 이어 센다(낱말 판정은 셈에 쓰지 않음)",
+    pages: { "/t": TITLE_TOGGLE },
+    async run(h) {
+      await h.settings(settings);
+      const r = await h.turn([findC, show(), findC, dismiss, findC, show(), findC, dismiss, findC, show(), { text: "보내면 안 됨" }], { path: "/t", approve: true });
+      expect(clickFails(r) === 3, `Show 실패 3번(${clickFails(r)})`);
+      const fails = clickResults(r).filter((t) => t.result?.error);
+      expect(fails.length >= 2 && fails[0].repeated === undefined && typeof fails[1].repeated === "string", `두 번째에 안내(${fails.map((t) => !!t.repeated).join(",")})`);
+      expect(r.logs.some((l) => l.includes("same_failure · click_element ×3")), "세 번째에서 멈춤");
+    },
+  },
+  {
+    name: "같은 label이 for만 바꿔 다른 숨은 checkbox를 가리키면 같은 실패로 세지 않는다",
+    pages: { "/lb": LABEL_SWAP },
+    async run(h) {
+      await h.settings(settings);
+      const sel = { click: "선택" };
+      const r = await h.turn([findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { text: "끝까지 감" }], { path: "/lb", approve: true });
+      expect(clickFails(r) === 3, `선택 실패 3번(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 컨트롤은 안내 없음");
+      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
     },
   },
   {
