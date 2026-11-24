@@ -1,4 +1,4 @@
-import { googleFetch } from "./auth";
+import { googleFetch, googleJson } from "./auth";
 
 export interface DriveFile {
   id: string;
@@ -21,8 +21,7 @@ export async function searchFiles(
     orderBy: "modifiedTime desc",
     spaces: "drive",
   });
-  const res = await googleFetch(`/drive/v3/files?${params.toString()}`);
-  const json = (await res.json()) as { files?: DriveFile[] };
+  const json = await googleJson<{ files?: DriveFile[] }>(`/drive/v3/files?${params.toString()}`);
   return json.files ?? [];
 }
 
@@ -39,8 +38,7 @@ export async function listRecent(
     spaces: "drive",
   });
   if (q) params.set("q", q);
-  const res = await googleFetch(`/drive/v3/files?${params.toString()}`);
-  const json = (await res.json()) as { files?: DriveFile[] };
+  const json = await googleJson<{ files?: DriveFile[] }>(`/drive/v3/files?${params.toString()}`);
   return json.files ?? [];
 }
 

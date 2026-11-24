@@ -257,9 +257,8 @@ export default [
     },
   },
   {
-    // #319 PR ① 특성 시험: 지금은 google_* 네 메시지에 발신자 검사가 없어 설정 페이지·패널·content script의 응답이 같다.
-    // ④에서 패널·content script는 거절로 바뀐다(그때 이 시나리오의 (b)·(c) 단언을 바꾼다).
-    name: "google_* 설정 메시지의 발신자별 응답: 설정 페이지·패널·content script 모두 같은 응답 (#319 ④에서 바뀜)",
+    // #319: google_* 네 메시지는 카카오와 같은 기준으로 설정 페이지에서만 받는다(①에서는 세 발신자의 응답이 같았다 — ④에서 바꿈).
+    name: "google_* 설정 메시지의 발신자별 응답: 설정 페이지만 받고, 패널·content script는 네 메시지 모두 거절",
     pages: { "/g": `<title>웹 문서</title><p>본문</p>` },
     async run(h) {
       expect(await h.sw.evaluate(() => typeof chrome.identity === "undefined"), "기본 빌드: identity API 없음");
@@ -292,11 +291,10 @@ export default [
         },
         { base: h.base, kinds: KINDS },
       );
-      for (const [who, r] of [
-        ["설정 페이지", fromOptions],
-        ["패널", fromPanel],
-        ["content script", fromContent],
-      ]) {
+      // (a) 설정 페이지: ①과 같은 응답.
+      {
+        const who = "설정 페이지";
+        const r = fromOptions;
         const s = r?.google_status;
         expect(s?.ok === true && s.data.configured === false && s.data.connected === false && s.data.clientId === "", `${who} google_status(${JSON.stringify(s)})`);
         // 진단 성공과 발신자 거절이 구별되게 ok === true와 진단 필드를 본다.
@@ -307,6 +305,19 @@ export default [
         const x = r?.google_disconnect;
         expect(x?.ok === true && x.error === undefined, `${who} google_disconnect(${JSON.stringify(x)})`);
       }
+      // (b) 패널 (c) content script: 네 메시지 모두 거절. 응답에 상태·진단 값이 실리지 않는다.
+      for (const [who, r] of [
+        ["패널", fromPanel],
+        ["content script", fromContent],
+      ]) {
+        for (const kind of KINDS) {
+          const x = r?.[kind];
+          expect(x?.ok === false && x.error === "허용되지 않은 요청" && x.data === undefined, `${who} ${kind} 거절(ok ${x?.ok}, 필드 ${Object.keys(x ?? {}).join(",")})`);
+        }
+      }
+      // 거절은 로그보다 앞이다: 패널·content script가 보낸 google_connect는 받았다는 로그도 남기지 않는다(설정 페이지의 한 번만).
+      const received = h.logs.filter((l) => l.startsWith("[SBP google:connect:received]")).length;
+      expect(received === 1, `google:connect:received 로그는 설정 페이지의 한 번뿐(${received})`);
       await opt.close();
     },
   },

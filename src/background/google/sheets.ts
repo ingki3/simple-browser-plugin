@@ -1,4 +1,4 @@
-import { googleFetch } from "./auth";
+import { googleJson } from "./auth";
 
 export interface SheetSummary {
   sheetId: number;
@@ -12,10 +12,7 @@ export async function listSheets(spreadsheetId: string): Promise<{
   title: string;
   sheets: SheetSummary[];
 }> {
-  const res = await googleFetch(
-    `/sheets/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=properties.title,sheets.properties`,
-  );
-  const json = (await res.json()) as {
+  const json = await googleJson<{
     properties?: { title?: string };
     sheets?: Array<{
       properties?: {
@@ -25,7 +22,7 @@ export async function listSheets(spreadsheetId: string): Promise<{
         gridProperties?: { rowCount?: number; columnCount?: number };
       };
     }>;
-  };
+  }>(`/sheets/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=properties.title,sheets.properties`);
   const sheets: SheetSummary[] = (json.sheets ?? []).map((s) => ({
     sheetId: s.properties?.sheetId ?? 0,
     title: s.properties?.title ?? "",
@@ -43,10 +40,9 @@ export async function readRange(
   spreadsheetId: string,
   range: string,
 ): Promise<{ range: string; values: string[][] }> {
-  const res = await googleFetch(
+  const json = await googleJson<{ range?: string; values?: string[][] }>(
     `/sheets/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`,
   );
-  const json = (await res.json()) as { range?: string; values?: string[][] };
   return { range: json.range ?? range, values: json.values ?? [] };
 }
 
@@ -54,15 +50,17 @@ export async function writeRange(
   spreadsheetId: string,
   range: string,
   values: string[][],
+  // 도구 중단 신호(#319): 401 뒤 다시 보내기 전에 중단됐으면 다시 쓰지 않는다.
+  signal?: AbortSignal,
 ): Promise<{ updatedCells: number }> {
-  const res = await googleFetch(
+  const json = await googleJson<{ updatedCells?: number }>(
     `/sheets/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
     {
       method: "PUT",
       body: JSON.stringify({ range, majorDimension: "ROWS", values }),
     },
+    { signal },
   );
-  const json = (await res.json()) as { updatedCells?: number };
   return { updatedCells: json.updatedCells ?? 0 };
 }
 
@@ -70,17 +68,19 @@ export async function appendRows(
   spreadsheetId: string,
   range: string,
   values: string[][],
+  // 도구 중단 신호(#319): 401 뒤 다시 보내기 전에 중단됐으면 다시 쓰지 않는다.
+  signal?: AbortSignal,
 ): Promise<{ appendedRows: number; updatedRange: string }> {
-  const res = await googleFetch(
+  const json = await googleJson<{
+    updates?: { updatedRange?: string; updatedRows?: number };
+  }>(
     `/sheets/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
     {
       method: "POST",
       body: JSON.stringify({ majorDimension: "ROWS", values }),
     },
+    { signal },
   );
-  const json = (await res.json()) as {
-    updates?: { updatedRange?: string; updatedRows?: number };
-  };
   return {
     appendedRows: json.updates?.updatedRows ?? 0,
     updatedRange: json.updates?.updatedRange ?? range,

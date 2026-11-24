@@ -1376,7 +1376,7 @@ async function runTool(
     }
     case "google_sheets_write_range": {
       const args = parsedArgs as ToolArgs["google_sheets_write_range"];
-      const data = await writeRange(args.spreadsheetId, args.range, args.values);
+      const data = await writeRange(args.spreadsheetId, args.range, args.values, signal);
       return {
         ok: true,
         summary: `${args.range}에 ${data.updatedCells}개 셀 기록`,
@@ -1385,7 +1385,7 @@ async function runTool(
     }
     case "google_sheets_append_rows": {
       const args = parsedArgs as ToolArgs["google_sheets_append_rows"];
-      const data = await appendRows(args.spreadsheetId, args.range, args.values);
+      const data = await appendRows(args.spreadsheetId, args.range, args.values, signal);
       return {
         ok: true,
         summary: `${data.appendedRows}행 추가 (${data.updatedRange})`,
@@ -1395,7 +1395,7 @@ async function runTool(
     case "google_sheets_write_markdown_table": {
       const args = parsedArgs as ToolArgs["google_sheets_write_markdown_table"];
       const values = parseMarkdownTable(args.markdownTable);
-      const data = await writeRange(args.spreadsheetId, args.range, values);
+      const data = await writeRange(args.spreadsheetId, args.range, values, signal);
       return {
         ok: true,
         summary: `markdown 표 (${values.length}행) → ${args.range}, ${data.updatedCells}셀 기록`,

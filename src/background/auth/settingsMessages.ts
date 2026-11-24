@@ -6,7 +6,7 @@ import { clearGoogleToken, connectGoogle, getGoogleConnectionState } from "../go
 import { debugLog } from "../debug";
 import { identityApi } from "./identity";
 
-// 설정 페이지(옵션 페이지, 해시 제외 전체 URL)에서 보낸 메시지인지(#310 카카오 연결·시험 전송). 사이드 패널·웹 문서(content script)는 아니다.
+// 설정 페이지(옵션 페이지, 해시 제외 전체 URL)에서 보낸 메시지인지(#310 카카오 연결·시험 전송, #319 Google 연동). 사이드 패널·웹 문서(content script)는 아니다.
 function fromOptionsPage(sender: chrome.runtime.MessageSender): boolean {
   const page = chrome.runtime.getManifest().options_page;
   return isOptionsPageSender(sender, chrome.runtime.id, page ? chrome.runtime.getURL(page) : undefined);
@@ -51,7 +51,14 @@ export function handleAuthSettingsMessage(msg: unknown, sender: chrome.runtime.M
     return true;
   }
 
-  // Google 연동(Sheets·Drive) 설정 메시지. 발신자 검사는 아직 없다(#319 ④에서 설정 페이지만 받게 바꾼다) — index.ts에 있던 그대로다.
+  // Google 연동(Sheets·Drive) 설정 메시지. 카카오와 같은 기준으로 설정 페이지에서만 받는다(#319 — 패널·content script 거절).
+  // 거절은 토큰 조회·로그인 창·폐기·로그보다 앞이다.
+  if (m.kind === "google_connect" || m.kind === "google_disconnect" || m.kind === "google_status" || m.kind === "google_diag") {
+    if (!fromOptionsPage(sender)) {
+      sendResponse({ ok: false, error: "허용되지 않은 요청" });
+      return false;
+    }
+  }
   if (m.kind === "google_connect") {
     debugLog("google:connect:received");
     // 클라이언트 ID 없이 빌드하면 identity 권한도 없다(정상) — 그때는 connectGoogle이 "직접 빌드 필요"를 알린다.
