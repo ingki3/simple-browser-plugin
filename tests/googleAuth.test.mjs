@@ -326,6 +326,7 @@ const NO_RESPONSE = "Google 응답을 받지 못했습니다. 쓰기 요청이�
 const UNREADABLE = "Google 응답을 읽지 못했습니다. 쓰기 요청이었다면 반영됐는지 확인한 뒤 다시 시도하세요.";
 const CHANGED = "Google 연결이 바뀌어 멈췄습니다. 다시 시도하세요.";
 const ABORTED = "중단되어 다시 보내지 않았습니다.";
+const NOT_SENT = "중단되어 보내지 않았습니다.";
 const unauthorized = () => new Response('{"error":{"status":"UNAUTHENTICATED"}}', { status: 401, statusText: "Unauthorized" });
 const bearer = (call) => new Headers(call.init.headers).get("Authorization");
 const apiCalls = (c) => c.fetch.filter((f) => !f.url.startsWith("https://oauth2.googleapis.com/"));
@@ -550,14 +551,40 @@ test("G11 401 뒤 재발급을 기다리는 사이 중단되면 다시 보내지
     await settled;
     assert.equal(c.fetch.length, 1, "쓰기 요청은 최초 1회뿐");
   }
-  // 401을 받기 전에 이미 중단됐으면 재발급도 하지 않는다.
+  // 첫 요청의 응답을 기다리는 사이 중단됐으면(401을 받기 전) 재발급도 하지 않는다.
   {
-    const c = install({ fetchReply: unauthorized });
+    const api = gate();
+    const c = install({ fetchReply: () => api.promise });
     const ac = new AbortController();
+    const settled = rejectsWith(auth.googleFetch("/v4/x", { method: "POST", body: "{}" }, { signal: ac.signal }), ABORTED);
+    for (let i = 0; i < 50 && c.fetch.length < 1; i++) await tick();
     ac.abort();
-    await rejectsWith(auth.googleFetch("/v4/x", { method: "POST", body: "{}" }, { signal: ac.signal }), ABORTED);
+    api.open(unauthorized());
+    await settled;
     assert.equal(c.fetch.length, 1);
     assert.deepEqual(c.getAuthToken, [false]);
+  }
+  // 보내기 전에 이미 중단됐거나 첫 토큰을 기다리는 사이 중단되면 쓰기 요청을 한 번도 보내지 않는다.
+  {
+    const c = install();
+    const ac = new AbortController();
+    ac.abort();
+    await rejectsWith(sheets.appendRows("sheet-id", "A1", [["a"]], ac.signal), NOT_SENT);
+    assert.equal(c.fetch.length, 0, "이미 중단: 전송 0회");
+
+    const c2 = install();
+    const hold = gate();
+    globalThis.chrome.identity.getAuthToken = (o, cb) => {
+      c2.getAuthToken.push(o.interactive);
+      hold.promise.then(() => cb(FAKE_TOKEN));
+    };
+    const ac2 = new AbortController();
+    const settled = rejectsWith(sheets.writeRange("sheet-id", "A1", [["a"]], ac2.signal), NOT_SENT);
+    await tick();
+    ac2.abort();
+    hold.open();
+    await settled;
+    assert.equal(c2.fetch.length, 0, "토큰 대기 중 중단: 전송 0회");
   }
   // 시트 쓰기 두 함수(범위 쓰기·Markdown 표 쓰기가 타는 writeRange, 행 추가 appendRows)가 신호를 끝까지 넘긴다.
   for (const [what, write] of [

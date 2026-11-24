@@ -204,6 +204,7 @@ const NO_RESPONSE = "Google 응답을 받지 못했습니다. 쓰기 요청이�
 const UNREADABLE = "Google 응답을 읽지 못했습니다. 쓰기 요청이었다면 반영됐는지 확인한 뒤 다시 시도하세요.";
 const REAUTH = "Google 인증이 만료됐습니다. 설정에서 'Google 연결'을 다시 눌러 주세요.";
 const CONNECTION_CHANGED = "Google 연결이 바뀌어 멈췄습니다. 다시 시도하세요.";
+const ABORTED_BEFORE_SEND = "중단되어 보내지 않았습니다.";
 const ABORTED_BEFORE_RETRY = "중단되어 다시 보내지 않았습니다.";
 
 // 상태 번호로만 고르는 안내(본문은 보지 않는다).
@@ -217,7 +218,7 @@ function statusHint(status: number): string {
 }
 
 export interface GoogleFetchOptions {
-  // 도구 중단 신호. 401 뒤 다시 보내기 직전에 본다(중단됐으면 다시 보내지 않는다). 진행 중인 요청을 끊지는 않는다.
+  // 도구 중단 신호. 보내기 직전(토큰을 받은 뒤)과 401 뒤 다시 보내기 직전에 본다(중단됐으면 보내지 않는다). 진행 중인 요청을 끊지는 않는다.
   signal?: AbortSignal;
 }
 
@@ -264,6 +265,8 @@ export async function googleFetch(
     ? path
     : `https://www.googleapis.com${path}`;
   const token = await getGoogleToken();
+  // 토큰을 기다리는 사이 중단됐으면 처음부터 보내지 않는다.
+  if (opts.signal?.aborted) throw new Error(ABORTED_BEFORE_SEND);
   let attempt = await sendOnce(url, init, token);
   if (!attempt.ok && attempt.status === 401) {
     await callRemoveCachedAuthToken(token);
