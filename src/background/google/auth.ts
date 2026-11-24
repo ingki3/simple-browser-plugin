@@ -72,9 +72,13 @@ function bumpAuthVersion(): void {
 export async function connectGoogle(): Promise<{ ok: true }> {
   requireOauthConfigured();
   debugLog("google:auth:start", "interactive");
+  // 이 연결 시도와 겹친 요청은 401이어도 다시 보내지 않는다(로그인 창에서 다른 계정을 골랐을 수 있다).
+  authChangeSeq += 1;
+  authChanging += 1;
   try {
     await callGetAuthToken(true);
   } finally {
+    authChanging -= 1;
     bumpAuthVersion();
   }
   debugLog("google:auth:ok");
@@ -93,12 +97,14 @@ export async function getGoogleToken(): Promise<string> {
   }
 }
 
-// 연결 끊기와 진행 중인 요청의 401 재시도가 엇갈리지 않게 하는 메모리 값(#319). 서비스 워커가 다시 뜨면 진행 중이던 요청도 사라지므로 저장하지 않는다.
-// - disconnectSeq: 끊기가 시작될 때마다 1 오른다. 요청이 시작된 뒤에 시작한 끊기를 잡는다.
-// - disconnecting: 진행 중인 끊기의 수(폐기 응답을 기다리는 동안에도 올라가 있다. 여러 설정 탭의 끊기가 겹쳐도 맞다).
-//   요청이 시작될 때 이미 진행 중이던 끊기를 잡는다.
-let disconnectSeq = 0;
-let disconnecting = 0;
+// 설정의 연결·끊기와 진행 중인 요청의 401 재시도가 엇갈리지 않게 하는 메모리 값(#319). 서비스 워커가 다시 뜨면 진행 중이던 요청도
+// 사라지므로 저장하지 않는다. 연결도 넣는 이유: 로그인 창(동의 화면)에서 다른 계정을 고르면 Chrome이 그 계정을 이 확장의 계정으로
+// 바꾸는데, 두 계정의 로그인 상태는 그대로라 로그인 상태 변화로는 잡히지 않는다.
+// - authChangeSeq: 연결·끊기가 시작될 때마다 1 오른다. 요청이 시작된 뒤에 시작한 연결·끊기를 잡는다.
+// - authChanging: 진행 중인 연결·끊기의 수(로그인 창·폐기 응답을 기다리는 동안에도 올라가 있다. 여러 설정 탭에서 겹쳐도 맞다).
+//   요청이 시작될 때 이미 진행 중이던 연결·끊기를 잡는다.
+let authChangeSeq = 0;
+let authChanging = 0;
 
 // Chrome 프로필의 로그인 상태가 바뀐 횟수(메모리). getAuthToken은 계정을 지정하지 않으면 Chrome 프로필의 계정(동기화 계정, 없으면 첫
 // Google 웹 계정)을 쓰므로, 401 뒤 다시 받은 토큰이 처음 요청과 같은 계정의 것인지 토큰만으로는 알 수 없다. 요청이 도는 사이
@@ -128,12 +134,12 @@ const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 
 export async function clearGoogleToken(): Promise<void> {
   if (!identityApi()) return;
-  disconnectSeq += 1;
-  disconnecting += 1;
+  authChangeSeq += 1;
+  authChanging += 1;
   try {
     await clearGoogleTokenInner();
   } finally {
-    disconnecting -= 1;
+    authChanging -= 1;
     bumpAuthVersion();
   }
 }
@@ -142,8 +148,9 @@ async function clearGoogleTokenInner(): Promise<void> {
   try {
     const token = await callGetAuthToken(false);
     await callRemoveCachedAuthToken(token);
-    // 토큰은 주소(쿼리)가 아니라 본문에 싣는다 — 주소는 로그·기록에 남기 쉽다. 응답은 읽지 않고, 실패(연결 실패·시간 초과)는 삼킨다.
-    await fetchLimited(
+    // 토큰은 주소(쿼리)가 아니라 본문에 싣는다 — 주소는 로그·기록에 남기 쉽다. 응답 본문은 읽지 않고, 실패(연결 실패·시간 초과)는 삼킨다.
+    // 성공 응답을 받았을 때만 폐기됐다고 기록한다(그 밖에는 로컬 캐시만 지운 것이고 원격 폐기 여부는 모른다).
+    const revoked = await fetchLimited(
       REVOKE_URL,
       {
         method: "POST",
@@ -153,9 +160,11 @@ async function clearGoogleTokenInner(): Promise<void> {
       { timeoutMs: fetchLimitMs },
       async (res) => {
         void res.body?.cancel().catch(() => {});
+        return res.ok;
       },
-    ).catch(() => undefined);
-    debugLog("google:disconnect:revoked");
+    ).catch(() => false);
+    if (revoked) debugLog("google:disconnect:revoked");
+    else debugLog("google:disconnect:revoke_unconfirmed", undefined, "warn");
   } catch {
     debugLog("google:disconnect:no_token");
   }
@@ -238,8 +247,8 @@ async function sendOnce(url: string, init: RequestInit, token: string): Promise<
 }
 
 // Google API 요청. 401이면 캐시에서 그 토큰을 지우고 조용히(로그인 창 없이) 다시 받아 한 번만 다시 보낸다.
-// 다시 보내지 않는 경우: 그 사이 연결을 끊었거나 요청을 시작할 때 끊는 중이었음(늦은 재발급이 새 연결의 토큰을 얻어 끊기 전에
-// 시작한 쓰기가 새 연결로 실행되지 않게), 그 사이 Chrome 프로필의 로그인 상태가 바뀜(다시 받은 토큰이 다른 계정의 것일 수 있다),
+// 다시 보내지 않는 경우: 그 사이 설정에서 연결·끊기를 시작했거나 요청을 시작할 때 연결·끊기가 진행 중이었음(늦은 재발급이 새 연결이나
+// 다른 계정의 토큰을 얻어, 그 전에 시작한 쓰기가 그 권한으로 실행되지 않게), 그 사이 Chrome 프로필의 로그인 상태가 바뀜(다시 받은 토큰이 다른 계정의 것일 수 있다),
 // 중단됨(opts.signal), 본문을 다시 쓸 수 없음. 401이 아닌 실패·응답 없음·본문 읽기 실패는
 // 다시 보내지 않는다(쓰기가 이미 반영됐을 수 있다).
 export async function googleFetch(
@@ -247,8 +256,8 @@ export async function googleFetch(
   init: RequestInit = {},
   opts: GoogleFetchOptions = {},
 ): Promise<Response> {
-  const startedSeq = disconnectSeq;
-  const startedDuringDisconnect = disconnecting > 0;
+  const startedSeq = authChangeSeq;
+  const startedDuringChange = authChanging > 0;
   const signInWatched = watchSignIn();
   const startedSignIn = signInSeq;
   const url = path.startsWith("https://")
@@ -258,7 +267,7 @@ export async function googleFetch(
   let attempt = await sendOnce(url, init, token);
   if (!attempt.ok && attempt.status === 401) {
     await callRemoveCachedAuthToken(token);
-    if (startedDuringDisconnect || disconnectSeq !== startedSeq || signInSeq !== startedSignIn) throw new Error(CONNECTION_CHANGED);
+    if (startedDuringChange || authChangeSeq !== startedSeq || signInSeq !== startedSignIn) throw new Error(CONNECTION_CHANGED);
     // 로그인 상태 변화를 볼 수 없으면 다시 받은 토큰이 같은 계정의 것인지 확인할 수 없다 — 다시 보내지 않는다.
     if (!signInWatched) throw new Error(REAUTH);
     if (opts.signal?.aborted) throw new Error(ABORTED_BEFORE_RETRY);
@@ -271,7 +280,7 @@ export async function googleFetch(
       throw new Error(REAUTH);
     }
     // 재발급을 기다리는 사이에 끊었거나 Chrome 프로필의 로그인 상태가 바뀌었거나 중단했는지 다시 본다.
-    if (disconnectSeq !== startedSeq || signInSeq !== startedSignIn) throw new Error(CONNECTION_CHANGED);
+    if (authChangeSeq !== startedSeq || signInSeq !== startedSignIn) throw new Error(CONNECTION_CHANGED);
     if (opts.signal?.aborted) throw new Error(ABORTED_BEFORE_RETRY);
     debugLog("google:fetch:retry_401");
     attempt = await sendOnce(url, init, next);

@@ -730,6 +730,85 @@ test("G13 요청이 도는 사이 Chrome 프로필의 로그인 상태가 바뀌
   }
 });
 
+test("G14 설정의 연결 시도와 겹친 요청은 401이어도 재발급·재전송하지 않는다(로그인 창에서 다른 계정을 골랐을 수 있다)", async () => {
+  const post = () => auth.googleFetch("/v4/x", { method: "POST", body: "{}" });
+  // (가) 요청을 시작한 뒤 연결(끊기 없이)이 끝나고 나서 401. 로그인 상태 변화 이벤트는 없다.
+  {
+    const api = gate();
+    const c = install({ tokenReply: (interactive) => (interactive ? FAKE_TOKEN_2 : FAKE_TOKEN), fetchReply: () => api.promise });
+    const settled = rejectsWith(post(), CHANGED);
+    for (let i = 0; i < 50 && c.fetch.length < 1; i++) await tick();
+    await auth.connectGoogle();
+    const silentBefore = c.getAuthToken.filter((i) => i === false).length;
+    api.open(unauthorized());
+    await settled;
+    assert.equal(c.fetch.length, 1, "(가) 요청은 최초 1회뿐");
+    assert.equal(c.getAuthToken.filter((i) => i === false).length, silentBefore, "(가) 401 뒤 조용한 재발급 0회");
+  }
+  // (나) 로그인 창이 열려 있는 동안(연결이 끝나지 않음) 시작한 요청.
+  {
+    const c = install({ fetchReply: unauthorized });
+    const login = gate();
+    const orig = globalThis.chrome.identity.getAuthToken;
+    globalThis.chrome.identity.getAuthToken = (o, cb) => {
+      if (!o.interactive) return orig(o, cb);
+      c.getAuthToken.push(true);
+      login.promise.then(() => cb(FAKE_TOKEN_2));
+    };
+    const connecting = auth.connectGoogle();
+    await tick();
+    await rejectsWith(post(), CHANGED);
+    assert.equal(c.fetch.length, 1, "(나) 요청은 최초 1회뿐");
+    assert.deepEqual(c.getAuthToken.filter((i) => i === false), [false], "(나) 재발급 0회");
+    login.open();
+    await connecting;
+  }
+  // (다) 실패한 연결 시도(창을 닫음)와 겹친 요청도 같다. 연결이 끝난 뒤 시작한 요청은 다시 보낸다(진행 중 수가 0으로 돌아온다).
+  {
+    const api = gate();
+    const c = install({ tokenReply: (interactive) => (interactive ? { lastError: "The user did not approve access." } : FAKE_TOKEN), fetchReply: () => api.promise });
+    const settled = rejectsWith(post(), CHANGED);
+    for (let i = 0; i < 50 && c.fetch.length < 1; i++) await tick();
+    await assert.rejects(auth.connectGoogle());
+    api.open(unauthorized());
+    await settled;
+    assert.equal(c.fetch.length, 1);
+    let n = 0;
+    const c2 = install({ fetchReply: () => (++n === 1 ? unauthorized() : new Response("{}", { status: 200 })) });
+    assert.equal((await post()).status, 200);
+    assert.equal(c2.fetch.length, 2);
+  }
+});
+
+test("G15 연결 해제 로그: 폐기 요청이 성공 응답일 때만 revoked, 실패 응답·응답 없음은 revoke_unconfirmed", async () => {
+  const seen = [];
+  const realLog = console.log;
+  const realWarn = console.warn;
+  console.log = (...a) => seen.push(String(a[0]));
+  console.warn = (...a) => seen.push(String(a[0]));
+  try {
+    install();
+    await auth.clearGoogleToken();
+    assert.deepEqual(seen.filter((l) => l.includes("google:disconnect:")), ["[SBP google:disconnect:revoked]"]);
+    for (const fetchReply of [
+      () => new Response("x", { status: 500 }),
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+    ]) {
+      seen.length = 0;
+      const c = install({ fetchReply });
+      await auth.clearGoogleToken();
+      assert.deepEqual(seen.filter((l) => l.includes("google:disconnect:")), ["[SBP google:disconnect:revoke_unconfirmed]"]);
+      assert.deepEqual(c.removeCached, [FAKE_TOKEN], "로컬 캐시는 지운다");
+    }
+    assert.equal(seen.join("\n").includes(FAKE_TOKEN), false, "로그에 토큰이 없다");
+  } finally {
+    console.log = realLog;
+    console.warn = realWarn;
+  }
+});
+
 test("시트·드라이브의 JSON 읽기: 응답을 지금과 같은 값으로 돌려주고, JSON이 아니면 고정 문구", async () => {
   const sheets = await import("../src/background/google/sheets.ts");
   const drive = await import("../src/background/google/drive.ts");
