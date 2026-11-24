@@ -582,9 +582,6 @@ function fullInfo(
 // - nearest: 연결이 없고 펼쳐진 트리거가 둘 이상일 때, 선택지의 팝업에서 위로 6단계 안에 트리거를 품는 첫 묶음(조상)이 트리거를
 //   정확히 하나(그것이 펼쳐짐)와 그 팝업 하나만 담고 다 볼 수 있으면(숨은 트리 없음) 그 트리거(출발·도착처럼 칸마다 목록을
 //   붙이는 자동완성, #네이버 지도). 구조로 추정한 관계라 실행 방식과 관계없이 늘 승인 카드로 묻는다(approvalDecision).
-// - #316: aria-controls·owns 연결이 없을 때, aria-activedescendant가 그 선택지(또는 같은 listbox·menu의 선택지)를 가리키는 펼친 트리거가
-//   정확히 하나이고 쓸 수 있으면(activeLinkUsable) linked. 쓸 수 없으면 무시하고 아래 판정을 그대로 쓴다. controls·owns 연결이 있는데
-//   다른 트리거의 활성 항목도 이 목록을 가리키면 정하지 않는다.
 // - 그 밖(위로도 정할 수 없음, 연결이 둘 이상)은 어느 위젯의 선택지인지 정할 수 없어 클릭 대상으로 돌려주지 않는다.
 // 관계는 찾을 때·승인 카드 때·실행 직전·스크롤과 포커스 뒤에 다시 계산해 같아야 한다.
 // ---------------------------------------------------------------------------
@@ -593,7 +590,7 @@ const CHOICE_ROLES = new Set(["option", "menuitem", "menuitemradio", "menuitemch
 const POPUP_ROLES = new Set(["listbox", "menu", "menubar"]);
 
 // 관계의 근거(#316). 같은 mode·via라도 근거가 바뀌면(래퍼 연결 → 직접 연결 등) 다른 관계로 본다.
-export type RelationBasis = "controls" | "owns" | "activedescendant" | "wrapper" | "unlinked" | "group";
+export type RelationBasis = "controls" | "owns" | "wrapper" | "unlinked" | "group";
 
 // choiceRelation이 null을 돌려준 이유별 수(#316 진단 — 디버그 로그에 수만). 한 선택지당 하나만 올라간다.
 export interface RelationWhy {
@@ -604,7 +601,7 @@ export interface RelationWhy {
 
 export interface Relation {
   mode: "linked" | "unlinked" | "nearest";
-  via: "controls" | "owns" | "activedescendant" | null;
+  via: "controls" | "owns" | null;
   basis: RelationBasis;
   trigger: WeakRef<HTMLElement> | null;
   triggerBase: TargetInfo | null;
@@ -749,45 +746,6 @@ function hasHiddenTree(el: Element): boolean {
   }
 }
 
-// 트리거의 aria-activedescendant가 가리키는 요소(트리거와 같은 Document/ShadowRoot에서 푼다). 빈 값·없는 id면 null.
-function activeRefOf(trigger: Element): Element | null {
-  const id = (trigger.getAttribute("aria-activedescendant") ?? "").trim();
-  if (!id) return null;
-  const root = trigger.getRootNode() as Document | ShadowRoot;
-  return root.getElementById?.(id) ?? null;
-}
-
-// aria-activedescendant 연결(#316, 명시적 ARIA 참조): 활성 항목이 이 선택지이거나, 같은 팝업 역할 요소(listbox·menu) 안의 선택지면 연결 후보.
-// 트리거가 aria-controls·aria-owns로 풀리는 참조를 가졌으면 모두 이 목록·선택지 자체여야 한다(목록을 담은 요소·대화상자·다른 목록을 가리키면
-// 세지 않음 — 대화상자를 연 버튼의 남은 활성 항목 등). 형제 관계(역할 없는 목록의 다른 항목)만으로는 세지 않는다.
-// 목록을 여는 트리거 종류만(구조 속성): role=combobox, 또는 aria-haspopup이 listbox·menu·true. 대화상자·tree·grid를 여는 트리거의 활성 항목은 보지 않는다.
-const LIST_POPUP_VALUES = new Set(["listbox", "menu", "true"]);
-function opensList(trigger: Element): boolean {
-  if ((trigger.getAttribute("role") ?? "").trim().toLowerCase() === "combobox") return true;
-  return LIST_POPUP_VALUES.has((trigger.getAttribute("aria-haspopup") ?? "").trim().toLowerCase());
-}
-
-function activeLink(trigger: Element, popup: Element, el: HTMLElement): boolean {
-  if (!opensList(trigger)) return false;
-  const ref = activeRefOf(trigger);
-  if (!ref || !isChoice(ref as HTMLElement)) return false;
-  const same = ref === el || (popup !== el && popupOf(ref as HTMLElement) === popup);
-  if (!same) return false;
-  return ariaRefs(trigger).every(({ ref: r }) => r === popup || r === el);
-}
-
-// activedescendant 연결을 쓸 수 있는지(#316): 다른 펼친 트리거가 이 목록·선택지를 가리키거나 목록을 담은 요소를 가리키지 않고(그 트리거가
-// 연 목록일 수 있다 — 기존 래퍼 판정·위험 정보를 밀어내지 않게), 트리거가 form 속성으로 다른 양식에 딸리지 않을 때(그 양식의 위험은 클릭
-// 위험 판정이 보지 않는다). 아니면 activedescendant를 무시하고 기존 판정(래퍼·unlinked·묶음 추정 — 카드)을 그대로 쓴다.
-// 같은 묶음의 다른 펼친 트리거가 그 목록을 연 것으로 보이면(기존 묶음 추정이 다른 트리거를 지목) 역시 쓰지 않는다.
-function activeLinkUsable(trigger: HTMLElement, popup: Element, el: HTMLElement, expanded: HTMLElement[]): boolean {
-  const owner = "form" in trigger ? ((trigger as HTMLInputElement).form ?? null) : null;
-  if (owner && owner !== trigger.closest("form")) return false;
-  if (expanded.some((t) => t !== trigger && ariaRefs(t).some(({ ref }) => ref === popup || ref === el || ref.contains(popup)))) return false;
-  const near = nearestTrigger(popup, expanded);
-  return !near || near === trigger;
-}
-
 // 선택지의 관계. 정할 수 없으면 null. why: null인 이유를 센다(진단).
 export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = expandedTriggers(), why?: RelationWhy): Relation | null {
   const popup = popupOf(el);
@@ -799,13 +757,11 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     if (why) why[k] += 1;
     return null;
   };
-  // 명시적 연결: aria-controls·aria-owns가 이 목록·선택지를 가리킴(기존). aria-activedescendant 후보는 따로 모은다(#316).
+  // 명시적 연결: aria-controls·aria-owns가 이 목록·선택지를 가리킴.
   const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
-  const actives: HTMLElement[] = [];
   for (const t of expanded) {
     const via = linkVia(t, [popup, el]);
     if (via) linked.push({ trigger: t, via });
-    else if (activeLink(t, popup, el)) actives.push(t);
   }
   const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"], basis: RelationBasis): Relation => ({
     mode,
@@ -816,23 +772,14 @@ export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = exp
     nested: trigger ? nestedTrigger(trigger) : false,
     popup: new WeakRef(popup),
   });
-  if (linked.length === 1) {
-    // 다른 트리거의 활성 항목도 이 목록을 가리키면 어느 위젯의 목록인지 충돌(좁히기만).
-    if (actives.length) return fail("many");
-    return make("linked", linked[0].trigger, linked[0].via, linked[0].via);
-  }
+  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via, linked[0].via);
   if (linked.length > 1) return fail("many");
-  // activedescendant 연결은 후보가 하나이고 쓸 수 있을 때만. 아니면 무시하고 아래 기존 판정을 그대로 쓴다.
-  if (actives.length === 1 && activeLinkUsable(actives[0], popup, el, expanded)) {
-    return make("linked", actives[0], "activedescendant", "activedescendant");
-  }
   const wrapped = wrapperLink(expanded, popup);
   if (wrapped) return make("linked", wrapped, "controls", "wrapper");
   if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null, "unlinked");
   const near = nearestTrigger(popup, expanded);
   if (near) return make("nearest", near, null, "group");
-  // 활성 항목 후보가 여럿이었으면 참조 충돌로 센다(진단).
-  return fail(actives.length > 1 ? "many" : "none");
+  return fail("none");
 }
 
 const NEAREST_CLIMB = 6;
