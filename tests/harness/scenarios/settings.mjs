@@ -256,4 +256,58 @@ export default [
       expect(await opt.getByRole("button", { name: "Google 연결" }).isDisabled(), "연결 버튼 비활성");
     },
   },
+  {
+    // #319 PR ① 특성 시험: 지금은 google_* 네 메시지에 발신자 검사가 없어 설정 페이지·패널·content script의 응답이 같다.
+    // ④에서 패널·content script는 거절로 바뀐다(그때 이 시나리오의 (b)·(c) 단언을 바꾼다).
+    name: "google_* 설정 메시지의 발신자별 응답: 설정 페이지·패널·content script 모두 같은 응답 (#319 ④에서 바뀜)",
+    pages: { "/g": `<title>웹 문서</title><p>본문</p>` },
+    async run(h) {
+      expect(await h.sw.evaluate(() => typeof chrome.identity === "undefined"), "기본 빌드: identity API 없음");
+      const KINDS = ["google_status", "google_diag", "google_connect", "google_disconnect"];
+      const sendAll = (page) =>
+        page.evaluate(async (kinds) => {
+          const out = {};
+          for (const kind of kinds) out[kind] = await chrome.runtime.sendMessage({ kind });
+          return out;
+        }, KINDS);
+      const opt = await h.openOptions("model");
+      const fromOptions = await sendAll(opt);
+      const fromPanel = await sendAll(h.panel);
+      await h.tab.goto(`${h.base}/g`);
+      await h.tab.waitForTimeout(300);
+      const fromContent = await h.sw.evaluate(
+        async ({ base, kinds }) => {
+          const tabs = await chrome.tabs.query({});
+          const tab = tabs.find((t) => (t.url ?? "") === `${base}/g`);
+          const [out] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            args: [kinds],
+            func: async (ks) => {
+              const r = {};
+              for (const kind of ks) r[kind] = await chrome.runtime.sendMessage({ kind });
+              return r;
+            },
+          });
+          return out.result;
+        },
+        { base: h.base, kinds: KINDS },
+      );
+      for (const [who, r] of [
+        ["설정 페이지", fromOptions],
+        ["패널", fromPanel],
+        ["content script", fromContent],
+      ]) {
+        const s = r?.google_status;
+        expect(s?.ok === true && s.data.configured === false && s.data.connected === false && s.data.clientId === "", `${who} google_status(${JSON.stringify(s)})`);
+        // 진단 성공과 발신자 거절이 구별되게 ok === true와 진단 필드를 본다.
+        const d = r?.google_diag;
+        expect(d?.ok === true && d.data.googleClientIdConfigured === false && d.data.identityApiPresent === false && d.data.manifestOauth2Present === false, `${who} google_diag(ok ${d?.ok}, configured ${d?.data?.googleClientIdConfigured})`);
+        const c = r?.google_connect;
+        expect(c?.ok === false && String(c.error).includes("직접 빌드한 확장"), `${who} google_connect(${JSON.stringify(c)})`);
+        const x = r?.google_disconnect;
+        expect(x?.ok === true && x.error === undefined, `${who} google_disconnect(${JSON.stringify(x)})`);
+      }
+      await opt.close();
+    },
+  },
 ];
