@@ -116,6 +116,23 @@ b.addEventListener("mousedown", (e) => {
 });
 </script></main>`;
 
+// 같은 행·같은 ▼ 버튼 노드를 다른 항목에 다시 쓰며 접근성 이름(aria-label)만 바꾸는 가상 목록(코드 리뷰 1회차 P1).
+const RENAMED = `<title>이름 바뀌는 버튼</title><main>
+<input id=memo aria-label="메모">
+<button id=dismiss style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
+<ul><li><div id=b role=button tabindex=0 aria-label="A 열기" style="display:inline-block;width:120px;height:32px;background:#ddd">▼</div></li></ul>
+<p id=out></p>
+<script>
+memo.value = ${JSON.stringify(SECRET)};
+const names = ["A 열기", "B 열기", "C 열기"];
+let n = 0;
+b.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  b.setAttribute("aria-label", "닫기");
+  setTimeout(() => b.setAttribute("aria-label", names[++n] ?? "끝"), 300);
+});
+</script></main>`;
+
 const show = (callId) => ({ click: "Show options", ...(callId ? { callId } : {}) });
 const dismiss = { click: "Dismiss" };
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs ?? []);
@@ -137,6 +154,7 @@ async function noSecret(h, r) {
   expect(!r.logs.some((l) => l.includes(SECRET)), "입력 칸 값이 로그에 없어야 한다(#43)");
 }
 const settings = { autoApprove: true, trustedInput: true };
+const panelBody = (h) => h.panel.locator("body").innerText();
 
 // 마지막 요청에 실린 대화의 click_element 호출 인자(호출 순서).
 async function sentClickArgs(h) {
@@ -327,18 +345,36 @@ export default [
       );
       const dismissed = await h.tab.evaluate(() => window.__dismiss);
       expect(dismissed === 2, `마지막 응답의 Dismiss는 실행하지 않음(${dismissed})`);
-      // 마무리 요청 본문은 짝 검사 전에 남는다. 겹친 id는 실제 API처럼 400으로 거절되므로(#221 짝 검사) 이 시험에서만 그 기록을 확인하고 지운다.
+      // 겹친 id는 받을 때 뒤의 것에 새 id를 준다(streamReply) — 마무리 요청의 호출·결과 짝이 맞아 거절되지 않는다(공통 짝 검사가 확인).
       const { body, tools } = await lastToolMessages(h);
       expect(body.tool_choice === "none", "마무리 요청은 도구 없이");
-      const x = tools.filter((t) => t.id === "call_x");
-      expect(x.length === 2, `겹친 id의 결과 2개(${x.length})`);
-      expect(x[0].data.result?.error && typeof x[0].data.repeated === "string", `첫째는 Show 실패 + 안내(${JSON.stringify(x[0].data).slice(0, 160)})`);
-      expect(x[1].data.error === "interrupted", `둘째는 미실행(${JSON.stringify(x[1].data)})`);
-      const bad = await h.sw.evaluate(() => globalThis.__badToolIds ?? []);
-      expect(bad.length > 0 && bad.every((b) => b.includes("call_x")), `예상한 짝 오류만(${bad.join("; ")})`);
-      await h.sw.evaluate(() => {
-        globalThis.__badToolIds = [];
-      });
+      const lastCalls = (body.messages ?? []).filter((m) => m.role === "assistant" && m.tool_calls?.length).at(-1).tool_calls.map((c) => c.id);
+      expect(lastCalls.length === 2 && lastCalls[0] === "call_x" && lastCalls[1] !== "call_x", `겹친 id는 뒤의 것만 새 id(${lastCalls.join(",")})`);
+      const first = tools.find((t) => t.id === lastCalls[0]);
+      const second = tools.find((t) => t.id === lastCalls[1]);
+      expect(first?.data.result?.error && typeof first.data.repeated === "string", `첫째는 Show 실패 + 안내(${JSON.stringify(first?.data).slice(0, 160)})`);
+      expect(second?.data.error === "interrupted", `둘째는 미실행(${JSON.stringify(second?.data)})`);
+      expect((await panelBody(h)).includes("정리"), "마무리 답을 받는다");
+      // 다음 요청도 같은 대화로 이어진다(기록의 짝이 맞음).
+      await h.turn([{ text: "다음 턴 답" }], { path: "/p", noReload: true });
+      expect((await panelBody(h)).includes("다음 턴 답"), "다음 턴 답");
+    },
+  },
+  {
+    name: "같은 노드를 다시 쓰며 접근성 이름만 바꾼 다른 대상은(다시 찾아 다른 이름을 봄) 같은 실패로 세지 않는다",
+    pages: { "/renamed": RENAMED },
+    async run(h) {
+      await h.settings(settings);
+      const r = await h.turn(
+        [findC, { click: "A 열기" }, { delayMs: 500, ...findC }, dismiss, findC, { click: "B 열기" }, { delayMs: 500, ...findC }, dismiss, findC, { click: "C 열기" }, { text: "끝까지 감" }],
+        { path: "/renamed" },
+      );
+      expect(clickFails(r) === 3, `세 대상 실패(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "이름이 다른 대상은 안내 없음");
+      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
+      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
     },
   },
   {

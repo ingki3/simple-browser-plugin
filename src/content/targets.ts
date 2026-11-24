@@ -96,10 +96,10 @@ function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null,
     }
   }
   const refs = [row, explicitRow, item?.ref.deref() ?? null, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
-  const { tag, role, name, href, context, modelContext, region, inFrame, fieldType } = base;
+  const { tag, role, name, modelName, modelNameClipped, href, context, modelContext, region, inFrame, fieldType } = base;
   const key = fingerprint(
     canonicalJson({
-      tag, role, name, href, context, modelContext, region, inFrame, fieldType,
+      tag, role, name, modelName, modelNameClipped, href, context, modelContext, region, inFrame, fieldType,
       list: base.list?.index ?? null,
       item: item?.text ?? null,
       relation: relation ? [relation.mode, relation.via, relation.basis, relation.nested] : null,
@@ -108,8 +108,15 @@ function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null,
   return { refs, key };
 }
 
+// 참조는 있었는지부터 비교한다: 앞 준비 때 있던 행이 그 뒤 수거돼(deref가 null) 지금 행이 없는 경우를 같은 것으로 보지 않게.
 function sameBinding(a: Binding, b: Omit<Binding, "rev">): boolean {
-  return a.key === b.key && a.refs.length === b.refs.length && a.refs.every((r, i) => (r?.deref() ?? null) === (b.refs[i]?.deref() ?? null));
+  if (a.key !== b.key || a.refs.length !== b.refs.length) return false;
+  return a.refs.every((r, i) => {
+    const now = b.refs[i];
+    if (!r || !now) return !r && !now;
+    const was = r.deref();
+    return !!was && was === now.deref();
+  });
 }
 
 // 실제 입력 클릭 준비 때의 바인딩 회차(#318). 승인한 기술(info)과 지금 요소의 행·항목·관계로 바인딩을 정하고, 이 id의 앞 준비 때와

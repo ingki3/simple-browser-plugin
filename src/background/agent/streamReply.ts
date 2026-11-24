@@ -87,12 +87,16 @@ export function createReplyAccumulator(cb: { onText: (text: string) => void; onT
     },
     usage: () => usage,
     result() {
+      // 호출 id는 한 응답 안에서 하나씩이어야 결과와 짝지어진다(#318 — 모델이 같은 id를 두 번 주면 뒤의 것에 새 id를 준다.
+      // 기록의 호출 블록과 결과가 모두 이 id를 쓰므로 제공자에는 짝이 맞는 기록이 간다).
+      const used = new Set<string>();
       const functionCalls = [...functionCallParts.entries()]
         .sort(([a], [b]) => a - b)
-        .map(([, call]) => ({
-          ...call,
-          id: call.id || crypto.randomUUID(),
-        }));
+        .map(([, call]) => {
+          const id = call.id && !used.has(call.id) ? call.id : crypto.randomUUID();
+          used.add(id);
+          return { ...call, id };
+        });
       return { assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, chunkCount, textChars, thoughtChars };
     },
   };
