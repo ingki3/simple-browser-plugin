@@ -36,10 +36,13 @@ import { setKakaoSender } from "./kakaoSender";
 import { maskStringForModel } from "./loginSecrets";
 import { debugLog } from "./debug";
 import { beginKeepalive, endKeepalive } from "./keepalive";
+import { AUTH_FETCH_LIMIT_MS, fetchLimited } from "./auth/http";
+import { expectedRedirectUri, identityApi } from "./auth/identity";
+
+// 콘솔에 등록할 리다이렉트 URI는 공용 인증 층(auth/identity.ts)에 있다. 이 모듈에서 내보내던 이름은 그대로 둔다.
+export { expectedRedirectUri };
 
 const STORE_KEY = "kakao";
-// 서비스 워커는 fetch 응답을 30초 넘게 기다리면 내려갈 수 있다.
-const FETCH_LIMIT_MS = 25_000;
 
 interface KakaoState {
   restKey: string;
@@ -167,11 +170,6 @@ export async function kakaoClear(): Promise<KakaoStatus> {
   return statusOf(s ?? (await load()));
 }
 
-// 콘솔에 등록할 리다이렉트 URI(확장 ID 기반). identity 권한이 없어도 설정 화면이 보여 줄 수 있는 값이다.
-export function expectedRedirectUri(): string {
-  return `https://${chrome.runtime.id}.chromiumapp.org/`;
-}
-
 function randomState(): string {
   const a = new Uint8Array(16);
   crypto.getRandomValues(a);
@@ -180,36 +178,34 @@ function randomState(): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+// 응답 상태와 JSON만 읽는다. 헤더를 받은 뒤 본문 읽기가 실패하면(시간 제한으로 끊김·JSON 아님) 상태는 살리고 본문만 null로 본다
+// — 이미 받은 401·400으로 갱신 거절·다시 로그인 판정을 할 수 있게(fetchLimited는 시간 초과를 따로 거부하지 않는다).
+const statusAndJson = async (res: Response): Promise<{ status: number; body: unknown }> => ({ status: res.status, body: await res.json().catch(() => null) });
+
 // kauth(토큰 발급·갱신)에 POST. 응답 상태와 JSON만 돌려주고, 요청 본문(키·코드·토큰)은 오류·로그에 남기지 않는다. 연결 실패면 null.
 async function kauthPost(params: Record<string, string>): Promise<{ status: number; body: unknown } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_LIMIT_MS);
   try {
-    const res = await fetch(KAKAO_TOKEN_URL, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded;charset=utf-8" },
-      body: new URLSearchParams(params).toString(),
-      signal: controller.signal,
-    });
-    return { status: res.status, body: await res.json().catch(() => null) };
+    return await fetchLimited(
+      KAKAO_TOKEN_URL,
+      {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded;charset=utf-8" },
+        body: new URLSearchParams(params).toString(),
+      },
+      { timeoutMs: AUTH_FETCH_LIMIT_MS },
+      statusAndJson,
+    );
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 // kapi GET(사용자 정보·동의 내역). 상태와 JSON만 돌려주고, 부르는 쪽은 판정에 필요한 값만 본다(저장·로그 없음). 연결 실패면 null.
 async function kapiGet(pathAndQuery: string, token: string): Promise<{ status: number; body: unknown } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_LIMIT_MS);
   try {
-    const res = await fetch(`${KAKAO_API_ORIGIN}${pathAndQuery}`, { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
-    return { status: res.status, body: await res.json().catch(() => null) };
+    return await fetchLimited(`${KAKAO_API_ORIGIN}${pathAndQuery}`, { headers: { authorization: `Bearer ${token}` } }, { timeoutMs: AUTH_FETCH_LIMIT_MS }, statusAndJson);
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -243,7 +239,7 @@ async function connectInner(): Promise<KakaoStatus> {
   const fail = (why: string, message: string): never => {
     throw new KakaoConnectError(why, message);
   };
-  const id = (chrome as { identity?: typeof chrome.identity }).identity;
+  const id = identityApi();
   if (!id || typeof id.launchWebAuthFlow !== "function" || typeof id.getRedirectURL !== "function") {
     fail("no_identity", "권한이 없어 연결하지 않았습니다. '카카오 연결'을 누르고 권한 요청을 허용하세요.");
   }
@@ -376,22 +372,17 @@ async function doRefresh(epoch: number): Promise<"ok" | "needs_login" | "failed"
 // 나에게 보내기 한 조각. 응답 원문·토큰은 남기지 않고 판정만 돌려준다. 연결 실패는 던진다(sendKakaoParts가 사유로 바꾼다).
 async function postMemo(token: string, linkUrl: string, part: string, signal: AbortSignal): Promise<MemoResult> {
   if (signal.aborted) throw new Error("aborted");
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  signal.addEventListener("abort", onAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), FETCH_LIMIT_MS);
-  try {
-    const res = await fetch(KAKAO_MEMO_URL, {
+  // 연결 신호가 끊기면 요청도 끊긴다. 본문 읽기가 실패해도 받은 상태로 판정한다(401이면 갱신, 200인데 본문이 없으면 uncertain).
+  return fetchLimited(
+    KAKAO_MEMO_URL,
+    {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/x-www-form-urlencoded;charset=utf-8" },
       body: memoBody(part, linkUrl),
-      signal: controller.signal,
-    });
-    return classifyMemo(res.status, await res.json().catch(() => null));
-  } finally {
-    clearTimeout(timer);
-    signal.removeEventListener("abort", onAbort);
-  }
+    },
+    { timeoutMs: AUTH_FETCH_LIMIT_MS, signal },
+    async (res) => classifyMemo(res.status, await res.json().catch(() => null)),
+  );
 }
 
 // 이 세대·이 연결 신호로 보내는 조각 의존성. 조각마다 큐에서 지금 토큰을 읽고(만료가 가까우면 갱신), 401이면 한 번 갱신한다.
