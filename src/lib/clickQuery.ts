@@ -42,6 +42,19 @@ export function emptyZeroDiag(): ZeroDiag {
   };
 }
 
+// 관계를 정하지 못해 뺀 선택지의 이유별 수(#316): 펼친 트리거 수, popupOf 깊이 한도, 연결 여럿·충돌, 연결 없음·추정 불가.
+export interface UnrelatedDiag {
+  expanded: number;
+  depth: number;
+  many: number;
+  none: number;
+}
+
+// 디버그 로그 find_clickables:unrelated의 한 줄(수만).
+export function unrelatedDiagText(d: UnrelatedDiag): string {
+  return `펼친 트리거 ${d.expanded} · 깊이 한도 ${d.depth} · 연결 여럿 ${d.many} · 연결 없음 ${d.none}`;
+}
+
 // 디버그 로그 find_clickables:zero의 한 줄(수만).
 export function zeroDiagText(d: ZeroDiag): string {
   const o = d.outside;

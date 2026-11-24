@@ -166,8 +166,26 @@ const PHASE_LABEL: Record<string, string> = {
   click: "클릭(click)",
 };
 
+const PASSABLE = ["pointerdown", "mousedown", "pointerup", "mouseup"] as const;
+
+// 첫 차단 앞에 가드를 통과해 사이트에 전달된 누르기·떼기 입력(#316). 순서 유지·중복 제거. 이벤트 종류로만 정한다.
+export function passedPress(first?: FirstBlock | null): string[] {
+  if (!first) return [];
+  const out: string[] = [];
+  for (const e of first.seenBefore) if ((PASSABLE as readonly string[]).includes(e) && !out.includes(e)) out.push(e);
+  return out;
+}
+
+// 누르기(pointerdown·mousedown)가 사이트에 전달됐는지(#316).
+export function pressDelivered(first?: FirstBlock | null): boolean {
+  const passed = passedPress(first);
+  return passed.includes("pointerdown") || passed.includes("mousedown");
+}
+
 // 막힌 실제 입력 클릭의 모델 문구(#241). 구조로 확인한 사실과 고정 안내만 — 사이트 동작은 단정하지 않는다.
-export function describeBlockedClick(reason: string, first?: FirstBlock | null): string {
+// changed(#316): 관측 구간(누르기 직전부터)에 변화가 있었는지. 누르기가 전달됐고 변화가 있었으면 통과한 입력을 그대로 알리고
+// 같은 클릭을 되풀이하지 말고 다시 관측하라고 안내한다(가드는 그대로 막는다). 막은 이유는 reason 그대로.
+export function describeBlockedClick(reason: string, first?: FirstBlock | null, opts: { changed?: boolean } = {}): string {
   const facts: string[] = [];
   if (first) {
     const at = PHASE_LABEL[first.event];
@@ -175,8 +193,18 @@ export function describeBlockedClick(reason: string, first?: FirstBlock | null):
     if (!first.targetConnected) facts.push("누르기 도중 대상이 문서에서 떨어졌습니다");
     else if (!first.targetShown) facts.push("누르기 도중 대상이 화면에서 사라졌습니다(숨겨짐)");
   }
+  const head = `실제 입력 클릭을 도중에 막았습니다(${reason}).${facts.length ? ` ${facts.join(". ")}.` : ""}`;
+  if (opts.changed && pressDelivered(first)) {
+    // 막힌 단계는 앞의 사실 문장(“… 단계에서 막음”)이 알린다. 그 단계의 입력도 가드보다 먼저 건 페이지 리스너는 받았을 수 있다.
+    return (
+      head +
+      ` 가드를 통과해 사이트에 전달된 입력: ${passedPress(first).join(", ")}.` +
+      " 이 클릭의 관측 구간(누르기 직전부터)에 화면 변화가 있었습니다(effect). 누를 때 바로 동작하는 위젯(목록·메뉴 열기, 항목 고르기)이면 이미 반영됐을 수 있습니다." +
+      " 같은 클릭을 바로 되풀이하지 말고 find_clickables(또는 describe_page)로 지금 화면을 다시 관측하세요. 원하는 결과가 이미 있으면 다시 누르지 마세요."
+    );
+  }
   return (
-    `실제 입력 클릭을 도중에 막았습니다(${reason}).${facts.length ? ` ${facts.join(". ")}.` : ""}` +
+    head +
     " 클릭은 끝나지 않았지만 앞 단계의 페이지 처리는 이미 일어났을 수 있습니다." +
     " 함께 보낸 effect(이동·화면 변화·대화상자)와 지금 화면을 먼저 보고, 원하는 결과가 이미 있으면 다시 누르지 마세요. 끝나지 않았을 때만 다시 찾아 시도하세요."
   );

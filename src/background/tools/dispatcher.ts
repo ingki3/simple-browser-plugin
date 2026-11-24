@@ -47,7 +47,9 @@ import {
   type TurnTab,
 } from "./handlers";
 import { ClickAbortedError, settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
-import { SCREEN_TEXT_NOTE, zeroDiagText, zeroMatchNote } from "@/lib/clickQuery";
+import { SCREEN_TEXT_NOTE, unrelatedDiagText, zeroDiagText, zeroMatchNote } from "@/lib/clickQuery";
+import { clickObservedChange } from "@/lib/hopGuard";
+import { describeBlockedClick, pressDelivered } from "@/lib/trustedClick";
 import { clickWithInput, PressedClickError, type InputClickResult, type InputSession } from "../trustedInput";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
@@ -924,14 +926,20 @@ async function clickTool(
     if (err instanceof PressedClickError) {
       const { effect } = await finishClick(turnTab, tabId, before, err.effectToken, newTabs, readOpens, clickedPopup, sourceWindowId);
       if (effect.dom) delete effect.dom.rebase;
+      // 가드가 막았는데 누르기(pointerdown·mousedown)는 이미 사이트에 전달됐고 관측 구간에 변화가 있었으면(#316 — 누를 때 목록을 여는
+      // 위젯) 실패와 구분해 알리고 다시 관측하라고 안내한다. 실패는 그대로 실패다(ok:false — 변화만으로 성공 판정하지 않음).
+      const delivered = !!err.blocked && pressDelivered(err.blocked.first) && clickObservedChange(effect);
+      const message = delivered && err.blocked ? describeBlockedClick(err.blocked.reason, err.blocked.first, { changed: true }) : err.message;
+      const head = delivered ? "클릭 미완료(누르기 전달·관측 구간 변화 — 다시 관측 필요)" : "클릭 실패";
       return {
         ok: false,
-        summary: `'${clip(err.text, 60) || "(글자 없음)"}' 클릭 실패: ${clip(err.message, 80)} · 그 사이 관측: ${describeEffect(effect)} · 실제 입력`,
+        summary: `'${clip(err.text, 60) || "(글자 없음)"}' ${head}: ${clip(message, 80)} · 그 사이 관측: ${describeEffect(effect)} · 실제 입력`,
         data: {
-          error: err.message,
+          error: message,
           text: err.text,
           href: err.href,
           effect,
+          ...(delivered ? { pressDelivered: true } : {}),
           ...(clickNoteNeeded(effect) ? { note: describeEffect(effect) } : {}),
         },
       };
@@ -1328,6 +1336,8 @@ async function runTool(
         ].filter(Boolean).join(" ") || "조건 없음",
       );
       const res = await callContentTool<FindClickablesResponse>(toolName, parsedArgs, callId, turnTab);
+      // 뺀 선택지의 이유별 수(#316 — 두 모드 공통, 수만). 모델 결과에는 넣지 않는다.
+      if (res.unrelatedDiag) debugLog("find_clickables:unrelated", unrelatedDiagText(res.unrelatedDiag));
       if (res.mode === "items") return itemsResult(res);
       const { items, unfiltered, unrelatedChoices } = res;
       const notes: string[] = [];

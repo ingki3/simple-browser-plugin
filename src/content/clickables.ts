@@ -1,7 +1,7 @@
 import type { ClickableElement, FindClickablesResponse, ListItem, PageRegion } from "@/lib/messages";
 import type { TargetInfo } from "@/lib/actionTarget";
 import { PAYMENT_TEXT_RE, splitIdentifier } from "@/lib/autoApprove";
-import { clickMatchScore, emptyZeroDiag, queryTerms, type ZeroDiag } from "@/lib/clickQuery";
+import { clickMatchScore, emptyZeroDiag, queryTerms, type UnrelatedDiag, type ZeroDiag } from "@/lib/clickQuery";
 import { resultHref, resultRole } from "@/lib/clickResult";
 import { getAccessibleRoots, isTag } from "./docs";
 import { composedContains } from "./composed";
@@ -56,6 +56,7 @@ import {
   takeApproved,
   type ItemBinding,
   type Relation,
+  type RelationWhy,
   type TargetKind,
 } from "./targets";
 import { VALUE_CONTROL_TAGS } from "@/lib/modelText";
@@ -442,12 +443,27 @@ interface Candidate {
 
 // 후보 하나를 만든다(보이는 것·편집 영역 제외·비활성 제외·선택지는 트리거 관계가 정해질 때만). 아니면 null.
 // list·items 모드가 같은 규칙을 쓴다.
+// 펼친 트리거 목록(한 번의 탐색에서 처음 필요할 때 한 번 모은다)과 관계를 정하지 못한 이유별 수(#316 진단).
+interface ExpandedRef {
+  list: HTMLElement[] | null;
+  why: RelationWhy;
+}
+
+function newExpandedRef(): ExpandedRef {
+  return { list: null, why: { depth: 0, many: 0, none: 0 } };
+}
+
+// 뺀 선택지가 있으면 진단 수(#316 — 디버그 로그 전용, 글자 없음).
+function unrelatedDiagOf(ref: ExpandedRef, unrelated: number): { unrelatedDiag: UnrelatedDiag } | Record<string, never> {
+  return unrelated > 0 ? { unrelatedDiag: { expanded: ref.list?.length ?? 0, ...ref.why } } : {};
+}
+
 // 선택지인데 펼친 트리거와의 관계를 정하지 못해 뺀 것은 "unrelated"(수를 알린다, 리뷰 #2).
 // rej: 뺀 이유별 수(#242 0개 진단). 주면 센다.
 function safeCandidate(
   node: HTMLElement,
   seen: Set<HTMLElement>,
-  expandedRef: { list: HTMLElement[] | null },
+  expandedRef: ExpandedRef,
   rej?: ZeroDiag["rejected"],
 ): Candidate | null | "unrelated" {
   // 진짜 checkbox·radio: 보이면 그 칸, 숨겼으면 대신 보여 주는 label을 누른다(그 label은 누르면 이 칸이 작동한다).
@@ -487,7 +503,7 @@ function safeCandidate(
   let relation: Relation | null = null;
   if (isChoice(el)) {
     expandedRef.list ??= expandedTriggers();
-    relation = choiceRelation(CLICK_KIND, el, expandedRef.list);
+    relation = choiceRelation(CLICK_KIND, el, expandedRef.list, expandedRef.why);
     if (!relation) return "unrelated";
   }
   return { el, text, href, tag, role, region: detectRegion(el), inViewport: rectInViewport(el), relation };
@@ -527,6 +543,7 @@ export function findClickablesCounted(args: FindClickablesArgs): FindClickablesR
       longHrefs: r.longHrefs,
       ...(r.zeroDiag ? { zeroDiag: r.zeroDiag } : {}),
       ...(r.screenText ? { screenText: r.screenText } : {}),
+      ...(r.unrelatedDiag ? { unrelatedDiag: r.unrelatedDiag } : {}),
     };
   });
 }
@@ -538,6 +555,7 @@ function collectClickables(args: FindClickablesArgs, within?: Element): {
   longHrefs: number;
   zeroDiag?: ZeroDiag;
   screenText?: number;
+  unrelatedDiag?: UnrelatedDiag;
 } {
   const limit = Math.min(args.limit ?? 50, 200);
   // within을 넘겼는데 요소가 아니면(잘못된 값) 범위를 넓히지 않고 아무것도 돌려주지 않는다.
@@ -550,7 +568,7 @@ function collectClickables(args: FindClickablesArgs, within?: Element): {
   const full = () => !ranked && found.length >= limit;
   // 같은 요소만 합친다(한 문서의 querySelectorAll은 요소를 한 번씩만 준다). 글자·주소가 같아도 다른 요소면 따로
   // 돌려준다(두 달 달력의 같은 날짜, 상품 행마다 있는 같은 버튼). 모델은 묶음 문맥(context)으로 구분한다.
-  const expandedRef: { list: HTMLElement[] | null } = { list: null };
+  const expandedRef = newExpandedRef();
   // 이미 돌려준 요소(숨긴 checkbox의 label이 다른 선택자로도 잡히는 경우 등 — 한 번만).
   const seen = new Set<HTMLElement>();
   // 찾기 조건만 빼면 돌려줄 수 있었던 요소 수(조건에 맞은 것 포함).
@@ -652,7 +670,15 @@ function collectClickables(args: FindClickablesArgs, within?: Element): {
       ...(byScreen.has(c.el) ? { matchedBy: "screenText" as const } : {}),
     };
   });
-  return { items, unfiltered, unrelated, longHrefs, ...(zeroDiag ? { zeroDiag } : {}), ...(screenText ? { screenText } : {}) };
+  return {
+    items,
+    unfiltered,
+    unrelated,
+    longHrefs,
+    ...(zeroDiag ? { zeroDiag } : {}),
+    ...(screenText ? { screenText } : {}),
+    ...unrelatedDiagOf(expandedRef, unrelated),
+  };
 }
 
 // 0개 진단에서 다시 볼 후보 상한과 글자 노드 순회 상한(#242).
@@ -845,7 +871,7 @@ function itemInViewport(item: Element, cands: Candidate[]): boolean {
 // 항목 모드의 (i) 후보 수집 ~ (iii) 항목 글자·필터·점수. 대상 id는 발급하지 않는다(collectItems가 남은 항목에만).
 function itemCandidates(args: FindClickablesArgs) {
   const terms = queryTerms(args.query);
-  const expandedRef: { list: HTMLElement[] | null } = { list: null };
+  const expandedRef = newExpandedRef();
   const seen = new Set<HTMLElement>();
   const cands: Candidate[] = [];
   let scanLimited = false;
@@ -918,12 +944,12 @@ function itemCandidates(args: FindClickablesArgs) {
     return b.score > 0;
   });
   if (terms.length) kept.sort((a, b) => b.score - a.score || a.order - b.order);
-  return { terms, cands, unrelated, scanLimited, outside, unfiltered, kept };
+  return { terms, cands, unrelated, scanLimited, outside, unfiltered, kept, diag: unrelatedDiagOf(expandedRef, unrelated) };
 }
 
 function collectItems(args: FindClickablesArgs): FindClickablesResponse {
   const limit = Math.min(args.limit ?? 20, 60);
-  const { terms, cands, unrelated, scanLimited, outside, unfiltered, kept } = itemCandidates(args);
+  const { terms, cands, unrelated, scanLimited, outside, unfiltered, kept, diag } = itemCandidates(args);
   // (iv) 제한·예산. (v) 남은 항목의 대상만 id 발급(선택지 관계 전달, 항목 결합).
   const items: ListItem[] = [];
   let used = 0;
@@ -984,6 +1010,7 @@ function collectItems(args: FindClickablesArgs): FindClickablesResponse {
     omittedItems: kept.length - items.length,
     scanLimited,
     unrelatedChoices: unrelated,
+    ...diag,
     longHrefs,
     ...(regionless && args.region ? { region: args.region, ...regionless } : {}),
   };

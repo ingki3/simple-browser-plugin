@@ -15,6 +15,7 @@ import {
   unguardedFrame,
   GUARD_MIN_REMAINING_MS,
   GUARD_MS,
+  type FirstBlock,
   type TrustedClickReport,
   type TrustedPrepare,
 } from "@/lib/trustedClick";
@@ -218,6 +219,8 @@ export class PressedClickError extends Error {
     readonly effectToken: string,
     readonly text: string,
     readonly href: string,
+    // 가드가 막은 경우의 이유와 첫 차단 기록(#316). clickTool이 관측 뒤 문구를 다시 만든다(누르기 전달 + 관측 구간 변화).
+    readonly blocked?: { reason: string; first?: FirstBlock },
   ) {
     super(message);
     this.name = "PressedClickError";
@@ -408,7 +411,10 @@ async function pressIn(
   if (status.status === "blocked") {
     // 첫 차단 진단(#241): 이벤트 종류·앞 이벤트·대상 연결·표시·닿은 요소(글자 없음)·대상 이름(modelName).
     debugLog("input:blocked", `tab ${tabId} · ${blockDiagText(status.reason, status.firstBlock, data.text)}`, "warn");
-    throw new PressedClickError(describeBlockedClick(status.reason, status.firstBlock), data.effectToken, data.text, data.href);
+    throw new PressedClickError(describeBlockedClick(status.reason, status.firstBlock), data.effectToken, data.text, data.href, {
+      reason: status.reason,
+      ...(status.firstBlock ? { first: status.firstBlock } : {}),
+    });
   }
   await cancel("입력이 도착하지 않음");
   // 원인을 좁힌다: 다른 프레임이 받았는지(가드를 떼며 막은 수를 읽는다), 점이 화면 밖인지, 이 문서가 무엇을 받았는지.

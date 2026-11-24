@@ -589,9 +589,20 @@ function fullInfo(
 const CHOICE_ROLES = new Set(["option", "menuitem", "menuitemradio", "menuitemcheckbox"]);
 const POPUP_ROLES = new Set(["listbox", "menu", "menubar"]);
 
+// 관계의 근거(#316). 같은 mode·via라도 근거가 바뀌면(래퍼 연결 → 직접 연결 등) 다른 관계로 본다.
+export type RelationBasis = "controls" | "owns" | "wrapper" | "unlinked" | "group";
+
+// choiceRelation이 null을 돌려준 이유별 수(#316 진단 — 디버그 로그에 수만). 한 선택지당 하나만 올라간다.
+export interface RelationWhy {
+  depth: number;
+  many: number;
+  none: number;
+}
+
 export interface Relation {
   mode: "linked" | "unlinked" | "nearest";
   via: "controls" | "owns" | null;
+  basis: RelationBasis;
   trigger: WeakRef<HTMLElement> | null;
   triggerBase: TargetInfo | null;
   // 트리거 자신이 다른 목록 안의 항목인지(중첩 메뉴). 실행 직전에도 같아야 한다.
@@ -735,31 +746,40 @@ function hasHiddenTree(el: Element): boolean {
   }
 }
 
-// 선택지의 관계. 정할 수 없으면 null.
-export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = expandedTriggers()): Relation | null {
+// 선택지의 관계. 정할 수 없으면 null. why: null인 이유를 센다(진단).
+export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = expandedTriggers(), why?: RelationWhy): Relation | null {
   const popup = popupOf(el);
-  if (!popup) return null;
+  if (!popup) {
+    if (why) why.depth += 1;
+    return null;
+  }
+  const fail = (k: "many" | "none"): null => {
+    if (why) why[k] += 1;
+    return null;
+  };
+  // 명시적 연결: aria-controls·aria-owns가 이 목록·선택지를 가리킴.
   const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
   for (const t of expanded) {
     const via = linkVia(t, [popup, el]);
     if (via) linked.push({ trigger: t, via });
   }
-  const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"]): Relation => ({
+  const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"], basis: RelationBasis): Relation => ({
     mode,
     via,
+    basis,
     trigger: trigger ? new WeakRef(trigger) : null,
     triggerBase: trigger ? baseInfo(kind, trigger) : null,
     nested: trigger ? nestedTrigger(trigger) : false,
     popup: new WeakRef(popup),
   });
-  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via);
-  if (linked.length > 1) return null;
+  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via, linked[0].via);
+  if (linked.length > 1) return fail("many");
   const wrapped = wrapperLink(expanded, popup);
-  if (wrapped) return make("linked", wrapped, "controls");
-  if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null);
+  if (wrapped) return make("linked", wrapped, "controls", "wrapper");
+  if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null, "unlinked");
   const near = nearestTrigger(popup, expanded);
-  if (near) return make("nearest", near, null);
-  return null;
+  if (near) return make("nearest", near, null, "group");
+  return fail("none");
 }
 
 const NEAREST_CLIMB = 6;
@@ -798,7 +818,7 @@ export function relationTrigger(relation: Relation | null): HTMLElement | null {
 // 두 관계가 같은지. 다르면 이유.
 function relationDifference(before: Relation, now: Relation | null): string | null {
   if (!now) return "선택지를 연 위젯을 정할 수 없게 됨";
-  if (before.mode !== now.mode || before.via !== now.via) return "선택지와 트리거의 연결이 바뀜";
+  if (before.mode !== now.mode || before.via !== now.via || before.basis !== now.basis) return "선택지와 트리거의 연결이 바뀜";
   if (before.popup.deref() !== now.popup.deref()) return "선택지 목록이 바뀜";
   if ((before.trigger?.deref() ?? null) !== (now.trigger?.deref() ?? null)) return "펼쳐진 트리거가 바뀜";
   if (before.nested !== now.nested) return "펼쳐진 트리거가 다른 목록 안으로 옮겨짐";
