@@ -17,7 +17,8 @@ const VERSION_KEY = "googleAuthVersion";
 // - tokenReply(interactive): getAuthToken 콜백에 넘길 값. { lastError } 를 주면 chrome.runtime.lastError로 실패시킨다.
 // - fetchReply(url, init): fetch 응답(Response) 또는 throw.
 // - holdRemove: true면 removeCachedAuthToken 콜백을 calls.finishRemove()까지 부르지 않는다(삭제가 끝나기 전의 순서를 본다).
-function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () => FAKE_TOKEN, fetchReply = () => new Response("{}", { status: 200 }), holdRemove = false } = {}) {
+// - signInEvent: false면 identity.onSignInChanged가 없다(로그인 상태 변화를 볼 수 없는 환경). calls.signInChanged()로 변화를 알린다.
+function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () => FAKE_TOKEN, fetchReply = () => new Response("{}", { status: 200 }), holdRemove = false, signInEvent = true } = {}) {
   // order: 캐시 삭제·fetch·알림 저장이 일어난 순서(한 배열에 적는다).
   // storageValuesOk: 저장한 값이 모두 유한한 숫자(바뀐 시각)였는지 — 값 자체는 기록하지 않는다(토큰이 값으로 저장되는 회귀를 잡는다).
   const calls = { getAuthToken: [], removeCached: [], storageSet: [], storageValuesOk: true, fetch: [], order: [] };
@@ -57,6 +58,14 @@ function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () =
         else cb();
       },
     };
+    if (signInEvent) {
+      const listeners = [];
+      chromeStub.identity.onSignInChanged = { addListener: (fn) => listeners.push(fn) };
+      calls.signInListeners = listeners;
+      calls.signInChanged = () => {
+        for (const fn of listeners) fn({ id: "fake-account" }, true);
+      };
+    }
   }
   globalThis.chrome = chromeStub;
   globalThis.fetch = async (url, init) => {
@@ -282,7 +291,7 @@ test("U7 googleFetch 실패: 401은 캐시를 지우고 조용히 다시 받아 
   // 401이 아닌 실패 응답: 상태 번호와 상태별 고정 안내뿐(본문·statusText 없음), 재시도 없음.
   const hints = {
     400: "Google API 오류 400. 요청 값(ID·범위)을 확인하세요.",
-    403: "Google API 오류 403. 이 파일에 접근할 권한이 없습니다.",
+    403: "Google API 오류 403. Google이 요청을 거부했습니다. 접근 권한이나 사용 한도를 확인하세요.",
     404: "Google API 오류 404. 파일이나 시트를 찾지 못했습니다.",
     429: "Google API 오류 429. 요청이 많습니다. 잠시 뒤 다시 시도하세요.",
     500: "Google API 오류 500.",
@@ -662,6 +671,62 @@ test("G12 연결을 끊은 뒤·끊는 중에 시작한 요청은 401이어도 �
     const res = await post();
     assert.equal(res.status, 200);
     assert.equal(c.fetch.length, 2);
+  }
+});
+
+test("G13 요청이 도는 사이 Chrome 프로필의 로그인 상태가 바뀌면(다른 계정일 수 있다) 401이어도 재발급·재전송하지 않는다", async () => {
+  const drive = await import("../src/background/google/drive.ts");
+  // (가) 첫 요청의 응답을 기다리는 사이 계정이 바뀜 → 401 → 재발급 0회, 요청 1회. 다른 계정의 토큰(FAKE_TOKEN_2)으로는 나가지 않는다.
+  {
+    const api = gate();
+    const c = install({ tokenReply: (_i, n) => (n === 1 ? FAKE_TOKEN : FAKE_TOKEN_2), fetchReply: () => api.promise });
+    const settled = rejectsWith(drive.listRecent(undefined, 5), CHANGED);
+    for (let i = 0; i < 50 && c.fetch.length < 1; i++) await tick();
+    assert.equal(c.signInListeners.length, 1, "요청을 보내기 전에 감시를 건다");
+    c.signInChanged();
+    api.open(unauthorized());
+    await settled;
+    assert.equal(c.fetch.length, 1);
+    assert.deepEqual(c.getAuthToken, [false], "401 뒤 재발급 0회");
+    assert.equal(c.fetch.some((f) => bearer(f) === `Bearer ${FAKE_TOKEN_2}`), false);
+  }
+  // (나) 재발급을 기다리는 사이 계정이 바뀜 → 다시 받은 토큰으로 보내지 않는다.
+  {
+    const c = install({ fetchReply: unauthorized });
+    const hold = gate();
+    const orig = globalThis.chrome.identity.getAuthToken;
+    let n = 0;
+    globalThis.chrome.identity.getAuthToken = (o, cb) => {
+      if (++n === 1) return orig(o, cb);
+      c.getAuthToken.push(o.interactive);
+      hold.promise.then(() => cb(FAKE_TOKEN_2));
+    };
+    const settled = rejectsWith(auth.googleFetch("/v4/x", { method: "POST", body: "{}" }), CHANGED);
+    for (let i = 0; i < 50 && c.getAuthToken.length < 2; i++) await tick();
+    c.signInChanged();
+    hold.open();
+    await settled;
+    assert.equal(c.fetch.length, 1, "두 번째 요청 0회");
+  }
+  // (다) 로그인 상태 변화를 볼 수 없으면(이벤트 없음) 같은 계정인지 확인할 수 없다 → 다시 보내지 않는다.
+  {
+    const c = install({ signInEvent: false, fetchReply: unauthorized });
+    await rejectsWith(auth.googleFetch("/v4/x"), REAUTH);
+    assert.equal(c.fetch.length, 1);
+    assert.deepEqual(c.getAuthToken, [false]);
+    assert.deepEqual(c.removeCached, [FAKE_TOKEN], "401을 받은 토큰은 캐시에서 지운다");
+  }
+  // (라) 요청 전의 변화는 상관없다: 변화가 없던 요청은 다시 보낸다. 감시는 identity마다 한 번만 건다.
+  {
+    let n = 0;
+    const c = install({ fetchReply: () => (++n === 1 ? unauthorized() : new Response("{}", { status: 200 })) });
+    c.signInChanged();
+    assert.equal((await auth.googleFetch("/v4/x")).status, 200);
+    c.signInChanged();
+    n = 0;
+    assert.equal((await auth.googleFetch("/v4/x")).status, 200);
+    assert.equal(c.fetch.length, 4);
+    assert.equal(c.signInListeners.length, 1, "같은 identity에는 감시를 한 번만 건다");
   }
 });
 

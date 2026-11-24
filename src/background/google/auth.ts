@@ -100,6 +100,30 @@ export async function getGoogleToken(): Promise<string> {
 let disconnectSeq = 0;
 let disconnecting = 0;
 
+// Chrome 프로필의 로그인 상태가 바뀐 횟수(메모리). getAuthToken은 계정을 지정하지 않으면 Chrome 프로필의 계정(동기화 계정, 없으면 첫
+// Google 웹 계정)을 쓰므로, 401 뒤 다시 받은 토큰이 처음 요청과 같은 계정의 것인지 토큰만으로는 알 수 없다. 요청이 도는 사이
+// 프로필의 계정 로그인·로그아웃이 한 번도 없었을 때만 같은 계정으로 보고 다시 보낸다(다른 계정의 권한으로 조회·쓰기가 실행되지 않게).
+let signInSeq = 0;
+let watchedIdentity: object | null = null;
+// 로그인 상태 변화 감시를 건다(요청을 보내기 전에 부른다). 걸지 못하면 false — 그러면 같은 계정인지 확인할 수 없어 다시 보내지 않는다.
+// 모듈 최상위에서 걸지 않는다: 값은 진행 중인 요청과 수명이 같고(워커가 내려가면 요청도 사라진다), identity는 부를 때 읽는다.
+function watchSignIn(): boolean {
+  const id = identityApi();
+  const ev = id?.onSignInChanged;
+  if (!id || !ev || typeof ev.addListener !== "function") return false;
+  if (watchedIdentity !== id) {
+    try {
+      ev.addListener(() => {
+        signInSeq += 1;
+      });
+    } catch {
+      return false;
+    }
+    watchedIdentity = id;
+  }
+  return true;
+}
+
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 
 export async function clearGoogleToken(): Promise<void> {
@@ -176,7 +200,8 @@ const ABORTED_BEFORE_RETRY = "중단되어 다시 보내지 않았습니다.";
 // 상태 번호로만 고르는 안내(본문은 보지 않는다).
 function statusHint(status: number): string {
   if (status === 400) return " 요청 값(ID·범위)을 확인하세요.";
-  if (status === 403) return " 이 파일에 접근할 권한이 없습니다.";
+  // 403은 권한 부족일 수도, 사용 한도 초과일 수도 있다(본문을 보지 않으므로 원인을 단정하지 않는다).
+  if (status === 403) return " Google이 요청을 거부했습니다. 접근 권한이나 사용 한도를 확인하세요.";
   if (status === 404) return " 파일이나 시트를 찾지 못했습니다.";
   if (status === 429) return " 요청이 많습니다. 잠시 뒤 다시 시도하세요.";
   return "";
@@ -214,7 +239,8 @@ async function sendOnce(url: string, init: RequestInit, token: string): Promise<
 
 // Google API 요청. 401이면 캐시에서 그 토큰을 지우고 조용히(로그인 창 없이) 다시 받아 한 번만 다시 보낸다.
 // 다시 보내지 않는 경우: 그 사이 연결을 끊었거나 요청을 시작할 때 끊는 중이었음(늦은 재발급이 새 연결의 토큰을 얻어 끊기 전에
-// 시작한 쓰기가 새 연결로 실행되지 않게), 중단됨(opts.signal), 본문을 다시 쓸 수 없음. 401이 아닌 실패·응답 없음·본문 읽기 실패는
+// 시작한 쓰기가 새 연결로 실행되지 않게), 그 사이 Chrome 프로필의 로그인 상태가 바뀜(다시 받은 토큰이 다른 계정의 것일 수 있다),
+// 중단됨(opts.signal), 본문을 다시 쓸 수 없음. 401이 아닌 실패·응답 없음·본문 읽기 실패는
 // 다시 보내지 않는다(쓰기가 이미 반영됐을 수 있다).
 export async function googleFetch(
   path: string,
@@ -223,6 +249,8 @@ export async function googleFetch(
 ): Promise<Response> {
   const startedSeq = disconnectSeq;
   const startedDuringDisconnect = disconnecting > 0;
+  const signInWatched = watchSignIn();
+  const startedSignIn = signInSeq;
   const url = path.startsWith("https://")
     ? path
     : `https://www.googleapis.com${path}`;
@@ -230,7 +258,9 @@ export async function googleFetch(
   let attempt = await sendOnce(url, init, token);
   if (!attempt.ok && attempt.status === 401) {
     await callRemoveCachedAuthToken(token);
-    if (startedDuringDisconnect || disconnectSeq !== startedSeq) throw new Error(CONNECTION_CHANGED);
+    if (startedDuringDisconnect || disconnectSeq !== startedSeq || signInSeq !== startedSignIn) throw new Error(CONNECTION_CHANGED);
+    // 로그인 상태 변화를 볼 수 없으면 다시 받은 토큰이 같은 계정의 것인지 확인할 수 없다 — 다시 보내지 않는다.
+    if (!signInWatched) throw new Error(REAUTH);
     if (opts.signal?.aborted) throw new Error(ABORTED_BEFORE_RETRY);
     // 다시 보낼 수 있는 본문은 없음(조회)·문자열(쓰기)뿐이다.
     if (init.body != null && typeof init.body !== "string") throw new Error(REAUTH);
@@ -240,8 +270,8 @@ export async function googleFetch(
     } catch {
       throw new Error(REAUTH);
     }
-    // 재발급을 기다리는 사이에 끊었거나 중단했는지 다시 본다.
-    if (disconnectSeq !== startedSeq) throw new Error(CONNECTION_CHANGED);
+    // 재발급을 기다리는 사이에 끊었거나 Chrome 프로필의 로그인 상태가 바뀌었거나 중단했는지 다시 본다.
+    if (disconnectSeq !== startedSeq || signInSeq !== startedSignIn) throw new Error(CONNECTION_CHANGED);
     if (opts.signal?.aborted) throw new Error(ABORTED_BEFORE_RETRY);
     debugLog("google:fetch:retry_401");
     attempt = await sendOnce(url, init, next);
