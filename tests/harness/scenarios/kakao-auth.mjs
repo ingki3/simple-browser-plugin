@@ -350,19 +350,22 @@ export default [
         "형식 이상": { status: 200, body: { token_type: "bearer" } },
         "연결 실패": "network",
       };
+      let n = 0;
       for (const [what, reply] of Object.entries(soft)) {
+        // 다시 보낼 때의 갱신은 이 반복만의 액세스 토큰을 준다(앞 반복에서 받은 토큰으로 보내도 통과하지 않게).
+        const fresh = `fake-access-retry-${++n}`;
         await nearExpiry(h);
-        await setKk(h, { memo: [], refreshes: 0, refreshReplies: [reply] });
+        await setKk(h, { memo: [], refreshes: 0, refreshReplies: [reply, { status: 200, body: { token_type: "bearer", access_token: fresh, expires_in: 21599 } }] });
         const failed = await testSend(opt);
         expect(failed?.ok === false && String(failed.error).startsWith(TEST_FAIL), `갱신 ${what}: 첫 보내기는 실패 안내(${brief(failed)})`);
         let st = await kk(h);
         expect(st.refreshes === 1 && st.memo.length === 0, `갱신 ${what}: 갱신 1회·메모 0(${st.refreshes} / ${st.memo.length})`);
-        // 다시 연결하지 않는다: 같은 세대·같은 토큰(만료 임박 그대로)으로 한 번 더 보낸다. 대역은 이번에는 기본 응답(성공)을 준다.
+        // 다시 연결하지 않는다: 같은 세대·같은 토큰(만료 임박 그대로)으로 한 번 더 보낸다. 대역은 이번에는 성공(위의 새 토큰)을 준다.
         const again = await testSend(opt);
         expect(again?.ok === true, `갱신 ${what}: 같은 연결에서 다시 보내면 성공(${brief(again)})`);
         st = await kk(h);
         expect(st.refreshes === 2, `갱신 ${what}: 새 갱신 요청이 나감(누적 ${st.refreshes})`);
-        expect(st.memo.length === 1 && /^Bearer fake-access-refreshed-\d+$/.test(st.memo[0].auth), `갱신 ${what}: 새 토큰으로 메모 1회(${st.memo.length})`);
+        expect(st.memo.length === 1 && st.memo[0].auth === `Bearer ${fresh}`, `갱신 ${what}: 이번 갱신이 준 토큰으로 메모 1회(${st.memo.length})`);
         const s = await storedInfo(h);
         expect(s.status === "idle" && s.epoch === start.epoch, `갱신 ${what}: 세대·status 그대로(${start.epoch} → ${s.epoch} / ${s.status})`);
       }
