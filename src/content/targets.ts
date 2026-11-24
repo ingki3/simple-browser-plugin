@@ -82,28 +82,29 @@ interface Binding {
   rev: number;
 }
 
-// 바인딩의 요소 참조(지금의 행·항목·선택지 트리거·목록)와 승인한 기술의 지문. 상태(states — 펼침·눌림 등)는 넣지 않는다: 같은 트리거를
-// 열고 닫는 사이 값이 바뀌어도 같은 대상이다.
+// 바인딩: 지금의 요소 참조와 승인한 기술의 지문(#318).
+// - 참조: 클릭 이벤트 경로(eventParent — slot에 배치된 요소는 그 slot, shadow root 맨 위면 host)의 조상 전체 + 행(rowElement)·항목·선택지
+//   트리거·목록. 행 표시나 행 글자가 없어도, 래퍼째 옮겨도, slot만 바꿔도 다른 자리에 놓인 같은 노드를 다른 대상으로 본다.
+// - 지문: 승인한 기술 중 "무엇을 누르고 어디로 가는지"를 정하는 필드(이름·모델용 이름·주소·제출 목적지·htmx 요청 주소·ping·감싼 링크·
+//   내려받기·삭제 선언·칸 종류·이름·구역·행 문맥·목록 순번·대리 label·선택지 관계와 트리거의 이름) + 항목 글자. 상태(states — 같은 트리거를
+//   열고 닫는 사이 바뀜), 호출마다 다른 값(consentCall), 위험 판정용 파생 값(결제·개인정보 표시, 범위 안 양식 목록), 바깥 글자(outerText)는 넣지 않는다.
+const BINDING_MAX_DEPTH = 64;
 function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null, item?: ItemBinding): Omit<Binding, "rev"> {
+  const chain: Element[] = [];
+  for (let cur = eventParent(el); cur && chain.length < BINDING_MAX_DEPTH; cur = eventParent(cur)) chain.push(cur);
   const row = rowElement(el)?.row ?? null;
-  // 행 글자가 버튼 글자와 같아 rowElement가 건너뛰는 행(버튼만 든 li 등)도 참조로 본다(글자 유무와 무관). 클릭 이벤트 경로(eventParent —
-  // slot에 배치된 요소는 그 slot, shadow root 맨 위면 host)를 따라 찾는다: slot 속성만 바꿔 다른 행에 배치해도 다른 행으로 본다.
-  let explicitRow: Element | null = null;
-  for (let cur = eventParent(el); cur; cur = eventParent(cur)) {
-    if (cur.matches(ROW_SELECTOR)) {
-      explicitRow = cur;
-      break;
-    }
-  }
-  // 클릭 이벤트 경로의 가까운 두 조상(행 표시가 없는 일반 div 행 사이로 같은 노드를 옮기는 경우 — 코드 리뷰 2회차).
-  const up1 = eventParent(el);
-  const up2 = up1 ? eventParent(up1) : null;
-  const refs = [row, explicitRow, up1, up2, item?.ref.deref() ?? null, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
-  const { tag, role, name, modelName, modelNameClipped, href, context, modelContext, region, inFrame, fieldType } = base;
+  const refs = [...chain, row, item?.ref.deref() ?? null, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
+  const b = base;
+  const t = b.trigger;
   const key = fingerprint(
     canonicalJson({
-      tag, role, name, modelName, modelNameClipped, href, submitTo: base.submitTo ?? null, context, modelContext, region, inFrame, fieldType,
-      list: base.list?.index ?? null,
+      tag: b.tag, role: b.role, name: b.name, modelName: b.modelName, modelNameClipped: b.modelNameClipped,
+      href: b.href, submitTo: b.submitTo, requestUrls: b.requestUrls, pingUrls: b.pingUrls, ancestorHref: b.ancestorHref,
+      download: b.download, deleteMethod: b.deleteMethod, fieldType: b.fieldType, fieldName: b.fieldName,
+      region: b.region, inFrame: b.inFrame, context: b.context, modelContext: b.modelContext, proxy: b.proxy, proxyLabel: b.proxyLabel,
+      popup: b.popup, nestedPopup: b.nestedPopup,
+      trigger: t ? [t.tag, t.role, t.name, t.modelName ?? null, t.href] : null,
+      list: b.list?.index ?? null,
       item: item?.text ?? null,
       relation: relation ? [relation.mode, relation.via, relation.basis, relation.nested] : null,
     }),

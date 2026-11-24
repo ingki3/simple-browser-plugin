@@ -156,6 +156,15 @@ b.addEventListener("mousedown", (e) => {
 });
 </script></main>`;
 
+// 같은 '열기' 버튼 노드가 hx-get(요청 주소)만 바꾸는 변형(코드 리뷰 3회차 P1).
+const HXGET = FORMACTION.replace('<form action="/noop" onsubmit="return false"><button id=b formaction="/edit/A"', '<div><button id=b type=button hx-get="/edit/A"')
+  .replace("열기</button></form>", "열기</button></div>")
+  .replace('b.setAttribute("formaction", "/edit/" + (recs[++n] ?? "Z"));', 'b.setAttribute("hx-get", "/edit/" + (recs[++n] ?? "Z"));');
+
+// 버튼을 두 겹 래퍼째로 글자 없는 일반 div 행 사이로 옮기는 변형(코드 리뷰 3회차 P2).
+const WRAPPED_ROWS = DIV_ROWS.replace("r1.append(b);", 'const w1 = document.createElement("div"); const w2 = document.createElement("div"); w1.append(w2); w2.append(b); r1.append(w1);')
+  .replace("(b.parentElement === r1 ? r2 : r1).append(b);", "(w1.parentElement === r1 ? r2 : r1).append(w1);");
+
 const show = (callId) => ({ click: "Show options", ...(callId ? { callId } : {}) });
 const dismiss = { click: "Dismiss" };
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs ?? []);
@@ -344,6 +353,41 @@ export default [
       expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
       expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
       expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+    },
+  },
+  {
+    name: "같은 버튼 노드가 요청 주소(hx-get)만 바꾼 다른 동작은(다시 찾음) 같은 실패로 세지 않는다",
+    pages: { "/hx": HXGET, "/edit/A": "<p>A</p>", "/edit/B": "<p>B</p>", "/edit/C": "<p>C</p>" },
+    async run(h) {
+      await h.settings(settings);
+      const open = { click: "열기" };
+      const r = await h.turn(
+        [findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { text: "끝까지 감" }],
+        { path: "/hx", approve: true },
+      );
+      expect(clickFails(r) === 3, `세 동작 실패(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
+      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
+      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+    },
+  },
+  {
+    name: "버튼을 두 겹 래퍼째 글자 없는 일반 div 행 사이로 옮겨도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
+    pages: { "/wrapped": WRAPPED_ROWS },
+    async run(h) {
+      await h.settings(settings);
+      const again = (text) => ({ clickAgain: text });
+      const r = await h.turn(
+        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
+        { path: "/wrapped" },
+      );
+      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
+      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
     },
   },
   {
