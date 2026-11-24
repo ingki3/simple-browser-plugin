@@ -1,5 +1,6 @@
 import { GOOGLE_AUTH_VERSION_KEY } from "@/lib/googleAuthKey";
 import { debugLog } from "../debug";
+import { identityApi } from "../auth/identity";
 
 function getManifestClientId(): string {
   const mf = chrome.runtime.getManifest() as chrome.runtime.Manifest & {
@@ -10,7 +11,7 @@ function getManifestClientId(): string {
 
 // 빌드 시 GOOGLE_OAUTH_CLIENT_ID가 없으면 Google 도구를 모델에 노출하지 않는다.
 export function isGoogleConfigured(): boolean {
-  return !!getManifestClientId() && typeof chrome.identity !== "undefined";
+  return !!getManifestClientId() && !!identityApi();
 }
 
 function requireOauthConfigured(): void {
@@ -19,7 +20,7 @@ function requireOauthConfigured(): void {
       "Google 연동은 직접 빌드한 확장에서만 쓸 수 있습니다(이 빌드에는 OAuth 클라이언트 ID가 없습니다). 설치 안내(docs/install.md)의 \"Google 연동\"대로 GOOGLE_OAUTH_CLIENT_ID를 넣어 다시 빌드해 주세요. 클라이언트 유형은 'Chrome 확장 프로그램'입니다.",
     );
   }
-  if (typeof chrome.identity === "undefined") {
+  if (!identityApi()) {
     throw new Error(
       "chrome.identity API가 없습니다. 확장에 'identity' 권한이 아직 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 삭제 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.",
     );
@@ -92,7 +93,7 @@ export async function getGoogleToken(): Promise<string> {
 }
 
 export async function clearGoogleToken(): Promise<void> {
-  if (typeof chrome.identity === "undefined") return;
+  if (!identityApi()) return;
   try {
     await clearGoogleTokenInner();
   } finally {

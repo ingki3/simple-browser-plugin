@@ -51,11 +51,6 @@ import {
 // auth/settingsMessages.ts로 옮겨 가 이 파일은 kakao.ts의 이름을 쓰지 않지만, 등록이 다른 모듈의 import 사슬에 기대지 않게 여기서 직접 불러온다.
 import "./kakao";
 import { handleAuthSettingsMessage } from "./auth/settingsMessages";
-import {
-  clearGoogleToken,
-  connectGoogle,
-  getGoogleConnectionState,
-} from "./google/auth";
 
 // 저장소(API 키·텔레그램 봇 토큰 등)는 확장의 화면·서비스 워커만 읽게 한다(content script는 저장소를 쓰지 않는다, #139).
 chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
@@ -601,7 +596,8 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     return true;
   }
 
-  // 인증 설정 메시지(#319 공용 인증 층 — 카카오톡 나에게 보내기 #310의 kakao_*). 설정 페이지에서만 받는다.
+  // 인증 설정 메시지(#319 공용 인증 층 — 카카오톡 나에게 보내기 #310의 kakao_*, Google 연동의 google_*).
+  // kakao_*는 설정 페이지에서만 받는다.
   const authHandled = handleAuthSettingsMessage(msg, sender, sendResponse);
   if (authHandled !== undefined) return authHandled;
 
@@ -660,104 +656,6 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) =>
         sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
-      );
-    return true;
-  }
-
-  if (m.kind === "google_connect") {
-    debugLog("google:connect:received");
-    // 클라이언트 ID 없이 빌드하면 identity 권한도 없다(정상) — 그때는 connectGoogle이 "직접 빌드 필요"를 알린다.
-    const hasClientId = !!(chrome.runtime.getManifest() as { oauth2?: { client_id?: string } }).oauth2?.client_id;
-    if (hasClientId && typeof chrome.identity === "undefined") {
-      const msg =
-        "chrome.identity API를 사용할 수 없습니다. 확장에 'identity' 권한이 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 '삭제' 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.";
-      debugLog("google:connect:no_identity", msg, "error");
-      sendResponse({ ok: false, error: msg });
-      return true;
-    }
-    connectGoogle()
-      .then(() => {
-        debugLog("google:connect:ok");
-        sendResponse({ ok: true });
-      })
-      .catch((err: unknown) => {
-        const e = err instanceof Error ? err.message : String(err);
-        debugLog("google:connect:error", e, "error");
-        sendResponse({ ok: false, error: e });
-      });
-    return true;
-  }
-
-  if (m.kind === "google_disconnect") {
-    clearGoogleToken()
-      .then(() => {
-        debugLog("google:disconnect:ok");
-        sendResponse({ ok: true });
-      })
-      .catch((err: unknown) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-    return true;
-  }
-
-  if (m.kind === "google_status") {
-    getGoogleConnectionState()
-      .then((state) => sendResponse({ ok: true, data: state }))
-      .catch((err: unknown) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-    return true;
-  }
-
-  if (m.kind === "google_diag") {
-    (async () => {
-      const mf = chrome.runtime.getManifest();
-      const state = await getGoogleConnectionState();
-      const hasIdentity = typeof chrome.identity !== "undefined";
-      let redirectUrl = "";
-      let identityCallError = "";
-      if (hasIdentity) {
-        try {
-          redirectUrl = chrome.identity.getRedirectURL();
-        } catch (err) {
-          identityCallError = err instanceof Error ? err.message : String(err);
-        }
-      }
-      const masked =
-        state.clientId.length > 18
-          ? state.clientId.slice(0, 8) + "…" + state.clientId.slice(-10)
-          : state.clientId;
-      const oauth2 = (mf as typeof mf & {
-        oauth2?: { client_id?: string; scopes?: string[] };
-      }).oauth2;
-      return {
-        extensionId: chrome.runtime.id,
-        extensionVersion: mf.version,
-        manifestPermissions: mf.permissions ?? [],
-        hostPermissions: mf.host_permissions ?? [],
-        manifestOauth2Present: !!oauth2,
-        manifestOauth2Scopes: oauth2?.scopes ?? [],
-        identityApiPresent: hasIdentity,
-        identityApiError: identityCallError,
-        redirectUrlFromIdentity: redirectUrl,
-        googleClientIdConfigured: state.configured,
-        googleClientIdPreview: masked || "(비어 있음)",
-        googleTokenCached: state.connected,
-        timestamp: new Date().toISOString(),
-      };
-    })()
-      .then((data) => sendResponse({ ok: true, data }))
-      .catch((err: unknown) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
       );
     return true;
   }
