@@ -2,6 +2,9 @@
 // 응답 모양·거절 문구·돌려주는 값은 index.ts에 있던 때와 같다.
 import { isOptionsPageSender } from "@/lib/optionsSender";
 import { kakaoClear, kakaoConnect, kakaoDisconnect, kakaoSaveKeys, kakaoStatus, kakaoTestSend } from "../kakao";
+import { clearGoogleToken, connectGoogle, getGoogleConnectionState } from "../google/auth";
+import { debugLog } from "../debug";
+import { identityApi } from "./identity";
 
 // 설정 페이지(옵션 페이지, 해시 제외 전체 URL)에서 보낸 메시지인지(#310 카카오 연결·시험 전송). 사이드 패널·웹 문서(content script)는 아니다.
 function fromOptionsPage(sender: chrome.runtime.MessageSender): boolean {
@@ -45,6 +48,106 @@ export function handleAuthSettingsMessage(msg: unknown, sender: chrome.runtime.M
     job
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
+
+  // Google 연동(Sheets·Drive) 설정 메시지. 발신자 검사는 아직 없다(#319 ④에서 설정 페이지만 받게 바꾼다) — index.ts에 있던 그대로다.
+  if (m.kind === "google_connect") {
+    debugLog("google:connect:received");
+    // 클라이언트 ID 없이 빌드하면 identity 권한도 없다(정상) — 그때는 connectGoogle이 "직접 빌드 필요"를 알린다.
+    const hasClientId = !!(chrome.runtime.getManifest() as { oauth2?: { client_id?: string } }).oauth2?.client_id;
+    if (hasClientId && !identityApi()) {
+      const msg =
+        "chrome.identity API를 사용할 수 없습니다. 확장에 'identity' 권한이 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 '삭제' 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.";
+      debugLog("google:connect:no_identity", msg, "error");
+      sendResponse({ ok: false, error: msg });
+      return true;
+    }
+    connectGoogle()
+      .then(() => {
+        debugLog("google:connect:ok");
+        sendResponse({ ok: true });
+      })
+      .catch((err: unknown) => {
+        const e = err instanceof Error ? err.message : String(err);
+        debugLog("google:connect:error", e, "error");
+        sendResponse({ ok: false, error: e });
+      });
+    return true;
+  }
+
+  if (m.kind === "google_disconnect") {
+    clearGoogleToken()
+      .then(() => {
+        debugLog("google:disconnect:ok");
+        sendResponse({ ok: true });
+      })
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    return true;
+  }
+
+  if (m.kind === "google_status") {
+    getGoogleConnectionState()
+      .then((state) => sendResponse({ ok: true, data: state }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    return true;
+  }
+
+  if (m.kind === "google_diag") {
+    (async () => {
+      const mf = chrome.runtime.getManifest();
+      const state = await getGoogleConnectionState();
+      const identity = identityApi();
+      const hasIdentity = !!identity;
+      let redirectUrl = "";
+      let identityCallError = "";
+      if (identity) {
+        try {
+          redirectUrl = identity.getRedirectURL();
+        } catch (err) {
+          identityCallError = err instanceof Error ? err.message : String(err);
+        }
+      }
+      const masked =
+        state.clientId.length > 18
+          ? state.clientId.slice(0, 8) + "…" + state.clientId.slice(-10)
+          : state.clientId;
+      const oauth2 = (mf as typeof mf & {
+        oauth2?: { client_id?: string; scopes?: string[] };
+      }).oauth2;
+      return {
+        extensionId: chrome.runtime.id,
+        extensionVersion: mf.version,
+        manifestPermissions: mf.permissions ?? [],
+        hostPermissions: mf.host_permissions ?? [],
+        manifestOauth2Present: !!oauth2,
+        manifestOauth2Scopes: oauth2?.scopes ?? [],
+        identityApiPresent: hasIdentity,
+        identityApiError: identityCallError,
+        redirectUrlFromIdentity: redirectUrl,
+        googleClientIdConfigured: state.configured,
+        googleClientIdPreview: masked || "(비어 있음)",
+        googleTokenCached: state.connected,
+        timestamp: new Date().toISOString(),
+      };
+    })()
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
     return true;
   }
 
