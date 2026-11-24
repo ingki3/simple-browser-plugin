@@ -60,7 +60,7 @@ const INDEPENDENT_SELECTOR = [
 // 평평한 트리(slot 배치 포함)에서 부모. shadow root면 host로 올라간다.
 // 닫힌 shadow root에 배치된 요소는 assignedSlot이 null이라(DOM 표준), 부모 host의 닫힌 root에서 그 노드를 받은 slot을
 // 직접 찾는다(그 안의 제출 버튼 등을 건너뛰지 않게).
-function flatParent(node: Node): Node | null {
+export function flatParent(node: Node): Node | null {
   const slot = (node as Element).assignedSlot ?? closedSlotOf(node);
   if (slot) return slot;
   const parent = node.parentNode;

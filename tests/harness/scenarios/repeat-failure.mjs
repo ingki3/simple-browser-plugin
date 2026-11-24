@@ -208,6 +208,14 @@ lb.addEventListener("mousedown", (e) => {
 });
 </script></main>`;
 
+// 코드 리뷰 6회차: 닫힌 shadow root의 slot 배치, label 안 자식 요소, 목적지를 확인할 수 없는 hx-post.
+const CLOSED_SLOT_ROWS = SLOT_ROWS.replace('host.attachShadow({ mode: "open" }).innerHTML', 'host.attachShadow({ mode: "closed" }).innerHTML');
+const LABEL_CHILD = LABEL_SWAP.replace(
+  '<label id=lb for=c1 style="display:inline-block;width:120px;height:32px;background:#ddd">선택</label>',
+  '<label id=lb for=c1><span id=sp role=button tabindex=0 style="display:inline-block;width:120px;height:32px;background:#ddd">선택</span></label>',
+).replace('lb.addEventListener("mousedown"', 'sp.addEventListener("mousedown"').replace('lb.setAttribute("aria-label", "닫기");', 'sp.setAttribute("aria-label", "닫기");').replace("lb.removeAttribute(\"aria-label\");", "sp.removeAttribute(\"aria-label\");");
+const HXPOST = HXGET.replace('hx-get="/edit/A"', 'hx-post="/records/A"').replace('b.setAttribute("hx-get", "/edit/"', 'b.setAttribute("hx-post", "/records/"');
+
 const show = (callId) => ({ click: "Show options", ...(callId ? { callId } : {}) });
 const dismiss = { click: "Dismiss" };
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs ?? []);
@@ -435,6 +443,24 @@ export default [
     },
   },
   {
+    name: "같은 버튼 노드가 목적지를 확인할 수 없는 요청(hx-post)이면 같은 실패로 세지 않는다(셈에서 뺌)",
+    pages: { "/hp": HXPOST, "/edit/A": "<p>A</p>", "/edit/B": "<p>B</p>", "/edit/C": "<p>C</p>" },
+    async run(h) {
+      await h.settings(settings);
+      const open = { click: "열기" };
+      const r = await h.turn(
+        [findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { text: "끝까지 감" }],
+        { path: "/hp", approve: true },
+      );
+      expect(clickFails(r) === 3, `세 동작 실패(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
+      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
+      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+    },
+  },
+  {
     name: "버튼을 두 겹 래퍼째 글자 없는 일반 div 행 사이로 옮겨도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
     pages: { "/wrapped": WRAPPED_ROWS },
     async run(h) {
@@ -477,6 +503,23 @@ export default [
       const r = await h.turn(
         [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
         { path: "/slot" },
+      );
+      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
+      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
+    },
+  },
+  {
+    name: "닫힌 shadow root에서 slot 속성만 바꿔 다른 행에 배치해도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
+    pages: { "/cslot": CLOSED_SLOT_ROWS },
+    async run(h) {
+      await h.settings(settings);
+      const again = (text) => ({ clickAgain: text });
+      const r = await h.turn(
+        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
+        { path: "/cslot" },
       );
       expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
       const args = await sentClickArgs(h);
@@ -576,6 +619,20 @@ export default [
       await h.settings(settings);
       const sel = { click: "선택" };
       const r = await h.turn([findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { text: "끝까지 감" }], { path: "/lb", approve: true });
+      expect(clickFails(r) === 3, `선택 실패 3번(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 컨트롤은 안내 없음");
+      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+    },
+  },
+  {
+    name: "label 안의 자식 요소를 누를 때 label이 for만 바꿔 다른 checkbox를 가리키면 같은 실패로 세지 않는다",
+    pages: { "/lc": LABEL_CHILD },
+    async run(h) {
+      await h.settings(settings);
+      const sel = { click: "선택", role: "button" };
+      const r = await h.turn([findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { text: "끝까지 감" }], { path: "/lc", approve: true });
       expect(clickFails(r) === 3, `선택 실패 3번(${clickFails(r)})`);
       const args = await sentClickArgs(h);
       expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);

@@ -18,7 +18,9 @@ import {
   type TargetInfo,
 } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
-import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
+import { closestAcross, eventParent, fieldValueSignature, linkHrefOf } from "./context";
+// 순환 import(trustedClick → targets)지만 함수 선언만 쓰고 부를 때는 두 모듈 모두 평가가 끝난 뒤라 안전하다.
+import { flatParent } from "./trustedClick";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
 import { canonicalJson, fingerprint } from "@/lib/hopGuard";
@@ -85,7 +87,7 @@ interface Binding {
 }
 
 // 바인딩: 지금의 요소 참조와 승인한 기술의 지문(#318).
-// - 참조: 클릭 이벤트 경로(eventParent — slot에 배치된 요소는 그 slot, shadow root 맨 위면 host)의 조상 전체 + 행(rowElement)·항목·선택지
+// - 참조: 평평한 트리 경로(flatParent — 열린·닫힌 shadow의 slot 배치 포함, shadow root 맨 위면 host)의 조상 전체 + 행(rowElement)·항목·선택지
 //   트리거·목록. 행 표시나 행 글자가 없어도, 래퍼째 옮겨도, slot만 바꿔도 다른 자리에 놓인 같은 노드를 다른 대상으로 본다.
 // - 지문: 승인한 기술 전체에서 같은 대상이라도 바뀌는 값만 뺀 것(빼는 목록 BINDING_VOLATILE — 상태(states, 같은 트리거를 열고 닫는 사이
 //   바뀜)·호출마다 다른 승인 표시(consentCall·consentPersonal)·경고 표시(hidden)·목록 항목 수(더 불러오면 늚)). 넣을 필드를 고르지 않아
@@ -113,14 +115,18 @@ function stableInfo(info: TargetInfo): Record<string, unknown> {
 }
 const BINDING_MAX_DEPTH = 64;
 // 경로 끝(문서 맨 위)까지 보지 못하면(깊이 한도) null — 다른 자리로 옮긴 것을 가릴 수 없어 같은 실패 셈에서 뺀다.
+// 목적지를 구조로 확인할 수 없는 요청(opaqueRequest — hx-post 등)을 일으키는 대상도 null: 같은 노드가 다른 곳으로 요청해도 가릴 수 없다.
 function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null, item?: ItemBinding): Omit<Binding, "rev"> | null {
+  if (base.opaqueRequest) return null;
+  // 가드와 같은 평평한 트리 경로(flatParent — 열린·닫힌 shadow root의 slot 배치 포함, root면 host).
   const chain: Element[] = [];
-  let cur = eventParent(el);
-  for (; cur && chain.length < BINDING_MAX_DEPTH; cur = eventParent(cur)) chain.push(cur);
+  let cur: Node | null = flatParent(el);
+  for (; cur && chain.length < BINDING_MAX_DEPTH; cur = flatParent(cur)) if (cur.nodeType === Node.ELEMENT_NODE) chain.push(cur as Element);
   if (cur) return null;
   const row = rowElement(el)?.row ?? null;
-  // label이면 실제로 작동시킬 컨트롤(대리 label이 가리키는 숨은 checkbox·radio가 바뀌는 경우).
-  const control = el.localName === "label" ? (el as HTMLLabelElement).control : null;
+  // 실제로 작동시킬 label의 컨트롤(대상이 label이거나 label 안의 요소 — 클릭 판정의 labelControl과 같은 경로).
+  const label = closestAcross(el, "label") as HTMLLabelElement | null;
+  const control = label?.control ?? null;
   const refs = [...chain, row, control, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
   const key = fingerprint(
     canonicalJson({
