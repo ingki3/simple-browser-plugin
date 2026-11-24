@@ -165,6 +165,27 @@ const HXGET = FORMACTION.replace('<form action="/noop" onsubmit="return false"><
 const WRAPPED_ROWS = DIV_ROWS.replace("r1.append(b);", 'const w1 = document.createElement("div"); const w2 = document.createElement("div"); w1.append(w2); w2.append(b); r1.append(w1);')
   .replace("(b.parentElement === r1 ? r2 : r1).append(b);", "(w1.parentElement === r1 ? r2 : r1).append(w1);");
 
+// 항목 목록 안의 막히는 버튼(찾기 모드를 번갈아 써도 같은 대상으로 세는지, 코드 리뷰 4회차 P2).
+const ITEMS = `<title>항목 목록</title><main>
+<input id=memo aria-label="메모">
+<button id=dismiss style="width:120px;height:32px">Dismiss</button>
+<ul>
+<li><span>레코드 1</span> <div role=button tabindex=0 aria-label="보기" style="display:inline-block;width:120px;height:32px;background:#eee">▼</div></li>
+<li><span>레코드 2</span> <div id=b role=button tabindex=0 aria-label="펼치기" style="display:inline-block;width:120px;height:32px;background:#ddd">▼</div></li>
+<li><span>레코드 3</span> <div role=button tabindex=0 aria-label="보기" style="display:inline-block;width:120px;height:32px;background:#eee">▼</div></li>
+</ul>
+<p id=out></p>
+<script>
+memo.value = ${JSON.stringify(SECRET)};
+b.addEventListener("mousedown", (e) => { e.preventDefault(); b.setAttribute("aria-label", "접기"); });
+dismiss.addEventListener("click", () => { b.setAttribute("aria-label", "펼치기"); out.textContent = "닫음"; });
+</script></main>`;
+const itemsFind = { tool: "find_clickables", args: { mode: "items" } };
+
+// 같은 '상세 보기' 제출 버튼이 name=value(제출 값)만 바꿔 다른 레코드를 여는 변형(코드 리뷰 4회차 P1).
+const SUBMITVAL = FORMACTION.replace('<form action="/noop" onsubmit="return false"><button id=b formaction="/edit/A"', '<form action="/detail" onsubmit="return false"><button id=b name=record value=A')
+  .replace('b.setAttribute("formaction", "/edit/" + (recs[++n] ?? "Z"));', 'b.setAttribute("value", recs[++n] ?? "Z");');
+
 const show = (callId) => ({ click: "Show options", ...(callId ? { callId } : {}) });
 const dismiss = { click: "Dismiss" };
 const reqs = (h) => h.sw.evaluate(() => globalThis.__modelReqs ?? []);
@@ -356,6 +377,24 @@ export default [
     },
   },
   {
+    name: "같은 버튼 노드가 제출 값(name=value)만 바꾼 다른 레코드는(다시 찾음) 같은 실패로 세지 않는다",
+    pages: { "/sv": SUBMITVAL, "/detail": "<p>d</p>" },
+    async run(h) {
+      await h.settings(settings);
+      const open = { click: "열기" };
+      const r = await h.turn(
+        [findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { text: "끝까지 감" }],
+        { path: "/sv", approve: true },
+      );
+      expect(clickFails(r) === 3, `세 동작 실패(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
+      expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
+      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
+      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+    },
+  },
+  {
     name: "같은 버튼 노드가 요청 주소(hx-get)만 바꾼 다른 동작은(다시 찾음) 같은 실패로 세지 않는다",
     pages: { "/hx": HXGET, "/edit/A": "<p>A</p>", "/edit/B": "<p>B</p>", "/edit/C": "<p>C</p>" },
     async run(h) {
@@ -477,6 +516,23 @@ export default [
       expect(clickResults(r).every((t) => t.repeated === undefined), "이름이 다른 대상은 안내 없음");
       expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
       expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+    },
+  },
+  {
+    name: "찾기 모드를 번갈아 써도(list → items → list) 같은 버튼의 같은 실패를 이어 센다",
+    pages: { "/items": ITEMS },
+    async run(h) {
+      await h.settings(settings);
+      const r = await h.turn(
+        [findC, { click: "펼치기" }, findC, dismiss, itemsFind, { clickItem: "레코드 2", target: "펼치기" }, findC, dismiss, findC, { click: "펼치기" }, { text: "보내면 안 됨" }],
+        { path: "/items" },
+      );
+      expect(clickFails(r) === 3, `펼치기 실패 3번(${clickFails(r)})`);
+      const args = await sentClickArgs(h);
+      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
+      const fails = clickResults(r).filter((t) => t.result?.error);
+      expect(fails.length >= 2 && fails[0].repeated === undefined && typeof fails[1].repeated === "string", `두 번째(항목 모드)에 안내(${fails.map((t) => !!t.repeated).join(",")})`);
+      expect(r.logs.some((l) => l.includes("same_failure · click_element ×3")), "세 번째(목록 모드)에서 멈춤");
     },
   },
   {

@@ -79,42 +79,46 @@ interface Entry {
 interface Binding {
   refs: Array<WeakRef<Element> | null>;
   key: string;
+  // 항목 모드(#161)로 찾았을 때의 항목. 앞·이번 준비 모두에 있을 때만 비교한다.
+  item: { ref: WeakRef<Element>; text: string } | null;
   rev: number;
 }
 
 // 바인딩: 지금의 요소 참조와 승인한 기술의 지문(#318).
 // - 참조: 클릭 이벤트 경로(eventParent — slot에 배치된 요소는 그 slot, shadow root 맨 위면 host)의 조상 전체 + 행(rowElement)·항목·선택지
 //   트리거·목록. 행 표시나 행 글자가 없어도, 래퍼째 옮겨도, slot만 바꿔도 다른 자리에 놓인 같은 노드를 다른 대상으로 본다.
-// - 지문: 승인한 기술 중 "무엇을 누르고 어디로 가는지"를 정하는 필드(이름·모델용 이름·주소·제출 목적지·htmx 요청 주소·ping·감싼 링크·
-//   내려받기·삭제 선언·칸 종류·이름·구역·행 문맥·목록 순번·대리 label·선택지 관계와 트리거의 이름) + 항목 글자. 상태(states — 같은 트리거를
-//   열고 닫는 사이 바뀜), 호출마다 다른 값(consentCall), 위험 판정용 파생 값(결제·개인정보 표시, 범위 안 양식 목록), 바깥 글자(outerText)는 넣지 않는다.
+// - 지문: 승인한 기술 전체에서 같은 대상이라도 바뀌는 값만 뺀 것(빼는 목록 BINDING_VOLATILE — 상태(states, 같은 트리거를 열고 닫는 사이
+//   바뀜)·호출마다 다른 승인 표시(consentCall·consentPersonal)·경고 표시(hidden)·목록 항목 수(더 불러오면 늚)). 넣을 필드를 고르지 않아
+//   주소·제출 목적지·제출 값·요청 주소처럼 승인 기술이 늘어도 다른 동작은 다른 대상으로 본다(더 묻는 쪽 — 셈을 덜 잇는다).
+//   항목 글자는 앞 준비와 이번 준비 모두에 항목이 있을 때만 비교한다(찾기 모드를 번갈아 써도 셈이 끊기지 않게).
+const BINDING_VOLATILE = ["states", "consentCall", "consentPersonal", "hidden"] as const;
+function stableInfo(info: TargetInfo): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...info };
+  for (const k of BINDING_VOLATILE) delete out[k];
+  out.list = info.list?.index ?? null;
+  if (info.trigger) out.trigger = stableInfo(info.trigger);
+  return out;
+}
 const BINDING_MAX_DEPTH = 64;
 function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null, item?: ItemBinding): Omit<Binding, "rev"> {
   const chain: Element[] = [];
   for (let cur = eventParent(el); cur && chain.length < BINDING_MAX_DEPTH; cur = eventParent(cur)) chain.push(cur);
   const row = rowElement(el)?.row ?? null;
-  const refs = [...chain, row, item?.ref.deref() ?? null, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
-  const b = base;
-  const t = b.trigger;
+  const refs = [...chain, row, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
   const key = fingerprint(
     canonicalJson({
-      tag: b.tag, role: b.role, name: b.name, modelName: b.modelName, modelNameClipped: b.modelNameClipped,
-      href: b.href, submitTo: b.submitTo, requestUrls: b.requestUrls, pingUrls: b.pingUrls, ancestorHref: b.ancestorHref,
-      download: b.download, deleteMethod: b.deleteMethod, fieldType: b.fieldType, fieldName: b.fieldName,
-      region: b.region, inFrame: b.inFrame, context: b.context, modelContext: b.modelContext, proxy: b.proxy, proxyLabel: b.proxyLabel,
-      popup: b.popup, nestedPopup: b.nestedPopup,
-      trigger: t ? [t.tag, t.role, t.name, t.modelName ?? null, t.href] : null,
-      list: b.list?.index ?? null,
-      item: item?.text ?? null,
+      ...stableInfo(base),
       relation: relation ? [relation.mode, relation.via, relation.basis, relation.nested] : null,
     }),
   );
-  return { refs, key };
+  const itemEl = item?.ref.deref() ?? null;
+  return { refs, key, item: itemEl ? { ref: new WeakRef(itemEl), text: item!.text } : null };
 }
 
 // 참조는 있었는지부터 비교한다: 앞 준비 때 있던 행이 그 뒤 수거돼(deref가 null) 지금 행이 없는 경우를 같은 것으로 보지 않게.
 function sameBinding(a: Binding, b: Omit<Binding, "rev">): boolean {
   if (a.key !== b.key || a.refs.length !== b.refs.length) return false;
+  if (a.item && b.item && (a.item.text !== b.item.text || !a.item.ref.deref() || a.item.ref.deref() !== b.item.ref.deref())) return false;
   return a.refs.every((r, i) => {
     const now = b.refs[i];
     if (!r || !now) return !r && !now;
@@ -131,6 +135,8 @@ export function prepareBindingRev(id: string, el: HTMLElement, info: TargetInfo,
   const now = bindingOf(el, info, relation, item);
   if (!entry.binding) entry.binding = { ...now, rev: 0 };
   else if (!sameBinding(entry.binding, now)) entry.binding = { ...now, rev: entry.binding.rev + 1 };
+  // 같은 대상이고 이번에 항목 모드로 찾았으면 그 항목을 다음 비교의 기준으로 남긴다.
+  else if (now.item) entry.binding.item = now.item;
   return entry.binding.rev;
 }
 
