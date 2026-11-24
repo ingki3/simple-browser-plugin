@@ -17,7 +17,8 @@ const VERSION_KEY = "googleAuthVersion";
 // - holdRemove: true면 removeCachedAuthToken 콜백을 calls.finishRemove()까지 부르지 않는다(삭제가 끝나기 전의 순서를 본다).
 function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () => FAKE_TOKEN, fetchReply = () => new Response("{}", { status: 200 }), holdRemove = false } = {}) {
   // order: 캐시 삭제·fetch·알림 저장이 일어난 순서(한 배열에 적는다).
-  const calls = { getAuthToken: [], removeCached: [], storageSet: [], fetch: [], order: [] };
+  // storageValuesOk: 저장한 값이 모두 유한한 숫자(바뀐 시각)였는지 — 값 자체는 기록하지 않는다(토큰이 값으로 저장되는 회귀를 잡는다).
+  const calls = { getAuthToken: [], removeCached: [], storageSet: [], storageValuesOk: true, fetch: [], order: [] };
   const runtime = {
     lastError: undefined,
     getManifest: () => (clientId ? { oauth2: { client_id: clientId, scopes: [] } } : {}),
@@ -28,6 +29,7 @@ function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () =
       local: {
         set: async (obj) => {
           calls.storageSet.push(Object.keys(obj));
+          if (!Object.values(obj).every((v) => typeof v === "number" && Number.isFinite(v))) calls.storageValuesOk = false;
           calls.order.push("storageSet");
         },
       },
@@ -92,12 +94,14 @@ test("U2 connectGoogle: interactive 한 번, getAuthToken을 부른 뒤에는 �
   await tick();
   assert.deepEqual(c.getAuthToken, [true]);
   assert.deepEqual(c.storageSet, [[VERSION_KEY]]);
+  assert.equal(c.storageValuesOk, true, "알림 값은 숫자(시각)뿐 — 토큰을 저장하지 않는다");
 
   c = install({ tokenReply: () => ({ lastError: "The user did not approve access." }) });
   await assert.rejects(auth.connectGoogle(), /The user did not approve access\./);
   await tick();
   assert.deepEqual(c.getAuthToken, [true]);
   assert.deepEqual(c.storageSet, [[VERSION_KEY]], "실패해도 알림 1회");
+  assert.equal(c.storageValuesOk, true);
 
   // 클라이언트 ID 없음: try에 들어가기 전에 던진다.
   c = install({ clientId: "" });
@@ -150,6 +154,24 @@ test("U4 clearGoogleToken: 캐시 삭제 → 폐기 요청 → 알림, 토큰이
   await clearing;
   await tick();
   assert.deepEqual(c.order, ["removeCached", "fetch", "storageSet"]);
+
+  assert.equal(c.storageValuesOk, true, "알림 값은 숫자(시각)뿐");
+
+  // 폐기 응답이 오기 전에는 알림이 나가지 않고 해제도 끝나지 않는다(폐기 요청을 기다리지 않는 회귀를 잡는다).
+  let finishRevoke;
+  c = install({ fetchReply: () => new Promise((r) => (finishRevoke = () => r(new Response("{}", { status: 200 })))) });
+  let cleared = false;
+  const revoking = auth.clearGoogleToken().then(() => {
+    cleared = true;
+  });
+  await tick();
+  assert.equal(c.fetch.length, 1);
+  assert.deepEqual(c.storageSet, [], "폐기 응답 전 알림 0회");
+  assert.equal(cleared, false, "폐기 응답 전에는 해제가 끝나지 않는다");
+  finishRevoke();
+  await revoking;
+  await tick();
+  assert.deepEqual(c.storageSet, [[VERSION_KEY]]);
 
   // 토큰이 없으면(조용한 조회 실패) 삭제·폐기 0회, 알림 1회.
   c = install({ tokenReply: () => ({ lastError: "OAuth2 not granted or revoked." }) });

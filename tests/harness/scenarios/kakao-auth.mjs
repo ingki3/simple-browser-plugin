@@ -227,7 +227,11 @@ export default [
         responses.push(rc.v);
         const afterChange = await storedInfo(h);
         expect(afterChange.epoch === before.epoch + 1, `${what}: 세대 +1(${before.epoch} → ${afterChange.epoch})`);
-        expect(afterChange.status === "idle" && afterChange.hasAccess === (change === "재연결"), `${what}: 변경 직후 저장 상태(status ${afterChange.status}, 토큰 ${afterChange.hasAccess})`);
+        const hasTokens = change === "재연결";
+        expect(
+          afterChange.status === "idle" && afterChange.hasAccess === hasTokens && afterChange.hasRefresh === hasTokens,
+          `${what}: 변경 직후 저장 상태(status ${afterChange.status}, 액세스 ${afterChange.hasAccess}, 리프레시 ${afterChange.hasRefresh})`,
+        );
         await snapshot(h);
         // 옛 갱신을 푼다.
         await setKk(h, { holdRefresh: false });
