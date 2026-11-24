@@ -36,6 +36,7 @@ import {
   availableTools,
   composeSystemPrompt,
   remoteTurnNote,
+  repeatFailureNote,
   spinStopNote,
 } from "./prompts";
 import { fetchTabHeader, loadedPage, requestTabId, toolTabUrl, turnTabOf } from "./tabContext";
@@ -59,6 +60,7 @@ import { beginKeepalive, endKeepalive } from "../keepalive";
 import { debugLog, timeSpan } from "../debug";
 import { detectPdfAtTab, fetchPdfAsBase64 } from "../pdf";
 import {
+  ContentError,
   topDocumentId,
   captureTurnTab,
   currentToolTab,
@@ -75,7 +77,11 @@ import {
   clickChangedForSpin,
   detectSpin,
   fingerprint,
+  REPEAT_FAILURE_NOTE_AT,
+  REPEAT_FAILURE_STOP_AT,
+  repeatedFailureCount,
   summarizeRuns,
+  withRepeatNote,
   type ClickEffectLike,
   type ToolRunRecord,
 } from "@/lib/hopGuard";
@@ -109,6 +115,12 @@ interface AuthorizedRun {
 type CallAuthorization = typeof STALE | typeof DONE | HandedOff | AuthorizedRun;
 
 const MAX_DOCUMENT_READS_PER_TURN = 5;
+
+// 대상 확인(target_inspect)이 구조로 정한 id 실패(#236 StaleTargetCode)면 같은 실패 반복 판정(#318)의 원인 코드. 그 밖은 undefined.
+function staleTargetFailCode(err: unknown): string | undefined {
+  if (!(err instanceof ContentError)) return undefined;
+  return err.code === "stale_target" || err.code === "foreign_target" ? `target:${err.code}` : undefined;
+}
 
 // 원격 대화(텔레그램, #139).
 export type AgentChannel = "panel" | "telegram" | "mcp";
@@ -1210,11 +1222,12 @@ export class ChatAgent {
     const callId = `k${this.callNonce}-${++this.callSeq}`;
     // 이 호출을 실패로 끝낸다: 패널 결과 줄, 대화 기록(모델이 보는 오류), 헛돌기 감지 기록을 함께 남긴다.
     // panelSummary: 패널에만 다르게 보일 문구(허락으로 실행한 호출 등).
-    const failCall = (msg: string, key: string, panelSummary = msg): void => {
+    // failCode: 원인을 식별한 실패의 고정 코드(#318 같은 실패 반복 판정). 없으면 그 판정에서 세지 않는다.
+    const failCall = (msg: string, key: string, panelSummary = msg, failCode?: string): void => {
       this.send({ kind: "tool_result", callId, toolName, ok: false, summary: panelSummary });
       this.history.push({ role: "tool", tool_call_id: modelCallId, name: toolName, content: this.toolContent(turnTab, { error: msg }) });
       this.noteRebases(callId);
-      record(toolName, key, false, `error:${msg}`, msg);
+      record(toolName, key, false, `error:${msg}`, msg, failCode ? { failCode } : {});
     };
 
     let parsedArgs: unknown;
@@ -1288,7 +1301,7 @@ export class ChatAgent {
       if (this.isStale(turn)) return STALE;
       const msg = err instanceof Error ? err.message : String(err);
       logToolFail(toolName, msg);
-      failCall(msg, argsKey);
+      failCall(msg, argsKey, msg, staleTargetFailCode(err));
       return DONE;
     }
     // 대상 확인을 기다리는 동안 사용자가 중단하거나 새 대화를 시작했으면 카드를 띄우지 않는다.
@@ -1926,7 +1939,10 @@ export class ChatAgent {
       const changed =
         toolName === "click_element" &&
         clickChangedForSpin(result.ok, (result.data as { effect?: ClickEffectLike } | null)?.effect);
-      call.record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, { changed });
+      call.record(toolName, argsKey, result.ok, `${result.ok ? "ok" : "fail"}:${JSON.stringify(result.data) ?? ""}`, result.summary, {
+        changed,
+        ...(!result.ok && result.failCode ? { failCode: result.failCode } : {}),
+      });
       if (auth.internalNavSite && result.ok && !this.turnSite) {
         this.turnSite = auth.internalNavSite;
         debugLog("turn:site", `${auth.internalNavSite} (내부 페이지에서 요청 글의 사이트로 이동)`);
@@ -1959,6 +1975,25 @@ export class ChatAgent {
     return true;
   }
 
+  // 같은 호출의 같은 실패 반복(#318): 방금 기록한 호출이 같은 도구·같은 인자로 같은 종류의 실패를 거듭했으면, 이 호출이 남긴
+  // 도구 결과 메시지(historyBefore 뒤에 더해진 것 중 이 호출 id의 마지막)에 방법을 바꾸라는 안내를 붙인다. 모델 호출 id는
+  // 순환마다 겹칠 수 있어 이번 호출 뒤 구간에서만 찾는다. 반복이면 그 도구 이름과 수를 돌려준다(멈춤 판정은 부르는 쪽).
+  // 원인 코드는 등록된 도구 실행(runAuthorized)에서만 생기지만, 모델이 만든 이름이 문구에 들어가지 않게 등록된 이름인지 다시 본다.
+  private noteRepeatedFailure(runs: readonly ToolRunRecord[], historyBefore: number, modelCallId: string): { tool: string; count: number } | null {
+    const count = repeatedFailureCount(runs);
+    const last = runs[runs.length - 1];
+    if (count < REPEAT_FAILURE_NOTE_AT || !last || !Object.hasOwn(TOOL_POLICY, last.tool)) return null;
+    for (let i = this.history.length - 1; i >= historyBefore; i -= 1) {
+      const m = this.history[i];
+      if (m.role !== "tool" || m.tool_call_id !== modelCallId || typeof m.content !== "string") continue;
+      m.content = withRepeatNote(m.content, repeatFailureNote(last.tool, count, REPEAT_FAILURE_STOP_AT));
+      break;
+    }
+    // 로그에는 도구 이름과 수만(원인 코드·대상 회차는 내부 비교용).
+    debugLog("hop:repeat_fail", `${last.tool} ×${count}`, "warn");
+    return { tool: last.tool, count };
+  }
+
   private async streamLoop(
     apiKey: string,
     model: ModelId,
@@ -1973,7 +2008,16 @@ export class ChatAgent {
     // 이번 요청에서 실행을 마친 도구 호출(헛돌기 판정과 이어 가기 카드의 요약).
     const runs: ToolRunRecord[] = [];
     const record: RecordRun = (tool, argsKey, ok, result, summary, extra = {}) => {
-      runs.push({ tool, argsKey, ok, resultKey: fingerprint(result), summary, changed: extra.changed === true, cancelled: extra.cancelled });
+      runs.push({
+        tool,
+        argsKey,
+        ok,
+        resultKey: fingerprint(result),
+        summary,
+        changed: extra.changed === true,
+        cancelled: extra.cancelled,
+        ...(!ok && !extra.cancelled && extra.failCode ? { failCode: extra.failCode } : {}),
+      });
     };
     // 승인 카드를 연달아 띄워 습관적으로 허용하게 만드는 것을 막는다.
     const reads = { documents: 0, otherTabs: 0, telegramSends: 0, kakaoSends: 0, tabLinkReads: 0 };
@@ -2040,9 +2084,25 @@ export class ChatAgent {
         return true;
       }
 
-      for (const fc of functionCalls) {
+      for (const [callIndex, fc] of functionCalls.entries()) {
         if (this.isStale(turn)) return false;
+        const runsBefore = runs.length;
+        const historyBefore = this.history.length;
         if (!(await this.handleCall(fc, turn, turnTab, record, reads))) return false;
+        // 같은 호출의 같은 실패 반복(#318): 호출마다 판정한다(응답 하나에 [같은 실패, 다른 성공]이 함께 와도 놓치지 않게).
+        const same = runs.length === runsBefore + 1 ? this.noteRepeatedFailure(runs, historyBefore, fc.id) : null;
+        if (same && same.count >= REPEAT_FAILURE_STOP_AT && !this.isStale(turn)) {
+          debugLog("hop:spin", `same_failure · ${same.tool} ×${same.count}`, "warn");
+          // 남은 호출은 실행하지 않는다 — 이 응답에서 아직 실행하지 않은 호출마다 미실행 결과를 채운다(호출 id가 한 응답 안에서
+          // 겹쳐도 하나씩 — id로 응답 여부를 보는 closeDanglingToolCalls는 겹친 id를 이미 답한 것으로 본다).
+          for (const rest of functionCalls.slice(callIndex + 1)) {
+            this.history.push({ role: "tool", tool_call_id: rest.id, name: rest.function.name, content: JSON.stringify({ error: "interrupted" }) });
+          }
+          const what = `${same.tool}를 같은 인자로 불러 같은 방식으로 ${same.count}번 실패했습니다.`;
+          this.send({ kind: "info", title: "같은 동작이 되풀이되어 멈춤", message: `${what} 단계를 더 쓰지 않고 지금까지의 결과로 답합니다.` });
+          await this.finishWithoutTools(apiKey, model, systemPrompt, turn, spinStopNote(what));
+          return false;
+        }
         // 원격 대화에서 승인이 필요해 거절했으면 남은 호출을 하지 않고 도구 없이 답을 마무리한다.
         if (this.remoteRefusedTurn === turn) break;
       }

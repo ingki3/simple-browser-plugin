@@ -22,13 +22,53 @@ export interface ToolRunRecord {
   changed: boolean;
   // 패널 결과 카드에 보인 한 줄(이어 가기 카드의 요약에 쓴다).
   summary: string;
+  // 실패 원인 코드(#318, 실패일 때만). 도구가 원인을 식별한 분기에서 정한 고정 값(예: 실제 입력 클릭의 가드 차단 단계).
+  // 오류 글자에서 뽑지 않는다. 없으면 원인을 구분할 수 없는 실패라 같은 실패 반복 규칙에서 세지 않는다.
+  failCode?: string;
 }
+
+// 같은 호출(도구·인자)이 같은 종류로 이만큼 실패하면 도구 결과에 방법을 바꾸라는 안내를 붙인다(#318).
+export const REPEAT_FAILURE_NOTE_AT = 2;
+// 안내를 받고도 같은 호출이 같은 종류로 이만큼 실패하면 멈춘다(#318).
+export const REPEAT_FAILURE_STOP_AT = 3;
 
 export type SpinVerdict =
   // 같은 도구·같은 인자·같은 결과, 화면 변화 없음이 count번 연속.
   | { kind: "repeat"; tool: string; count: number }
   // 한 도구가 사이에 그 도구의 성공 없이 count번 실패(다른 도구 호출이 끼어도 이어서 셈).
-  | { kind: "failure"; tool: string; count: number };
+  | { kind: "failure"; tool: string; count: number }
+  // 같은 도구·같은 인자가 그 호출의 성공 없이 같은 원인 코드로 count번 실패(다른 대상·다른 도구의 성공이 끼어도 이어서 셈, #318).
+  // detectSpin은 내지 않는다 — streamLoop가 호출마다 repeatedFailureCount로 판정한다(응답 하나에 [같은 실패, 다른 성공]이 와도 잡게).
+  | { kind: "same_failure"; tool: string; count: number };
+
+// index번 기록이 코드 있는 실패(비취소)면, 그 호출(같은 도구·같은 argsKey)이 이번 요청에서 마지막으로 성공한 뒤 같은 failCode로
+// 몇 번 실패했는지(자기 포함, #318). 취소는 건너뛰고, 다른 코드·코드 없는 실패는 세지도 끊지도 않는다. 다른 대상·다른 도구의
+// 성공은 셈을 끊지 않는다("찾기 → 다른 버튼 성공 → 같은 버튼 실패" 고리). 같은 호출이 성공하면 거기서 멈춘다(정당한 재시도).
+export function repeatedFailureCount(records: readonly ToolRunRecord[], index = records.length - 1): number {
+  const at = records[index];
+  if (!at || at.ok || at.cancelled || !at.failCode) return 0;
+  let count = 0;
+  for (let i = index; i >= 0; i -= 1) {
+    const r = records[i];
+    if (r.tool !== at.tool || r.argsKey !== at.argsKey || r.cancelled) continue;
+    if (r.ok) break;
+    if (r.failCode === at.failCode) count += 1;
+  }
+  return count;
+}
+
+// 도구 결과 메시지 내용(toolContent가 만든 JSON 객체 문자열)의 최상위에 repeated 안내를 더한다(#318).
+// 객체 JSON이 아니면 원문 그대로 둔다.
+export function withRepeatNote(content: string, note: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return content;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return content;
+  return JSON.stringify({ ...(parsed as Record<string, unknown>), repeated: note });
+}
 
 // 마지막 기록까지 보고 헛돌기인지 판정한다.
 // - 같은 호출 반복: 관측 도구는 페이지가 그대로면 같은 결과가 나오므로 세 번째는 쓸모가 없다. 클릭은 '다음 달'처럼
@@ -120,6 +160,8 @@ export interface RunSummary {
   cancelled: number;
   byTool: Array<{ tool: string; count: number }>;
   recent: string[];
+  // 같은 호출(도구·인자·실패 종류)이 마지막 성공 뒤 거듭 실패한 묶음(#318). 도구 이름과 수만(인자에는 입력값이 있을 수 있다, #43).
+  repeatedFailures: Array<{ tool: string; count: number }>;
 }
 
 export function summarizeRuns(records: readonly ToolRunRecord[], recentCount = 3): RunSummary {
@@ -137,5 +179,30 @@ export function summarizeRuns(records: readonly ToolRunRecord[], recentCount = 3
   const recent = records
     .slice(-recentCount)
     .map((r) => `${r.tool}: ${r.summary.length > 120 ? `${r.summary.slice(0, 119)}…` : r.summary}`);
-  return { total: records.length, failed, cancelled, byTool, recent };
+  return { total: records.length, failed, cancelled, byTool, recent, repeatedFailures: repeatedFailureGroups(records) };
+}
+
+// 묶음(도구·argsKey·failCode)마다 지금 남은 같은 실패 수(repeatedFailureCount와 같은 규칙: 같은 호출이 성공하면 0으로,
+// 취소·코드 없는 실패는 건너뜀). 2 이상만, 많은 순(같으면 최근 순) 최대 limit개.
+function repeatedFailureGroups(records: readonly ToolRunRecord[], limit = 3): Array<{ tool: string; count: number }> {
+  const byCall = new Map<string, { tool: string; kinds: Map<string, { count: number; last: number }> }>();
+  records.forEach((r, index) => {
+    if (r.cancelled) return;
+    const key = `${r.tool}\u0000${r.argsKey}`;
+    if (r.ok) {
+      byCall.delete(key);
+      return;
+    }
+    if (!r.failCode) return;
+    const call = byCall.get(key) ?? { tool: r.tool, kinds: new Map<string, { count: number; last: number }>() };
+    call.kinds.set(r.failCode, { count: (call.kinds.get(r.failCode)?.count ?? 0) + 1, last: index });
+    byCall.set(key, call);
+  });
+  // 많은 순, 같으면 마지막 실패가 늦은 묶음부터(멈춤 전 카드에서는 묶음이 모두 2번이라 최근 것이 앞에 오게).
+  return [...byCall.values()]
+    .flatMap((c) => [...c.kinds.values()].map((k) => ({ tool: c.tool, count: k.count, last: k.last })))
+    .filter((g) => g.count >= REPEAT_FAILURE_NOTE_AT)
+    .sort((a, b) => b.count - a.count || b.last - a.last)
+    .slice(0, limit)
+    .map(({ tool, count }) => ({ tool, count }));
 }

@@ -58,7 +58,8 @@ export type ChatMessage =
       callId: string;
       used: number;
       extra: number;
-      summary: { total: number; failed: number; cancelled: number; byTool: Array<{ tool: string; count: number }>; recent: string[] };
+      // repeatedFailures(#318): 같은 호출이 거듭 실패한 묶음(도구 이름·수만). 이전 형태(필드 없음)는 없음으로 본다.
+      summary: { total: number; failed: number; cancelled: number; byTool: Array<{ tool: string; count: number }>; recent: string[]; repeatedFailures?: Array<{ tool: string; count: number }> };
       resolved: "approved" | "cancelled" | null;
     }
   | {

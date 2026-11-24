@@ -21,6 +21,7 @@ import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
 import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
+import { canonicalJson, fingerprint } from "@/lib/hopGuard";
 import { groupLabelInfo, inProtectedArea, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo, type TextInfo } from "./modelText";
 
 export interface TargetKind {
@@ -70,6 +71,56 @@ interface Entry {
   // 대화별 기준(#233): 바뀐 행·항목 글자를 모델에게 보여 준 결과(클릭 뒤 결과·row_drift 오류)마다 만든 기준. 공용 기준(base·item)은
   // 바꾸지 않고, 그 결과를 본 대화만 nonce로 골라 쓴다(백그라운드가 결과를 실은 모델 요청의 응답이 온 뒤에만 넘긴다).
   snaps?: RowSnap[];
+  // 같은 실패 반복 판정(#318)의 대상 바인딩: 실제 입력 클릭을 준비할 때마다 승인한 기술(상태 제외)과 지금의 행·항목·선택지 관계
+  // (요소 참조)로 정하고, 앞 준비 때와 다르면 rev를 올린다. 백그라운드에는 rev(수)만 간다.
+  binding?: Binding;
+}
+
+interface Binding {
+  refs: Array<WeakRef<Element> | null>;
+  key: string;
+  rev: number;
+}
+
+// 바인딩의 요소 참조(지금의 행·항목·선택지 트리거·목록)와 승인한 기술의 지문. 상태(states — 펼침·눌림 등)는 넣지 않는다: 같은 트리거를
+// 열고 닫는 사이 값이 바뀌어도 같은 대상이다.
+function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null, item?: ItemBinding): Omit<Binding, "rev"> {
+  const row = rowElement(el)?.row ?? null;
+  // 행 글자가 버튼 글자와 같아 rowElement가 건너뛰는 행(버튼만 든 li 등)도 참조로 본다(글자 유무와 무관). 클릭 이벤트 경로(eventParent —
+  // slot에 배치된 요소는 그 slot, shadow root 맨 위면 host)를 따라 찾는다: slot 속성만 바꿔 다른 행에 배치해도 다른 행으로 본다.
+  let explicitRow: Element | null = null;
+  for (let cur = eventParent(el); cur; cur = eventParent(cur)) {
+    if (cur.matches(ROW_SELECTOR)) {
+      explicitRow = cur;
+      break;
+    }
+  }
+  const refs = [row, explicitRow, item?.ref.deref() ?? null, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
+  const { tag, role, name, href, context, modelContext, region, inFrame, fieldType } = base;
+  const key = fingerprint(
+    canonicalJson({
+      tag, role, name, href, context, modelContext, region, inFrame, fieldType,
+      list: base.list?.index ?? null,
+      item: item?.text ?? null,
+      relation: relation ? [relation.mode, relation.via, relation.basis, relation.nested] : null,
+    }),
+  );
+  return { refs, key };
+}
+
+function sameBinding(a: Binding, b: Omit<Binding, "rev">): boolean {
+  return a.key === b.key && a.refs.length === b.refs.length && a.refs.every((r, i) => (r?.deref() ?? null) === (b.refs[i]?.deref() ?? null));
+}
+
+// 실제 입력 클릭 준비 때의 바인딩 회차(#318). 승인한 기술(info)과 지금 요소의 행·항목·관계로 바인딩을 정하고, 이 id의 앞 준비 때와
+// 다르면 회차를 올린다(같은 id가 글자가 같은 다른 행으로 옮겨진 노드를 가리키는 경우 — 다시 찾지 않고 같은 id로 눌러도). 없는 id면 undefined.
+export function prepareBindingRev(id: string, el: HTMLElement, info: TargetInfo, relation: Relation | null, item?: ItemBinding): number | undefined {
+  const entry = registry.get(id);
+  if (!entry) return undefined;
+  const now = bindingOf(el, info, relation, item);
+  if (!entry.binding) entry.binding = { ...now, rev: 0 };
+  else if (!sameBinding(entry.binding, now)) entry.binding = { ...now, rev: entry.binding.rev + 1 };
+  return entry.binding.rev;
 }
 
 interface RowSnap {

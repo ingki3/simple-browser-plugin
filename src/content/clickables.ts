@@ -46,6 +46,7 @@ import {
   itemText,
   parentAcross,
   recheckApproved,
+  prepareBindingRev,
   registerTarget,
   registeredInfo,
   relationTrigger,
@@ -1024,7 +1025,7 @@ export function clickElement(
   args: { id: string },
   callId: string,
   trusted?: string,
-): { clicked: boolean; text: string; href: string; effectToken: string; trusted?: TrustedPrepare } {
+): { clicked: boolean; text: string; href: string; effectToken: string; trusted?: TrustedPrepare; bindingKey?: string } {
   const { el, info, relation, item } = takeApproved(args.id, callId, CLICK_KIND.prefix);
   const text = info.modelName ?? "";
   const href = isTag(el, "a") ? el.href : "";
@@ -1074,7 +1075,7 @@ export function clickElement(
       (phase) => recheckApproved(CLICK_KIND, el, phaseInfo(el, info, phase === "click" ? "up" : phase), relation, false, false, item),
       (check) => (toggleEl && toggle ? withToggleReverted(toggleEl, toggle, check) : check()),
     );
-    return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y } };
+    return { clicked: true, text, href, effectToken, trusted: { mode: "trusted", x: point.x, y: point.y }, bindingKey: String(prepareBindingRev(args.id, el, info, relation, item) ?? "") };
   }
 
   // Defer actual click so the content-script response can fly back to the

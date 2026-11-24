@@ -160,3 +160,10 @@ test("안내 상수·spinStopNote 스냅숏", () => {
   assert.equal(sha(P.spinStopNote("같은 클릭 3번")), SNAP.spin);
   assert.ok(P.spinStopNote("같은 클릭 3번").includes("(같은 클릭 3번)"));
 });
+
+test("repeatFailureNote(#318): 확장 안내 머리, 도구 이름·수·멈춤 수만 넣는다", () => {
+  const n = P.repeatFailureNote("click_element", 2, 3);
+  assert.ok(n.startsWith("[확장 안내 — 사용자 글 아님]"));
+  assert.ok(n.includes("같은 도구(click_element)") && n.includes("2번 실패") && n.includes("3번째 실패하면"));
+  assert.equal(P.repeatFailureNote("click_element", 2, 3).replace("click_element", "X"), P.repeatFailureNote("X", 2, 3));
+});

@@ -10,7 +10,8 @@ export type RecordRun = (
   ok: boolean,
   result: string,
   summary: string,
-  extra?: { changed?: boolean; cancelled?: boolean },
+  // failCode: 실패 원인 코드(#318, 도구가 원인을 식별한 실패만). 없으면 같은 실패 반복 규칙에서 세지 않는다.
+  extra?: { changed?: boolean; cancelled?: boolean; failCode?: string },
 ) => void;
 
 // 도구 호출 하나를 처리하는 동안 함께 쓰는 값.
@@ -26,7 +27,8 @@ export interface ToolCallContext {
   parsedArgs: unknown;
   argsKey: string;
   // 이 호출을 실패로 끝낸다(패널 결과 줄·대화 기록·헛돌기 기록).
-  failCall(msg: string, key: string, panelSummary?: string): void;
+  // failCode: 원인을 식별한 실패의 고정 코드(#318). 없으면 같은 실패 반복 판정에서 세지 않는다.
+  failCall(msg: string, key: string, panelSummary?: string, failCode?: string): void;
   record: RecordRun;
   // 경로 레시피의 그림자 판정(#297): 승인 판정 자리에서 "auto·허락 없음"으로 다시 계산한 결과가 카드 없이 실행이었는지.
   // 판정에 도달하지 않으면 false로 남는다(그 턴의 경로는 배우지 않는다).

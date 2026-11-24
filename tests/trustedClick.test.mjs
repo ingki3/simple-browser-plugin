@@ -192,3 +192,17 @@ test("roleToken: 구조 토큰 꼴만(소문자 낱말, 40자 안)", () => {
   assert.equal(roleToken(null), undefined);
   assert.equal(roleToken(""), undefined);
 });
+
+test("blockedFailCode(#318): 막은 분기 코드·첫 차단 이벤트·대상 연결·표시로만 정하고, 분기를 모르면 null", async () => {
+  const { blockedFailCode } = await import("../src/lib/trustedClick.ts");
+  const first = (o) => ({ event: "pointerup", seenBefore: ["pointerdown"], targetConnected: true, targetShown: true, hit: { tag: "div" }, ...o });
+  assert.equal(blockedFailCode("target_changed", first({})), "blocked:target_changed:pointerup:c:s");
+  assert.equal(blockedFailCode("target_changed", first({ seenBefore: [], hit: null })), "blocked:target_changed:pointerup:c:s", "앞 이벤트·닿은 요소는 코드에 없음");
+  assert.notEqual(blockedFailCode("other_element", first({})), blockedFailCode("target_changed", first({})), "같은 단계·상태라도 분기가 다르면 다름");
+  assert.equal(blockedFailCode("target_changed", first({ event: "mousedown", targetConnected: false })), "blocked:target_changed:mousedown:d:s");
+  assert.equal(blockedFailCode("target_changed", first({ targetShown: false })), "blocked:target_changed:pointerup:c:h");
+  assert.equal(blockedFailCode("expired", first({ event: "만료" })), "blocked:expired:other:c:s");
+  assert.equal(blockedFailCode("inspect_error", first({ event: "toString" })), "blocked:inspect_error:other:c:s");
+  assert.equal(blockedFailCode("cancelled", undefined), "blocked:cancelled:none");
+  for (const bad of [undefined, null, "", "toString", "글자 '비밀'", 3]) assert.equal(blockedFailCode(bad, first({})), null, String(bad));
+});
