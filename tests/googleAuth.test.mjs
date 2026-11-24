@@ -14,7 +14,8 @@ const VERSION_KEY = "googleAuthVersion";
 // - identity: false면 chrome.identity가 없다(권한 없는 기본 빌드)
 // - tokenReply(interactive): getAuthToken 콜백에 넘길 값. { lastError } 를 주면 chrome.runtime.lastError로 실패시킨다.
 // - fetchReply(url, init): fetch 응답(Response) 또는 throw.
-function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () => FAKE_TOKEN, fetchReply = () => new Response("{}", { status: 200 }) } = {}) {
+// - holdRemove: true면 removeCachedAuthToken 콜백을 calls.finishRemove()까지 부르지 않는다(삭제가 끝나기 전의 순서를 본다).
+function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () => FAKE_TOKEN, fetchReply = () => new Response("{}", { status: 200 }), holdRemove = false } = {}) {
   // order: 캐시 삭제·fetch·알림 저장이 일어난 순서(한 배열에 적는다).
   const calls = { getAuthToken: [], removeCached: [], storageSet: [], fetch: [], order: [] };
   const runtime = {
@@ -48,7 +49,8 @@ function install({ clientId = FAKE_CLIENT_ID, identity = true, tokenReply = () =
       removeCachedAuthToken: ({ token }, cb) => {
         calls.removeCached.push(token);
         calls.order.push("removeCached");
-        cb();
+        if (holdRemove) calls.finishRemove = cb;
+        else cb();
       },
     };
   }
@@ -135,6 +137,18 @@ test("U4 clearGoogleToken: 캐시 삭제 → 폐기 요청 → 알림, 토큰이
   assert.equal(c.fetch[0].init?.method, "POST");
   assert.deepEqual(c.storageSet, [[VERSION_KEY]]);
   // 순서: 캐시 삭제 → 원격 폐기 → 알림(알림이 먼저 나가면 다른 설정 화면이 아직 남은 캐시를 읽는다).
+  assert.deepEqual(c.order, ["removeCached", "fetch", "storageSet"]);
+
+  // 캐시 삭제가 끝나기 전에는 폐기 요청도 알림도 나가지 않는다(삭제를 기다리지 않는 회귀를 잡는다).
+  c = install({ holdRemove: true });
+  const clearing = auth.clearGoogleToken();
+  await tick();
+  assert.deepEqual(c.removeCached, [FAKE_TOKEN]);
+  assert.equal(c.fetch.length, 0, "삭제가 끝나기 전 폐기 요청 0회");
+  assert.deepEqual(c.storageSet, [], "삭제가 끝나기 전 알림 0회");
+  c.finishRemove();
+  await clearing;
+  await tick();
   assert.deepEqual(c.order, ["removeCached", "fetch", "storageSet"]);
 
   // 토큰이 없으면(조용한 조회 실패) 삭제·폐기 0회, 알림 1회.

@@ -124,6 +124,15 @@ async function reconnect(h, opt) {
   await setKk(h, { memo: [], tokenReqs: [], flows: [], refreshes: 0, refreshWaiting: 0, memoWaiting: 0 });
 }
 
+// 누출 검사를 하는 시나리오의 연결: 첫 로그인 창을 열기 전에 고유한 인가 코드 접두사를 건다(연결 도우미 connect는 기본 "C"로 발급한다).
+async function connectUnique(h) {
+  const opt = await h.openOptions("model");
+  await installKakao(h);
+  await uniqueCodes(h);
+  await reconnect(h, opt);
+  return opt;
+}
+
 const testSend = (opt) => optSend(opt, { kind: "kakao_test_send" });
 const TEST_FAIL = "카카오톡으로 시험 메시지를 보내지 못했습니다";
 const NEEDS_LOGIN = "카카오 로그인이 끝났습니다. 다시 연결하세요.";
@@ -157,13 +166,32 @@ export default [
       expect(end.refreshes === 1, `갱신 요청은 끝까지 1회(${end.refreshes})`);
       expect(end.memo.length === 2, `메모 2회(${end.memo.length})`);
       expect(end.memo[0].auth === end.memo[1].auth && /^Bearer fake-access-refreshed-\d+$/.test(end.memo[0].auth), "둘 다 같은 새 토큰");
+
+      // 둘째 보내기가 정말 같은 갱신에 합류했는지: 보류한 갱신을 실패(500)로 푼다. 합류했다면 둘 다 그 한 번의 실패로 끝난다(갱신 1회).
+      // 둘째가 첫째 뒤에 줄만 서 있었다면(보내기끼리 직렬화되는 회귀) 첫째가 끝난 뒤 따로 갱신해 갱신이 2회가 되고 성공한다.
+      await reconnect(h, opt);
+      await nearExpiry(h);
+      await setKk(h, { holdRefresh: true, refreshReplies: [{ status: 500, body: { msg: "서버 오류 원문" } }] });
+      const q1 = track(testSend(opt));
+      await waitUntil(async () => (await kk(h)).refreshWaiting >= 1, { label: "첫 보내기의 갱신 요청이 대역에 도착(실패로 풀기)" });
+      const q2 = track(testSend(opt));
+      for (let i = 0; i < 4; i++) {
+        const st = await within(optSend(opt, { kind: "kakao_status" }), 3000);
+        expect(st.done && st.v?.ok === true, `보류 중에도 상태 조회가 끝남(실패로 풀기 ${i + 1}번째, ${brief(st)})`);
+      }
+      await setKk(h, { holdRefresh: false });
+      await release(h, "refresh");
+      const [f1, f2] = [await within(q1, 5000), await within(q2, 5000)];
+      expect(f1.done && f1.v?.ok === false && String(f1.v.error).startsWith(TEST_FAIL), `첫째: 갱신 실패로 끝남(${brief(f1)})`);
+      expect(f2.done && f2.v?.ok === false && String(f2.v.error).startsWith(TEST_FAIL), `둘째: 같은 갱신의 실패로 끝남(${brief(f2)})`);
+      const failed = await kk(h);
+      expect(failed.refreshes === 1 && failed.memo.length === 0, `실패한 갱신 1회를 둘이 함께 씀(갱신 ${failed.refreshes} / 메모 ${failed.memo.length})`);
     }),
   },
   {
     name: "카카오 인증 H2: 갱신을 기다리는 사이 끊기·재연결·키 바꾸기는 바로 끝나고, 늦게 끝난 옛 갱신(성공·400·401)은 새 상태를 건드리지 않는다",
     run: guarded(async (h, track) => {
-      const opt = await connect(h);
-      await uniqueCodes(h);
+      const opt = await connectUnique(h);
       const responses = [];
       const changes = {
         끊기: () => optSend(opt, { kind: "kakao_disconnect" }),
@@ -251,7 +279,7 @@ export default [
   {
     name: "카카오 인증 H4: 갱신 실패 종류 — 500·형식 이상·연결 실패는 일반 실패(저장 idle), 400·401은 needs_login 저장, 리프레시 만료는 요청 없이 실패(저장은 idle 그대로)",
     run: guarded(async (h) => {
-      const opt = await connect(h);
+      const opt = await connectUnique(h);
       const responses = [];
       // (가) 일반 실패: 시험 전송 안내, 갱신 1회, 메모 0, 저장 status idle.
       const soft = {
@@ -513,8 +541,7 @@ export default [
   {
     name: "카카오 인증 H9: 연결 뒤 identity 권한이 사라져도 보내기·갱신은 되고, 응답·화면·로그에 키·시크릿·토큰이 없다",
     run: guarded(async (h) => {
-      const opt = await connect(h);
-      await uniqueCodes(h);
+      const opt = await connectUnique(h);
       const responses = [];
       await h.sw.evaluate(() => {
         delete chrome.identity;
