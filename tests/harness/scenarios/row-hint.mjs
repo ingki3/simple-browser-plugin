@@ -40,6 +40,7 @@ for (const el of document.querySelectorAll("#f input:not([type=hidden])")) {
     if (m === "action") { setHint(row, ${JSON.stringify(HINT)}); document.getElementById("f").action = "/pay/checkout"; }
     if (m === "hiddenpay") document.getElementById("op").value = "pay";
     if (m === "tight") setHint(row, "형식 안내");
+    if (m === "clear" && row.querySelector(".hint").textContent.trim() === "") { setHint(row, ${JSON.stringify(HINT)}); el.value = ""; }
     if (m === "hiddenrec") { setHint(row, ${JSON.stringify(HINT)}); document.getElementById("op").value = "2"; }
     if (m === "record") { setHint(row, ${JSON.stringify(HINT)}); document.getElementById("f").action = "/records/2"; }
     if (m === "hiddenonly") row.querySelector(".hid").textContent = " 숨은 안내 ";
@@ -91,11 +92,12 @@ const FILL3 = { fillMany: [{ label: "첫칸", value: "fake-a-317" }, { label: "D
 const FILL3T = { fillMany: [{ label: "Code", value: "fake-a-317" }, { label: "Domain", value: "fake-b-317" }, { label: "Action", value: "fake-c-317" }] };
 
 // 채우기 결과·오류(role=tool의 fill_form_fields 전체 글)에 가짜 값이 없고, 재시도를 허용하는 표시·문구도 없다.
+// 실패 메시지에는 결과 원문을 넣지 않는다(되비친 값이 섞였을 때 로그로 다시 나가지 않게, #43) — 몇 번째 결과의 어떤 검사인지만.
 async function noValues(h) {
-  for (const m of await fills(h)) {
-    expect(!/fake-[a-z]+-317/.test(m.raw), `채우기 결과에 넣은 값이 있음(${m.raw})`);
-    expect(!/refillOnce|다시 채울 수 있습니다/.test(m.raw), `재시도 허용 표시가 있음(${m.raw})`);
-  }
+  (await fills(h)).forEach((m, i) => {
+    expect(!/fake-[a-z]+-317/.test(m.raw), `채우기 결과 ${i + 1}번째에 넣은 값이 있음`);
+    expect(!/refillOnce|다시 채울 수 있습니다/.test(m.raw), `채우기 결과 ${i + 1}번째에 재시도 허용 표시가 있음`);
+  });
 }
 
 export default [
@@ -123,6 +125,24 @@ export default [
       const log = await h.sw.evaluate(async () => ((await chrome.storage.local.get("actionLog")).actionLog ?? []).filter((e) => e.tool === "fill_form_fields"));
       const first = log.at(-2);
       expect(first?.outcome === "aborted" && first?.reason === "target_changed", `작업 기록(${show(log.slice(-2))})`);
+      await noValues(h);
+    },
+  },
+  {
+    name: "#317 R1c 한 칸만 채우다 막힘(처리기가 값을 비움) → 다시 찾아 비어 있음 확인 → 같은 id·같은 인자로 다시 채우면 통과(반복 감지에 막히지 않음)",
+    pages: { "/r": ROWS },
+    async run(h) {
+      await h.settings({ autoApprove: true });
+      const fill = { fill: "Domain", value: "fake-b-317" };
+      await h.turn([findF, fill, findF, fill, { text: "끝" }], { path: "/r?m=clear" });
+      const [f1, f2] = await fills(h);
+      const [, d2] = await finds(h);
+      expect(!resultsOf(f1)[0].applied && has(resultsOf(f1)[0], MSG_INPUT), `첫 시도 안내(${show(resultsOf(f1)[0])})`);
+      const b2 = d2.result.find((f) => f.label === "Domain");
+      expect(b2 && b2.hasValue === false, `다시 찾으면 비어 있음(${show(b2)})`);
+      expect(resultsOf(f2)[0]?.applied === true && !f2.error, `같은 인자 재채우기 통과(${show(f2)})`);
+      const ev = await events(h);
+      expect(ev.b.input === 2 && ev.b.change === 1, `이벤트(${show(ev.b)})`);
       await noValues(h);
     },
   },
