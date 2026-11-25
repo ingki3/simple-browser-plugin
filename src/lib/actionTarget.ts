@@ -199,7 +199,8 @@ export function rowDriftDiag(before: TargetInfo, after: TargetInfo): string {
 // 입력 도중 비교가 막혔을 때 그 차이가 "비교한 칸 자신은 그대로이고 행 글자만 더해짐"인지(#317 — 판정은 바꾸지 않고 안내만 고른다).
 // 이미 만든 두 기술만 본다(DOM 조회 없음). 낱말 순서 비교일 뿐 글자의 뜻은 보지 않는다.
 // - 행 문맥만 다르고 나머지 기본 항목(태그·역할·이름·주소·영역·칸 종류·민감·잘림 플래그·대리 라벨·상태)과 목록 순번이 같다.
-// - 원문 행 글자와 모델용 행 문맥 모두 승인 때 낱말이 같은 순서로 남고 더해지기만 했다. 모델용 문맥은 실제로 늘었다(숨은 글자만 는 것은 아님).
+// - 모델용 행 문맥은 승인 때 낱말이 같은 순서로 남고 더해지기만 했으며 실제로 늘었다(숨은 글자만 는 것은 아님). 원문 행 글자는 요소 사이에
+//   공백이 없을 수 있어(textContent — 'Domain' + '형식 안내' → 'Domain형식 안내') 공백을 뺀 승인 때 글자가 같은 순서로 모두 남았는지만 본다.
 // - 양쪽 모두 모델용 문맥이 잘리지 않았다(잘린 뒤쪽 변화는 확인할 수 없다).
 // 빈 행 문맥은 기술에서 생략되므로 빈 글자로 본다.
 export function rowGrew(approved: TargetInfo, now: TargetInfo): boolean {
@@ -211,7 +212,18 @@ export function rowGrew(approved: TargetInfo, now: TargetInfo): boolean {
   const modelBefore = approved.modelContext ?? "";
   const modelNow = now.modelContext ?? "";
   if (modelBefore === modelNow) return false;
-  return onlyAdded(rawBefore, rawNow) && onlyAdded(modelBefore, modelNow);
+  return charsKept(rawBefore, rawNow) && onlyAdded(modelBefore, modelNow);
+}
+
+// before의 공백 아닌 글자가 after 안에 같은 순서로 모두 남았는지(글자가 끼워지기만 했는지).
+function charsKept(before: string, after: string): boolean {
+  const want = before.replace(/\s+/g, "");
+  const have = after.replace(/\s+/g, "");
+  let i = 0;
+  for (const ch of have) {
+    if (i < want.length && ch === want[i]) i++;
+  }
+  return i === want.length;
 }
 
 // #317 안내 문구(고정 글 — 값·행 글자·이름·길이를 담지 않는다, #43). 실행 전 중단 문구는 "다시 찾으세요"를, 반영 확인 문구는

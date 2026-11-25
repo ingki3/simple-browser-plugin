@@ -854,6 +854,19 @@ function selectedSignature(sel: HTMLSelectElement): string {
   return Array.from(sel.options, (o) => (o.selected ? `1:${o.value}` : "0")).join("\u0001");
 }
 
+// 기준값을 기록하지 않는 조회(#317 — 막힌 뒤 안내 문구를 고르는 확인용). 켜져 있으면 formHasChangedValues가 처음 보는 칸의 기준을
+// 기록하지 않고 "바뀐 값"으로 본다(더 막는 쪽 — 그 결과는 문구 선택에만 쓰고, 다음 호출의 판정 기준을 바꾸지 않는다).
+let baselineReadOnly = false;
+export function withoutBaselineWrites<T>(fn: () => T): T {
+  const prev = baselineReadOnly;
+  baselineReadOnly = true;
+  try {
+    return fn();
+  } finally {
+    baselineReadOnly = prev;
+  }
+}
+
 // 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
 // (페이지가 처음부터 넣어 둔 값은 페이지의 것이다). 모든 페이지 머리의 빈 검색 양식 같은 것은 빼려는 것.
 function formHasChangedValues(form: HTMLFormElement): boolean {
@@ -867,6 +880,7 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
     } else if (baselineDocs.has(el.ownerDocument) && !seenFields.has(el) && v) {
       return true;
     } else if (!known.has(el)) {
+      if (baselineReadOnly) return true;
       known.set(el, v);
     }
   }
@@ -884,19 +898,23 @@ function formHasChangedValues(form: HTMLFormElement): boolean {
     }
     if (isTag(f, "select")) {
       const sig = selectedSignature(f);
-      if (!hiddenBaseline.has(f)) hiddenBaseline.set(f, sig);
-      else if (hiddenBaseline.get(f) !== sig) return true;
+      if (!hiddenBaseline.has(f)) {
+        if (baselineReadOnly) return true;
+        hiddenBaseline.set(f, sig);
+      } else if (hiddenBaseline.get(f) !== sig) return true;
     } else if (isTag(f, "input") && (f.type === "checkbox" || f.type === "radio")) {
       if (f.checked !== f.defaultChecked) return true;
       // 체크 상태가 그대로여도 제출될 value가 처음 살핀 값에서 바뀌었으면(처리기가 내용을 복사) 바뀐 것.
       if (!hiddenBaseline.has(f)) {
         if (baselineDocs.has(f.ownerDocument) && f.checked) return true;
+        if (baselineReadOnly) return true;
         hiddenBaseline.set(f, f.value);
       } else if (hiddenBaseline.get(f) !== f.value) return true;
     } else if (isTag(f, "input") && f.type === "hidden") {
       if (!hiddenBaseline.has(f)) {
         // 기준을 기록한 문서에 나중에 생긴 숨은 칸(값이 있는)은 바뀐 것으로 본다.
         if (baselineDocs.has(f.ownerDocument) && f.value) return true;
+        if (baselineReadOnly) return true;
         hiddenBaseline.set(f, f.value);
       } else if (hiddenBaseline.get(f) !== f.value) return true;
     } else if (f.value !== (f as HTMLInputElement | HTMLTextAreaElement).defaultValue) {
@@ -1061,6 +1079,8 @@ const FIELD_KIND: TargetKind = {
   // (change 처리기로 바로 제출하는 칸이 있다). checkbox·radio는 채우기가 실제 클릭이라 그 칸을 직접 누를 때의 위험도
   // 더하고(toggleClickRisk), 보이는 label로 바꾸는 칸은 그 label 쪽 문맥도 더한다(labelRisk).
   risk: (el) => labelRisk(el, toggleClickRisk(el, fieldRisk(el))),
+  // 같은 위험 정보를 기준값 기록 없이(#317 — 막힌 뒤 안내 문구 선택용, 처음 보는 칸은 바뀐 값으로 본다).
+  riskReadOnly: (el) => withoutBaselineWrites(() => labelRisk(el, toggleClickRisk(el, fieldRisk(el)))),
   // 이 칸의 deleteParam이 입력 묶음이 쓴 선택 칸들(writes: 칸 → 쓴 직전·처리기가 돌기 전의 상태 기록)만으로 설명되는지(#62).
   // 지금 상태가 쓴 상태와 그대로 같은 칸들만 빼고 다시 봐서 신호가 없어야 한다(다른 원인으로 생긴 신호는 설명되지 않는다).
   // 비교는 글자가 아니라 실제 상태다: select는 선택된 option 요소·그 value·선택 상태·select의 name, checkbox·radio는
@@ -1706,14 +1726,16 @@ export async function fillFormFields(
     const startName = info.fieldName ?? "";
     // 브라우저가 정리한 실제 값(onSet에서 받는다). change 전 재검사의 허용 값에도 넣는다.
     let actual: string | undefined;
-    const driftReason = (): string | null => {
-      const guarded = extraGuard?.();
+    // readOnly(#317 — 막힌 뒤 안내 문구 선택용): extraGuard를 부르지 않고(부작용이 있다 — 부르는 쪽이 extraGuard가 없을 때만 쓴다)
+    // 기준값을 기록하지 않는 위험 조회로 같은 검사를 한다. halted도 건드리지 않는다.
+    const driftReason = (readOnly = false): string | null => {
+      const guarded = readOnly ? null : extraGuard?.();
       if (guarded) {
         halted = true;
         return guarded;
       }
       if (el.name !== startName) return "입력 중 칸 이름이 바뀌어 채우지 않았습니다. 다시 찾으세요.";
-      const nowRisk = FIELD_KIND.risk?.(el);
+      const nowRisk = readOnly ? FIELD_KIND.riskReadOnly?.(el) : FIELD_KIND.risk?.(el);
       // 같은 칸의 양식 제출 주소와, 양식 밖 칸이면 주변 양식들의 제출 주소를 함께 본다.
       const nowUrl = [nowRisk?.submitUrl ?? "", ...(nowRisk?.scopeSubmitUrls ?? [])].join(" ");
       const approvedUrl = [info.submitUrl ?? "", ...(info.scopeSubmitUrls ?? [])].join(" ");
@@ -1803,8 +1825,11 @@ export async function fillFormFields(
     const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
     let guardGrew = false;
     const guard = (phase: "click" | "input"): string | null => {
-      const { reason, grew } = recheckApprovedDetail(FIELD_KIND, el, info, null, true);
+      const detail = recheckApprovedDetail(FIELD_KIND, el, info, null, true);
+      const reason = detail.reason;
       if (reason) {
+        // 행 글자만 더해졌고 제출 주소·값 위험도 그대로일 때만 안내를 바꾼다(extraGuard가 있는 자동 로그인 경로는 확인하지 않고 지금 문구).
+        const grew = detail.grew && !extraGuard && driftReason(true) === null;
         guardGrew = grew;
         return grew ? rowGrewGuardMessage(phase, toggle) : `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${reason}). 다시 찾으세요.`;
       }
