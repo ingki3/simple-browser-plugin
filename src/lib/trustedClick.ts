@@ -199,12 +199,19 @@ export type PressedFailCode =
   | "result_unknown"
   | "not_delivered";
 
-// 가드 차단의 원인 코드(#318): 막은 분기(code)·첫 차단 이벤트(알려진 단계만)·대상 연결·표시로만 정한다. 가드 사유 글자(페이지 글자가
+// 첫 차단 기록의 이벤트 이름: 가드가 거는 실제 이벤트(GUARDED_EVENTS)와 가드가 스스로 적는 고정 표지(만료·확인 중 오류)만 구분해 남긴다.
+const BLOCK_EVENT_TOKEN: ReadonlyMap<string, string> = new Map<string, string>([
+  ...GUARDED_EVENTS.map((e) => [e, e] as [string, string]),
+  ["만료", "expiry"],
+  ["확인 중 오류", "inspect"],
+]);
+
+// 가드 차단의 원인 코드(#318): 막은 분기(code)·첫 차단 이벤트(알려진 이름만)·대상 연결·표시로만 정한다. 가드 사유 글자(페이지 글자가
 // 섞임)는 넣지 않는다. 분기를 모르면(분류하지 않은 분기·이전 content) null — 같은 실패 반복 판정에서 뺀다.
 export function blockedFailCode(code: unknown, first?: FirstBlock | null): string | null {
   if (typeof code !== "string" || !GUARD_BLOCK_CODES.has(code)) return null;
   if (!first) return `blocked:${code}:none`;
-  const phase = Object.hasOwn(PHASE_LABEL, first.event) ? first.event : "other";
+  const phase = BLOCK_EVENT_TOKEN.get(first.event) ?? "other";
   return `blocked:${code}:${phase}:${first.targetConnected ? "c" : "d"}:${first.targetShown ? "s" : "h"}`;
 }
 

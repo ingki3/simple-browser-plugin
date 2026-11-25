@@ -306,3 +306,14 @@ test("도구 호출 id: 한 응답 안에서 겹치면 뒤의 것에 새 id를 �
     assert.equal(new Set(ids).size, 3);
   });
 });
+
+test("도구 호출 id: 겹친 영숫자 id는 같은 길이의 영숫자 새 id로(#318 — 정해진 길이만 받는 로컬 템플릿)", () => {
+  const { result } = run([
+    d({ tool_calls: [{ index: 0, id: "abc123XYZ", function: { name: "click_element", arguments: "{}" } }] }),
+    d({ tool_calls: [{ index: 1, id: "abc123XYZ", function: { name: "click_element", arguments: "{}" } }] }),
+  ]);
+  const [a, b] = result.functionCalls.map((c) => c.id);
+  assert.equal(a, "abc123XYZ");
+  assert.notEqual(b, a);
+  assert.match(b, /^[A-Za-z0-9]{9}$/);
+});

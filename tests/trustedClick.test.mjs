@@ -201,7 +201,13 @@ test("blockedFailCode(#318): 막은 분기 코드·첫 차단 이벤트·대상 
   assert.notEqual(blockedFailCode("other_element", first({})), blockedFailCode("target_changed", first({})), "같은 단계·상태라도 분기가 다르면 다름");
   assert.equal(blockedFailCode("target_changed", first({ event: "mousedown", targetConnected: false })), "blocked:target_changed:mousedown:d:s");
   assert.equal(blockedFailCode("target_changed", first({ targetShown: false })), "blocked:target_changed:pointerup:c:h");
-  assert.equal(blockedFailCode("expired", first({ event: "만료" })), "blocked:expired:other:c:s");
+  assert.equal(blockedFailCode("expired", first({ event: "만료" })), "blocked:expired:expiry:c:s");
+  assert.equal(blockedFailCode("inspect_error", first({ event: "확인 중 오류" })), "blocked:inspect_error:inspect:c:s");
+  assert.notEqual(
+    blockedFailCode("unexpected_input", first({ event: "auxclick" })),
+    blockedFailCode("unexpected_input", first({ event: "contextmenu" })),
+    "가드가 거는 다른 이벤트는 다른 코드",
+  );
   assert.equal(blockedFailCode("inspect_error", first({ event: "toString" })), "blocked:inspect_error:other:c:s");
   assert.equal(blockedFailCode("cancelled", undefined), "blocked:cancelled:none");
   for (const bad of [undefined, null, "", "toString", "글자 '비밀'", 3]) assert.equal(blockedFailCode(bad, first({})), null, String(bad));

@@ -24,6 +24,18 @@ export interface ReplyAccumulator {
   result(): StreamReplyResult;
 }
 
+// 겹친 호출 id를 대신할 새 id: 원래 id와 같은 길이의 영숫자(일부 로컬 모델 템플릿은 정해진 길이의 영숫자 id만 받는다 — 예: 9자).
+// 원래 id에 영숫자가 아닌 글자가 있거나 길이가 0이면 UUID.
+function sameShapeId(original: string, used: ReadonlySet<string>): string {
+  if (!/^[A-Za-z0-9]+$/.test(original)) return crypto.randomUUID();
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  for (;;) {
+    const bytes = crypto.getRandomValues(new Uint8Array(original.length));
+    const id = Array.from(bytes, (b) => chars[b % chars.length]).join("");
+    if (!used.has(id)) return id;
+  }
+}
+
 export function createReplyAccumulator(cb: { onText: (text: string) => void; onThought: (text: string) => void }): ReplyAccumulator {
   let usage: ModelUsage | null = null;
   let assistantText = "";
@@ -93,7 +105,7 @@ export function createReplyAccumulator(cb: { onText: (text: string) => void; onT
       const functionCalls = [...functionCallParts.entries()]
         .sort(([a], [b]) => a - b)
         .map(([, call]) => {
-          const id = call.id && !used.has(call.id) ? call.id : crypto.randomUUID();
+          const id = call.id && !used.has(call.id) ? call.id : call.id ? sameShapeId(call.id, used) : crypto.randomUUID();
           used.add(id);
           return { ...call, id };
         });
