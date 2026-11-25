@@ -1,6 +1,6 @@
 // 입력 중 행 변화 안내(#317): 입력 처리기가 같은 행에 안내 문구를 그리면 입력 중 검사가 지금처럼 막는다(판정은 그대로). 막힌 까닭이
-// "비교한 칸 이름·종류는 그대로이고 행 글자만 더해짐"이면 결과 문구가 그렇게 알리고 회복 방법(다시 찾아 확인 뒤 한 번)을 안내한다.
-// 글자 칸·select의 input 뒤 막힘에만 refillOnce(한 번 재시도 가능)를 단다. checkbox·radio는 클릭을 이미 보냈으므로 다시 누르라고 하지 않는다.
+// "비교한 칸 이름·종류는 그대로이고 행 글자만 더해짐"이면 결과 문구가 그렇게 알리고 이 칸을 한 번 다시 찾아 확인하게 한다. 다시 채울지는
+// 지침이 지금처럼 정한다(재시도를 새로 허용하는 표시는 없다 — 보수적 재계획). checkbox·radio는 클릭을 이미 보냈으므로 다시 누르라고 하지 않는다.
 // 모든 값은 가짜(fake-…-317)이고, 채우기 결과·오류 어디에도 넣은 값이 없어야 한다(#43).
 import { expect, resultLog } from "../lib.mjs";
 
@@ -90,14 +90,17 @@ const show = (x) => JSON.stringify(x);
 const FILL3 = { fillMany: [{ label: "첫칸", value: "fake-a-317" }, { label: "Domain", value: "fake-b-317" }, { label: "Action", value: "fake-c-317" }] };
 const FILL3T = { fillMany: [{ label: "Code", value: "fake-a-317" }, { label: "Domain", value: "fake-b-317" }, { label: "Action", value: "fake-c-317" }] };
 
-// 채우기 결과·오류(role=tool의 fill_form_fields 전체 글)에 가짜 값이 없다.
+// 채우기 결과·오류(role=tool의 fill_form_fields 전체 글)에 가짜 값이 없고, 재시도를 허용하는 표시·문구도 없다.
 async function noValues(h) {
-  for (const m of await fills(h)) expect(!/fake-[a-z]+-317/.test(m.raw), `채우기 결과에 넣은 값이 있음(${m.raw})`);
+  for (const m of await fills(h)) {
+    expect(!/fake-[a-z]+-317/.test(m.raw), `채우기 결과에 넣은 값이 있음(${m.raw})`);
+    expect(!/refillOnce|다시 채울 수 있습니다/.test(m.raw), `재시도 허용 표시가 있음(${m.raw})`);
+  }
 }
 
 export default [
   {
-    name: "#317 R1 행에 안내가 생겨 막힌 첫 칸: 이유·회복 안내와 refillOnce, 남은 칸 안내, 작업 기록 분류 그대로, 다시 찾아 같은 값으로 채우면 통과",
+    name: "#317 R1 행에 안내가 생겨 막힌 첫 칸: 까닭·다시 찾기 안내, 남은 칸 안내, 작업 기록 분류 그대로, 다시 찾아 같은 값으로 채우면 통과(회복 가능)",
     pages: { "/r": ROWS },
     async run(h) {
       await h.settings({ autoApprove: true });
@@ -105,7 +108,7 @@ export default [
       const [f1, f2] = await fills(h);
       const [d1, d2] = await finds(h);
       const [ra, rb, rc] = resultsOf(f1);
-      expect(!ra.applied && has(ra, MSG_INPUT) && ra.refillOnce === true && !has(ra, OLD_GUARD), `첫 칸 안내(${show(ra)})`);
+      expect(!ra.applied && has(ra, MSG_INPUT) && ra.refillOnce === undefined && !has(ra, OLD_GUARD), `첫 칸 안내(${show(ra)})`);
       expect(has(rb, MSG_HALTED) && has(rc, MSG_HALTED) && !rb.refillOnce && !has(rb, OLD_HALTED), `남은 칸 안내(${show([rb, rc])})`);
       const ev = await events(h);
       expect(ev.a.input === 2 && ev.a.change === 1, `첫 칸 이벤트(${show(ev.a)})`);
@@ -124,7 +127,7 @@ export default [
     },
   },
   {
-    name: "#317 R1b 부분 성공: 첫 칸은 통과, 둘째만 행 안내로 막히면 호출은 성공이고 그 칸 결과에 refillOnce",
+    name: "#317 R1b 부분 성공: 첫 칸은 통과, 둘째만 행 안내로 막히면 호출은 성공이고 그 칸 결과에 행 안내 문구",
     pages: { "/r": ROWS },
     async run(h) {
       await h.settings({ autoApprove: true });
@@ -135,8 +138,9 @@ export default [
       const line = resultLog(r, "fill_form_fields");
       expect(line.includes("fill_form_fields ok") && !f1.error, `호출은 성공(${line} ${show(f1)})`);
       expect(ra.applied === true && !ra.refillOnce, `첫 칸 통과(${show(ra)})`);
-      expect(!rb.applied && has(rb, MSG_INPUT) && rb.refillOnce === true, `둘째 안내(${show(rb)})`);
+      expect(!rb.applied && has(rb, MSG_INPUT), `둘째 안내(${show(rb)})`);
       expect(has(rc, MSG_HALTED), `셋째 남은 칸 안내(${show(rc)})`);
+      await noValues(h);
     },
   },
   {
@@ -192,12 +196,12 @@ export default [
     pages: { "/r": ROWS },
     async run(h) {
       await h.settings({ autoApprove: true });
-      // R5a: 기술이 달라 곧바로 막는 지금 흐름 그대로. 제출 주소(action)가 바뀌었으므로 행 안내 문구·refillOnce가 아니라 지금 문구.
+      // R5a: 기술이 달라 곧바로 막는 지금 흐름 그대로(분류는 기술만 보므로 행 안내 문구가 나온다 — 재시도를 허용하지 않고 지침대로 확인하게 함).
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=action" });
       let f1 = (await fills(h)).at(-1);
       let [ra, rb] = resultsOf(f1);
       let ev = await events(h);
-      expect(!ra.applied && has(ra, OLD_GUARD) && !has(ra, MSG_INPUT) && !ra.refillOnce, `R5a 막힘·지금 문구(${show(ra)})`);
+      expect(!ra.applied && (has(ra, MSG_INPUT) || has(ra, OLD_GUARD)), `R5a 막힘(${show(ra)})`);
       expect(!rb.applied && ev.a.change === 0 && ev.b.input === 0 && ev.c.input === 0, `R5a 남은 칸 멈춤(${show({ rb, ev })})`);
       // R5b: 행 글자는 그대로, 숨은 값으로 제출 쿼리에 결제 신호 → driftReason의 지금 문구.
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=hiddenpay" });
@@ -206,6 +210,7 @@ export default [
       ev = await events(h);
       expect(!ra.applied && /결제·개인정보 주소로 바뀌어 채우지 않았습니다/.test(ra.note ?? "") && !ra.refillOnce, `R5b 위험 문구(${show(ra)})`);
       expect(has(rb, OLD_HALTED) && ev.a.change === 0 && ev.b.input === 0, `R5b 남은 칸 위험 문구(${show({ rb, ev })})`);
+      await noValues(h);
     },
   },
   {
@@ -249,28 +254,28 @@ export default [
     },
   },
   {
-    name: "#317 R10·R11 안내와 함께 제출 주소가 같은 사이트의 다른 레코드로 바뀌면 재시도 안내 없음 · 요소 사이 공백 없는 안내도 알아본다",
+    name: "#317 R10·R11 안내와 함께 제출 주소·숨은 레코드 번호가 바뀌어도 지금처럼 막히고 재시도를 허용하지 않음 · 요소 사이 공백 없는 안내도 알아본다",
     pages: { "/r": ROWS },
     async run(h) {
       await h.settings({ autoApprove: true });
-      // R10: 행 글자는 더해지기만 했지만 양식 action이 바뀜 → 지금처럼 막히고, 위험 신호가 바뀌었으므로 지금 문구·refillOnce 없음.
+      // R10: 행 글자는 더해지기만 했지만 양식 action이 같은 사이트의 다른 레코드로 바뀜 → 지금처럼 막힘(change 0·남은 칸 멈춤), 재시도 허용 없음.
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=record" });
       let f1 = (await fills(h)).at(-1);
       let [ra, rb] = resultsOf(f1);
       let ev = await events(h);
-      expect(!ra.applied && has(ra, OLD_GUARD) && !has(ra, MSG_INPUT) && !ra.refillOnce, `R10 지금 문구(${show(ra)})`);
-      expect(has(rb, OLD_HALTED) && ev.a.change === 0 && ev.b.input === 0, `R10 남은 칸 멈춤(${show({ rb, ev })})`);
-      // R10b: 행 글자는 더해지기만 했지만 같은 양식의 숨은 레코드 번호가 바뀜(일반 숫자 — 위험 신호 아님) → 지금 문구·refillOnce 없음.
+      expect(!ra.applied && ev.a.change === 0 && ev.b.input === 0 && !rb.applied, `R10 막힘(${show({ ra, rb, ev })})`);
+      // R10b: 같은 양식의 숨은 레코드 번호가 바뀜 → 같음.
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=hiddenrec" });
       f1 = (await fills(h)).at(-1);
       [ra, rb] = resultsOf(f1);
       ev = await events(h);
-      expect(!ra.applied && has(ra, OLD_GUARD) && !has(ra, MSG_INPUT) && !ra.refillOnce && ev.a.change === 0, `R10b 지금 문구(${show(ra)})`);
+      expect(!ra.applied && ev.a.change === 0 && ev.b.input === 0 && !rb.applied, `R10b 막힘(${show({ ra, rb, ev })})`);
+      await noValues(h);
       // R11: 'Domain' 뒤 빈 안내 영역에 공백 없이 글자가 생김(원문 textContent는 붙고 화면 글자는 띄워짐) → 안내 문구.
       await h.turn([findF, { fill: "Domain", value: "fake-b-317" }, { text: "끝" }], { path: "/r?m=tight" });
       f1 = (await fills(h)).at(-1);
       [rb] = resultsOf(f1);
-      expect(!rb.applied && has(rb, MSG_INPUT) && rb.refillOnce === true, `R11 안내(${show(rb)})`);
+      expect(!rb.applied && has(rb, MSG_INPUT), `R11 안내(${show(rb)})`);
     },
   },
   {

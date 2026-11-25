@@ -443,13 +443,14 @@ test("행 글자 더해짐 안내 문구(#317): 고정 글, 단계별로 고르�
     assert.equal(reasonCode(m), "target_changed", m);
   }
   assert.equal(reasonCode(`입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${ROW_GREW_REASON})`), "unverified");
-  // 토글 칸 문구는 다시 누르라고 하지 않는다. 글자 칸 문구만 한 번 재시도 조건을 말한다.
+  // 토글 칸 문구는 다시 누르라고 하지 않는다. 글자 칸 문구는 한 번 다시 찾아 확인하게 하고, 다시 채울지는 지침대로(재시도를 새로 허용하지 않음).
   assert.match(ROW_GREW_CLICK, /다시 누르지 말고/);
   assert.match(ROW_GREW_TOGGLE_INPUT, /다시 누르지 말고/);
-  assert.match(ROW_GREW_INPUT, /한 번 다시 채울 수 있습니다/);
-  assert.match(ROW_GREW_INPUT, /describe_page/);
-  assert.match(ROW_GREW_HALTED, /의도한 행과 칸임을 확인한 뒤/);
-  assert.match(ROW_GREW_PRE_WRITE, /의도한 행과 칸임을 확인한 뒤/);
+  assert.match(ROW_GREW_INPUT, /이 칸을 한 번 다시 찾아 의도한 행의 칸인지/);
+  assert.match(ROW_GREW_INPUT, /지침대로 필요한 칸만 다시 채우세요\(확인할 수 없으면 사용자에게 알리세요\)/);
+  assert.ok(!/다시 채울 수 있습니다/.test(ROW_GREW_INPUT));
+  assert.match(ROW_GREW_HALTED, /의도한 행과 칸임을 확인한 뒤 지침대로/);
+  assert.match(ROW_GREW_PRE_WRITE, /의도한 행과 칸임을 확인한 뒤 지침대로/);
   // 고정 글이라 값·행 글자·이름이 들어갈 자리가 없다(따옴표 인용 없음).
   for (const m of [ROW_GREW_INPUT, ROW_GREW_CLICK, ROW_GREW_TOGGLE_INPUT, ROW_GREW_HALTED, ROW_GREW_PRE_WRITE, ROW_GREW_REASON]) {
     assert.ok(!/'/.test(m), m);

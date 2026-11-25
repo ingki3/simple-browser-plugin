@@ -232,13 +232,11 @@ function charsKept(before: string, after: string): boolean {
 // "그대로"라고 말하는 것은 실제로 비교한 칸 이름·종류뿐이다(입력 칸은 상태·표시를 비교하지 않는다).
 export const ROW_GREW_REASON = "이 칸이 든 행에 글자가 더해짐 — 비교한 칸 이름·종류는 그대로";
 
-// 글자 칸·select: input은 보냈고 change는 보내지 않음. 결과에 refillOnce(한 번 재시도 가능)를 함께 단다.
+// 글자 칸·select: input은 보냈고 change는 보내지 않음. 다시 채울지는 지침(입력 도중 멈춤 규칙)이 지금처럼 정한다 — 재시도를 새로 허용하지 않는다.
 export const ROW_GREW_INPUT =
   "입력 중 이 칸이 든 행에 글자가 더해져(비교한 칸 이름·종류는 그대로 — 페이지가 입력에 반응해 안내 문구를 그렸을 수 있음) 변경 이벤트를 보내지 않았습니다. " +
-  "입력 이벤트는 보냈지만 값이 확정되지 않았을 수 있습니다. 다시 찾으세요: find_form_fields로 다시 찾아 이 칸이 결과에 있고 의도한 행의 칸이 맞으며, " +
-  "다시 관측한 화면에 요청한 작업이 이미 진행된 정황이 없을 때만, 그리고 선택 칸이면 다시 찾은 결과의 options와 selectedIndex로 지금 선택이 요청과 다름도 " +
-  "확인했을 때(selectedIndex가 없으면 다시 채우지 않음) 같은 값으로 한 번 다시 채울 수 있습니다. 칸 목록만으로 진행 여부를 판단하기 어려우면 describe_page로 " +
-  "작업 결과를 확인하고, 여전히 불분명하면 멈추세요. 그 밖이면 다시 채우지 마세요.";
+  "입력 이벤트는 보냈지만 값이 확정되지 않았을 수 있습니다. 다시 찾으세요: find_form_fields로 이 칸을 한 번 다시 찾아 의도한 행의 칸인지와 지금 상태를 " +
+  "확인한 뒤, 같은 묶음을 그대로 반복하지 말고 지침대로 필요한 칸만 다시 채우세요(확인할 수 없으면 사용자에게 알리세요).";
 
 // checkbox·radio: click 뒤(input 전) 막힘. 클릭은 이미 보냈으므로 다시 누르라고 하지 않는다.
 export const ROW_GREW_CLICK =
@@ -253,12 +251,12 @@ export const ROW_GREW_TOGGLE_INPUT =
 // 같은 호출의 남은 칸(앞 칸이 위 셋 중 하나로 멈춤 — 이 칸에는 쓰지 않음).
 export const ROW_GREW_HALTED =
   "앞 칸 입력 중 그 칸이 든 행에 글자가 더해져 이 칸은 채우지 않았습니다(이 칸에는 쓰지 않음). " +
-  "다시 찾으세요: find_form_fields로 다시 찾은 결과에서 의도한 행과 칸임을 확인한 뒤 이어 채우세요.";
+  "다시 찾으세요: find_form_fields로 다시 찾은 결과에서 의도한 행과 칸임을 확인한 뒤 지침대로 이어 채우세요.";
 
 // 묶음 뒤 칸의 쓰기 전 확인이 막힘(이 칸에는 쓰지 않음).
 export const ROW_GREW_PRE_WRITE =
   "승인한 뒤 이 칸이 든 행에 글자가 더해져(비교한 칸 이름·종류는 그대로) 이 칸은 쓰지 않았습니다. " +
-  "다시 찾으세요: find_form_fields로 다시 찾은 결과에서 의도한 행과 칸임을 확인한 뒤 이어 채우세요.";
+  "다시 찾으세요: find_form_fields로 다시 찾은 결과에서 의도한 행과 칸임을 확인한 뒤 지침대로 이어 채우세요.";
 
 // guard 단계(click: checkbox·radio의 click 뒤, input: input 뒤)와 칸 종류로 막힌 까닭의 문구를 고른다.
 export function rowGrewGuardMessage(phase: "click" | "input", toggle: boolean): string {

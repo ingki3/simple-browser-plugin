@@ -854,36 +854,6 @@ function selectedSignature(sel: HTMLSelectElement): string {
   return Array.from(sel.options, (o) => (o.selected ? `1:${o.value}` : "0")).join("\u0001");
 }
 
-// 칸이 든 양식의 제출 상태 요약(#317 — 막힌 뒤 재시도 안내를 고를 때만 쓴다. 값이 들어 있으므로 메모리에서 비교만 하고 결과·로그·오류에
-// 넣지 않는다, #43). 속성·값을 읽기만 한다(복제·이벤트·기준값 기록 없음). action·method·target·enctype·문서 기준 주소와 양식의 모든 컨트롤
-// (form 속성으로 연결된 바깥 칸 포함, 순서대로)의 종류·name·formaction·값. 이 칸 자신의 값은 이번 입력이 바꾸므로 빼고 종류·이름만 넣는다.
-// 양식이 없는 칸은 확인할 수 없어 null(재시도 안내를 하지 않는다 — 더 막는 쪽).
-function submitSnapshot(el: FieldElement): string | null {
-  const form = el.form;
-  if (!form) return null;
-  const parts = [
-    form.getAttribute("action") ?? "",
-    form.getAttribute("method") ?? "",
-    form.getAttribute("target") ?? "",
-    form.getAttribute("enctype") ?? "",
-    el.ownerDocument.baseURI,
-  ];
-  for (const c of formElements(form)) {
-    const kind = `${c.localName}:${c.getAttribute("type") ?? ""}:${c.getAttribute("name") ?? ""}:${c.getAttribute("formaction") ?? ""}`;
-    if (c === el) {
-      parts.push(`self:${kind}`);
-      continue;
-    }
-    let v = "";
-    if (isTag(c, "select")) v = selectedSignature(c as HTMLSelectElement);
-    else if (isTag(c, "input") && ((c as HTMLInputElement).type === "checkbox" || (c as HTMLInputElement).type === "radio")) {
-      v = `${(c as HTMLInputElement).checked}:${(c as HTMLInputElement).value}`;
-    } else if (isTag(c, "input") || isTag(c, "textarea") || isTag(c, "button")) v = (c as HTMLInputElement).value;
-    parts.push(`${kind}=${v}`);
-  }
-  return parts.join("\u0001");
-}
-
 // 칸 값이 처음 값(HTML에 적힌 값)에서 바뀐 양식인지. 사용자나 모델이 넣은 값이 있어야 대화 내용이 실릴 수 있다
 // (페이지가 처음부터 넣어 둔 값은 페이지의 것이다). 모든 페이지 머리의 빈 검색 양식 같은 것은 빼려는 것.
 function formHasChangedValues(form: HTMLFormElement): boolean {
@@ -1621,9 +1591,6 @@ export interface FillResult {
   note?: string;
   // 자동완성 칸이 입력 뒤 펼쳐져 있었는지(관측한 상태 — 선택 확정이 아니다).
   listOpened?: boolean;
-  // 이 칸 한 번 재시도 가능(#317): 글자 칸·select에 input은 보냈고 change는 보내지 않았으며, 비교한 칸 이름·종류는 그대로이고 그 칸이 든
-  // 행 글자만 더해져 막힘. "다시 채우라"가 아니다(모델 지침 6번이 조건을 정한다). checkbox·radio에는 달지 않는다(클릭을 이미 보냄).
-  refillOnce?: boolean;
 }
 
 // 페이지가 값을 고치거나 되돌리는 처리(마이크로태스크·타이머·다시 그리기)가 끝날 틈을 준 뒤 최종 값을 본다.
@@ -1829,18 +1796,16 @@ export async function fillFormFields(
     noteWritten(callId, el, expectedSig ?? intended);
     // input 처리기가 action·숨은 값·대상을 바꿨으면 change(제출로 이어질 수 있다)를 보내지 않는다.
     // 판정·순서·호출은 지금과 같다(재검사가 다르면 곧바로 막고, 같으면 driftReason). 막힌 까닭이 "비교한 칸 이름·종류는 그대로이고 행 글자만
-    // 더해짐"(rowGrew — 이미 만든 기술만 봄)이면 문구만 그 안내로 바꾼다(#317). checkbox·radio는 클릭을 이미 보냈으므로 다시 채우라고 하지 않는다.
+    // 더해짐"(rowGrew — 이미 만든 기술만 봄)이면 문구만 그 까닭과 다시 찾을 칸을 알리는 안내로 바꾼다(#317). 다시 채울지는 모델 지침 6번이
+    // 지금처럼 정한다(재시도를 새로 허용하지 않는다). checkbox·radio는 클릭을 이미 보냈으므로 다시 누르라고 하지 않는다.
+    // 자동 로그인 경로(extraGuard — find_form_fields 안내가 맞지 않음)는 지금 문구.
     const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
-    // 쓰기 직전의 양식 제출 상태(읽기만 함). 막혔을 때 이것이 그대로여야 안내를 바꾼다 — 처리기가 숨은 레코드 번호·action 등 제출될
-    // 내용을 함께 바꿨으면 지금 문구(재시도 안내 없음). 다른 위험 신호는 재시도 때 새 승인에서 다시 본다.
-    const submitBefore = isFieldElement(el) ? submitSnapshot(el) : null;
     let guardGrew = false;
     const guard = (phase: "click" | "input"): string | null => {
       const detail = recheckApprovedDetail(FIELD_KIND, el, info, null, true);
       const reason = detail.reason;
       if (reason) {
-        // 행 글자만 더해졌고 양식 제출 상태도 그대로일 때만 안내를 바꾼다. 자동 로그인 경로(extraGuard)는 지금 문구.
-        const grew = detail.grew && !extraGuard && submitBefore !== null && isFieldElement(el) && submitSnapshot(el) === submitBefore;
+        const grew = detail.grew && !extraGuard;
         guardGrew = grew;
         return grew ? rowGrewGuardMessage(phase, toggle) : `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${reason}). 다시 찾으세요.`;
       }
@@ -1870,8 +1835,7 @@ export async function fillFormFields(
       );
     } catch (err) {
       if (!(err instanceof ChangeBlocked)) throw err;
-      // refillOnce: 글자 칸·select가 input 뒤 행 글자 더해짐으로 막혔을 때만(한 번 재시도 가능 — 조건은 모델 지침 6번).
-      results.push({ id: f.id, label, applied: false, note: err.message, ...(guardGrew && !toggle ? { refillOnce: true } : {}) });
+      results.push({ id: f.id, label, applied: false, note: err.message });
       halted = true;
       haltedGrew = guardGrew;
       continue;
