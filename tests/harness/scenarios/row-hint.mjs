@@ -40,6 +40,7 @@ for (const el of document.querySelectorAll("#f input:not([type=hidden])")) {
     if (m === "action") { setHint(row, ${JSON.stringify(HINT)}); document.getElementById("f").action = "/pay/checkout"; }
     if (m === "hiddenpay") document.getElementById("op").value = "pay";
     if (m === "tight") setHint(row, "형식 안내");
+    if (m === "hiddenrec") { setHint(row, ${JSON.stringify(HINT)}); document.getElementById("op").value = "2"; }
     if (m === "record") { setHint(row, ${JSON.stringify(HINT)}); document.getElementById("f").action = "/records/2"; }
     if (m === "hiddenonly") row.querySelector(".hid").textContent = " 숨은 안내 ";
     if (m === "retag") { setHint(row, ${JSON.stringify(HINT)}); row.querySelector(".tag").textContent = "T9"; }
@@ -259,6 +260,12 @@ export default [
       let ev = await events(h);
       expect(!ra.applied && has(ra, OLD_GUARD) && !has(ra, MSG_INPUT) && !ra.refillOnce, `R10 지금 문구(${show(ra)})`);
       expect(has(rb, OLD_HALTED) && ev.a.change === 0 && ev.b.input === 0, `R10 남은 칸 멈춤(${show({ rb, ev })})`);
+      // R10b: 행 글자는 더해지기만 했지만 같은 양식의 숨은 레코드 번호가 바뀜(일반 숫자 — 위험 신호 아님) → 지금 문구·refillOnce 없음.
+      await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=hiddenrec" });
+      f1 = (await fills(h)).at(-1);
+      [ra, rb] = resultsOf(f1);
+      ev = await events(h);
+      expect(!ra.applied && has(ra, OLD_GUARD) && !has(ra, MSG_INPUT) && !ra.refillOnce && ev.a.change === 0, `R10b 지금 문구(${show(ra)})`);
       // R11: 'Domain' 뒤 빈 안내 영역에 공백 없이 글자가 생김(원문 textContent는 붙고 화면 글자는 띄워짐) → 안내 문구.
       await h.turn([findF, { fill: "Domain", value: "fake-b-317" }, { text: "끝" }], { path: "/r?m=tight" });
       f1 = (await fills(h)).at(-1);

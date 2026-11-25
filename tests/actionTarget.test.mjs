@@ -413,6 +413,9 @@ test("rowGrew(#317): 비교한 칸은 그대로이고 원문·모델용 행 글�
   assert.equal(rowGrew(bare, { ...field, context: hint, modelContext: hint }), true);
   // 원문은 요소 사이 공백 없이 붙음(textContent), 모델용 문맥은 블록 경계로 띄워짐 → 참.
   assert.equal(rowGrew(field, { ...field, context: "Domain형식 안내", modelContext: "Domain 형식 안내" }), true);
+  // 기존 행에 이모지(서로게이트 쌍)가 있어도 → 참.
+  const emoji = { ...field, context: "📌 Domain", modelContext: "📌 Domain" };
+  assert.equal(rowGrew(emoji, { ...emoji, context: `📌 Domain ${hint}`, modelContext: `📌 Domain ${hint}` }), true);
   // 낱말이 사라짐(행 글자가 바뀜) → 거짓.
   assert.equal(rowGrew(field, { ...field, context: `Other ${hint}`, modelContext: `Other ${hint}` }), false);
   // 숨은 글자만 늘어 모델용 문맥이 같음 → 거짓.

@@ -216,9 +216,10 @@ export function rowGrew(approved: TargetInfo, now: TargetInfo): boolean {
 }
 
 // before의 공백 아닌 글자가 after 안에 같은 순서로 모두 남았는지(글자가 끼워지기만 했는지).
+// 두 글자를 같은 단위(코드 포인트)로 본다(이모지 같은 서로게이트 쌍).
 function charsKept(before: string, after: string): boolean {
-  const want = before.replace(/\s+/g, "");
-  const have = after.replace(/\s+/g, "");
+  const want = Array.from(before.replace(/\s+/g, ""));
+  const have = Array.from(after.replace(/\s+/g, ""));
   let i = 0;
   for (const ch of have) {
     if (i < want.length && ch === want[i]) i++;

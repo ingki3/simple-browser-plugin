@@ -54,12 +54,8 @@ export interface TargetKind {
   deleteParamExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
   // deleteMethod(구조 선언)에 대한 같은 예외(#62).
   deleteMethodExplained?(el: HTMLElement, writes: ReadonlyMap<Element, ChoiceState>): boolean;
-  risk?(el: HTMLElement): KindRisk;
-  // risk와 같되 기준값(처음 살핀 칸 값)을 기록하지 않는 조회(#317 — 막힌 뒤 안내 문구를 고르는 확인 전용, 판정에는 쓰지 않음).
-  riskReadOnly?(el: HTMLElement): KindRisk;
+  risk?(el: HTMLElement): Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 }
-
-type KindRisk = Pick<TargetInfo, "personal" | "submitsPersonal" | "paymentContext" | "submitTo" | "submitUrl" | "ancestorHref" | "outerText" | "choiceUrls" | "download" | "deleteMethod" | "deleteParam" | "opaqueRequest" | "requestUrls" | "deleteChoices" | "insideControl" | "scopeSubmitUrls" | "scopeFormActions" | "aroundFormActions" | "pingUrls" | "fieldName" | "baseUri">;
 
 interface Entry {
   kind: TargetKind;
@@ -1242,10 +1238,8 @@ export function takeApproved(
 // 승인 카드 때 없던 위험(개인정보 칸, 개인정보가 채워진 양식의 버튼)이 그 뒤에 생겼는지.
 // 자동 완성·페이지 스크립트가 승인 뒤에 칸을 채우면, 자동 실행이든 사람이 승인한 카드든 그대로 실행하지 않는다.
 // afterWrite: 실행이 끝난 뒤 반영을 확인하는 보고용 검사(해시만 바뀐 기준 주소는 같게 본다).
-// readOnly: 기준값을 기록하지 않는 조회로 본다(안내 문구 선택용 — riskReadOnly가 없는 종류는 확인할 수 없다고 보고 이유를 돌려준다).
-function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, afterWrite = false, readOnly = false): string | null {
-  if (readOnly && kind.risk && !kind.riskReadOnly) return "위험 확인 안 함";
-  const now = readOnly ? kind.riskReadOnly?.(el) : kind.risk?.(el);
+function riskAdded(kind: TargetKind, el: HTMLElement, info: TargetInfo, afterWrite = false): string | null {
+  const now = kind.risk?.(el);
   if (!now) return null;
   if (now.personal && !info.personal) return "개인정보 칸으로 바뀜";
   const allowed = info.consentCall ? consentAllowed.get(info.consentCall) : undefined;
@@ -1434,8 +1428,9 @@ export function recheckApproved(
   return recheckApprovedDetail(kind, el, info, relation, inFlight, afterWrite, item).reason;
 }
 
-// recheckApproved와 같은 판정·같은 순서(reason이 그 값). grew는 기술이 달라 곧바로 돌려주는 그 자리에서만 정한다(#317): 이미 만든 두
-// 기술(rowGrew)과, 기준값을 기록하지 않는 위험 조회(riskReadOnly — 다음 호출의 판정 기준을 바꾸지 않는다)로. 안내 문구를 고르는 데만 쓴다.
+// recheckApproved와 같은 판정·같은 순서·같은 호출(reason이 그 값). grew는 기술이 달라 곧바로 돌려주는 그 자리에서만, 이미 만든 두
+// 기술로 정한다(rowGrew — 페이지 코드를 부를 수 있는 조회를 더하지 않는다, #317). 안내 문구를 고르는 데만 쓴다. 제출 상태가 그대로인지는
+// 부르는 쪽(forms.ts guard)이 쓰기 직전에 떠 둔 양식 제출 상태와 비교해 따로 본다.
 export function recheckApprovedDetail(
   kind: TargetKind,
   el: HTMLElement,
@@ -1450,10 +1445,8 @@ export function recheckApprovedDetail(
   const now = fullInfo(kind, el, pinned, inFlight ? inFlightSubstitute(el, info, pinned) : undefined);
   const sameNow = inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info);
   if (!sameNow) {
-    // grew는 행 글자만 더해졌고, 기준값을 기록하지 않는 조회로 본 위험 신호(제출 주소·칸 이름·개인정보 등)도 승인 때와 같을 때만
-    // (같은 행의 다른 레코드로 제출 주소를 바꾼 경우 재시도 안내를 하지 않는다). 트리거 관계가 있는 대상은 보지 않는다(입력 칸에는 없음).
-    const grew = rowGrew(info, now) && !relation && !item && !riskAdded(kind, el, info, afterWrite, true);
-    return { reason: describeDifference(info, now), grew };
+    // 트리거 관계·항목 결합이 있는 대상(입력 칸에는 없음)은 보지 않는다.
+    return { reason: describeDifference(info, now), grew: rowGrew(info, now) && !relation && !item };
   }
   const added = riskAdded(kind, el, info, afterWrite) ?? triggerRiskAdded(kind, relation, info);
   if (added) return { reason: added, grew: false };
