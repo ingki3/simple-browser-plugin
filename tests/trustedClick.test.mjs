@@ -90,7 +90,7 @@ test("clickPoints: 가운데 다음 안쪽 네 점, 화면 밖 사각형은 건�
 });
 
 // #241: 막힌 실제 입력 클릭의 모델 문구·진단 줄.
-import { blockDiagText, describeBlockedClick, describePressedFailure, roleToken } from "../src/lib/trustedClick.ts";
+import { blockDiagText, describeBlockedClick, describePressedFailure, passedPress, pressDelivered, roleToken } from "../src/lib/trustedClick.ts";
 
 const fb = (over = {}) => ({ event: "mousedown", seenBefore: ["pointerdown"], targetConnected: false, targetShown: false, hit: { tag: "button" }, ...over });
 
@@ -110,6 +110,57 @@ test("describeBlockedClick: 단계와 대상 상태(떨어짐·숨겨짐)를 구
   const plain = describeBlockedClick("확인 시간이 지남");
   assert.match(plain, /^실제 입력 클릭을 도중에 막았습니다\(확인 시간이 지남\)\. 클릭은 끝나지 않았지만/);
   assert.doesNotMatch(describeBlockedClick("x", fb({ event: "만료", targetConnected: true, targetShown: true })), /단계에서 막음/);
+});
+
+test("passedPress·pressDelivered: 첫 차단 앞에 가드를 통과한 누르기·떼기 입력만, 이벤트 종류로(#316)", () => {
+  // a1형: pointerdown만 통과하고 mousedown에서 막음.
+  assert.deepEqual(passedPress(fb()), ["pointerdown"]);
+  assert.equal(pressDelivered(fb()), true);
+  // b형: 누르기 둘이 통과하고 떼기에서 막음.
+  const b = fb({ event: "pointerup", seenBefore: ["pointerover", "pointerdown", "mousedown"] });
+  assert.deepEqual(passedPress(b), ["pointerdown", "mousedown"]);
+  // click에서 막으면 떼기까지 통과했다.
+  assert.deepEqual(passedPress(fb({ event: "click", seenBefore: ["pointerdown", "mousedown", "pointerup", "mouseup", "mouseup"] })), [
+    "pointerdown",
+    "mousedown",
+    "pointerup",
+    "mouseup",
+  ]);
+  // a2형(앞 입력 없음)·첫 차단 정보 없음은 전달 아님.
+  assert.deepEqual(passedPress(fb({ event: "pointerup", seenBefore: [] })), []);
+  assert.equal(pressDelivered(fb({ event: "pointerup", seenBefore: [] })), false);
+  assert.equal(pressDelivered(undefined), false);
+  assert.equal(pressDelivered(fb({ event: "click", seenBefore: ["pointerup", "mouseup"] })), false);
+});
+
+test("describeBlockedClick changed: 누르기 전달 + 관측 구간 변화면 통과한 입력과 다시 관측 안내(#316)", () => {
+  const b = fb({ event: "pointerup", seenBefore: ["pointerdown", "mousedown"], targetConnected: true, targetShown: true });
+  const t = describeBlockedClick("글자가 'Show options' → ''", b, { changed: true });
+  assert.match(t, /^실제 입력 클릭을 도중에 막았습니다\(글자가 'Show options' → ''\)\. 떼기\(pointerup\) 단계에서 막음\./);
+  assert.match(t, /전달된 입력: pointerdown, mousedown\. 이 클릭의 관측 구간/);
+  assert.match(t, /관측 구간\(누르기 직전부터\)에 화면 변화가 있었습니다/);
+  assert.match(t, /find_clickables/);
+  assert.match(t, /다시 누르지 마세요/);
+  // 막은 이유를 따로 단정하지 않는다(reason 그대로).
+  assert.doesNotMatch(describeBlockedClick("확인 시간이 지남", b, { changed: true }), /대상이 바뀌/);
+  // a1형: mousedown은 전달로 말하지 않는다.
+  const a1 = describeBlockedClick("다른 요소에 닿음", fb(), { changed: true });
+  assert.match(a1, /누르기\(mousedown\) 단계에서 막음.*전달된 입력: pointerdown\. /);
+  assert.match(a1, /문서에서 떨어졌습니다/);
+  // click 차단: 떼기까지 전달.
+  assert.match(
+    describeBlockedClick("r", fb({ event: "click", seenBefore: ["pointerdown", "mousedown", "pointerup", "mouseup"], targetConnected: true, targetShown: true }), { changed: true }),
+    /전달된 입력: pointerdown, mousedown, pointerup, mouseup\. /,
+  );
+  // 단계 라벨이 없는 첫 차단(확인 중 오류·만료)에서도 깨지지 않는다.
+  const odd = describeBlockedClick("확인 중 오류", fb({ event: "확인 중 오류", seenBefore: ["pointerdown"], targetConnected: true, targetShown: true }), { changed: true });
+  assert.match(odd, /전달된 입력: pointerdown\. 이 클릭의 관측 구간/);
+  assert.doesNotMatch(odd, /undefined/);
+  // 변화 없음·전달 아님이면 기존 문구와 같다.
+  assert.equal(describeBlockedClick("x", b, { changed: false }), describeBlockedClick("x", b));
+  const a2 = fb({ event: "pointerup", seenBefore: [] });
+  assert.equal(describeBlockedClick("x", a2, { changed: true }), describeBlockedClick("x", a2));
+  assert.equal(describeBlockedClick("x", undefined, { changed: true }), describeBlockedClick("x"));
 });
 
 test("describePressedFailure: 단계 문장 + 고정 안내", () => {
@@ -140,4 +191,24 @@ test("roleToken: 구조 토큰 꼴만(소문자 낱말, 40자 안)", () => {
   assert.equal(roleToken("a".repeat(41)), undefined);
   assert.equal(roleToken(null), undefined);
   assert.equal(roleToken(""), undefined);
+});
+
+test("blockedFailCode(#318): 막은 분기 코드·첫 차단 이벤트·대상 연결·표시로만 정하고, 분기를 모르면 null", async () => {
+  const { blockedFailCode } = await import("../src/lib/trustedClick.ts");
+  const first = (o) => ({ event: "pointerup", seenBefore: ["pointerdown"], targetConnected: true, targetShown: true, hit: { tag: "div" }, ...o });
+  assert.equal(blockedFailCode("target_changed", first({})), "blocked:target_changed:pointerup:c:s");
+  assert.equal(blockedFailCode("target_changed", first({ seenBefore: [], hit: null })), "blocked:target_changed:pointerup:c:s", "앞 이벤트·닿은 요소는 코드에 없음");
+  assert.notEqual(blockedFailCode("other_element", first({})), blockedFailCode("target_changed", first({})), "같은 단계·상태라도 분기가 다르면 다름");
+  assert.equal(blockedFailCode("target_changed", first({ event: "mousedown", targetConnected: false })), "blocked:target_changed:mousedown:d:s");
+  assert.equal(blockedFailCode("target_changed", first({ targetShown: false })), "blocked:target_changed:pointerup:c:h");
+  assert.equal(blockedFailCode("expired", first({ event: "만료" })), "blocked:expired:expiry:c:s");
+  assert.equal(blockedFailCode("inspect_error", first({ event: "확인 중 오류" })), "blocked:inspect_error:inspect:c:s");
+  assert.notEqual(
+    blockedFailCode("unexpected_input", first({ event: "auxclick" })),
+    blockedFailCode("unexpected_input", first({ event: "contextmenu" })),
+    "가드가 거는 다른 이벤트는 다른 코드",
+  );
+  assert.equal(blockedFailCode("inspect_error", first({ event: "toString" })), "blocked:inspect_error:other:c:s");
+  assert.equal(blockedFailCode("cancelled", undefined), "blocked:cancelled:none");
+  for (const bad of [undefined, null, "", "toString", "글자 '비밀'", 3]) assert.equal(blockedFailCode(bad, first({})), null, String(bad));
 });

@@ -9,11 +9,46 @@ const KEY = "fakeKakaoRestKey0000aaaa";
 const CLIENT_SECRET = "fakeKakaoSecret0000bbbb";
 const LINK = "https://example.com/";
 const SECRET = "Harness-Pw-2100";
+// kakao-auth.mjs(#319)가 같은 가짜 값을 쓴다.
+export const KAKAO_FAKE = { KEY, CLIENT_SECRET, LINK };
 
 // 워커에 카카오 대역을 건다(fetch 감싸기는 한 번만 — 다른 시나리오의 텔레그램 대역과 겹쳐도 그대로 이어지게). 기록은 매번 비운다.
+// #319: 인증 특성 시험(kakao-auth.mjs)이 쓰는 필드를 더했다. 더한 필드의 기본값은 모두 "지금과 같은 응답"이다.
+// - holdRefresh / holdMemo: 갱신·메모 응답을 __kkRelease("refresh" | "memo")까지 보류한다. 보류된 요청은 모두 같은 해제 Promise를
+//   기다린다(요청이 여러 건이어도 한 번에 풀린다). 보류는 실제 fetch와 달리 abort 신호로 풀리지 않으니 시나리오 끝에서 반드시 푼다.
+// - refreshReplies / tokenReplies: 갱신·코드 교환 응답 큐({ status, body } 또는 "network" = fetch 거부). 비면 지금 응답.
+// - memoReplies: { status, body } 말고도 "throw"(요청을 기록한 뒤 거부)·"raw"(200 + JSON이 아닌 본문)를 넣을 수 있다.
+// - flowReject / flowAnswer("error" | "origin") / redirectUrl: 로그인 창 거부, 돌아올 주소 바꾸기, getRedirectURL 값 바꾸기.
+// - refreshUsedLatest / stateEchoed: 대역이 안에서 계산한 일치 여부만 내보낸다(토큰·state 값은 시나리오로 나가지 않는다).
+// - codePrefix: 로그인 창이 돌려주는 인가 코드의 앞부분(기본 "C" — 누출 검사는 고유한 값으로 바꿔 그 값 자체를 찾는다).
 export async function installKakao(h) {
   await h.sw.evaluate(() => {
+    // 앞 시나리오가 남긴 보류는 풀고 새 게이트를 만든다(게이트는 __kk 밖에 둔다 — __kk는 값만 담아 그대로 읽어 온다).
+    const mkGate = () => {
+      let open;
+      const promise = new Promise((r) => (open = r));
+      return { promise, open };
+    };
+    for (const g of Object.values(globalThis.__kkGates ?? {})) g.open();
+    globalThis.__kkGates = { refresh: mkGate(), memo: mkGate() };
+    globalThis.__kkRelease = (name) => {
+      globalThis.__kkGates[name].open();
+      globalThis.__kkGates[name] = mkGate();
+    };
     globalThis.__kk = {
+      holdRefresh: false,
+      refreshWaiting: 0,
+      holdMemo: false,
+      memoWaiting: 0,
+      refreshReplies: [],
+      tokenReplies: [],
+      flowReject: false,
+      flowAnswer: null,
+      redirectUrl: null,
+      lastRefreshIssued: null,
+      refreshUsedLatest: null,
+      stateEchoed: null,
+      codePrefix: "C",
       tokenReqs: [],
       memo: [],
       flows: [],
@@ -48,6 +83,10 @@ export async function installKakao(h) {
           kk.tokenReqs.push({ grant: p.get("grant_type"), clientId: p.get("client_id"), hasSecret: p.has("client_secret"), code: p.get("code"), redirect: p.get("redirect_uri"), method: init?.method });
           if (p.get("grant_type") === "authorization_code") {
             if (kk.holdToken) await new Promise((r) => (kk.releaseToken = r));
+            const tr = kk.tokenReplies.shift();
+            if (tr === "network") throw new TypeError("Failed to fetch");
+            if (tr) return json(tr.status, tr.body);
+            kk.lastRefreshIssued = `fake-refresh-${p.get("code")}`;
             return json(200, {
               token_type: "bearer",
               access_token: `fake-access-${p.get("code")}`,
@@ -60,6 +99,18 @@ export async function installKakao(h) {
           }
           if (p.get("grant_type") === "refresh_token") {
             kk.refreshes += 1;
+            kk.refreshUsedLatest = p.get("refresh_token") === kk.lastRefreshIssued;
+            if (kk.holdRefresh) {
+              kk.refreshWaiting += 1;
+              await globalThis.__kkGates.refresh.promise;
+            }
+            // 보류를 풀 때도 큐의 다음 항목으로 답한다(kk는 처음 붙잡은 기록 — 보류 사이 대역을 다시 설치하지 않는다).
+            const rr = kk.refreshReplies.shift();
+            if (rr === "network") throw new TypeError("Failed to fetch");
+            if (rr) {
+              if (rr.status === 200 && typeof rr.body?.refresh_token === "string") kk.lastRefreshIssued = rr.body.refresh_token;
+              return json(rr.status, rr.body);
+            }
             if (kk.refreshFail) return json(400, { error: "invalid_grant", error_description: "카카오 오류 원문", error_code: "KOE322" });
             // 토큰 이름은 기록을 비워도 이어지는 번호(조각마다 어느 토큰을 썼는지 구분).
             globalThis.__kkTokenSeq = (globalThis.__kkTokenSeq ?? 0) + 1;
@@ -84,7 +135,13 @@ export async function installKakao(h) {
             template = JSON.parse(p.get("template_object") ?? "null");
           } catch {}
           kk.memo.push({ url: u, method: init?.method, auth, keys: [...p.keys()], template });
+          if (kk.holdMemo) {
+            kk.memoWaiting += 1;
+            await globalThis.__kkGates.memo.promise;
+          }
           const r = kk.memoReplies.shift() ?? { status: 200, body: { result_code: 0 } };
+          if (r === "throw") throw new TypeError("Failed to fetch");
+          if (r === "raw") return new Response("<html>not json</html>", { status: 200, headers: { "content-type": "text/html" } });
           return json(r.status, r.body);
         }
         return prev(url, init);
@@ -92,13 +149,17 @@ export async function installKakao(h) {
     }
     // identity 대역: 돌아올 주소는 인증 주소의 state·redirect_uri로 만든다(badState면 다른 state). hold면 __kk.held의 함수로 풀 때까지 보류.
     chrome.identity = {
-      getRedirectURL: () => `https://${chrome.runtime.id}.chromiumapp.org/`,
+      getRedirectURL: () => globalThis.__kk.redirectUrl ?? `https://${chrome.runtime.id}.chromiumapp.org/`,
       launchWebAuthFlow: async ({ url }) => {
         const kk = globalThis.__kk;
         const a = new URL(url);
         kk.flows.push({ origin: a.origin, path: a.pathname, clientId: a.searchParams.get("client_id"), scope: a.searchParams.get("scope"), redirect: a.searchParams.get("redirect_uri") });
-        const code = `C${++kk.codeSeq}`;
+        kk.stateEchoed = !!a.searchParams.get("state");
+        if (kk.flowReject) throw new Error("The user did not approve access.");
+        const code = `${kk.codePrefix}${++kk.codeSeq}`;
         const state = kk.badState ? "wrong-state" : a.searchParams.get("state");
+        if (kk.flowAnswer === "error") return `${a.searchParams.get("redirect_uri")}?error=access_denied&state=${state}`;
+        if (kk.flowAnswer === "origin") return `https://other.example/?code=${code}&state=${state}`;
         const answer = `${a.searchParams.get("redirect_uri")}?code=${code}&state=${state}`;
         if (!kk.hold) return answer;
         return new Promise((resolve) => kk.held.push({ code, release: () => resolve(answer) }));
@@ -136,14 +197,15 @@ const lastSend = (r) => sendLog(r).at(-1);
 const send = (text) => ({ tool: "send_to_kakao", args: { text } });
 
 // 설정 페이지를 열어 키를 저장하고 카카오 로그인으로 연결한다(대역 설치 포함). 기록은 비우고 설정 페이지를 돌려준다.
-async function connect(h, opt) {
+export async function connect(h, opt) {
   opt ??= await h.openOptions("model");
   await installKakao(h);
   const saved = await optSend(opt, { kind: "kakao_save_keys", restKey: KEY, clientSecret: CLIENT_SECRET, linkUrl: LINK });
-  expect(saved?.ok && saved.data.hasKey && saved.data.linkSet && !saved.data.connected, `키 저장(${JSON.stringify(saved)})`);
+  // 실패 문구에 응답 전체를 넣지 않는다(#319 — 응답에 값이 섞이는 회귀가 있어도 하네스 출력에 남지 않게).
+  expect(saved?.ok && saved.data.hasKey && saved.data.linkSet && !saved.data.connected, `키 저장(ok=${saved?.ok})`);
   expect(!JSON.stringify(saved).includes(KEY) && !JSON.stringify(saved).includes(CLIENT_SECRET), "상태에 키·시크릿 없음");
   const c = await optSend(opt, { kind: "kakao_connect" });
-  expect(c?.ok && c.data.connected && c.data.connectedAt > 0, `연결(${JSON.stringify(c)})`);
+  expect(c?.ok && c.data.connected && c.data.connectedAt > 0, `연결(ok=${c?.ok})`);
   expect(Object.keys(c.data).sort().join(",") === "connected,connectedAt,hasKey,linkSet,needsLogin", `허용한 필드만(${Object.keys(c.data)})`);
   expect((await kk(h)).userMe === 1, "연결 확정에 사용자 정보 조회 한 번");
   expect(!JSON.stringify(await stored(h)).includes("가짜 이름"), "사용자 정보는 저장하지 않음");
@@ -561,6 +623,19 @@ export default [
       await opt.waitForTimeout(300);
       expect(!h.logs.slice(before).some((l) => l.startsWith("[SBP kakao:connect]")), `연결 시도 없음(${h.logs.slice(before).join(" | ")})`);
       expect(!(await h.sw.evaluate(async () => (await chrome.storage.local.get("kakao")).kakao?.accessToken)), "연결 안 됨");
+
+      // 1-1) 권한 요청이 예외를 던져도 같은 안내로 끝나고 연결 메시지를 보내지 않는다(#319 특성 시험).
+      await opt.evaluate(() => {
+        chrome.permissions.request = async () => {
+          throw new Error("This function must be called during a user gesture");
+        };
+      });
+      const beforeThrow = h.logs.length;
+      await opt.getByRole("button", { name: "카카오 연결" }).click();
+      await opt.getByText("권한이 없어 연결하지 않았습니다.").waitFor({ timeout: 5000 });
+      await opt.waitForTimeout(300);
+      expect(!h.logs.slice(beforeThrow).some((l) => l.startsWith("[SBP kakao:connect]")), "권한 요청 예외: 연결 시도 없음");
+      expect(!(await opt.evaluate(() => document.body.innerText.includes("user gesture"))), "권한 요청 예외의 글은 화면에 없음");
 
       // 2) 권한 허용(대역 — 워커에 identity를 건다) → 연결된다.
       await installKakao(h);

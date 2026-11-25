@@ -10,6 +10,7 @@ import {
   describeDifference,
   onlyRowDiffers,
   rowDriftDiag,
+  rowGrew,
   sameApproved,
   sameApprovedInFlight,
   sameBase,
@@ -589,9 +590,20 @@ function fullInfo(
 const CHOICE_ROLES = new Set(["option", "menuitem", "menuitemradio", "menuitemcheckbox"]);
 const POPUP_ROLES = new Set(["listbox", "menu", "menubar"]);
 
+// 관계의 근거(#316). 같은 mode·via라도 근거가 바뀌면(래퍼 연결 → 직접 연결 등) 다른 관계로 본다.
+export type RelationBasis = "controls" | "owns" | "wrapper" | "unlinked" | "group";
+
+// choiceRelation이 null을 돌려준 이유별 수(#316 진단 — 디버그 로그에 수만). 한 선택지당 하나만 올라간다.
+export interface RelationWhy {
+  depth: number;
+  many: number;
+  none: number;
+}
+
 export interface Relation {
   mode: "linked" | "unlinked" | "nearest";
   via: "controls" | "owns" | null;
+  basis: RelationBasis;
   trigger: WeakRef<HTMLElement> | null;
   triggerBase: TargetInfo | null;
   // 트리거 자신이 다른 목록 안의 항목인지(중첩 메뉴). 실행 직전에도 같아야 한다.
@@ -735,31 +747,40 @@ function hasHiddenTree(el: Element): boolean {
   }
 }
 
-// 선택지의 관계. 정할 수 없으면 null.
-export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = expandedTriggers()): Relation | null {
+// 선택지의 관계. 정할 수 없으면 null. why: null인 이유를 센다(진단).
+export function choiceRelation(kind: TargetKind, el: HTMLElement, expanded = expandedTriggers(), why?: RelationWhy): Relation | null {
   const popup = popupOf(el);
-  if (!popup) return null;
+  if (!popup) {
+    if (why) why.depth += 1;
+    return null;
+  }
+  const fail = (k: "many" | "none"): null => {
+    if (why) why[k] += 1;
+    return null;
+  };
+  // 명시적 연결: aria-controls·aria-owns가 이 목록·선택지를 가리킴.
   const linked: Array<{ trigger: HTMLElement; via: "controls" | "owns" }> = [];
   for (const t of expanded) {
     const via = linkVia(t, [popup, el]);
     if (via) linked.push({ trigger: t, via });
   }
-  const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"]): Relation => ({
+  const make = (mode: Relation["mode"], trigger: HTMLElement | null, via: Relation["via"], basis: RelationBasis): Relation => ({
     mode,
     via,
+    basis,
     trigger: trigger ? new WeakRef(trigger) : null,
     triggerBase: trigger ? baseInfo(kind, trigger) : null,
     nested: trigger ? nestedTrigger(trigger) : false,
     popup: new WeakRef(popup),
   });
-  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via);
-  if (linked.length > 1) return null;
+  if (linked.length === 1) return make("linked", linked[0].trigger, linked[0].via, linked[0].via);
+  if (linked.length > 1) return fail("many");
   const wrapped = wrapperLink(expanded, popup);
-  if (wrapped) return make("linked", wrapped, "controls");
-  if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null);
+  if (wrapped) return make("linked", wrapped, "controls", "wrapper");
+  if (expanded.length <= 1) return make("unlinked", expanded[0] ?? null, null, "unlinked");
   const near = nearestTrigger(popup, expanded);
-  if (near) return make("nearest", near, null);
-  return null;
+  if (near) return make("nearest", near, null, "group");
+  return fail("none");
 }
 
 const NEAREST_CLIMB = 6;
@@ -798,7 +819,7 @@ export function relationTrigger(relation: Relation | null): HTMLElement | null {
 // 두 관계가 같은지. 다르면 이유.
 function relationDifference(before: Relation, now: Relation | null): string | null {
   if (!now) return "선택지를 연 위젯을 정할 수 없게 됨";
-  if (before.mode !== now.mode || before.via !== now.via) return "선택지와 트리거의 연결이 바뀜";
+  if (before.mode !== now.mode || before.via !== now.via || before.basis !== now.basis) return "선택지와 트리거의 연결이 바뀜";
   if (before.popup.deref() !== now.popup.deref()) return "선택지 목록이 바뀜";
   if ((before.trigger?.deref() ?? null) !== (now.trigger?.deref() ?? null)) return "펼쳐진 트리거가 바뀜";
   if (before.nested !== now.nested) return "펼쳐진 트리거가 다른 목록 안으로 옮겨짐";
@@ -1171,6 +1192,9 @@ function stampConsent(info: TargetInfo, callId: string): TargetInfo {
 // 승인 뒤 위험(개인정보·제출 주소·이름 등)이 새로 생겨 멈췄다는 표시. 묶음 입력은 남은 칸도 멈춘다.
 export class RiskAddedError extends Error {}
 
+// 입력 도중 쓰기 전 확인이 막혔고 그 차이가 "비교한 칸 자신은 그대로, 행 글자만 더해짐"이라는 표시(#317 — 안내 문구만 바꾼다, 판정 같음).
+export class RowGrewError extends Error {}
+
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
 // inFlight: 같은 승인 묶음의 앞 칸에 이미 입력 이벤트를 보낸 뒤면 입력 도중의 비교(sameApprovedInFlight)를 쓴다.
 export function takeApproved(
@@ -1197,6 +1221,8 @@ export function takeApproved(
     // (묶음 입력의 남은 칸도 멈춘다).
     if ((now.sensitive ?? null) !== (approved.info.sensitive ?? null)) throw new RiskAddedError(msg);
     if (riskAdded(entry.kind, el, approved.info)) throw new RiskAddedError(msg);
+    // 입력 도중(묶음 뒤 칸의 쓰기 전)이고 위험이 아니며 행 글자만 더해졌으면 그 까닭을 구조 표시로 싣는다(#317 — 흐름·판정은 그대로).
+    if (inFlight && rowGrew(approved.info, now)) throw new RowGrewError(msg);
     throw new Error(msg);
   }
   const added = riskAdded(entry.kind, el, approved.info) ?? triggerRiskAdded(entry.kind, approved.relation, approved.info);
@@ -1399,19 +1425,36 @@ export function recheckApproved(
   // 항목 모드로 찾은 대상의 목록 항목 결합(#161). 누르기 직전에도 항목이 그대로여야 한다.
   item?: ItemBinding,
 ): string | null {
-  if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
+  return recheckApprovedDetail(kind, el, info, relation, inFlight, afterWrite, item).reason;
+}
+
+// recheckApproved와 같은 판정·같은 순서·같은 호출(reason이 그 값). grew는 기술이 달라 곧바로 돌려주는 그 자리에서만, 이미 만든 두
+// 기술로 정한다(rowGrew — 페이지 코드를 부를 수 있는 조회를 더하지 않는다, #317). 안내 문구를 고르는 데만 쓰고, 판정·재시도 정책은 바꾸지 않는다.
+export function recheckApprovedDetail(
+  kind: TargetKind,
+  el: HTMLElement,
+  info: TargetInfo,
+  relation: Relation | null = null,
+  inFlight = false,
+  afterWrite = false,
+  item?: ItemBinding,
+): { reason: string | null; grew: boolean } {
+  if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return { reason: "대상이 페이지에서 사라짐", grew: false };
   const pinned = inFlight ? pinnedRowOf(el) : null;
   const now = fullInfo(kind, el, pinned, inFlight ? inFlightSubstitute(el, info, pinned) : undefined);
   const sameNow = inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info);
-  if (!sameNow) return describeDifference(info, now);
+  if (!sameNow) {
+    // 트리거 관계·항목 결합이 있는 대상(입력 칸에는 없음)은 보지 않는다.
+    return { reason: describeDifference(info, now), grew: rowGrew(info, now) && !relation && !item };
+  }
   const added = riskAdded(kind, el, info, afterWrite) ?? triggerRiskAdded(kind, relation, info);
-  if (added) return added;
+  if (added) return { reason: added, grew: false };
   const relationMoved = relationChanged(kind, el, relation);
-  if (relationMoved) return relationMoved;
+  if (relationMoved) return { reason: relationMoved, grew: false };
   const itemMoved = itemDifference(item, el);
-  if (itemMoved) return itemMoved;
-  if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";
-  return null;
+  if (itemMoved) return { reason: itemMoved, grew: false };
+  if (kind.requireVisible && !kind.visible(el)) return { reason: "대상이 화면에서 사라짐", grew: false };
+  return { reason: null, grew: false };
 }
 
 // 승인된 대상이 아직 같은지 실행 없이 확인만 한다(여러 칸을 채우기 전에 모두 확인).

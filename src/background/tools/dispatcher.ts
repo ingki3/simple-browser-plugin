@@ -47,7 +47,9 @@ import {
   type TurnTab,
 } from "./handlers";
 import { ClickAbortedError, settlePopups, watchNewTabs, watchWindowOpen } from "../popups";
-import { SCREEN_TEXT_NOTE, zeroDiagText, zeroMatchNote } from "@/lib/clickQuery";
+import { SCREEN_TEXT_NOTE, unrelatedDiagText, zeroDiagText, zeroMatchNote } from "@/lib/clickQuery";
+import { clickObservedChange } from "@/lib/hopGuard";
+import { describeBlockedClick, pressDelivered } from "@/lib/trustedClick";
 import { clickWithInput, PressedClickError, type InputClickResult, type InputSession } from "../trustedInput";
 import { runDownloads, type DownloadRunResult } from "./downloads";
 import { captureFullPage, captureTarget, captureVisible, type CaptureResult, type CaptureTarget } from "./capture";
@@ -102,6 +104,8 @@ export interface ToolExecResult {
   ok: boolean;
   summary: string;
   data: unknown;
+  // 실패 원인 코드(#318, 내부 전용 — 모델에 보내는 data·요약과 별개). 원인을 식별한 분기만 단다(지금은 실제 입력 클릭의 누른 뒤 실패).
+  failCode?: string;
 }
 
 const INFERRED_CHOICE = "이 선택지가 어느 칸의 목록인지는 화면 구조로 추정했습니다";
@@ -209,7 +213,8 @@ async function inspectTargets(
     // 원래 탭에서 찾은 id를 팝업 창에 쓰면(또는 반대) 그 문서에는 없는 id라 실패한다. 다른 문서의 id일 때만(#236 —
     // 팝업 안에서 찾은 대상이 바뀐 오류에는 붙이지 않는다) 어느 창인지 덧붙인다.
     if (followingPopup(turnTab) && err instanceof ContentError && err.code === "foreign_target") {
-      throw new Error(`${err.message} (지금 도구는 팝업 창에서 동작합니다. 다른 창이나 이전 페이지에서 찾은 id는 쓸 수 없습니다.)`);
+      // 원인 코드(foreign_target)는 같은 실패 반복 판정(#318)에 쓰므로 잃지 않게 같은 형으로 다시 던진다.
+      throw new ContentError(`${err.message} (지금 도구는 팝업 창에서 동작합니다. 다른 창이나 이전 페이지에서 찾은 id는 쓸 수 없습니다.)`, err.code);
     }
     throw err;
   }
@@ -924,14 +929,21 @@ async function clickTool(
     if (err instanceof PressedClickError) {
       const { effect } = await finishClick(turnTab, tabId, before, err.effectToken, newTabs, readOpens, clickedPopup, sourceWindowId);
       if (effect.dom) delete effect.dom.rebase;
+      // 가드가 막았는데 누르기(pointerdown·mousedown)는 이미 사이트에 전달됐고 관측 구간에 변화가 있었으면(#316 — 누를 때 목록을 여는
+      // 위젯) 실패와 구분해 알리고 다시 관측하라고 안내한다. 실패는 그대로 실패다(ok:false — 변화만으로 성공 판정하지 않음).
+      const delivered = !!err.blocked && pressDelivered(err.blocked.first) && clickObservedChange(effect);
+      const message = delivered && err.blocked ? describeBlockedClick(err.blocked.reason, err.blocked.first, { changed: true }) : err.message;
+      const head = delivered ? "클릭 미완료(누르기 전달·관측 구간 변화 — 다시 관측 필요)" : "클릭 실패";
       return {
         ok: false,
-        summary: `'${clip(err.text, 60) || "(글자 없음)"}' 클릭 실패: ${clip(err.message, 80)} · 그 사이 관측: ${describeEffect(effect)} · 실제 입력`,
+        ...(err.code ? { failCode: err.code } : {}),
+        summary: `'${clip(err.text, 60) || "(글자 없음)"}' ${head}: ${clip(message, 80)} · 그 사이 관측: ${describeEffect(effect)} · 실제 입력`,
         data: {
-          error: err.message,
+          error: message,
           text: err.text,
           href: err.href,
           effect,
+          ...(delivered ? { pressDelivered: true } : {}),
           ...(clickNoteNeeded(effect) ? { note: describeEffect(effect) } : {}),
         },
       };
@@ -1328,6 +1340,8 @@ async function runTool(
         ].filter(Boolean).join(" ") || "조건 없음",
       );
       const res = await callContentTool<FindClickablesResponse>(toolName, parsedArgs, callId, turnTab);
+      // 뺀 선택지의 이유별 수(#316 — 두 모드 공통, 수만). 모델 결과에는 넣지 않는다.
+      if (res.unrelatedDiag) debugLog("find_clickables:unrelated", unrelatedDiagText(res.unrelatedDiag));
       if (res.mode === "items") return itemsResult(res);
       const { items, unfiltered, unrelatedChoices } = res;
       const notes: string[] = [];
@@ -1376,7 +1390,7 @@ async function runTool(
     }
     case "google_sheets_write_range": {
       const args = parsedArgs as ToolArgs["google_sheets_write_range"];
-      const data = await writeRange(args.spreadsheetId, args.range, args.values);
+      const data = await writeRange(args.spreadsheetId, args.range, args.values, signal);
       return {
         ok: true,
         summary: `${args.range}에 ${data.updatedCells}개 셀 기록`,
@@ -1385,7 +1399,7 @@ async function runTool(
     }
     case "google_sheets_append_rows": {
       const args = parsedArgs as ToolArgs["google_sheets_append_rows"];
-      const data = await appendRows(args.spreadsheetId, args.range, args.values);
+      const data = await appendRows(args.spreadsheetId, args.range, args.values, signal);
       return {
         ok: true,
         summary: `${data.appendedRows}행 추가 (${data.updatedRange})`,
@@ -1395,7 +1409,7 @@ async function runTool(
     case "google_sheets_write_markdown_table": {
       const args = parsedArgs as ToolArgs["google_sheets_write_markdown_table"];
       const values = parseMarkdownTable(args.markdownTable);
-      const data = await writeRange(args.spreadsheetId, args.range, values);
+      const data = await writeRange(args.spreadsheetId, args.range, values, signal);
       return {
         ok: true,
         summary: `markdown 표 (${values.length}행) → ${args.range}, ${data.updatedCells}셀 기록`,

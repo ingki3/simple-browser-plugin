@@ -196,6 +196,74 @@ export function rowDriftDiag(before: TargetInfo, after: TargetInfo): string {
   return `${visible ? "visible" : "hidden-only"} len ${b.length}→${a.length}${digitsOnly ? " digits-only" : ""}`;
 }
 
+// 입력 도중 비교가 막혔을 때 그 차이가 "비교한 칸 자신은 그대로이고 행 글자만 더해짐"인지(#317 — 판정은 바꾸지 않고 안내만 고른다).
+// 이미 만든 두 기술만 본다(DOM 조회 없음). 낱말 순서 비교일 뿐 글자의 뜻은 보지 않는다.
+// - 행 문맥만 다르고 나머지 기본 항목(태그·역할·이름·주소·영역·칸 종류·민감·잘림 플래그·대리 라벨·상태)과 목록 순번이 같다.
+// - 모델용 행 문맥은 승인 때 낱말이 같은 순서로 남고 더해지기만 했으며 실제로 늘었다(숨은 글자만 는 것은 아님). 원문 행 글자는 요소 사이에
+//   공백이 없을 수 있어(textContent — 'Domain' + '형식 안내' → 'Domain형식 안내') 공백을 뺀 승인 때 글자가 같은 순서로 모두 남았는지만 본다.
+// - 양쪽 모두 모델용 문맥이 잘리지 않았다(잘린 뒤쪽 변화는 확인할 수 없다).
+// 빈 행 문맥은 기술에서 생략되므로 빈 글자로 본다.
+export function rowGrew(approved: TargetInfo, now: TargetInfo): boolean {
+  if (!onlyRowDiffers(approved, now)) return false;
+  if ((approved.list?.index ?? null) !== (now.list?.index ?? null)) return false;
+  if (approved.modelContextClipped || now.modelContextClipped) return false;
+  const rawBefore = approved.context ?? "";
+  const rawNow = now.context ?? "";
+  const modelBefore = approved.modelContext ?? "";
+  const modelNow = now.modelContext ?? "";
+  if (modelBefore === modelNow) return false;
+  return charsKept(rawBefore, rawNow) && onlyAdded(modelBefore, modelNow);
+}
+
+// before의 공백 아닌 글자가 after 안에 같은 순서로 모두 남았는지(글자가 끼워지기만 했는지).
+// 두 글자를 같은 단위(코드 포인트)로 본다(이모지 같은 서로게이트 쌍).
+function charsKept(before: string, after: string): boolean {
+  const want = Array.from(before.replace(/\s+/g, ""));
+  const have = Array.from(after.replace(/\s+/g, ""));
+  let i = 0;
+  for (const ch of have) {
+    if (i < want.length && ch === want[i]) i++;
+  }
+  return i === want.length;
+}
+
+// #317 안내 문구(고정 글 — 값·행 글자·이름·길이를 담지 않는다, #43). 실행 전 중단 문구는 "다시 찾으세요"를, 반영 확인 문구는
+// "확인하지 못했"를 담아 작업 기록 분류(src/lib/actionLog.ts reasonCode — target_changed·unverified)를 지금과 같게 둔다.
+// "그대로"라고 말하는 것은 실제로 비교한 칸 이름·종류뿐이다(입력 칸은 상태·표시를 비교하지 않는다).
+export const ROW_GREW_REASON = "이 칸이 든 행에 글자가 더해짐 — 비교한 칸 이름·종류는 그대로";
+
+// 글자 칸·select: input은 보냈고 change는 보내지 않음. 다시 채울지는 지침(입력 도중 멈춤 규칙)이 지금처럼 정한다 — 재시도를 새로 허용하지 않는다.
+export const ROW_GREW_INPUT =
+  "입력 중 이 칸이 든 행에 글자가 더해져(비교한 칸 이름·종류는 그대로 — 페이지가 입력에 반응해 안내 문구를 그렸을 수 있음) 변경 이벤트를 보내지 않았습니다. " +
+  "입력 이벤트는 보냈지만 값이 확정되지 않았을 수 있습니다. 다시 찾으세요: find_form_fields로 이 칸을 한 번 다시 찾아 의도한 행의 칸인지와 지금 상태를 " +
+  "확인한 뒤, 같은 묶음을 그대로 반복하지 말고 지침대로 필요한 칸만 다시 채우세요(확인할 수 없으면 사용자에게 알리세요).";
+
+// checkbox·radio: click 뒤(input 전) 막힘. 클릭은 이미 보냈으므로 다시 누르라고 하지 않는다.
+export const ROW_GREW_CLICK =
+  "누른 뒤 이 칸이 든 행에 글자가 더해져(비교한 칸 이름·종류는 그대로) 입력·변경 이벤트를 보내지 않았습니다. 클릭은 이미 보냈습니다. " +
+  "다시 찾으세요: find_form_fields로 다시 찾아 이 칸의 지금 체크 상태(checked)를 확인하고, 요청과 다르면 다시 누르지 말고 사용자에게 알리세요.";
+
+// checkbox·radio: input 뒤(change 전) 막힘.
+export const ROW_GREW_TOGGLE_INPUT =
+  "입력 중 이 칸이 든 행에 글자가 더해져(비교한 칸 이름·종류는 그대로) 변경 이벤트를 보내지 않았습니다. 클릭과 입력 이벤트는 이미 보냈습니다. " +
+  "다시 찾으세요: find_form_fields로 다시 찾아 이 칸의 지금 체크 상태(checked)를 확인하고, 요청과 다르면 다시 누르지 말고 사용자에게 알리세요.";
+
+// 같은 호출의 남은 칸(앞 칸이 위 셋 중 하나로 멈춤 — 이 칸에는 쓰지 않음).
+export const ROW_GREW_HALTED =
+  "앞 칸 입력 중 그 칸이 든 행에 글자가 더해져 이 칸은 채우지 않았습니다(이 칸에는 쓰지 않음). " +
+  "다시 찾으세요: find_form_fields로 다시 찾은 결과에서 의도한 행과 칸임을 확인한 뒤 지침대로 이어 채우세요.";
+
+// 묶음 뒤 칸의 쓰기 전 확인이 막힘(이 칸에는 쓰지 않음).
+export const ROW_GREW_PRE_WRITE =
+  "승인한 뒤 이 칸이 든 행에 글자가 더해져(비교한 칸 이름·종류는 그대로) 이 칸은 쓰지 않았습니다. " +
+  "다시 찾으세요: find_form_fields로 다시 찾은 결과에서 의도한 행과 칸임을 확인한 뒤 지침대로 이어 채우세요.";
+
+// guard 단계(click: checkbox·radio의 click 뒤, input: input 뒤)와 칸 종류로 막힌 까닭의 문구를 고른다.
+export function rowGrewGuardMessage(phase: "click" | "input", toggle: boolean): string {
+  if (phase === "click") return ROW_GREW_CLICK;
+  return toggle ? ROW_GREW_TOGGLE_INPUT : ROW_GREW_INPUT;
+}
+
 // 서로 다른 항목을 사람이 읽을 수 있게 하나 고른다(실패 메시지용 — 모델에도 간다).
 // 글자는 모델에 돌려준 이름(modelName)만 인용한다. 원문 이름에는 입력 칸·편집 영역의 글자가 섞일 수 있다.
 export function describeDifference(before: TargetInfo, after: TargetInfo): string {
@@ -270,7 +338,11 @@ export function clickCard(info: TargetInfo): { summary: string; details: string 
   const lines = [`대상: ${label} ${name}`, `위치: ${placeLine(info)}`];
   if (info.context && info.context !== info.name) lines.push(`행 내용: '${clip(info.context, 100)}'`);
   if (info.href) lines.push(`주소: ${clip(info.href, 300)}`);
-  if (info.trigger) lines.push(`열린 목록의 트리거: ${roleLabel(info.trigger)} '${clip(info.trigger.name, 60)}'`);
+  // 트리거 이름은 모델용 이름(modelName — 입력 칸 값 제외, #43). 원문 이름(name)은 이름 없는 입력 칸이면 값으로 대체된다(#316).
+  if (info.trigger) {
+    const tn = info.trigger.modelName ?? "";
+    lines.push(`열린 목록의 트리거: ${roleLabel(info.trigger)} ${tn ? `'${clip(tn, 60)}'` : "(이름 없음)"}`);
+  }
   // 체크 위젯(role=checkbox·switch·radio, menuitemcheckbox 등)은 지금 상태를 보여 준다(누르면 반대로 바뀐다).
   const checked = info.states?.checked;
   if (checked !== undefined) lines.push(`지금 상태: ${checked === "true" ? "체크됨" : checked === "mixed" ? "일부 체크" : "체크 안 됨"}`);

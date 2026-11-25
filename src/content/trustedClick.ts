@@ -9,6 +9,7 @@ import {
   type Point,
   type TrustedClickReport,
   type TrustedClickStatus,
+  type GuardBlockCode,
 } from "@/lib/trustedClick";
 import { isTag } from "./docs";
 import { expandedTriggers } from "./targets";
@@ -307,7 +308,7 @@ export function armTopGuard(
     if (guard.seen.length < 12) guard.seen.push(e.type);
     if (guard.status.status === "blocked") {
       // 누르기 전 확인·취소·만료로 이미 막힘이면 처음 온 입력을 첫 차단으로 기록한다.
-      noteBlock(guard.status.reason === "확인 시간이 지남" ? "만료" : e.type, before, e);
+      noteBlock(guard.status.code === "expired" ? "만료" : e.type, before, e);
       return block(e);
     }
     if (guard.status.status === "clicked") return;
@@ -315,40 +316,47 @@ export function armTopGuard(
     try {
       inspect(e, before);
     } catch {
-      guard.status = { status: "blocked", reason: "확인 중 오류" };
+      guard.status = { status: "blocked", reason: "확인 중 오류", code: "inspect_error" };
       noteBlock("확인 중 오류", before, e);
       block(e);
     }
   };
   const inspect = (e: Event, before: string[]) => {
-    const stop = (reason: string) => {
-      guard.status = { status: "blocked", reason };
+    const stop = (reason: string, code: GuardBlockCode) => {
+      guard.status = { status: "blocked", reason, code };
       noteBlock(e.type, before, e);
       block(e);
     };
-    if (Date.now() > guard.deadline) return stop("확인 시간이 지남");
+    if (Date.now() > guard.deadline) return stop("확인 시간이 지남", "expired");
     // 누르기 한 번(mousePressed·mouseReleased)이 만드는 이벤트만 받는다.
-    if (e.type === "auxclick" || e.type === "dblclick" || e.type === "contextmenu") return stop("예상하지 않은 입력");
+    if (e.type === "auxclick" || e.type === "dblclick" || e.type === "contextmenu") return stop("예상하지 않은 입력", "unexpected_input");
     const path = e.composedPath();
     const at = path.indexOf(el);
-    if (at < 0) return stop("다른 요소에 닿음");
+    if (at < 0) return stop("다른 요소에 닿음", "other_element");
     const chain = path.slice(0, at).filter((n): n is Element => n instanceof Element);
     const other = independentIn(chain, el);
-    if (other) return stop(`대상 안의 다른 ${other.tagName.toLowerCase()} 요소에 닿음`);
+    if (other) return stop(`대상 안의 다른 ${other.tagName.toLowerCase()} 요소에 닿음`, "inner_element");
     const phase: RecheckPhase = e.type === "click" ? "click" : e.type === "pointerdown" ? "down" : "up";
-    const verify = (): string | null => {
+    const verify = (): { reason: string; code: GuardBlockCode } | null => {
       // composedPath는 닫힌 shadow root 안을 감추므로, 입력 좌표에서 닫힌 root까지 따라 내려가 다시 본다.
       if (e instanceof MouseEvent) {
         const hit = checkPoint(el, { x: e.clientX, y: e.clientY });
-        if (!hit.ok) return hit.reason;
+        if (!hit.ok) return { reason: hit.reason, code: "point_off" };
       }
       // 단계마다 대상 기술 전체(주소·양식 관계·위험 신호 포함)를 다시 본다 — 앞 단계 처리기가 href·formaction 등을 바꿨으면
       // 막는다. pointerdown 뒤에는 화면 상태(펼침·눌림 등, 체크 제외)의 변화만 허용한다(clickables의 phaseInfo).
-      return recheck(phase);
+      const changed = recheck(phase);
+      return changed ? { reason: changed, code: "target_changed" } : null;
     };
     // click 단계는 브라우저가 먼저 바꾼 체크 상태(와 그에 따른 배치)를 승인 때로 되돌린 채 본다.
-    const changed = phase === "click" ? asApproved(verify) : verify();
-    if (changed) return stop(changed);
+    const out: { failed: { reason: string; code: GuardBlockCode } | null } = { failed: null };
+    const check = (): string | null => {
+      out.failed = verify();
+      return out.failed?.reason ?? null;
+    };
+    if (phase === "click") asApproved(check);
+    else check();
+    if (out.failed) return stop(out.failed.reason, out.failed.code);
     if (e.type === "click") {
       guard.status = { status: "clicked" };
       // 결과(status)는 백그라운드가 읽을 때까지 남기고 리스너만 뗀다.
@@ -365,7 +373,7 @@ export function armTopGuard(
     handler,
     GUARD_MS,
     () => {
-      if (guard.status.status === "none") guard.status = { status: "blocked", reason: "확인 시간이 지남" };
+      if (guard.status.status === "none") guard.status = { status: "blocked", reason: "확인 시간이 지남", code: "expired" };
     },
     [probeType],
   );
@@ -382,7 +390,7 @@ export function checkBeforePress(token: string): number {
   const guard = topGuards.get(token);
   if (!guard) throw new Error("누르기 전 확인 정보를 찾을 수 없음(문서가 바뀜)");
   const fail = (reason: string): never => {
-    guard.status = { status: "blocked", reason };
+    guard.status = { status: "blocked", reason, code: "pre_press" };
     throw new Error(reason);
   };
   if (guard.status.status !== "none") fail("이미 처리된 클릭");
@@ -432,7 +440,7 @@ export function guardResult(token: string): TrustedClickReport | null {
 // 누르지 않기로 했으면 막힘으로 바꾼다(늦게 도착한 입력도 막도록 가드는 만료까지 둔다).
 export function cancelGuard(token: string, reason: string): void {
   const guard = topGuards.get(token);
-  if (guard && guard.status.status === "none") guard.status = { status: "blocked", reason };
+  if (guard && guard.status.status === "none") guard.status = { status: "blocked", reason, code: "cancelled" };
 }
 
 // 다른 프레임 가드: 이 프레임으로 오는 실제 마우스 입력을 모두 막는다(대상은 top 문서에 있으므로).

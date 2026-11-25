@@ -325,6 +325,26 @@ test("Anthropic: 받은 블록 배열(anthropic.content)이 있으면 그 응답
   ]);
   assert.deepEqual(messages[1], { role: "assistant", content });
 });
+
+test("Anthropic 받은 블록 복원: tool_use id를 기록의 호출 id(순서대로)로 맞춘다(#318 — 겹친 id를 새로 준 경우)", () => {
+  const content = [
+    { type: "tool_use", id: "call_x", name: "click_element", input: { id: "c1" } },
+    { type: "tool_use", id: "call_x", name: "click_element", input: { id: "c2" } },
+  ];
+  const calls = [
+    { id: "call_x", type: "function", function: { name: "click_element", arguments: '{"id":"c1"}' } },
+    { id: "uuid-2", type: "function", function: { name: "click_element", arguments: '{"id":"c2"}' } },
+  ];
+  const { messages } = anthropicMessages([
+    { role: "user", content: "q" },
+    { role: "assistant", content: null, tool_calls: calls, reasoning_details: [{ type: "anthropic.content", content }] },
+    { role: "tool", tool_call_id: "call_x", name: "click_element", content: "{}" },
+    { role: "tool", tool_call_id: "uuid-2", name: "click_element", content: "{}" },
+  ]);
+  assert.deepEqual(messages[1].content.map((b) => b.id), ["call_x", "uuid-2"]);
+  assert.deepEqual(messages[1].content[1].input, { id: "c2" }, "다른 내용은 그대로");
+  assert.deepEqual(messages[2].content.map((b) => b.tool_use_id), ["call_x", "uuid-2"]);
+});
 import { candidateIdsOf, candidatesText } from "../src/lib/savedPages.ts";
 
 test("candidateIdsOf: 후보 데이터 글자에서 id를 읽는다", () => {

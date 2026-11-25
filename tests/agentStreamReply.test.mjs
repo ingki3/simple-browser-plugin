@@ -291,3 +291,44 @@ test("로컬: <think> 태그·reasoning_content를 생각으로, 갈라진 태�
   assert.equal(result.finishReason, "stop");
   assert.deepEqual(usage, { input: 3, output: 2 });
 });
+
+test("도구 호출 id: 한 응답 안에서 겹치면 뒤의 것에 새 id를 준다(#318 — 결과와 짝이 맞게)", () => {
+  withUuid(() => {
+    const { result } = run([
+      d({ tool_calls: [{ index: 0, id: "call_x", function: { name: "click_element", arguments: "{}" } }] }),
+      d({ tool_calls: [{ index: 1, id: "call_x", function: { name: "click_element", arguments: "{}" } }] }),
+      d({ tool_calls: [{ index: 2, id: "call_y", function: { name: "find_clickables", arguments: "{}" } }] }),
+    ]);
+    const ids = result.functionCalls.map((c) => c.id);
+    assert.equal(ids[0], "call_x");
+    assert.notEqual(ids[1], "call_x");
+    assert.equal(ids[2], "call_y");
+    assert.equal(new Set(ids).size, 3);
+  });
+});
+
+test("도구 호출 id: 겹친 영숫자 id는 같은 길이의 영숫자 새 id로(#318 — 정해진 길이만 받는 로컬 템플릿)", () => {
+  const { result } = run([
+    d({ tool_calls: [{ index: 0, id: "abc123XYZ", function: { name: "click_element", arguments: "{}" } }] }),
+    d({ tool_calls: [{ index: 1, id: "abc123XYZ", function: { name: "click_element", arguments: "{}" } }] }),
+  ]);
+  const [a, b] = result.functionCalls.map((c) => c.id);
+  assert.equal(a, "abc123XYZ");
+  assert.notEqual(b, a);
+  assert.match(b, /^[A-Za-z0-9]{9}$/);
+});
+
+test("도구 호출 id: 짧은 id를 다 써도 멈추지 않고, 아주 긴 id도 예외 없이 새 id를 준다(#318)", () => {
+  const many = Array.from({ length: 70 }, (_, index) => d({ tool_calls: [{ index, id: "a", function: { name: "describe_page", arguments: "{}" } }] }));
+  const ids = run(many).result.functionCalls.map((c) => c.id);
+  assert.equal(ids.length, 70);
+  assert.equal(new Set(ids).size, 70, "모두 다른 id");
+  const long = "x".repeat(70_000);
+  const two = run([
+    d({ tool_calls: [{ index: 0, id: long, function: { name: "describe_page", arguments: "{}" } }] }),
+    d({ tool_calls: [{ index: 1, id: long, function: { name: "describe_page", arguments: "{}" } }] }),
+  ]).result.functionCalls.map((c) => c.id);
+  assert.equal(two[0], long);
+  assert.notEqual(two[1], long);
+  assert.ok(two[1].length < 100);
+});

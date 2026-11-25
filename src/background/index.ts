@@ -47,12 +47,10 @@ import {
   telegramStartPairing,
   telegramStatus,
 } from "./telegram";
-import { kakaoClear, kakaoConnect, kakaoDisconnect, kakaoSaveKeys, kakaoStatus, kakaoTestSend } from "./kakao";
-import {
-  clearGoogleToken,
-  connectGoogle,
-  getGoogleConnectionState,
-} from "./google/auth";
+// 부수 효과 import: kakao.ts가 로드될 때 send_to_kakao의 보내기 함수를 등록한다(setKakaoSender). 설정 메시지 처리가
+// auth/settingsMessages.ts로 옮겨 가 이 파일은 kakao.ts의 이름을 쓰지 않지만, 등록이 다른 모듈의 import 사슬에 기대지 않게 여기서 직접 불러온다.
+import "./kakao";
+import { handleAuthSettingsMessage } from "./auth/settingsMessages";
 
 // 저장소(API 키·텔레그램 봇 토큰 등)는 확장의 화면·서비스 워커만 읽게 한다(content script는 저장소를 쓰지 않는다, #139).
 chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
@@ -85,13 +83,6 @@ let panelConnectSeq = 0;
 const parked = new ParkedConversations<ChatAgent>((a) => a.abort());
 // 백그라운드가 본 마지막 패널 끊김(다음 연결 때 port:prev_disconnect로 남긴다).
 let lastPanelClose: PanelClose | null = null;
-
-// 설정 페이지(옵션 페이지, 해시 제외 전체 URL)에서 보낸 메시지인지(#310 카카오 연결·시험 전송). 사이드 패널·웹 문서(content script)는 아니다.
-function fromOptionsPage(sender: chrome.runtime.MessageSender): boolean {
-  const page = chrome.runtime.getManifest().options_page;
-  if (sender.id !== chrome.runtime.id || !page || typeof sender.url !== "string") return false;
-  return sender.url.split("#")[0] === chrome.runtime.getURL(page);
-}
 
 // 확장 화면(패널)에서 연 연결인지(content script·웹 페이지의 연결은 sender.url이 웹 주소).
 function fromExtensionPage(port: chrome.runtime.Port): boolean {
@@ -605,39 +596,10 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     return true;
   }
 
-  // 카카오톡 나에게 보내기(#310, 설정 화면). 설정 페이지에서만 받는다(패널·content script 거절 — OAuth·전송 호출 없이).
-  // 키·시크릿·토큰·링크 주소는 돌려주지 않는다(허용한 상태 필드만).
-  if (
-    m.kind === "kakao_status" ||
-    m.kind === "kakao_save_keys" ||
-    m.kind === "kakao_connect" ||
-    m.kind === "kakao_disconnect" ||
-    m.kind === "kakao_clear" ||
-    m.kind === "kakao_test_send"
-  ) {
-    if (!fromOptionsPage(sender)) {
-      sendResponse({ ok: false, error: "허용되지 않은 요청" });
-      return false;
-    }
-    const p = msg as { restKey?: unknown; clientSecret?: unknown; linkUrl?: unknown };
-    const str = (v: unknown) => (typeof v === "string" ? v : "");
-    const job =
-      m.kind === "kakao_save_keys"
-        ? kakaoSaveKeys({ restKey: str(p.restKey), clientSecret: str(p.clientSecret), linkUrl: str(p.linkUrl) })
-        : m.kind === "kakao_connect"
-          ? kakaoConnect()
-          : m.kind === "kakao_disconnect"
-            ? kakaoDisconnect()
-            : m.kind === "kakao_clear"
-              ? kakaoClear()
-              : m.kind === "kakao_test_send"
-                ? kakaoTestSend()
-                : kakaoStatus();
-    job
-      .then((data) => sendResponse({ ok: true, data }))
-      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
-    return true;
-  }
+  // 인증 설정 메시지(#319 공용 인증 층 — 카카오톡 나에게 보내기 #310의 kakao_*, Google 연동의 google_*).
+  // kakao_*는 설정 페이지에서만 받는다.
+  const authHandled = handleAuthSettingsMessage(msg, sender, sendResponse);
+  if (authHandled !== undefined) return authHandled;
 
   // MCP 연동(#140, 설정 화면). 이 확장의 화면에서만 받는다. 비밀은 mcp_secret으로만 돌려준다(다리 설정에 넣어야 한다).
   if (m.kind === "mcp_status" || m.kind === "mcp_secret" || m.kind === "mcp_set" || m.kind === "mcp_regenerate") {
@@ -694,104 +656,6 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       .then((data) => sendResponse({ ok: true, data }))
       .catch((err: unknown) =>
         sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }),
-      );
-    return true;
-  }
-
-  if (m.kind === "google_connect") {
-    debugLog("google:connect:received");
-    // 클라이언트 ID 없이 빌드하면 identity 권한도 없다(정상) — 그때는 connectGoogle이 "직접 빌드 필요"를 알린다.
-    const hasClientId = !!(chrome.runtime.getManifest() as { oauth2?: { client_id?: string } }).oauth2?.client_id;
-    if (hasClientId && typeof chrome.identity === "undefined") {
-      const msg =
-        "chrome.identity API를 사용할 수 없습니다. 확장에 'identity' 권한이 적용되지 않았다는 뜻입니다. chrome://extensions 에서 이 확장을 '삭제' 후 다시 '압축해제된 확장 프로그램 로드'로 재설치해 주세요.";
-      debugLog("google:connect:no_identity", msg, "error");
-      sendResponse({ ok: false, error: msg });
-      return true;
-    }
-    connectGoogle()
-      .then(() => {
-        debugLog("google:connect:ok");
-        sendResponse({ ok: true });
-      })
-      .catch((err: unknown) => {
-        const e = err instanceof Error ? err.message : String(err);
-        debugLog("google:connect:error", e, "error");
-        sendResponse({ ok: false, error: e });
-      });
-    return true;
-  }
-
-  if (m.kind === "google_disconnect") {
-    clearGoogleToken()
-      .then(() => {
-        debugLog("google:disconnect:ok");
-        sendResponse({ ok: true });
-      })
-      .catch((err: unknown) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-    return true;
-  }
-
-  if (m.kind === "google_status") {
-    getGoogleConnectionState()
-      .then((state) => sendResponse({ ok: true, data: state }))
-      .catch((err: unknown) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-    return true;
-  }
-
-  if (m.kind === "google_diag") {
-    (async () => {
-      const mf = chrome.runtime.getManifest();
-      const state = await getGoogleConnectionState();
-      const hasIdentity = typeof chrome.identity !== "undefined";
-      let redirectUrl = "";
-      let identityCallError = "";
-      if (hasIdentity) {
-        try {
-          redirectUrl = chrome.identity.getRedirectURL();
-        } catch (err) {
-          identityCallError = err instanceof Error ? err.message : String(err);
-        }
-      }
-      const masked =
-        state.clientId.length > 18
-          ? state.clientId.slice(0, 8) + "…" + state.clientId.slice(-10)
-          : state.clientId;
-      const oauth2 = (mf as typeof mf & {
-        oauth2?: { client_id?: string; scopes?: string[] };
-      }).oauth2;
-      return {
-        extensionId: chrome.runtime.id,
-        extensionVersion: mf.version,
-        manifestPermissions: mf.permissions ?? [],
-        hostPermissions: mf.host_permissions ?? [],
-        manifestOauth2Present: !!oauth2,
-        manifestOauth2Scopes: oauth2?.scopes ?? [],
-        identityApiPresent: hasIdentity,
-        identityApiError: identityCallError,
-        redirectUrlFromIdentity: redirectUrl,
-        googleClientIdConfigured: state.configured,
-        googleClientIdPreview: masked || "(비어 있음)",
-        googleTokenCached: state.connected,
-        timestamp: new Date().toISOString(),
-      };
-    })()
-      .then((data) => sendResponse({ ok: true, data }))
-      .catch((err: unknown) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
       );
     return true;
   }

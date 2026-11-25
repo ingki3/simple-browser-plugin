@@ -18,6 +18,8 @@ function labelRecent(line: string): string {
 export function HopLimitCard({ callId, used, extra, summary, resolved, onApprove, onCancel }: Props) {
   const disabled = resolved !== null;
   const counts = summary.byTool.map((t) => `${toolLabel(t.tool)} ${t.count}`).join(" · ");
+  // 같은 호출이 거듭 실패한 묶음(#318): 도구 이름과 수만(인자·대상 글자 없음).
+  const repeated = (summary.repeatedFailures ?? []).map((t) => `${toolLabel(t.tool)} ${t.count}번`).join(" · ");
   const issues = [
     summary.failed ? `실패 ${summary.failed}` : "",
     summary.cancelled ? `취소 ${summary.cancelled}` : "",
@@ -34,6 +36,7 @@ export function HopLimitCard({ callId, used, extra, summary, resolved, onApprove
           {" "}{extra}단계 더 진행할까요?
         </div>
         {counts && <div className="hop-limit-counts">{counts}</div>}
+        {repeated && <div className="hop-limit-repeated">같은 호출 반복 실패: {repeated}</div>}
         {summary.recent.length > 0 && (
           <ul className="hop-limit-recent">
             {summary.recent.map((line, i) => (

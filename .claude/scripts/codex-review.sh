@@ -4,14 +4,53 @@
 # 이 기록이 있는 커밋에 대해서만 gh pr create / gh pr merge를 허용한다.
 #
 # 사용법: .claude/scripts/codex-review.sh [base-branch]   (기본 dev — 기능 브랜치는 dev로 PR한다)
+#         .claude/scripts/codex-review.sh [--spec <파일>] [base-branch]
+#   --spec <파일>(또는 CODEX_REVIEW_SPEC=<파일>)을 주면 그 파일(이슈의 `확정 사항`)을 프롬프트에 넣는다.
 # 종료 코드: 0 PASS · 1 CHANGES_REQUESTED · 3 리뷰 불가 상태 · 4 codex 실행 실패 · 5 판정 없음
 set -euo pipefail
 
-BASE="${1:-dev}"
+# 이슈의 `확정 사항`을 담은 파일(선택). `--spec <파일>` 또는 CODEX_REVIEW_SPEC로 주며, --spec이 우선한다.
+# 지정하면 프롬프트에 넣고 범위 밖 제안을 판정에서 뺀다. 둘 다 없으면 예전과 같다.
+SPEC_SET=0
+SPEC_FILE=""
+if [ -n "${CODEX_REVIEW_SPEC+x}" ]; then
+  SPEC_SET=1
+  SPEC_FILE="$CODEX_REVIEW_SPEC"
+fi
+BASE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --spec)
+      # 값이 없으면 빈 경로로 두어 아래에서 이전 PASS를 지운 뒤 멈추게 한다.
+      SPEC_SET=1
+      SPEC_FILE="${2:-}"
+      shift $(( $# < 2 ? 1 : 2 ))
+      ;;
+    *)
+      if [ -n "$BASE" ]; then
+        echo "base 브랜치는 하나만 줄 수 있습니다: $BASE, $1" >&2
+        exit 3
+      fi
+      BASE="$1"
+      shift
+      ;;
+  esac
+done
+BASE="${BASE:-dev}"
 MODEL="${CODEX_REVIEW_MODEL:-gpt-6.2-astra}"
 EFFORT="${CODEX_REVIEW_EFFORT:-high}"
 # 리뷰어 에이전트의 Bash 호출 제한(10분) 안에 끝나도록 9분으로 둔다.
 TIMEOUT_S="${CODEX_REVIEW_TIMEOUT:-540}"
+
+# 상대 경로는 호출한 위치 기준이므로 저장소 루트로 옮기기 전에 절대 경로로 바꿔 둔다.
+# 파일 검사는 이전 PASS 기록을 지운 뒤에 한다(아래 revoke_pass 다음). 확정 사항 파일은 저장소 밖에 둔다
+# (안에 두면 미커밋 변경으로 보여 리뷰가 시작되지 않는다).
+# PASS 기록은 "이 SHA가 리뷰를 통과했다"만 남기는 절차 가드이고 확정 사항 여부를 구분하지 않는다(기록 방식은
+# 바꾸지 않는다). 확정 사항 없이 받은 PASS는 [범위 밖] 면제가 없는 리뷰라 확정 사항을 준 리뷰보다 느슨하지 않으므로,
+# 확정 사항을 준 재리뷰가 잠금·미커밋 변경 등으로 시작 전에 멈췄을 때 같은 SHA의 이전 PASS가 남아도 허용한다.
+if [ -n "$SPEC_FILE" ] && [ "${SPEC_FILE#/}" = "$SPEC_FILE" ]; then
+  SPEC_FILE="$PWD/$SPEC_FILE"
+fi
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -113,10 +152,14 @@ src/sidepanel(React UI), src/lib(공용 타입·스키마).
 P2 이하로만 분류한다: 셸 접근 권한자의 의도적 우회, 다른 작업자의 동시 push로 인한 검사-실행 사이 경쟁,
 Claude Code 훅 실행기 자체의 장애·타임아웃. 에이전트가 평범하게 쓰는 명령에서 게이트가 잘못 열리거나
 정상 작업이 막히는 문제는 범위 안이다.
+EOF
 
+read -r -d '' PROMPT_SEVERITY <<'EOF' || true
 각 지적 사항은 [P0]~[P3] 심각도, 파일:줄, 실패 시나리오(어떤 입력/상태에서 어떻게 틀리는지)를 적는다.
 P0/P1은 머지를 막아야 하는 문제, P2/P3는 권고다.
+EOF
 
+read -r -d '' PROMPT_VERDICT <<'EOF' || true
 응답의 마지막 줄은 반드시 다음 중 정확히 하나로 끝낸다:
 VERDICT: PASS                (P0/P1이 하나도 없을 때)
 VERDICT: CHANGES_REQUESTED   (P0/P1이 하나라도 있을 때)
@@ -124,6 +167,7 @@ EOF
 
 PROMPT="${PROMPT//BASE_REF/$BASE_SHA}"
 PROMPT="${PROMPT//HEAD_REF/$HEAD_SHA}"
+PROMPT="$PROMPT"$'\n\n'"$PROMPT_SEVERITY"
 
 # 이 커밋의 이전 PASS 기록은 이번 리뷰 결과로 대체한다. 재리뷰가 실패하면 통과 상태가 남지 않는다.
 revoke_pass() {
@@ -133,6 +177,40 @@ revoke_pass() {
   fi
 }
 revoke_pass
+
+# 확정 사항 파일은 PASS 기록을 지운 뒤 검사한다. 지정했는데(빈 값 포함) 못 읽거나 비어 있으면
+# 명세 없이 리뷰하지 않고 리뷰 불가(3)로 멈춘다.
+# 내용은 치환·eval 없이 문자열 그대로 이어 붙인다(따옴표·줄바꿈·BASE_REF 같은 글자도 그대로 전달).
+# 심각도 형식 지시 뒤에 두어 [범위 밖] 규칙이 그 지시를 덮게 한다.
+if [ "$SPEC_SET" = 1 ]; then
+  if [ -z "$SPEC_FILE" ]; then
+    echo "확정 사항 파일 경로가 비어 있습니다(--spec 또는 CODEX_REVIEW_SPEC)." >&2
+    exit 3
+  fi
+  if [ ! -f "$SPEC_FILE" ] || [ ! -r "$SPEC_FILE" ]; then
+    echo "확정 사항 파일을 읽을 수 없습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
+  if ! SPEC_TEXT="$(cat -- "$SPEC_FILE")"; then
+    echo "확정 사항 파일을 읽다가 실패했습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
+  # 공백 아닌 글자가 하나라도 있는지만 본다(${var//...} 치환은 bash 3.2에서 긴 한글 글자에 매우 느리다).
+  if [[ ! "$SPEC_TEXT" =~ [^[:space:]] ]]; then
+    echo "확정 사항 파일이 비어 있습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
+  read -r -d '' SPEC_RULE <<'EOF' || true
+위 확정 사항은 관리자가 이 작업의 범위로 정한 고정 명세다. 판정 규칙(위 심각도 형식보다 우선한다):
+- 확정 사항 밖의 범위 확장 제안("X도 해야 한다", "이렇게 하면 더 낫다")은 [P0]~[P3]을 붙이지 않고 [범위 밖]으로 표시한다.
+  [범위 밖]은 P0/P1이 아니며 VERDICT에 영향을 주지 않는다(별도 이슈로 뺀다).
+- 정확성·보안·회귀 결함("이 경로에서 틀린다")은 확정 사항 안팎과 관계없이 원래 심각도로 분류한다. [범위 밖]으로 내리지 않는다.
+- VERDICT는 [범위 밖]을 빼고 P0/P1 결함만 세어 정한다.
+EOF
+  PROMPT="$PROMPT"$'\n\n## 확정 사항\n\n'"$SPEC_TEXT"$'\n\n'"$SPEC_RULE"
+  echo "[codex-review] 확정 사항 포함: $SPEC_FILE" >&2
+fi
+PROMPT="$PROMPT"$'\n\n'"$PROMPT_VERDICT"
 
 echo "[codex-review] $MODEL ($EFFORT) · $BASE..${HEAD_SHA:0:7} 리뷰 중…" >&2
 # `codex exec review --base`는 사용자 지침과 함께 쓸 수 없어서 일반 exec에 diff 범위를 지정한다.

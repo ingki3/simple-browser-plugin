@@ -78,8 +78,32 @@ export function clickPoints(rects: readonly Rect[], viewport: { width: number; h
 // 가드가 기록한 결과. clicked: 승인한 대상에 click까지 갔음. blocked: 가드가 막음(이유). none: 실제 입력이 오지 않음.
 export type TrustedClickStatus =
   | { status: "clicked" }
-  | { status: "blocked"; reason: string }
+  // code(#318): 막은 분기의 고정 값(같은 실패 반복 판정용 — 사유 글자에는 페이지 글자가 섞일 수 있어 따로 둔다).
+  | { status: "blocked"; reason: string; code?: GuardBlockCode }
   | { status: "none" };
+
+// 가드가 막은 분기(src/content/trustedClick.ts). 새 분기를 더하면 여기에도 더한다(없으면 같은 실패 반복 판정에서 빠진다).
+export type GuardBlockCode =
+  | "expired"
+  | "unexpected_input"
+  | "other_element"
+  | "inner_element"
+  | "point_off"
+  | "target_changed"
+  | "inspect_error"
+  | "pre_press"
+  | "cancelled";
+const GUARD_BLOCK_CODES: ReadonlySet<string> = new Set<GuardBlockCode>([
+  "expired",
+  "unexpected_input",
+  "other_element",
+  "inner_element",
+  "point_off",
+  "target_changed",
+  "inspect_error",
+  "pre_press",
+  "cancelled",
+]);
 
 // 백그라운드가 읽는 가드 기록: 결과와, 결과가 none일 때 원인을 좁히는 진단(이 문서가 받은 실제 입력 종류·화면 크기).
 export type TrustedClickReport = TrustedClickStatus & {
@@ -166,8 +190,51 @@ const PHASE_LABEL: Record<string, string> = {
   click: "클릭(click)",
 };
 
+// 실제 입력 클릭의 "누른 뒤 실패" 원인 코드(#318 같은 실패 반복 판정). 실패를 식별한 분기마다 고정 값.
+export type PressedFailCode =
+  | "press_send"
+  | "release_check"
+  | "document_changed"
+  | "release_send"
+  | "result_unknown"
+  | "not_delivered";
+
+// 첫 차단 기록의 이벤트 이름: 가드가 거는 실제 이벤트(GUARDED_EVENTS)와 가드가 스스로 적는 고정 표지(만료·확인 중 오류)만 구분해 남긴다.
+const BLOCK_EVENT_TOKEN: ReadonlyMap<string, string> = new Map<string, string>([
+  ...GUARDED_EVENTS.map((e) => [e, e] as [string, string]),
+  ["만료", "expiry"],
+  ["확인 중 오류", "inspect"],
+]);
+
+// 가드 차단의 원인 코드(#318): 막은 분기(code)·첫 차단 이벤트(알려진 이름만)·대상 연결·표시로만 정한다. 가드 사유 글자(페이지 글자가
+// 섞임)는 넣지 않는다. 분기를 모르면(분류하지 않은 분기·이전 content) null — 같은 실패 반복 판정에서 뺀다.
+export function blockedFailCode(code: unknown, first?: FirstBlock | null): string | null {
+  if (typeof code !== "string" || !GUARD_BLOCK_CODES.has(code)) return null;
+  if (!first) return `blocked:${code}:none`;
+  const phase = BLOCK_EVENT_TOKEN.get(first.event) ?? "other";
+  return `blocked:${code}:${phase}:${first.targetConnected ? "c" : "d"}:${first.targetShown ? "s" : "h"}`;
+}
+
+const PASSABLE = ["pointerdown", "mousedown", "pointerup", "mouseup"] as const;
+
+// 첫 차단 앞에 가드를 통과해 사이트에 전달된 누르기·떼기 입력(#316). 순서 유지·중복 제거. 이벤트 종류로만 정한다.
+export function passedPress(first?: FirstBlock | null): string[] {
+  if (!first) return [];
+  const out: string[] = [];
+  for (const e of first.seenBefore) if ((PASSABLE as readonly string[]).includes(e) && !out.includes(e)) out.push(e);
+  return out;
+}
+
+// 누르기(pointerdown·mousedown)가 사이트에 전달됐는지(#316).
+export function pressDelivered(first?: FirstBlock | null): boolean {
+  const passed = passedPress(first);
+  return passed.includes("pointerdown") || passed.includes("mousedown");
+}
+
 // 막힌 실제 입력 클릭의 모델 문구(#241). 구조로 확인한 사실과 고정 안내만 — 사이트 동작은 단정하지 않는다.
-export function describeBlockedClick(reason: string, first?: FirstBlock | null): string {
+// changed(#316): 관측 구간(누르기 직전부터)에 변화가 있었는지. 누르기가 전달됐고 변화가 있었으면 통과한 입력을 그대로 알리고
+// 같은 클릭을 되풀이하지 말고 다시 관측하라고 안내한다(가드는 그대로 막는다). 막은 이유는 reason 그대로.
+export function describeBlockedClick(reason: string, first?: FirstBlock | null, opts: { changed?: boolean } = {}): string {
   const facts: string[] = [];
   if (first) {
     const at = PHASE_LABEL[first.event];
@@ -175,8 +242,18 @@ export function describeBlockedClick(reason: string, first?: FirstBlock | null):
     if (!first.targetConnected) facts.push("누르기 도중 대상이 문서에서 떨어졌습니다");
     else if (!first.targetShown) facts.push("누르기 도중 대상이 화면에서 사라졌습니다(숨겨짐)");
   }
+  const head = `실제 입력 클릭을 도중에 막았습니다(${reason}).${facts.length ? ` ${facts.join(". ")}.` : ""}`;
+  if (opts.changed && pressDelivered(first)) {
+    // 막힌 단계는 앞의 사실 문장(“… 단계에서 막음”)이 알린다. 그 단계의 입력도 가드보다 먼저 건 페이지 리스너는 받았을 수 있다.
+    return (
+      head +
+      ` 가드를 통과해 사이트에 전달된 입력: ${passedPress(first).join(", ")}.` +
+      " 이 클릭의 관측 구간(누르기 직전부터)에 화면 변화가 있었습니다(effect). 누를 때 바로 동작하는 위젯(목록·메뉴 열기, 항목 고르기)이면 이미 반영됐을 수 있습니다." +
+      " 같은 클릭을 바로 되풀이하지 말고 find_clickables(또는 describe_page)로 지금 화면을 다시 관측하세요. 원하는 결과가 이미 있으면 다시 누르지 마세요."
+    );
+  }
   return (
-    `실제 입력 클릭을 도중에 막았습니다(${reason}).${facts.length ? ` ${facts.join(". ")}.` : ""}` +
+    head +
     " 클릭은 끝나지 않았지만 앞 단계의 페이지 처리는 이미 일어났을 수 있습니다." +
     " 함께 보낸 effect(이동·화면 변화·대화상자)와 지금 화면을 먼저 보고, 원하는 결과가 이미 있으면 다시 누르지 마세요. 끝나지 않았을 때만 다시 찾아 시도하세요."
   );
