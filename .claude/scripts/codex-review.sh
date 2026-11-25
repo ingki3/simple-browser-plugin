@@ -43,12 +43,26 @@ EFFORT="${CODEX_REVIEW_EFFORT:-high}"
 TIMEOUT_S="${CODEX_REVIEW_TIMEOUT:-540}"
 
 # 상대 경로는 호출한 위치 기준이므로 저장소 루트로 옮기기 전에 절대 경로로 바꿔 둔다.
-# 파일 검사는 이전 PASS 기록을 지운 뒤에 한다(아래 revoke_pass 다음).
+# 파일 검사는 이전 PASS 기록을 지운 뒤에 한다(아래 revoke_pass 다음). 확정 사항 파일은 저장소 밖에 둔다
+# (안에 두면 미커밋 변경으로 보여 리뷰가 시작되지 않는다).
 if [ -n "$SPEC_FILE" ] && [ "${SPEC_FILE#/}" = "$SPEC_FILE" ]; then
   SPEC_FILE="$PWD/$SPEC_FILE"
 fi
 
 cd "$(git rev-parse --show-toplevel)"
+
+# 리뷰 도중 브랜치가 바뀌어도 리뷰 범위와 기록 SHA가 어긋나지 않게 SHA로 고정한다.
+HEAD_SHA="$(git rev-parse HEAD)"
+GIT_DIR="$(git rev-parse --git-common-dir)"
+PASSED="$GIT_DIR/codex-review-passed"
+
+# 확정 사항을 주고 다시 리뷰하면, 아래 어느 단계에서 멈추든(미커밋 변경·잠금·파일 오류) 명세 없이 받은
+# 이전 PASS가 남지 않도록 시작하자마자 이 SHA의 기록을 지운다. 잠금 밖이라 동시에 끝난 다른 리뷰의
+# 기록이 지워질 수는 있으나, 그쪽은 다시 리뷰하면 되는 안전한 실패다. 미지정이면 예전과 같다.
+if [ "$SPEC_SET" = 1 ] && [ -f "$PASSED" ]; then
+  grep -vxF "$HEAD_SHA" "$PASSED" >"$PASSED.tmp.$$" || true
+  mv "$PASSED.tmp.$$" "$PASSED"
+fi
 
 # 리뷰한 내용과 기록되는 SHA가 일치하도록 커밋된 상태만 리뷰한다.
 if [ -n "$(git status --porcelain)" ]; then
@@ -56,11 +70,6 @@ if [ -n "$(git status --porcelain)" ]; then
   git status --short >&2
   exit 3
 fi
-
-# 리뷰 도중 브랜치가 바뀌어도 리뷰 범위와 기록 SHA가 어긋나지 않게 SHA로 고정한다.
-HEAD_SHA="$(git rev-parse HEAD)"
-GIT_DIR="$(git rev-parse --git-common-dir)"
-PASSED="$GIT_DIR/codex-review-passed"
 # 기능 PR은 원격 dev로 머지되므로 origin/dev 대비 전체 범위를 리뷰했을 때만 통과를 기록한다.
 # 로컬 dev에 미푸시 커밋이 있으면 그만큼 리뷰에서 빠지므로 로컬 브랜치를 기준으로 쓰지 않는다.
 RECORD=0
@@ -193,6 +202,11 @@ if [ "$SPEC_SET" = 1 ]; then
   fi
   if [ -z "${SPEC_TEXT//[[:space:]]/}" ]; then
     echo "확정 사항 파일이 비어 있습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
+  # 프롬프트는 codex의 명령행 인자 하나로 넘어가므로(Linux는 인자 하나에 128KiB 제한) 크기를 제한한다.
+  if [ "$(printf '%s' "$SPEC_TEXT" | wc -c)" -gt 65536 ]; then
+    echo "확정 사항 파일이 64KiB를 넘습니다. 핵심만 줄여 주세요: $SPEC_FILE" >&2
     exit 3
   fi
   read -r -d '' SPEC_RULE <<'EOF' || true
