@@ -16,19 +16,10 @@ TIMEOUT_S="${CODEX_REVIEW_TIMEOUT:-540}"
 # 이슈의 `확정 사항`을 담은 파일(선택). 지정하면 프롬프트에 넣고 범위 밖 제안을 판정에서 뺀다.
 SPEC_FILE="${CODEX_REVIEW_SPEC:-}"
 
-# 상대 경로가 호출한 위치 기준으로 풀리도록 저장소 루트로 옮기기 전에 읽는다.
-# 지정했는데 못 읽으면 확정 사항 없이 리뷰한 결과를 쓰게 되므로 멈춘다.
-SPEC_TEXT=""
-if [ -n "$SPEC_FILE" ]; then
-  if [ ! -f "$SPEC_FILE" ] || [ ! -r "$SPEC_FILE" ]; then
-    echo "CODEX_REVIEW_SPEC 파일을 읽을 수 없습니다: $SPEC_FILE" >&2
-    exit 3
-  fi
-  SPEC_TEXT="$(cat -- "$SPEC_FILE")"
-  if [ -z "${SPEC_TEXT//[[:space:]]/}" ]; then
-    echo "CODEX_REVIEW_SPEC 파일이 비어 있습니다: $SPEC_FILE" >&2
-    exit 3
-  fi
+# 상대 경로는 호출한 위치 기준이므로 저장소 루트로 옮기기 전에 절대 경로로 바꿔 둔다.
+# 파일 검사는 이전 PASS 기록을 지운 뒤에 한다(아래 revoke_pass 다음).
+if [ -n "$SPEC_FILE" ] && [ "${SPEC_FILE#/}" = "$SPEC_FILE" ]; then
+  SPEC_FILE="$PWD/$SPEC_FILE"
 fi
 
 cd "$(git rev-parse --show-toplevel)"
@@ -133,10 +124,12 @@ Claude Code 훅 실행기 자체의 장애·타임아웃. 에이전트가 평범
 정상 작업이 막히는 문제는 범위 안이다.
 EOF
 
-read -r -d '' PROMPT_TAIL <<'EOF' || true
+read -r -d '' PROMPT_SEVERITY <<'EOF' || true
 각 지적 사항은 [P0]~[P3] 심각도, 파일:줄, 실패 시나리오(어떤 입력/상태에서 어떻게 틀리는지)를 적는다.
 P0/P1은 머지를 막아야 하는 문제, P2/P3는 권고다.
+EOF
 
+read -r -d '' PROMPT_VERDICT <<'EOF' || true
 응답의 마지막 줄은 반드시 다음 중 정확히 하나로 끝낸다:
 VERDICT: PASS                (P0/P1이 하나도 없을 때)
 VERDICT: CHANGES_REQUESTED   (P0/P1이 하나라도 있을 때)
@@ -144,19 +137,7 @@ EOF
 
 PROMPT="${PROMPT//BASE_REF/$BASE_SHA}"
 PROMPT="${PROMPT//HEAD_REF/$HEAD_SHA}"
-
-# 확정 사항은 치환·eval 없이 문자열 그대로 이어 붙인다(따옴표·줄바꿈·BASE_REF 같은 글자도 그대로 전달).
-if [ -n "$SPEC_TEXT" ]; then
-  read -r -d '' SPEC_RULE <<'EOF' || true
-위 확정 사항은 관리자가 이 작업의 범위로 정한 고정 명세다. 판정 규칙:
-- 확정 사항 밖의 범위 확장 제안("X도 해야 한다", "이렇게 하면 더 낫다")은 [P0]~[P3] 대신 [범위 밖]으로 표시한다.
-  [범위 밖]은 P0/P1이 아니며 VERDICT에 영향을 주지 않는다(별도 이슈로 뺀다).
-- 정확성·보안·회귀 결함("이 경로에서 틀린다")은 확정 사항 안팎과 관계없이 원래 심각도로 분류한다. [범위 밖]으로 내리지 않는다.
-EOF
-  PROMPT="$PROMPT"$'\n\n## 확정 사항\n\n'"$SPEC_TEXT"$'\n\n'"$SPEC_RULE"
-  echo "[codex-review] 확정 사항 포함: $SPEC_FILE" >&2
-fi
-PROMPT="$PROMPT"$'\n\n'"$PROMPT_TAIL"
+PROMPT="$PROMPT"$'\n\n'"$PROMPT_SEVERITY"
 
 # 이 커밋의 이전 PASS 기록은 이번 리뷰 결과로 대체한다. 재리뷰가 실패하면 통과 상태가 남지 않는다.
 revoke_pass() {
@@ -166,6 +147,31 @@ revoke_pass() {
   fi
 }
 revoke_pass
+
+# 확정 사항 파일은 PASS 기록을 지운 뒤 검사한다. 지정했는데 못 읽거나 비어 있으면 명세 없이 리뷰하지 않고 멈춘다.
+# 내용은 치환·eval 없이 문자열 그대로 이어 붙인다(따옴표·줄바꿈·BASE_REF 같은 글자도 그대로 전달).
+# 심각도 형식 지시 뒤에 두어 [범위 밖] 규칙이 그 지시를 덮게 한다.
+if [ -n "$SPEC_FILE" ]; then
+  if [ ! -f "$SPEC_FILE" ] || [ ! -r "$SPEC_FILE" ]; then
+    echo "CODEX_REVIEW_SPEC 파일을 읽을 수 없습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
+  SPEC_TEXT="$(cat -- "$SPEC_FILE")"
+  if [ -z "${SPEC_TEXT//[[:space:]]/}" ]; then
+    echo "CODEX_REVIEW_SPEC 파일이 비어 있습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
+  read -r -d '' SPEC_RULE <<'EOF' || true
+위 확정 사항은 관리자가 이 작업의 범위로 정한 고정 명세다. 판정 규칙(위 심각도 형식보다 우선한다):
+- 확정 사항 밖의 범위 확장 제안("X도 해야 한다", "이렇게 하면 더 낫다")은 [P0]~[P3]을 붙이지 않고 [범위 밖]으로 표시한다.
+  [범위 밖]은 P0/P1이 아니며 VERDICT에 영향을 주지 않는다(별도 이슈로 뺀다).
+- 정확성·보안·회귀 결함("이 경로에서 틀린다")은 확정 사항 안팎과 관계없이 원래 심각도로 분류한다. [범위 밖]으로 내리지 않는다.
+- VERDICT는 [범위 밖]을 빼고 P0/P1 결함만 세어 정한다.
+EOF
+  PROMPT="$PROMPT"$'\n\n## 확정 사항\n\n'"$SPEC_TEXT"$'\n\n'"$SPEC_RULE"
+  echo "[codex-review] 확정 사항 포함: $SPEC_FILE" >&2
+fi
+PROMPT="$PROMPT"$'\n\n'"$PROMPT_VERDICT"
 
 echo "[codex-review] $MODEL ($EFFORT) · $BASE..${HEAD_SHA:0:7} 리뷰 중…" >&2
 # `codex exec review --base`는 사용자 지침과 함께 쓸 수 없어서 일반 exec에 diff 범위를 지정한다.
