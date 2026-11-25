@@ -1429,8 +1429,7 @@ export function recheckApproved(
 }
 
 // recheckApproved와 같은 판정·같은 순서·같은 호출(reason이 그 값). grew는 기술이 달라 곧바로 돌려주는 그 자리에서만, 이미 만든 두
-// 기술로 정한다(rowGrew — 페이지 코드를 부를 수 있는 조회를 더하지 않는다, #317). 안내 문구를 고르는 데만 쓴다. 제출 상태가 그대로인지는
-// 부르는 쪽(forms.ts guard)이 쓰기 직전에 떠 둔 양식 제출 상태와 비교해 따로 본다.
+// 기술로 정한다(rowGrew — 페이지 코드를 부를 수 있는 조회를 더하지 않는다, #317). 안내 문구를 고르는 데만 쓰고, 판정·재시도 정책은 바꾸지 않는다.
 export function recheckApprovedDetail(
   kind: TargetKind,
   el: HTMLElement,

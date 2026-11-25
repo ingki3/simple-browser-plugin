@@ -85,7 +85,19 @@ const finds = async (h) => (await toolMessages(h)).filter((m) => m.name === "fin
 const events = (h) => h.tab.evaluate(() => window.__ev);
 const resultsOf = (m) => m?.result?.results ?? [];
 const has = (r, s) => String(r?.note ?? "").includes(s);
-const show = (x) => JSON.stringify(x);
+// 실패 메시지용 요약: 칸 이름·문구·행 문맥·원문은 빼고 구조만(반영 여부·문구 종류·이벤트 수·키 목록) 남긴다(#43 — 되비친 값·페이지 글자를
+// 로그로 다시 내보내지 않게).
+const KINDS = { MSG_INPUT, MSG_CLICK, MSG_TOGGLE_INPUT, MSG_HALTED, MSG_PRE_WRITE, MSG_REASON, OLD_GUARD, OLD_HALTED };
+const noteKind = (n) => Object.entries(KINDS).filter(([, s]) => String(n ?? "").includes(s)).map(([k]) => k).join("+") || (n ? "other" : "none");
+const brief = (x) => {
+  if (Array.isArray(x)) return x.map(brief);
+  if (!x || typeof x !== "object") return x;
+  if ("applied" in x || "note" in x) return { applied: x.applied, note: noteKind(x.note), keys: Object.keys(x).filter((k) => !["id", "label", "note"].includes(k)) };
+  if ("input" in x && "change" in x) return x;
+  if (x.result !== undefined || x.raw !== undefined) return { error: !!x.error, results: brief(x.result?.results ?? []) };
+  return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, brief(v)]));
+};
+const show = (x) => JSON.stringify(brief(x));
 
 // 같은 값으로 셋을 한 호출에 채운다.
 const FILL3 = { fillMany: [{ label: "첫칸", value: "fake-a-317" }, { label: "Domain", value: "fake-b-317" }, { label: "Action", value: "fake-c-317" }] };
