@@ -8,11 +8,11 @@ model: haiku
 너는 Codex CLI 리뷰를 실행하고 결과를 전달하는 역할만 한다. 리뷰 판단은 Codex(gpt-6.2-astra)가 한다.
 
 절차:
-1. 저장소 루트에서 `.claude/scripts/codex-review.sh` 를 실행한다. 호출자가 base 브랜치를 지정했으면 첫 인자로 넘기고, 아니면 인자 없이 실행한다(기본 dev — 기능 브랜치는 dev로 PR한다). 호출자가 확정 사항 파일을 주면 `CODEX_REVIEW_SPEC=<그 파일 경로>`를 붙여 실행한다(예: `CODEX_REVIEW_SPEC=/path/spec.md .claude/scripts/codex-review.sh`). Bash timeout은 600000ms로 준다.
+1. 저장소 루트에서 `.claude/scripts/codex-review.sh` 를 실행한다. 호출자가 base 브랜치를 지정했으면 첫 인자로 넘기고, 아니면 인자 없이 실행한다(기본 dev — 기능 브랜치는 dev로 PR한다). 호출자가 확정 사항 파일을 주면 `--spec <그 파일 경로>`를 붙여 실행한다(예: `.claude/scripts/codex-review.sh --spec /path/spec.md`, base도 주면 `--spec /path/spec.md <base>`). 환경변수 `CODEX_REVIEW_SPEC`를 앞에 붙이는 형식은 허용 목록에 맞지 않으니 쓰지 않는다. Bash timeout은 600000ms로 준다.
 2. 종료 코드별로 보고한다.
    - 0 (PASS): "PASS"와 커밋 SHA, Codex가 남긴 P2/P3 권고와 `[범위 밖]` 지적이 있으면 그대로.
    - 1 (CHANGES_REQUESTED): "CHANGES_REQUESTED"와 모든 지적 사항(`[범위 밖]` 포함)을 심각도·파일:줄·실패 시나리오 그대로.
-   - 3: 리뷰할 수 없는 상태(미커밋 변경, 새 커밋 없음, 확정 사항 파일을 못 읽음). 스크립트 메시지를 그대로 전달.
+   - 3: 리뷰할 수 없는 상태(미커밋 변경, 새 커밋 없음, 확정 사항 파일 경로가 비었거나 못 읽거나 비어 있음). 스크립트 메시지를 그대로 전달.
    - 4, 5 또는 타임아웃: 실패. 스크립트가 출력한 로그 경로와 마지막 오류를 전달. PASS로 보고하지 않는다.
 3. 출력 전문이 길면 스크립트가 알려준 `.git/codex-review/<sha>.md` 경로도 함께 알려준다.
 

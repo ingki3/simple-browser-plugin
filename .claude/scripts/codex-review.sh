@@ -4,17 +4,46 @@
 # 이 기록이 있는 커밋에 대해서만 gh pr create / gh pr merge를 허용한다.
 #
 # 사용법: .claude/scripts/codex-review.sh [base-branch]   (기본 dev — 기능 브랜치는 dev로 PR한다)
-#   CODEX_REVIEW_SPEC=<파일> 을 주면 그 파일(이슈의 `확정 사항`)을 프롬프트에 넣는다.
+#         .claude/scripts/codex-review.sh [--spec <파일>] [base-branch]
+#   --spec <파일>(또는 CODEX_REVIEW_SPEC=<파일>)을 주면 그 파일(이슈의 `확정 사항`)을 프롬프트에 넣는다.
 # 종료 코드: 0 PASS · 1 CHANGES_REQUESTED · 3 리뷰 불가 상태 · 4 codex 실행 실패 · 5 판정 없음
 set -euo pipefail
 
-BASE="${1:-dev}"
+# 이슈의 `확정 사항`을 담은 파일(선택). `--spec <파일>` 또는 CODEX_REVIEW_SPEC로 주며, --spec이 우선한다.
+# 지정하면 프롬프트에 넣고 범위 밖 제안을 판정에서 뺀다. 둘 다 없으면 예전과 같다.
+SPEC_SET=0
+SPEC_FILE=""
+if [ -n "${CODEX_REVIEW_SPEC+x}" ]; then
+  SPEC_SET=1
+  SPEC_FILE="$CODEX_REVIEW_SPEC"
+fi
+BASE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --spec)
+      if [ $# -lt 2 ]; then
+        echo "--spec 다음에 확정 사항 파일 경로를 주세요." >&2
+        exit 3
+      fi
+      SPEC_SET=1
+      SPEC_FILE="$2"
+      shift 2
+      ;;
+    *)
+      if [ -n "$BASE" ]; then
+        echo "base 브랜치는 하나만 줄 수 있습니다: $BASE, $1" >&2
+        exit 3
+      fi
+      BASE="$1"
+      shift
+      ;;
+  esac
+done
+BASE="${BASE:-dev}"
 MODEL="${CODEX_REVIEW_MODEL:-gpt-6.2-astra}"
 EFFORT="${CODEX_REVIEW_EFFORT:-high}"
 # 리뷰어 에이전트의 Bash 호출 제한(10분) 안에 끝나도록 9분으로 둔다.
 TIMEOUT_S="${CODEX_REVIEW_TIMEOUT:-540}"
-# 이슈의 `확정 사항`을 담은 파일(선택). 지정하면 프롬프트에 넣고 범위 밖 제안을 판정에서 뺀다.
-SPEC_FILE="${CODEX_REVIEW_SPEC:-}"
 
 # 상대 경로는 호출한 위치 기준이므로 저장소 루트로 옮기기 전에 절대 경로로 바꿔 둔다.
 # 파일 검사는 이전 PASS 기록을 지운 뒤에 한다(아래 revoke_pass 다음).
@@ -148,17 +177,25 @@ revoke_pass() {
 }
 revoke_pass
 
-# 확정 사항 파일은 PASS 기록을 지운 뒤 검사한다. 지정했는데 못 읽거나 비어 있으면 명세 없이 리뷰하지 않고 멈춘다.
+# 확정 사항 파일은 PASS 기록을 지운 뒤 검사한다. 지정했는데(빈 값 포함) 못 읽거나 비어 있으면
+# 명세 없이 리뷰하지 않고 리뷰 불가(3)로 멈춘다.
 # 내용은 치환·eval 없이 문자열 그대로 이어 붙인다(따옴표·줄바꿈·BASE_REF 같은 글자도 그대로 전달).
 # 심각도 형식 지시 뒤에 두어 [범위 밖] 규칙이 그 지시를 덮게 한다.
-if [ -n "$SPEC_FILE" ]; then
-  if [ ! -f "$SPEC_FILE" ] || [ ! -r "$SPEC_FILE" ]; then
-    echo "CODEX_REVIEW_SPEC 파일을 읽을 수 없습니다: $SPEC_FILE" >&2
+if [ "$SPEC_SET" = 1 ]; then
+  if [ -z "$SPEC_FILE" ]; then
+    echo "확정 사항 파일 경로가 비어 있습니다(--spec 또는 CODEX_REVIEW_SPEC)." >&2
     exit 3
   fi
-  SPEC_TEXT="$(cat -- "$SPEC_FILE")"
+  if [ ! -f "$SPEC_FILE" ] || [ ! -r "$SPEC_FILE" ]; then
+    echo "확정 사항 파일을 읽을 수 없습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
+  if ! SPEC_TEXT="$(cat -- "$SPEC_FILE")"; then
+    echo "확정 사항 파일을 읽다가 실패했습니다: $SPEC_FILE" >&2
+    exit 3
+  fi
   if [ -z "${SPEC_TEXT//[[:space:]]/}" ]; then
-    echo "CODEX_REVIEW_SPEC 파일이 비어 있습니다: $SPEC_FILE" >&2
+    echo "확정 사항 파일이 비어 있습니다: $SPEC_FILE" >&2
     exit 3
   fi
   read -r -d '' SPEC_RULE <<'EOF' || true
