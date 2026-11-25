@@ -96,7 +96,7 @@ const FILL3T = { fillMany: [{ label: "Code", value: "fake-a-317" }, { label: "Do
 async function noValues(h) {
   (await fills(h)).forEach((m, i) => {
     expect(!/fake-[a-z]+-317/.test(m.raw), `채우기 결과 ${i + 1}번째에 넣은 값이 있음`);
-    expect(!/refillOnce|다시 채울 수 있습니다/.test(m.raw), `채우기 결과 ${i + 1}번째에 재시도 허용 표시가 있음`);
+    expect(!/refillOnce|"sent"|다시 채울 수 있습니다/.test(m.raw), `채우기 결과 ${i + 1}번째에 재시도 허용 표시가 있음`);
   });
 }
 
@@ -110,16 +110,16 @@ export default [
       const [f1, f2] = await fills(h);
       const [d1, d2] = await finds(h);
       const [ra, rb, rc] = resultsOf(f1);
-      expect(!ra.applied && has(ra, MSG_INPUT) && ra.refillOnce === undefined && ra.sent === "input" && !has(ra, OLD_GUARD), `첫 칸 안내(${show(ra)})`);
-      expect(has(rb, MSG_HALTED) && has(rc, MSG_HALTED) && !rb.sent && !rc.sent && !has(rb, OLD_HALTED), `남은 칸 안내(${show([rb, rc])})`);
+      expect(!ra.applied && has(ra, MSG_INPUT) && ra.refillOnce === undefined && !has(ra, OLD_GUARD), `첫 칸 안내(${show(ra)})`);
+      expect(has(rb, MSG_HALTED) && has(rc, MSG_HALTED) && !has(rb, OLD_HALTED), `남은 칸 안내(${show([rb, rc])})`);
       const ev = await events(h);
       expect(ev.a.input === 2 && ev.a.change === 1, `첫 칸 이벤트(${show(ev.a)})`);
       expect(ev.b.input === 0 && ev.c.input === 0, `남은 칸은 쓰지 않음(${show(ev)})`);
       // 0→63: 첫 찾기에서 첫 칸 context는 생략, 다시 찾으면 같은 id에 안내가 보인다.
       const a1 = d1.result.find((f) => f.label === "첫칸");
       const a2 = d2.result.find((f) => f.label === "첫칸");
-      expect(a1 && a1.id === a2?.id, `다시 찾아도 같은 id(${show([a1, a2])})`);
-      expect(!a1.context && String(a2.context ?? "").includes("영문 소문자"), `행 문맥 생략 → 안내(${show([a1, a2])})`);
+      expect(a1 && a1.id === a2?.id, `다시 찾아도 같은 id(${a1?.id} ${a2?.id})`);
+      expect(!a1.context && String(a2.context ?? "").includes("영문 소문자"), `행 문맥 생략 → 안내(있음 ${!!a1?.context}→${!!a2?.context}, 길이 ${String(a2?.context ?? "").length})`);
       expect(resultsOf(f2)[0]?.applied === true, `다시 채우기 통과(${show(f2)})`);
       // 작업 기록 분류는 지금과 같다(첫 채우기: 쓰기 전 중단으로 분류된 칸뿐 → aborted·target_changed).
       const log = await h.sw.evaluate(async () => ((await chrome.storage.local.get("actionLog")).actionLog ?? []).filter((e) => e.tool === "fill_form_fields"));
@@ -172,7 +172,7 @@ export default [
         await h.turn([findF, { fillMany: [{ label: "동의1", value: "true" }, { label: "메모", value: "fake-t-317" }] }, { text: "끝" }], { path: `/k?m=${m}` });
         const f1 = (await fills(h)).at(-1);
         const [rk, rt] = resultsOf(f1);
-        expect(!rk.applied && has(rk, MSG_CLICK) && !rk.refillOnce && rk.sent === "click", `${m}: click 단계 안내(${show(rk)})`);
+        expect(!rk.applied && has(rk, MSG_CLICK) && !rk.refillOnce, `${m}: click 단계 안내(${show(rk)})`);
         expect(has(rt, MSG_HALTED), `${m}: 남은 칸 안내(${show(rt)})`);
         const ev = await events(h);
         expect(ev.k1.click === 1 && ev.k1.input === 0 && ev.k1.change === 0 && ev.t.input === 0, `${m}: 이벤트(${show(ev)})`);
@@ -188,8 +188,8 @@ export default [
       await h.turn([findF, { fillMany: [{ label: "동의1", value: "true" }, { label: "메모", value: "fake-t-317" }] }, { text: "끝" }], { path: "/k?m=inputrevert" });
       const f1 = (await fills(h)).at(-1);
       const [rk, rt] = resultsOf(f1);
-      expect(!rk.applied && has(rk, MSG_TOGGLE_INPUT) && !rk.refillOnce && rk.sent === "click", `토글 input 단계 안내(${show(rk)})`);
-      expect(has(rt, MSG_HALTED) && !rt.refillOnce && !rt.sent, `뒤 칸 안내(${show(rt)})`);
+      expect(!rk.applied && has(rk, MSG_TOGGLE_INPUT) && !rk.refillOnce, `토글 input 단계 안내(${show(rk)})`);
+      expect(has(rt, MSG_HALTED) && !rt.refillOnce, `뒤 칸 안내(${show(rt)})`);
       const ev = await events(h);
       expect(ev.k1.click === 1 && ev.k1.input === 1 && ev.k1.change === 0 && ev.t.input === 0, `이벤트(${show(ev)})`);
     },
@@ -243,7 +243,7 @@ export default [
       let [ra, rb, rc] = resultsOf(f1);
       let ev = await events(h);
       expect(ra.applied === true, `첫 칸 통과(${show(ra)})`);
-      expect(!rb.applied && has(rb, MSG_PRE_WRITE) && !rb.refillOnce && !rb.sent && ev.b.input === 0, `둘째 쓰기 전 안내(${show({ rb, ev })})`);
+      expect(!rb.applied && has(rb, MSG_PRE_WRITE) && !rb.refillOnce && ev.b.input === 0, `둘째 쓰기 전 안내(${show({ rb, ev })})`);
       expect(rc.applied === true && ev.c.change === 1, `셋째 통과(${show({ rc, ev })})`);
       // R6b: 첫 칸 change 처리기가 둘째 칸 행의 안내와 양식 action을 함께 바꿈 → 둘째 칸 takeApproved가 지금처럼 위험 오류.
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=change-next-risk" });
@@ -264,7 +264,7 @@ export default [
       let f1 = (await fills(h)).at(-1);
       let [rb] = resultsOf(f1);
       let ev = await events(h);
-      expect(!rb.applied && has(rb, MSG_REASON) && /확인하지 못했습니다/.test(rb.note ?? "") && !rb.refillOnce && !rb.sent && !/한 번 다시 채울/.test(rb.note ?? ""), `R7 반영 확인 안내(${show(rb)})`);
+      expect(!rb.applied && has(rb, MSG_REASON) && /확인하지 못했습니다/.test(rb.note ?? "") && !rb.refillOnce && !/한 번 다시 채울/.test(rb.note ?? ""), `R7 반영 확인 안내(${show(rb)})`);
       expect(ev.b.change === 1, `R7 change는 보냄(${show(ev)})`);
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=hiddenonly" });
       f1 = (await fills(h)).at(-1);
