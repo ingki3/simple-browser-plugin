@@ -2,7 +2,7 @@
 // 결과(SHA-256)를 스냅숏으로 둔다 — 옮긴 뒤에도 한 글자도 같아야 한다. 문구를 일부러 고치면 이 값도 함께 고친다.
 // #297 2단계에서 pathHints 줄을 더해 system 스냅숏을 고쳤다(원격 안내·고정 문구는 그대로).
 // #310에서 send_to_kakao 지침 줄을 더해 system 스냅숏을 고쳤다(원격 안내·고정 문구는 그대로).
-// #317에서 6번 지침(입력 도중 멈춤)에 다시 관측한 뒤 같은 id 재채우기 한 문장을 더해 system 스냅숏을 고쳤다(원격 안내·고정 문구는 그대로).
+// #317에서 6번 지침(입력 도중 멈춤)에 sent: "input" 칸의 다시 관측한 뒤 같은 id 재채우기 한 문장과 도구 설명의 sent 한 줄을 더해 system 스냅숏을 고쳤다(원격 안내·고정 문구는 그대로).
 // isGoogleConfigured는 manifest의 oauth2.client_id와 chrome.identity를 보므로 chrome 전역 대역으로 Google 있음/없음을 고른다.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -21,14 +21,14 @@ const NAMED = { none: [], one: ["https://news.naver.com"], two: ["https://news.n
 const SITES = { none: [], one: ["https://example.com"], two: ["https://example.com", "https://shop.example.org"] };
 
 const SNAP = {
-  "system g=false q=false c=0": "c9aeec0e2503dccc9b09a242fa5dfc128bcd68ec202b62422c27cd8da0abc7aa",
-  "system g=false q=false c=1": "680fb46e6cf5968b09da250a21aa64ae1e0e976e9f3e9046eda94cb6987418c9",
-  "system g=false q=true c=0": "ec605f6f873e606aafbc150e5f11ed530d75738cb54ff52cbff4a70465bd10a7",
-  "system g=false q=true c=1": "c12bc4fd6e64bfd90c282cc3d74d850d75711770fc6d4b23698ca397a9e266dc",
-  "system g=true q=false c=0": "ffb77e328fddaba1e4a5ef542ee7a56ee002928006c52c6583128e7ec6783c5d",
-  "system g=true q=false c=1": "4c4af49790439893b91d7c7344f36ba36d014f5ceddae4f8aecb1af6fb5e6eea",
-  "system g=true q=true c=0": "90ecde225026ad1a186e12611dcac42b40182ba0f8e1657db4f64506ed7da010",
-  "system g=true q=true c=1": "17a2f430560d82a022baf927ff3c45a61d150dc193923e71465f8a5d0f0e3781",
+  "system g=false q=false c=0": "c117d5c3ea6df770a4c173cca59815aa777cb6f52d7ff65eefd064d1b4e07d7e",
+  "system g=false q=false c=1": "6952c8a33a88e57c81ad2dbb114755ff1020dd4e6b5a1e4050778ede3bb8632c",
+  "system g=false q=true c=0": "fbef72fa230df2e5359af3d5ef8b5b626d60c584c1f30540efeca0491885a748",
+  "system g=false q=true c=1": "ccb87e773c3bd1bf332d35fc8b2ce096edfce5bc15dea087261dcc0ec68bcdb6",
+  "system g=true q=false c=0": "6abac2e2d1ac0f2c92b9098b8f7c95a092d3e53ada7de1c35b2555ccfa1ba11d",
+  "system g=true q=false c=1": "0c5088745d10d3725dc5612c90f310739bcc617e3c0fec0b43f831b2132ca605",
+  "system g=true q=true c=0": "d41aaddc5f874029e8485822fd84069daff550e722d7e181b6ee0cde9e4e7ad3",
+  "system g=true q=true c=1": "faff51db65f6d01cdac6b1e00d9df498cba48aab11ee1e2f4e1aa346a68ed1f5",
   "remote panel named=none ask=false sites=none": "e9b5c931c33c7c34b03c3b973c16a2baa89ace5e0310f4cbbcc0c8bd686395d0",
   "remote panel named=none ask=false sites=one": "31abe1f780df0cb1ed0b5b5578a63bbf4136e788f51a15deda64587bd506836c",
   "remote panel named=none ask=false sites=two": "cce20de157c132ea5ee26da1ff7cae0cf6aaa591a8435d28c62089620cc9eaf4",
@@ -109,7 +109,7 @@ test("composeSystemPrompt: 빠르게 생각 켬·끔 × Google 있음·없음 ×
     }
   }
   // 하네스 진단(prompt-fingerprint.mjs "panel system 기본")과 같은 글이다.
-  assert.equal(SNAP["system g=false q=false c=0"], "c9aeec0e2503dccc9b09a242fa5dfc128bcd68ec202b62422c27cd8da0abc7aa");
+  assert.equal(SNAP["system g=false q=false c=0"], "c117d5c3ea6df770a4c173cca59815aa777cb6f52d7ff65eefd064d1b4e07d7e");
 });
 
 test("composeSystemPrompt: 입력 도중 멈춤 뒤 다시 관측해 확인하면 같은 id로 한 번 다시 채울 수 있다(#317 — 확인 못 하면 알림은 그대로)", () => {
@@ -117,6 +117,9 @@ test("composeSystemPrompt: 입력 도중 멈춤 뒤 다시 관측해 확인하�
   const s = P.composeSystemPrompt("");
   assert.ok(s.includes("확인할 수 없으면(글자 칸은 값 내용을 볼 수 없다) 다시 시도하지 않고 사용자에게 알린다."));
   assert.ok(s.includes("같은 칸에 같은 id를 돌려줘 앞 호출과 인자가 같아도 그 칸을 다시 채우는 한 번은 '같은 인자 재시도 금지'에 해당하지 않는다"));
+  // 그 명확화는 sent: "input"(글자 칸·선택 칸)에만, sent: "click"(checkbox·radio)은 다시 채우지 않는다.
+  assert.ok(s.includes('결과에서 그 칸이 sent: "input"(글자 칸·선택 칸'));
+  assert.ok(s.includes('sent: "click"인 칸(checkbox·radio — 클릭을 이미 보냄)은 다시 채우지 않고'));
 });
 
 test("composeSystemPrompt: Google 지침은 설정됐을 때만, 빠르게 생각은 Thought 규칙만 바꾼다", () => {

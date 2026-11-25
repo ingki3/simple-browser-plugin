@@ -1591,6 +1591,8 @@ export interface FillResult {
   note?: string;
   // 자동완성 칸이 입력 뒤 펼쳐져 있었는지(관측한 상태 — 선택 확정이 아니다).
   listOpened?: boolean;
+  // 입력 중 검사가 막은 칸에 그때까지 보낸 이벤트(#317 — 구조 사실): input(글자 칸·select, 변경 이벤트는 안 보냄)·click(checkbox·radio).
+  sent?: "input" | "click";
 }
 
 // 페이지가 값을 고치거나 되돌리는 처리(마이크로태스크·타이머·다시 그리기)가 끝날 틈을 준 뒤 최종 값을 본다.
@@ -1801,15 +1803,20 @@ export async function fillFormFields(
     // 자동 로그인 경로(extraGuard — find_form_fields 안내가 맞지 않음)는 지금 문구.
     const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
     let guardGrew = false;
+    // guard가 막았는지(그때 이미 보낸 이벤트를 결과에 구조로 적는다 — 아래 sent).
+    let guardBlocked = false;
     const guard = (phase: "click" | "input"): string | null => {
       const detail = recheckApprovedDetail(FIELD_KIND, el, info, null, true);
       const reason = detail.reason;
       if (reason) {
         const grew = detail.grew && !extraGuard;
         guardGrew = grew;
+        guardBlocked = true;
         return grew ? rowGrewGuardMessage(phase, toggle) : `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${reason}). 다시 찾으세요.`;
       }
-      return driftReason();
+      const drift = driftReason();
+      if (drift) guardBlocked = true;
+      return drift;
     };
     let filled: boolean;
     touched = true;
@@ -1835,7 +1842,15 @@ export async function fillFormFields(
       );
     } catch (err) {
       if (!(err instanceof ChangeBlocked)) throw err;
-      results.push({ id: f.id, label, applied: false, note: err.message });
+      // sent(#317): guard가 막았으면 그 칸에 이미 보낸 이벤트. 글자 칸·select는 "input"(입력 이벤트만, 변경 이벤트는 안 보냄), checkbox·radio는
+      // "click"(클릭을 이미 보냄). 사실만 적는다 — 다시 채울지는 모델 지침 6번이 정한다("click" 칸은 다시 채우지 않음).
+      results.push({
+        id: f.id,
+        label,
+        applied: false,
+        note: err.message,
+        ...(guardBlocked ? { sent: toggle ? ("click" as const) : ("input" as const) } : {}),
+      });
       halted = true;
       haltedGrew = guardGrew;
       continue;

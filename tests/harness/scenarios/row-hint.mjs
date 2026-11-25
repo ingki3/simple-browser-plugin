@@ -110,8 +110,8 @@ export default [
       const [f1, f2] = await fills(h);
       const [d1, d2] = await finds(h);
       const [ra, rb, rc] = resultsOf(f1);
-      expect(!ra.applied && has(ra, MSG_INPUT) && ra.refillOnce === undefined && !has(ra, OLD_GUARD), `첫 칸 안내(${show(ra)})`);
-      expect(has(rb, MSG_HALTED) && has(rc, MSG_HALTED) && !rb.refillOnce && !has(rb, OLD_HALTED), `남은 칸 안내(${show([rb, rc])})`);
+      expect(!ra.applied && has(ra, MSG_INPUT) && ra.refillOnce === undefined && ra.sent === "input" && !has(ra, OLD_GUARD), `첫 칸 안내(${show(ra)})`);
+      expect(has(rb, MSG_HALTED) && has(rc, MSG_HALTED) && !rb.sent && !rc.sent && !has(rb, OLD_HALTED), `남은 칸 안내(${show([rb, rc])})`);
       const ev = await events(h);
       expect(ev.a.input === 2 && ev.a.change === 1, `첫 칸 이벤트(${show(ev.a)})`);
       expect(ev.b.input === 0 && ev.c.input === 0, `남은 칸은 쓰지 않음(${show(ev)})`);
@@ -156,7 +156,7 @@ export default [
       const [ra, rb, rc] = resultsOf(f1);
       // 모델에 간 글에는 ok가 없다 — 백그라운드가 남긴 도구 결과 줄(패널의 tool_result.ok와 같은 값)로 호출 전체의 성공을 본다.
       const line = resultLog(r, "fill_form_fields");
-      expect(line.includes("fill_form_fields ok") && !f1.error, `호출은 성공(${line} ${show(f1)})`);
+      expect(line.includes("fill_form_fields ok") && !f1.error, `호출은 성공(${line})`);
       expect(ra.applied === true && !ra.refillOnce, `첫 칸 통과(${show(ra)})`);
       expect(!rb.applied && has(rb, MSG_INPUT), `둘째 안내(${show(rb)})`);
       expect(has(rc, MSG_HALTED), `셋째 남은 칸 안내(${show(rc)})`);
@@ -172,7 +172,7 @@ export default [
         await h.turn([findF, { fillMany: [{ label: "동의1", value: "true" }, { label: "메모", value: "fake-t-317" }] }, { text: "끝" }], { path: `/k?m=${m}` });
         const f1 = (await fills(h)).at(-1);
         const [rk, rt] = resultsOf(f1);
-        expect(!rk.applied && has(rk, MSG_CLICK) && !rk.refillOnce, `${m}: click 단계 안내(${show(rk)})`);
+        expect(!rk.applied && has(rk, MSG_CLICK) && !rk.refillOnce && rk.sent === "click", `${m}: click 단계 안내(${show(rk)})`);
         expect(has(rt, MSG_HALTED), `${m}: 남은 칸 안내(${show(rt)})`);
         const ev = await events(h);
         expect(ev.k1.click === 1 && ev.k1.input === 0 && ev.k1.change === 0 && ev.t.input === 0, `${m}: 이벤트(${show(ev)})`);
@@ -188,8 +188,8 @@ export default [
       await h.turn([findF, { fillMany: [{ label: "동의1", value: "true" }, { label: "메모", value: "fake-t-317" }] }, { text: "끝" }], { path: "/k?m=inputrevert" });
       const f1 = (await fills(h)).at(-1);
       const [rk, rt] = resultsOf(f1);
-      expect(!rk.applied && has(rk, MSG_TOGGLE_INPUT) && !rk.refillOnce, `토글 input 단계 안내(${show(rk)})`);
-      expect(has(rt, MSG_HALTED) && !rt.refillOnce, `뒤 칸 안내(${show(rt)})`);
+      expect(!rk.applied && has(rk, MSG_TOGGLE_INPUT) && !rk.refillOnce && rk.sent === "click", `토글 input 단계 안내(${show(rk)})`);
+      expect(has(rt, MSG_HALTED) && !rt.refillOnce && !rt.sent, `뒤 칸 안내(${show(rt)})`);
       const ev = await events(h);
       expect(ev.k1.click === 1 && ev.k1.input === 1 && ev.k1.change === 0 && ev.t.input === 0, `이벤트(${show(ev)})`);
     },
@@ -243,7 +243,7 @@ export default [
       let [ra, rb, rc] = resultsOf(f1);
       let ev = await events(h);
       expect(ra.applied === true, `첫 칸 통과(${show(ra)})`);
-      expect(!rb.applied && has(rb, MSG_PRE_WRITE) && !rb.refillOnce && ev.b.input === 0, `둘째 쓰기 전 안내(${show({ rb, ev })})`);
+      expect(!rb.applied && has(rb, MSG_PRE_WRITE) && !rb.refillOnce && !rb.sent && ev.b.input === 0, `둘째 쓰기 전 안내(${show({ rb, ev })})`);
       expect(rc.applied === true && ev.c.change === 1, `셋째 통과(${show({ rc, ev })})`);
       // R6b: 첫 칸 change 처리기가 둘째 칸 행의 안내와 양식 action을 함께 바꿈 → 둘째 칸 takeApproved가 지금처럼 위험 오류.
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=change-next-risk" });
@@ -264,7 +264,7 @@ export default [
       let f1 = (await fills(h)).at(-1);
       let [rb] = resultsOf(f1);
       let ev = await events(h);
-      expect(!rb.applied && has(rb, MSG_REASON) && /확인하지 못했습니다/.test(rb.note ?? "") && !rb.refillOnce && !/한 번 다시 채울/.test(rb.note ?? ""), `R7 반영 확인 안내(${show(rb)})`);
+      expect(!rb.applied && has(rb, MSG_REASON) && /확인하지 못했습니다/.test(rb.note ?? "") && !rb.refillOnce && !rb.sent && !/한 번 다시 채울/.test(rb.note ?? ""), `R7 반영 확인 안내(${show(rb)})`);
       expect(ev.b.change === 1, `R7 change는 보냄(${show(ev)})`);
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=hiddenonly" });
       f1 = (await fills(h)).at(-1);
@@ -305,7 +305,8 @@ export default [
       await h.settings({ autoApprove: true });
       await h.turn([findF, FILL3, { text: "끝" }], { path: "/r?m=echo" });
       const f1 = (await fills(h)).at(-1);
-      expect(has(resultsOf(f1)[0], MSG_INPUT), `안내 문구(${show(f1)})`);
+      // 실패 메시지에 결과를 넣지 않는다(되비친 값이 섞였을 수 있다, #43).
+      expect(has(resultsOf(f1)[0], MSG_INPUT), "R9 안내 문구가 없음");
       await noValues(h);
     },
   },
