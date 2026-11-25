@@ -195,7 +195,8 @@ if [ "$SPEC_SET" = 1 ]; then
     echo "확정 사항 파일을 읽다가 실패했습니다: $SPEC_FILE" >&2
     exit 3
   fi
-  if [ -z "${SPEC_TEXT//[[:space:]]/}" ]; then
+  # 공백 아닌 글자가 하나라도 있는지만 본다(${var//...} 치환은 bash 3.2에서 긴 한글 글자에 매우 느리다).
+  if [[ ! "$SPEC_TEXT" =~ [^[:space:]] ]]; then
     echo "확정 사항 파일이 비어 있습니다: $SPEC_FILE" >&2
     exit 3
   fi
