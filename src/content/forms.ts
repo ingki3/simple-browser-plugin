@@ -13,12 +13,20 @@ import {
 } from "@/lib/autoApprove";
 import { choiceState, sameChoiceState, type ChoiceState } from "./choiceState";
 import { closestAcross, eventParent, formlessScopes, inPaymentContext, nestedContainerScan } from "./context";
-import { parseCheckedRequest, type TargetInfo } from "@/lib/actionTarget";
+import {
+  ROW_GREW_HALTED,
+  ROW_GREW_PRE_WRITE,
+  ROW_GREW_REASON,
+  parseCheckedRequest,
+  rowGrewGuardMessage,
+  type TargetInfo,
+} from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isTag } from "./docs";
 import { clickRiskOf } from "./clickables";
 import { inProtectedArea, modelName, modelNameInfo, optionHidden, selectProxyOf, subtreeTextInfo } from "./modelText";
 import {
   RiskAddedError,
+  RowGrewError,
   expandedTriggers,
   isAutocompleteField,
   otherOpenList,
@@ -27,7 +35,7 @@ import {
   noteChosenOption,
   noteWritten,
   peekApproved,
-  recheckApproved,
+  recheckApprovedDetail,
   registerTarget,
   registeredInfo,
   scanTargets,
@@ -1438,9 +1446,12 @@ export function setNativeProperty(el: Element, prop: "value" | "checked" | "sele
 // input 처리기가 돈 뒤 change를 보내기 전에 막혔다는 표시(이유가 메시지).
 class ChangeBlocked extends Error {}
 
-function dispatchChange(el: Element, guard?: () => string | null): void {
+// guard 단계: click(checkbox·radio의 click 처리기 뒤, input 전)·input(input 처리기 뒤, change 전). 막힌 까닭의 안내 문구만 단계로 고른다(#317).
+type Guard = (phase: "click" | "input") => string | null;
+
+function dispatchChange(el: Element, guard?: Guard): void {
   el.dispatchEvent(new Event("input", { bubbles: true }));
-  const blocked = guard?.();
+  const blocked = guard?.("input");
   if (blocked) throw new ChangeBlocked(blocked);
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
@@ -1460,7 +1471,7 @@ function dispatchChange(el: Element, guard?: () => string | null): void {
 // click 처리기가 한 일(요청·이동)은 막을 수 없어, 승인 판정에 같은 칸을 누를 때의 위험 신호를 넣는다(toggleClickRisk).
 // 한계: MouseEvent가 아니라 좌표·button 값이 없다. 그런 값을 요구하는 처리기는 반응하지 않을 수 있다(그때는 예전처럼
 // 상태와 input·change만 반영된다).
-function clickToggle(el: HTMLInputElement, want: boolean, guard?: () => string | null, onWritten?: () => void): void {
+function clickToggle(el: HTMLInputElement, want: boolean, guard?: Guard, onWritten?: () => void): void {
   const was = el.checked;
   // radio를 체크하면 같은 묶음의 다른 칸이 풀리므로, 취소되면 되살릴 칸을 먼저 기억한다.
   const prevRadio = el.type === "radio" && !was ? checkedInGroup(el) : null;
@@ -1473,7 +1484,7 @@ function clickToggle(el: HTMLInputElement, want: boolean, guard?: () => string |
     if (prevRadio) setNativeProperty(prevRadio, "checked", true);
     return;
   }
-  const blocked = guard?.();
+  const blocked = guard?.("click");
   if (blocked) throw new ChangeBlocked(blocked);
   dispatchChange(el, guard);
 }
@@ -1513,7 +1524,7 @@ function fillOne(
   el: FieldElement,
   value: string,
   onSet?: (actual: string) => void,
-  guard?: () => string | null,
+  guard?: Guard,
   onWritten?: () => void,
 ): boolean {
   if (isTag(el, "select")) {
@@ -1608,13 +1619,20 @@ export async function fillFormFields(
   // 한 칸이 승인 뒤 위험 변화(제출 주소·이름·개인정보)로 막히면 남은 칸도 채우지 않는다
   // (앞 칸의 처리기가 뒤 칸을 바꿔 둔 것일 수 있다).
   let halted = false;
+  // 멈춘 까닭이 "앞 칸의 행 글자만 더해짐"(#317)이면 남은 칸 안내를 그것에 맞춘다(멈추는 동작은 같다).
+  let haltedGrew = false;
   // 이 묶음에서 칸에 쓰기를 시작했는지(그 뒤의 칸은 입력 도중의 비교로 확인한다).
   let touched = false;
   // 이 호출에서 자동완성 칸을 썼는지(그 뒤 칸은 쓰지 않는다).
   let autocompleteWritten = false;
   for (const f of args.fills) {
     if (halted) {
-      results.push({ id: f.id, label: "", applied: false, note: "앞 칸에서 위험 변화가 보여 채우지 않았습니다. 다시 찾으세요." });
+      results.push({
+        id: f.id,
+        label: "",
+        applied: false,
+        note: haltedGrew ? ROW_GREW_HALTED : "앞 칸에서 위험 변화가 보여 채우지 않았습니다. 다시 찾으세요.",
+      });
       continue;
     }
     if (opts.autocompleteOrder) {
@@ -1657,7 +1675,9 @@ export async function fillFormFields(
       // 바뀐 것 허용)를 쓴다 — 같은 행의 앞 칸 입력 처리기가 행 안의 숨은 안내 글을 보이게 하는 경우.
       ({ el, info } = takeApproved(f.id, callId, FIELD_KIND.prefix, touched));
     } catch (err) {
-      results.push({ id: f.id, label: "", applied: false, note: err instanceof Error ? err.message : String(err) });
+      // 묶음 뒤 칸이 쓰기 전에 막혔고 그 차이가 행 글자 더해짐뿐이면(위험 아님) 그렇게 알린다(#317 — 그 칸만 건너뛰는 흐름은 같다).
+      const note = err instanceof RowGrewError ? ROW_GREW_PRE_WRITE : err instanceof Error ? err.message : String(err);
+      results.push({ id: f.id, label: "", applied: false, note });
       // 대상이 사라진 것이 아니라 위험이 생긴 것(riskAdded)이면 남은 칸도 멈춘다.
       if (err instanceof RiskAddedError) halted = true;
       continue;
@@ -1775,9 +1795,20 @@ export async function fillFormFields(
     // change를 보내기 전 재검사에서 이 칸 자신이 쓴 값이 '승인 뒤 채워진 개인정보'로 보이지 않게 먼저 기록한다.
     noteWritten(callId, el, expectedSig ?? intended);
     // input 처리기가 action·숨은 값·대상을 바꿨으면 change(제출로 이어질 수 있다)를 보내지 않는다.
-    const guard = (): string | null => {
-      const changed = recheckApproved(FIELD_KIND, el, info, null, true);
-      if (changed) return `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${changed}). 다시 찾으세요.`;
+    // 판정·순서·호출은 지금과 같다(재검사가 다르면 곧바로 막고, 같으면 driftReason). 막힌 까닭이 "비교한 칸 이름·종류는 그대로이고 행 글자만
+    // 더해짐"(rowGrew — 이미 만든 기술만 봄)이면 문구만 그 까닭과 다시 찾을 칸을 알리는 안내로 바꾼다(#317). 다시 채울지는 모델 지침 6번이
+    // 지금처럼 정한다(재시도를 새로 허용하지 않는다). checkbox·radio는 클릭을 이미 보냈으므로 다시 누르라고 하지 않는다.
+    // 자동 로그인 경로(extraGuard — find_form_fields 안내가 맞지 않음)는 지금 문구.
+    const toggle = info.fieldType === "checkbox" || info.fieldType === "radio";
+    let guardGrew = false;
+    const guard = (phase: "click" | "input"): string | null => {
+      const detail = recheckApprovedDetail(FIELD_KIND, el, info, null, true);
+      const reason = detail.reason;
+      if (reason) {
+        const grew = detail.grew && !extraGuard;
+        guardGrew = grew;
+        return grew ? rowGrewGuardMessage(phase, toggle) : `입력 중 칸이 바뀌어 변경 이벤트를 보내지 않았습니다(${reason}). 다시 찾으세요.`;
+      }
       return driftReason();
     };
     let filled: boolean;
@@ -1806,6 +1837,7 @@ export async function fillFormFields(
       if (!(err instanceof ChangeBlocked)) throw err;
       results.push({ id: f.id, label, applied: false, note: err.message });
       halted = true;
+      haltedGrew = guardGrew;
       continue;
     }
 
@@ -1838,7 +1870,9 @@ export async function fillFormFields(
     }
     // 같은 칸 노드가 다른 행에 다시 쓰였으면 값이 남아 있어도 승인한 칸에 들어간 것이 아니다. 이 확인은 실행이 끝난 뒤의
     // 보고라 해시만 바뀐 기준 주소(고르면 해시에 반영하는 필터 화면)는 같게 본다(#88). 남은 칸을 쓰기 전 확인은 해시까지 본다.
-    const changed = recheckApproved(FIELD_KIND, el, info, null, true, true);
+    const check = recheckApprovedDetail(FIELD_KIND, el, info, null, true, true);
+    // 까닭이 행 글자 더해짐뿐이면 괄호 안 이유만 그렇게 적는다(#317 — 이미 change까지 보냈으므로 다시 채우라는 안내는 더하지 않는다).
+    const changed = check.reason && check.grew ? ROW_GREW_REASON : check.reason;
     if (changed) {
       // 값이 칸에 남아 있으면 알려 준다(콤보박스가 입력에 반응해 추천 목록·대화상자를 열며 이름을 바꾸는 경우). 승인한 칸인지는
       // 확인하지 못했으므로 반영으로 세지 않는다.

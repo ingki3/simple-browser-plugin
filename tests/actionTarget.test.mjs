@@ -13,10 +13,19 @@ import {
   onlyRowDiffers,
   parseCheckedRequest,
   rowDriftDiag,
+  rowGrew,
+  rowGrewGuardMessage,
+  ROW_GREW_CLICK,
+  ROW_GREW_HALTED,
+  ROW_GREW_INPUT,
+  ROW_GREW_PRE_WRITE,
+  ROW_GREW_REASON,
+  ROW_GREW_TOGGLE_INPUT,
   sameApproved,
   sameApprovedInFlight,
   sameBase,
 } from "../src/lib/actionTarget.ts";
+import { reasonCode } from "../src/lib/actionLog.ts";
 
 const link = {
   tag: "a",
@@ -392,4 +401,58 @@ test("staleTargetCode: 꼬리표가 이 문서 것이면 정리된 id, 아니면
   assert.equal(staleTargetCode("f3-x-abc", "abc"), "stale_target");
   assert.equal(staleTargetCode("c-missing", "abc"), "foreign_target");
   assert.equal(staleTargetCode("nodash", "abc"), "foreign_target");
+});
+
+test("rowGrew(#317): 비교한 칸은 그대로이고 원문·모델용 행 글자에 낱말이 더해지기만 했을 때만 참", () => {
+  const field = { ...rowBox, role: "textbox", fieldType: "text", proxy: undefined, name: "Domain", modelName: "Domain", context: "Domain", modelContext: "Domain", list: { index: 2, count: 3, semantic: false } };
+  const hint = "영문 소문자만 쓸 수 있습니다";
+  const grown = { ...field, context: `Domain ${hint}`, modelContext: `Domain ${hint}` };
+  assert.equal(rowGrew(field, grown), true);
+  // 빈 행 문맥은 기술에서 생략된다(이슈의 0→63) — 예외 없이 참.
+  const bare = { ...field, context: "", modelContext: undefined };
+  assert.equal(rowGrew(bare, { ...field, context: hint, modelContext: hint }), true);
+  // 원문은 요소 사이 공백 없이 붙음(textContent), 모델용 문맥은 블록 경계로 띄워짐 → 참.
+  assert.equal(rowGrew(field, { ...field, context: "Domain형식 안내", modelContext: "Domain 형식 안내" }), true);
+  // 기존 행에 이모지(서로게이트 쌍)가 있어도 → 참.
+  const emoji = { ...field, context: "📌 Domain", modelContext: "📌 Domain" };
+  assert.equal(rowGrew(emoji, { ...emoji, context: `📌 Domain ${hint}`, modelContext: `📌 Domain ${hint}` }), true);
+  // 낱말이 사라짐(행 글자가 바뀜) → 거짓.
+  assert.equal(rowGrew(field, { ...field, context: `Other ${hint}`, modelContext: `Other ${hint}` }), false);
+  // 숨은 글자만 늘어 모델용 문맥이 같음 → 거짓.
+  assert.equal(rowGrew(field, { ...field, context: `Domain ${hint}` }), false);
+  // 모델용 문맥은 늘었지만 원문에서 낱말이 사라짐 → 거짓.
+  assert.equal(rowGrew(field, { ...field, context: hint, modelContext: `Domain ${hint}` }), false);
+  // 잘림(한쪽·양쪽) → 거짓.
+  assert.equal(rowGrew(field, { ...grown, modelContextClipped: true }), false);
+  assert.equal(rowGrew({ ...field, modelContextClipped: true }, { ...grown, modelContextClipped: true }), false);
+  // 칸 자신의 비교 항목이 다름 → 거짓.
+  for (const diff of [{ name: "X" }, { modelName: "X" }, { fieldType: "email" }, { sensitive: "password" }, { tag: "textarea" }, { states: { checked: "true" } }, { list: { index: 1, count: 3, semantic: false } }]) {
+    assert.equal(rowGrew(field, { ...grown, ...diff }), false, JSON.stringify(diff));
+  }
+  // 아무것도 다르지 않음 → 거짓(막힌 까닭이 아님).
+  assert.equal(rowGrew(field, { ...field }), false);
+});
+
+test("행 글자 더해짐 안내 문구(#317): 고정 글, 단계별로 고르고, 작업 기록 분류는 지금과 같다", () => {
+  assert.equal(rowGrewGuardMessage("input", false), ROW_GREW_INPUT);
+  assert.equal(rowGrewGuardMessage("input", true), ROW_GREW_TOGGLE_INPUT);
+  assert.equal(rowGrewGuardMessage("click", true), ROW_GREW_CLICK);
+  assert.equal(rowGrewGuardMessage("click", false), ROW_GREW_CLICK);
+  // 실행 전 중단 문구는 target_changed, 반영 확인 이유를 담은 문구는 unverified(지금 문구와 같은 분류).
+  for (const m of [ROW_GREW_INPUT, ROW_GREW_CLICK, ROW_GREW_TOGGLE_INPUT, ROW_GREW_HALTED, ROW_GREW_PRE_WRITE]) {
+    assert.equal(reasonCode(m), "target_changed", m);
+  }
+  assert.equal(reasonCode(`입력 뒤 칸이 바뀌어 승인한 칸에 반영됐는지 확인하지 못했습니다(${ROW_GREW_REASON})`), "unverified");
+  // 토글 칸 문구는 다시 누르라고 하지 않는다. 글자 칸 문구는 한 번 다시 찾아 확인하게 하고, 다시 채울지는 지침대로(재시도를 새로 허용하지 않음).
+  assert.match(ROW_GREW_CLICK, /다시 누르지 말고/);
+  assert.match(ROW_GREW_TOGGLE_INPUT, /다시 누르지 말고/);
+  assert.match(ROW_GREW_INPUT, /이 칸을 한 번 다시 찾아 의도한 행의 칸인지/);
+  assert.match(ROW_GREW_INPUT, /지침대로 필요한 칸만 다시 채우세요\(확인할 수 없으면 사용자에게 알리세요\)/);
+  assert.ok(!/다시 채울 수 있습니다/.test(ROW_GREW_INPUT));
+  assert.match(ROW_GREW_HALTED, /의도한 행과 칸임을 확인한 뒤 지침대로/);
+  assert.match(ROW_GREW_PRE_WRITE, /의도한 행과 칸임을 확인한 뒤 지침대로/);
+  // 고정 글이라 값·행 글자·이름이 들어갈 자리가 없다(따옴표 인용 없음).
+  for (const m of [ROW_GREW_INPUT, ROW_GREW_CLICK, ROW_GREW_TOGGLE_INPUT, ROW_GREW_HALTED, ROW_GREW_PRE_WRITE, ROW_GREW_REASON]) {
+    assert.ok(!/'/.test(m), m);
+  }
 });
