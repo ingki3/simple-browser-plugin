@@ -640,9 +640,16 @@ export async function installMockModel(sw) {
         const t = it?.targets?.find((x) => !step.target || (x.text ?? "").includes(step.target));
         out = { tool: "click_element", args: { id: t ? t.id : "c-missing" } };
       }
+      else if (step?.clickMany) {
+        // 한 응답에 여러 클릭(#318): 직전 찾기 결과에서 글자마다 id를 찾는다. callId: 모델이 줄 호출 id(없으면 call<n>).
+        out = {
+          calls: step.clickMany.map((c) => ({ tool: "click_element", args: { id: list.find((x) => x.text === c.text)?.id ?? "c-missing" }, callId: c.callId })),
+        };
+      }
       else if (step?.click) {
         const hit = list.find((c) => c.text === step.click && (!step.role || c.role === step.role));
-        out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" } };
+        // callId(#318): 모델이 줄 호출 id(응답마다 같은 id를 다시 쓰는 모델 흉내).
+        out = { tool: "click_element", args: { id: hit ? hit.id : "c-missing" }, ...(step.callId ? { callId: step.callId } : {}) };
       } else if (step) out = step;
       // httpStatus: 요청을 HTTP 오류로 거절한다(연결 단계 실패).
       if (step?.httpStatus) return new Response(JSON.stringify({ error: { message: "거절" } }), { status: step.httpStatus, headers: { "content-type": "application/json" } });

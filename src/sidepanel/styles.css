@@ -1144,6 +1144,12 @@ body,
   margin-bottom: 6px;
 }
 
+.hop-limit-repeated {
+  font-size: 12px;
+  color: var(--warn);
+  margin-bottom: 6px;
+}
+
 .hop-limit-recent {
   margin: 0;
   padding-left: 16px;

@@ -10,9 +10,12 @@ import {
   detectSpin,
   fingerprint,
   summarizeRuns,
+  REPEAT_FAILURE_NOTE_AT,
+  repeatedFailureCount,
+  withRepeatNote,
 } from "../src/lib/hopGuard.ts";
 
-const run = (tool, args, { ok = true, result = "r", changed = false, cancelled = false, summary = "s" } = {}) => ({
+const run = (tool, args, { ok = true, result = "r", changed = false, cancelled = false, summary = "s", failCode } = {}) => ({
   tool,
   argsKey: canonicalJson(args),
   ok,
@@ -20,6 +23,7 @@ const run = (tool, args, { ok = true, result = "r", changed = false, cancelled =
   changed,
   cancelled,
   summary,
+  ...(failCode ? { failCode } : {}),
 });
 
 test("canonicalJson: 키 순서와 관계없이 같은 값은 같은 문자열, undefined 키는 뺌", () => {
@@ -180,4 +184,75 @@ test("clickChangedForSpin: 성공한 클릭의 변화만 반복 연속을 끊는
   assert.equal(clickChangedForSpin(false, changed), false);
   assert.equal(clickChangedForSpin(true, { navigation: "none", dom: { mutations: 3, aborted: "바뀜" } }), false);
   assert.equal(clickChangedForSpin(true, null), false);
+});
+
+// #318 같은 호출의 같은 실패 반복.
+const BLOCK = "blocked:pointerup:c:s";
+const showFail = (result = "r") => run("click_element", { id: "c1-x" }, { ok: false, failCode: BLOCK, result });
+const findOk = () => run("find_clickables", {});
+const dismissOk = () => run("click_element", { id: "c2-x" });
+
+test("repeatedFailureCount: 다른 대상 클릭 성공·찾기가 끼어도 같은 호출의 같은 원인 실패를 이어 센다", () => {
+  assert.equal(REPEAT_FAILURE_NOTE_AT, 2);
+  const r = [findOk(), showFail("a"), findOk(), dismissOk(), findOk(), showFail("b")];
+  assert.equal(repeatedFailureCount(r), 2);
+  assert.equal(repeatedFailureCount(r, 1), 1);
+  // 기존 규칙은 다른 대상 성공에 끊겨 잡지 못한다(이번 순환의 원인).
+  assert.equal(detectSpin(r), null);
+  r.push(findOk(), dismissOk(), findOk(), showFail("c"));
+  assert.equal(repeatedFailureCount(r), 3);
+  assert.equal(detectSpin(r), null, "같은 실패 셈은 멈춤 판정(detectSpin)을 바꾸지 않는다(안내만)");
+});
+
+test("repeatedFailureCount: 같은 호출이 성공하면 0부터(정당한 재시도), 다른 인자는 다른 묶음", () => {
+  assert.equal(repeatedFailureCount([showFail(), run("click_element", { id: "c1-x" }), showFail()]), 1);
+  assert.equal(repeatedFailureCount([showFail(), run("click_element", { id: "c9-x" }, { ok: false, failCode: BLOCK })]), 1);
+  assert.equal(repeatedFailureCount([showFail(), run("fill_form_fields", { id: "c1-x" }, { ok: false, failCode: BLOCK })]), 1);
+});
+
+test("repeatedFailureCount: 다른 원인 코드·코드 없는 실패는 세지도 끊지도 않고, 취소는 건너뜀", () => {
+  const other = run("click_element", { id: "c1-x" }, { ok: false, failCode: "not_delivered" });
+  const uncoded = run("click_element", { id: "c1-x" }, { ok: false });
+  const cancelled = run("click_element", { id: "c1-x" }, { ok: false, cancelled: true });
+  assert.equal(repeatedFailureCount([showFail(), other]), 1);
+  assert.equal(repeatedFailureCount([showFail(), other, uncoded, cancelled, showFail()]), 2);
+  assert.equal(repeatedFailureCount([showFail(), uncoded]), 0, "코드 없는 실패 자신은 0");
+  assert.equal(repeatedFailureCount([showFail(), cancelled]), 0);
+  assert.equal(repeatedFailureCount([showFail(), dismissOk()]), 0, "성공 기록은 0");
+  assert.equal(repeatedFailureCount([]), 0);
+});
+
+test("summarizeRuns.repeatedFailures: 남은 같은 실패 묶음만(2 이상, 많은 순 최대 3개), 도구 이름과 수만", () => {
+  const fill = (v) => run("fill_form_fields", { fills: [{ id: "f1-x", value: v }] }, { ok: false, failCode: "x" });
+  const s = summarizeRuns([
+    showFail(), dismissOk(), showFail(), showFail(),
+    fill("비밀"), fill("비밀"),
+    run("click_element", { id: "c3-x" }, { ok: false, failCode: BLOCK }), run("click_element", { id: "c3-x" }, { ok: false, failCode: BLOCK }),
+    run("click_element", { id: "c3-x" }),
+    run("click_element", { id: "c4-x" }, { ok: false }), run("click_element", { id: "c4-x" }, { ok: false }),
+    run("click_element", { id: "c5-x" }, { ok: false, failCode: BLOCK }),
+  ]);
+  assert.deepEqual(s.repeatedFailures, [
+    { tool: "click_element", count: 3 },
+    { tool: "fill_form_fields", count: 2 },
+  ]);
+  assert.ok(!JSON.stringify(s.repeatedFailures).includes("비밀"), "인자(입력값)는 요약에 없다");
+  const many = [1, 2, 3, 4].flatMap((n) => [0, 1].map(() => run("click_element", { id: `c${n}` }, { ok: false, failCode: BLOCK })));
+  assert.equal(summarizeRuns(many).repeatedFailures.length, 3);
+  assert.deepEqual(summarizeRuns([]).repeatedFailures, []);
+});
+
+test("withRepeatNote: 객체 JSON 결과 최상위에 repeated를 더하고, 아니면 원문", () => {
+  const out = JSON.parse(withRepeatNote(JSON.stringify({ result: { error: "e" } }), "안내"));
+  assert.deepEqual(out, { result: { error: "e" }, repeated: "안내" });
+  assert.equal(JSON.parse(withRepeatNote(JSON.stringify({ error: "e" }), "n")).repeated, "n");
+  for (const raw of ["{", "[1]", "3", "null", '"s"']) assert.equal(withRepeatNote(raw, "n"), raw);
+});
+
+test("summarizeRuns.repeatedFailures: 수가 같으면 마지막 실패가 늦은 묶음부터(네 묶음이면 가장 오래된 것이 빠짐)", () => {
+  const f = (tool) => run(tool, { id: "x" }, { ok: false, failCode: BLOCK });
+  const recs = ["t_old", "t_old", "t_b", "t_b", "t_c", "t_c", "t_new", "t_new"].map(f);
+  assert.deepEqual(summarizeRuns(recs).repeatedFailures.map((g) => g.tool), ["t_new", "t_c", "t_b"]);
+  // 가장 오래된 묶음이 다시 실패하면 수 3으로 맨 앞.
+  assert.deepEqual(summarizeRuns([...recs, f("t_old")]).repeatedFailures.map((g) => `${g.tool}:${g.count}`), ["t_old:3", "t_new:2", "t_c:2"]);
 });

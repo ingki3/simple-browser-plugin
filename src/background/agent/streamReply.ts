@@ -24,6 +24,22 @@ export interface ReplyAccumulator {
   result(): StreamReplyResult;
 }
 
+// 겹친 호출 id를 대신할 새 id: 원래 id와 같은 길이의 영숫자(일부 로컬 모델 템플릿은 정해진 길이의 영숫자 id만 받는다 — 예: 9자).
+// 원래 id가 영숫자가 아니거나 너무 길거나(SAME_SHAPE_MAX), 정해진 시도 안에 겹치지 않는 id를 못 만들면(아주 짧은 id) UUID — 멈추거나
+// 예외로 끝나지 않는다.
+const SAME_SHAPE_MAX = 64;
+const SAME_SHAPE_TRIES = 16;
+function sameShapeId(original: string, used: ReadonlySet<string>): string {
+  if (original.length > SAME_SHAPE_MAX || !/^[A-Za-z0-9]+$/.test(original)) return crypto.randomUUID();
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  for (let i = 0; i < SAME_SHAPE_TRIES; i += 1) {
+    const bytes = crypto.getRandomValues(new Uint8Array(original.length));
+    const id = Array.from(bytes, (b) => chars[b % chars.length]).join("");
+    if (!used.has(id)) return id;
+  }
+  return crypto.randomUUID();
+}
+
 export function createReplyAccumulator(cb: { onText: (text: string) => void; onThought: (text: string) => void }): ReplyAccumulator {
   let usage: ModelUsage | null = null;
   let assistantText = "";
@@ -87,12 +103,16 @@ export function createReplyAccumulator(cb: { onText: (text: string) => void; onT
     },
     usage: () => usage,
     result() {
+      // 호출 id는 한 응답 안에서 하나씩이어야 결과와 짝지어진다(#318 — 모델이 같은 id를 두 번 주면 뒤의 것에 새 id를 준다.
+      // 기록의 호출 블록과 결과가 모두 이 id를 쓰므로 제공자에는 짝이 맞는 기록이 간다).
+      const used = new Set<string>();
       const functionCalls = [...functionCallParts.entries()]
         .sort(([a], [b]) => a - b)
-        .map(([, call]) => ({
-          ...call,
-          id: call.id || crypto.randomUUID(),
-        }));
+        .map(([, call]) => {
+          const id = call.id && !used.has(call.id) ? call.id : call.id ? sameShapeId(call.id, used) : crypto.randomUUID();
+          used.add(id);
+          return { ...call, id };
+        });
       return { assistantText, assistantReasoning, reasoningDetails, functionCalls, finishReason, chunkCount, textChars, thoughtChars };
     },
   };

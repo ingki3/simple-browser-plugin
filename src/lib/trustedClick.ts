@@ -78,8 +78,32 @@ export function clickPoints(rects: readonly Rect[], viewport: { width: number; h
 // 가드가 기록한 결과. clicked: 승인한 대상에 click까지 갔음. blocked: 가드가 막음(이유). none: 실제 입력이 오지 않음.
 export type TrustedClickStatus =
   | { status: "clicked" }
-  | { status: "blocked"; reason: string }
+  // code(#318): 막은 분기의 고정 값(같은 실패 반복 판정용 — 사유 글자에는 페이지 글자가 섞일 수 있어 따로 둔다).
+  | { status: "blocked"; reason: string; code?: GuardBlockCode }
   | { status: "none" };
+
+// 가드가 막은 분기(src/content/trustedClick.ts). 새 분기를 더하면 여기에도 더한다(없으면 같은 실패 반복 판정에서 빠진다).
+export type GuardBlockCode =
+  | "expired"
+  | "unexpected_input"
+  | "other_element"
+  | "inner_element"
+  | "point_off"
+  | "target_changed"
+  | "inspect_error"
+  | "pre_press"
+  | "cancelled";
+const GUARD_BLOCK_CODES: ReadonlySet<string> = new Set<GuardBlockCode>([
+  "expired",
+  "unexpected_input",
+  "other_element",
+  "inner_element",
+  "point_off",
+  "target_changed",
+  "inspect_error",
+  "pre_press",
+  "cancelled",
+]);
 
 // 백그라운드가 읽는 가드 기록: 결과와, 결과가 none일 때 원인을 좁히는 진단(이 문서가 받은 실제 입력 종류·화면 크기).
 export type TrustedClickReport = TrustedClickStatus & {
@@ -165,6 +189,31 @@ const PHASE_LABEL: Record<string, string> = {
   mouseup: "떼기(mouseup)",
   click: "클릭(click)",
 };
+
+// 실제 입력 클릭의 "누른 뒤 실패" 원인 코드(#318 같은 실패 반복 판정). 실패를 식별한 분기마다 고정 값.
+export type PressedFailCode =
+  | "press_send"
+  | "release_check"
+  | "document_changed"
+  | "release_send"
+  | "result_unknown"
+  | "not_delivered";
+
+// 첫 차단 기록의 이벤트 이름: 가드가 거는 실제 이벤트(GUARDED_EVENTS)와 가드가 스스로 적는 고정 표지(만료·확인 중 오류)만 구분해 남긴다.
+const BLOCK_EVENT_TOKEN: ReadonlyMap<string, string> = new Map<string, string>([
+  ...GUARDED_EVENTS.map((e) => [e, e] as [string, string]),
+  ["만료", "expiry"],
+  ["확인 중 오류", "inspect"],
+]);
+
+// 가드 차단의 원인 코드(#318): 막은 분기(code)·첫 차단 이벤트(알려진 이름만)·대상 연결·표시로만 정한다. 가드 사유 글자(페이지 글자가
+// 섞임)는 넣지 않는다. 분기를 모르면(분류하지 않은 분기·이전 content) null — 같은 실패 반복 판정에서 뺀다.
+export function blockedFailCode(code: unknown, first?: FirstBlock | null): string | null {
+  if (typeof code !== "string" || !GUARD_BLOCK_CODES.has(code)) return null;
+  if (!first) return `blocked:${code}:none`;
+  const phase = BLOCK_EVENT_TOKEN.get(first.event) ?? "other";
+  return `blocked:${code}:${phase}:${first.targetConnected ? "c" : "d"}:${first.targetShown ? "s" : "h"}`;
+}
 
 const PASSABLE = ["pointerdown", "mousedown", "pointerup", "mouseup"] as const;
 
