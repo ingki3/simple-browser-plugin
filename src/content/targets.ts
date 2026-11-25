@@ -18,12 +18,9 @@ import {
   type TargetInfo,
 } from "@/lib/actionTarget";
 import { getAccessibleDocs, getAccessibleRoots, isShadowRoot } from "./docs";
-import { closestAcross, eventParent, fieldValueSignature, linkHrefOf } from "./context";
-// 순환 import(trustedClick → targets)지만 함수 선언만 쓰고 부를 때는 두 모듈 모두 평가가 끝난 뒤라 안전하다.
-import { flatParent } from "./trustedClick";
+import { eventParent, fieldValueSignature, linkHrefOf } from "./context";
 import { choiceState, type ChoiceState } from "./choiceState";
 import { cleanModelText } from "@/lib/modelText";
-import { canonicalJson, fingerprint } from "@/lib/hopGuard";
 import { groupLabelInfo, inProtectedArea, modelTextInfo, selectProxyOf, subtreeText, subtreeTextInfo, type TextInfo } from "./modelText";
 
 export interface TargetKind {
@@ -73,99 +70,6 @@ interface Entry {
   // 대화별 기준(#233): 바뀐 행·항목 글자를 모델에게 보여 준 결과(클릭 뒤 결과·row_drift 오류)마다 만든 기준. 공용 기준(base·item)은
   // 바꾸지 않고, 그 결과를 본 대화만 nonce로 골라 쓴다(백그라운드가 결과를 실은 모델 요청의 응답이 온 뒤에만 넘긴다).
   snaps?: RowSnap[];
-  // 같은 실패 반복 판정(#318)의 대상 바인딩: 실제 입력 클릭을 준비할 때마다 승인한 기술(상태 제외)과 지금의 행·항목·선택지 관계
-  // (요소 참조)로 정하고, 앞 준비 때와 다르면 rev를 올린다. 백그라운드에는 rev(수)만 간다.
-  binding?: Binding;
-}
-
-interface Binding {
-  refs: Array<WeakRef<Element> | null>;
-  key: string;
-  // 항목 모드(#161)로 찾았을 때의 항목. 앞·이번 준비 모두에 있을 때만 비교한다.
-  item: { ref: WeakRef<Element>; text: string } | null;
-  rev: number;
-}
-
-// 바인딩: 지금의 요소 참조와 승인한 기술의 지문(#318).
-// - 참조: 평평한 트리 경로(flatParent — 열린·닫힌 shadow의 slot 배치 포함, shadow root 맨 위면 host)의 조상 전체 + 행(rowElement)·항목·선택지
-//   트리거·목록. 행 표시나 행 글자가 없어도, 래퍼째 옮겨도, slot만 바꿔도 다른 자리에 놓인 같은 노드를 다른 대상으로 본다.
-// - 지문: 승인한 기술 전체에서 같은 대상이라도 바뀌는 값만 뺀 것(빼는 목록 BINDING_VOLATILE — 상태(states, 같은 트리거를 열고 닫는 사이
-//   바뀜)·호출마다 다른 승인 표시(consentCall·consentPersonal)·경고 표시(hidden)·목록 항목 수(더 불러오면 늚)). 넣을 필드를 고르지 않아
-//   주소·제출 목적지·제출 값·요청 주소처럼 승인 기술이 늘어도 다른 동작은 다른 대상으로 본다(더 묻는 쪽 — 셈을 덜 잇는다).
-//   항목 글자는 앞 준비와 이번 준비 모두에 항목이 있을 때만 비교한다(찾기 모드를 번갈아 써도 셈이 끊기지 않게).
-// 위험 판정용 파생 값(결제·개인정보·민감 칸·삭제 단서 — 일부는 낱말 판정 결과)도 뺀다: 낱말 판정이 이 셈(안내·멈춤)을 바꾸지 않게.
-const BINDING_VOLATILE = [
-  "states",
-  "consentCall",
-  "consentPersonal",
-  "hidden",
-  "paymentContext",
-  "personal",
-  "submitsPersonal",
-  "sensitive",
-  "deleteParam",
-  "deleteChoices",
-] as const;
-function stableInfo(info: TargetInfo): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...info };
-  for (const k of BINDING_VOLATILE) delete out[k];
-  out.list = info.list?.index ?? null;
-  if (info.trigger) out.trigger = stableInfo(info.trigger);
-  return out;
-}
-const BINDING_MAX_DEPTH = 64;
-// 경로 끝(문서 맨 위)까지 보지 못하면(깊이 한도) null — 다른 자리로 옮긴 것을 가릴 수 없어 같은 실패 셈에서 뺀다.
-// 목적지를 구조로 확인할 수 없는 요청(opaqueRequest — hx-post 등)을 일으키는 대상도 null: 같은 노드가 다른 곳으로 요청해도 가릴 수 없다.
-function bindingOf(el: HTMLElement, base: TargetInfo, relation: Relation | null, item?: ItemBinding): Omit<Binding, "rev"> | null {
-  if (base.opaqueRequest) return null;
-  // 가드와 같은 평평한 트리 경로(flatParent — 열린·닫힌 shadow root의 slot 배치 포함, root면 host).
-  const chain: Element[] = [];
-  let cur: Node | null = flatParent(el);
-  for (; cur && chain.length < BINDING_MAX_DEPTH; cur = flatParent(cur)) if (cur.nodeType === Node.ELEMENT_NODE) chain.push(cur as Element);
-  if (cur) return null;
-  const row = rowElement(el)?.row ?? null;
-  // 실제로 작동시킬 label의 컨트롤(대상이 label이거나 label 안의 요소 — 클릭 판정의 labelControl과 같은 경로).
-  const label = closestAcross(el, "label") as HTMLLabelElement | null;
-  const control = label?.control ?? null;
-  const refs = [...chain, row, control, relation?.trigger?.deref() ?? null, relation?.popup.deref() ?? null].map((e) => (e ? new WeakRef(e) : null));
-  const key = fingerprint(
-    canonicalJson({
-      ...stableInfo(base),
-      relation: relation ? [relation.mode, relation.via, relation.basis, relation.nested] : null,
-    }),
-  );
-  const itemEl = item?.ref.deref() ?? null;
-  return { refs, key, item: itemEl ? { ref: new WeakRef(itemEl), text: item!.text } : null };
-}
-
-// 참조는 있었는지부터 비교한다: 앞 준비 때 있던 행이 그 뒤 수거돼(deref가 null) 지금 행이 없는 경우를 같은 것으로 보지 않게.
-function sameBinding(a: Binding, b: Omit<Binding, "rev">): boolean {
-  if (a.key !== b.key || a.refs.length !== b.refs.length) return false;
-  if (a.item && b.item && (a.item.text !== b.item.text || !a.item.ref.deref() || a.item.ref.deref() !== b.item.ref.deref())) return false;
-  return a.refs.every((r, i) => {
-    const now = b.refs[i];
-    if (!r || !now) return !r && !now;
-    const was = r.deref();
-    return !!was && was === now.deref();
-  });
-}
-
-// 실제 입력 클릭 준비 때의 바인딩 회차(#318). 승인한 기술(info)과 지금 요소의 행·항목·관계로 바인딩을 정하고, 이 id의 앞 준비 때와
-// 다르면 회차를 올린다(같은 id가 글자가 같은 다른 행으로 옮겨진 노드를 가리키는 경우 — 다시 찾지 않고 같은 id로 눌러도). 없는 id면 undefined.
-export function prepareBindingRev(id: string, el: HTMLElement, info: TargetInfo, relation: Relation | null, item?: ItemBinding): number | undefined {
-  const entry = registry.get(id);
-  if (!entry) return undefined;
-  const now = bindingOf(el, info, relation, item);
-  if (!now) {
-    // 회차는 계속 올린다(다음 준비의 회차가 앞 회차와 겹치지 않게). 빈 지문은 어떤 바인딩과도 같지 않다.
-    entry.binding = { refs: [], key: "", item: null, rev: (entry.binding?.rev ?? -1) + 1 };
-    return undefined;
-  }
-  if (!entry.binding) entry.binding = { ...now, rev: 0 };
-  else if (!sameBinding(entry.binding, now)) entry.binding = { ...now, rev: entry.binding.rev + 1 };
-  // 같은 대상이고 이번에 항목 모드로 찾았으면 그 항목을 다음 비교의 기준으로 남긴다.
-  else if (now.item) entry.binding.item = now.item;
-  return entry.binding.rev;
 }
 
 interface RowSnap {

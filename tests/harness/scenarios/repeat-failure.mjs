@@ -1,6 +1,6 @@
-// 같은 호출의 같은 실패 반복(#318): 같은 도구·같은 인자·같은 원인으로 거듭 실패하면 두 번째 결과에 방법을 바꾸라는 안내(repeated)를
-// 붙이고 세 번째에 멈춘다. 다른 대상의 성공(Dismiss)이 사이에 끼어도 이어서 센다(기존 헛돌기 감지가 놓친 순환).
-// 오탐 방지: 다른 대상·같은 호출의 성공·다른 행으로 옮겨 다시 쓴 노드(같은 id)·새 요청은 세지 않는다.
+// 같은 호출의 같은 실패 반복(#318): 같은 도구·같은 인자·같은 원인으로 거듭 실패하면 두 번째 결과부터 방법을 바꾸라는 안내(repeated)를
+// 붙인다. 안내만 한다 — 이 셈으로 호출을 막거나 턴을 끝내지 않는다. 다른 대상의 성공(Dismiss)이 사이에 끼어도 이어서 센다(기존 헛돌기
+// 감지가 놓친 순환). 다른 인자·같은 호출의 성공·새 요청은 세지 않는다.
 // 'Show options'는 누를 때(mousedown) 목록을 연 것처럼 이름을 'Hide options'로 바꾼다 → 실제 입력 클릭이 떼기에서 막힌다(대상 바뀜,
 // #316과 같은 꼴). Dismiss를 누를 때까지 열린 이름으로 남는다(그 사이 찾기에도 바뀐 이름으로 나온다).
 import { expect, findC } from "../lib.mjs";
@@ -36,136 +36,7 @@ dismiss.addEventListener("click", () => {
 });
 </script></main>`;
 
-// 같은 버튼 노드를 글자가 같은 두 행 사이로 옮겨 다시 쓰는 목록(가상 목록의 노드 재사용 흉내). 누르면 이름이 바뀌어 막히고,
-// 잠시 뒤 이름을 되돌리며 다른 행으로 옮긴다.
-const ROWS = `<title>행 재사용</title><main>
-<input id=memo aria-label="메모">
-<button id=dismiss style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
-<ul><li id=r1><span>항목 A</span> </li><li id=r2><span>항목 A</span> </li></ul>
-<p id=out></p>
-<script>
-memo.value = ${JSON.stringify(SECRET)};
-const b = document.createElement("div");
-b.setAttribute("role", "button");
-b.tabIndex = 0;
-b.setAttribute("aria-label", "열기");
-b.style.cssText = "display:inline-block;width:120px;height:32px;background:#ddd";
-r1.append(b);
-b.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  b.setAttribute("aria-label", "닫기");
-  setTimeout(() => {
-    b.setAttribute("aria-label", "열기");
-    (b.parentElement === r1 ? r2 : r1).append(b);
-  }, 300);
-});
-</script></main>`;
-
-// 행에 버튼 말고 글자가 없는 변형(행 글자가 버튼 글자와 같아 행 문맥이 비는 경우, 5회차 P1).
-const BARE_ROWS = ROWS.replace(/<span>항목 A<\/span> /g, "");
-
-// 버튼이 열린 shadow root 안에 있고 호스트를 글자 없는 두 행 사이로 옮기는 변형(6회차 P1).
-const SHADOW_ROWS = `<title>행 재사용(shadow)</title><main>
-<input id=memo aria-label="메모">
-<button id=dismiss style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
-<ul><li id=r1></li><li id=r2></li></ul>
-<p id=out></p>
-<script>
-memo.value = ${JSON.stringify(SECRET)};
-const host = document.createElement("span");
-r1.append(host);
-const b = document.createElement("div");
-b.setAttribute("role", "button");
-b.tabIndex = 0;
-b.setAttribute("aria-label", "열기");
-b.style.cssText = "display:inline-block;width:120px;height:32px;background:#ddd";
-host.attachShadow({ mode: "open" }).append(b);
-b.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  b.setAttribute("aria-label", "닫기");
-  setTimeout(() => {
-    b.setAttribute("aria-label", "열기");
-    (host.parentElement === r1 ? r2 : r1).append(host);
-  }, 300);
-});
-</script></main>`;
-
-// 같은 버튼(DOM 부모는 그대로)을 slot 속성만 바꿔 shadow 안의 다른(글자 없는) 행에 배치하는 변형(7회차 P1).
-const SLOT_ROWS = `<title>행 재사용(slot)</title><main>
-<input id=memo aria-label="메모">
-<button id=dismiss style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
-<div id=host></div>
-<p id=out></p>
-<script>
-memo.value = ${JSON.stringify(SECRET)};
-host.attachShadow({ mode: "open" }).innerHTML = '<ul><li id=r1><slot name=a></slot></li><li id=r2><slot name=b></slot></li></ul>';
-const b = document.createElement("div");
-b.setAttribute("role", "button");
-b.tabIndex = 0;
-b.slot = "a";
-b.setAttribute("aria-label", "열기");
-b.style.cssText = "display:inline-block;width:120px;height:32px;background:#ddd";
-host.append(b);
-b.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  b.setAttribute("aria-label", "닫기");
-  setTimeout(() => {
-    b.setAttribute("aria-label", "열기");
-    b.slot = b.slot === "a" ? "b" : "a";
-  }, 300);
-});
-</script></main>`;
-
-// 같은 행·같은 ▼ 버튼 노드를 다른 항목에 다시 쓰며 접근성 이름(aria-label)만 바꾸는 가상 목록(코드 리뷰 1회차 P1).
-const RENAMED = `<title>이름 바뀌는 버튼</title><main>
-<input id=memo aria-label="메모">
-<button id=dismiss style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
-<ul><li><div id=b role=button tabindex=0 aria-label="A 열기" style="display:inline-block;width:120px;height:32px;background:#ddd">▼</div></li></ul>
-<p id=out></p>
-<script>
-memo.value = ${JSON.stringify(SECRET)};
-const names = ["A 열기", "B 열기", "C 열기"];
-let n = 0;
-b.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  b.setAttribute("aria-label", "닫기");
-  setTimeout(() => b.setAttribute("aria-label", names[++n] ?? "끝"), 300);
-});
-</script></main>`;
-
-// 행 표시가 없는 일반 div 행(버튼 외 글자 없음) 사이로 같은 버튼 노드를 옮기는 변형(코드 리뷰 2회차 P2).
-const DIV_ROWS = BARE_ROWS.replace("<ul><li id=r1></li><li id=r2></li></ul>", "<div><div id=r1></div><div id=r2></div></div>");
-
-// 같은 '열기' 버튼 노드가 고른 레코드에 따라 formaction(제출 목적지)만 바꾸는 양식(코드 리뷰 2회차 P1).
-const FORMACTION = `<title>제출 목적지</title><main>
-<input id=memo aria-label="메모">
-<button id=dismiss type=button style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
-<form action="/noop" onsubmit="return false"><button id=b formaction="/edit/A" style="width:120px;height:32px">열기</button></form>
-<p id=out></p>
-<script>
-memo.value = ${JSON.stringify(SECRET)};
-const recs = ["A", "B", "C"];
-let n = 0;
-b.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  b.setAttribute("aria-label", "닫기");
-  setTimeout(() => {
-    b.removeAttribute("aria-label");
-    b.setAttribute("formaction", "/edit/" + (recs[++n] ?? "Z"));
-  }, 300);
-});
-</script></main>`;
-
-// 같은 '열기' 버튼 노드가 hx-get(요청 주소)만 바꾸는 변형(코드 리뷰 3회차 P1).
-const HXGET = FORMACTION.replace('<form action="/noop" onsubmit="return false"><button id=b formaction="/edit/A"', '<div><button id=b type=button hx-get="/edit/A"')
-  .replace("열기</button></form>", "열기</button></div>")
-  .replace('b.setAttribute("formaction", "/edit/" + (recs[++n] ?? "Z"));', 'b.setAttribute("hx-get", "/edit/" + (recs[++n] ?? "Z"));');
-
-// 버튼을 두 겹 래퍼째로 글자 없는 일반 div 행 사이로 옮기는 변형(코드 리뷰 3회차 P2).
-const WRAPPED_ROWS = DIV_ROWS.replace("r1.append(b);", 'const w1 = document.createElement("div"); const w2 = document.createElement("div"); w1.append(w2); w2.append(b); r1.append(w1);')
-  .replace("(b.parentElement === r1 ? r2 : r1).append(b);", "(w1.parentElement === r1 ? r2 : r1).append(w1);");
-
-// 항목 목록 안의 막히는 버튼(찾기 모드를 번갈아 써도 같은 대상으로 세는지, 코드 리뷰 4회차 P2).
+// 항목 목록 안의 막히는 버튼(찾기 모드를 번갈아 써도 같은 호출로 세는지).
 const ITEMS = `<title>항목 목록</title><main>
 <input id=memo aria-label="메모">
 <button id=dismiss style="width:120px;height:32px">Dismiss</button>
@@ -182,39 +53,11 @@ dismiss.addEventListener("click", () => { b.setAttribute("aria-label", "펼치�
 </script></main>`;
 const itemsFind = { tool: "find_clickables", args: { mode: "items" } };
 
-// 같은 '상세 보기' 제출 버튼이 name=value(제출 값)만 바꿔 다른 레코드를 여는 변형(코드 리뷰 4회차 P1).
-const SUBMITVAL = FORMACTION.replace('<form action="/noop" onsubmit="return false"><button id=b formaction="/edit/A"', '<form action="/detail" onsubmit="return false"><button id=b name=record value=A')
-  .replace('b.setAttribute("formaction", "/edit/" + (recs[++n] ?? "Z"));', 'b.setAttribute("value", recs[++n] ?? "Z");');
-
-// 닫을 때마다 문서 제목이 결제 문구를 넣었다 뺐다 하는 변형(코드 리뷰 5회차 P1 — 낱말 판정이 셈을 바꾸지 않아야 함).
+// 닫을 때마다 문서 제목이 결제 문구를 넣었다 뺐다 하는 변형(낱말 판정이 셈을 바꾸지 않아야 함).
 const TITLE_TOGGLE = PAGE.replace("<title>반복 실패</title>", "<title>알림</title>").replace(
   'out.textContent = "닫음 " + (++window.__dismiss);',
   'out.textContent = "닫음 " + (++window.__dismiss); document.title = document.title === "알림" ? "결제 알림" : "알림";',
 );
-
-// 같은 label의 for만 바꿔 양식 밖의 다른 숨은 checkbox를 가리키는 변형(코드 리뷰 5회차 P2).
-const LABEL_SWAP = `<title>라벨</title><main>
-<input id=memo aria-label="메모">
-<button id=dismiss style="width:120px;height:32px" onclick="out.textContent='닫음'">Dismiss</button>
-<input type=checkbox id=c1 style="position:absolute;opacity:0;width:1px;height:1px"><input type=checkbox id=c2 style="position:absolute;opacity:0;width:1px;height:1px">
-<label id=lb for=c1 style="display:inline-block;width:120px;height:32px;background:#ddd">선택</label>
-<p id=out></p>
-<script>
-memo.value = ${JSON.stringify(SECRET)};
-lb.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  lb.setAttribute("aria-label", "닫기");
-  setTimeout(() => { lb.removeAttribute("aria-label"); lb.htmlFor = lb.htmlFor === "c1" ? "c2" : "c1"; }, 300);
-});
-</script></main>`;
-
-// 코드 리뷰 6회차: 닫힌 shadow root의 slot 배치, label 안 자식 요소, 목적지를 확인할 수 없는 hx-post.
-const CLOSED_SLOT_ROWS = SLOT_ROWS.replace('host.attachShadow({ mode: "open" }).innerHTML', 'host.attachShadow({ mode: "closed" }).innerHTML');
-const LABEL_CHILD = LABEL_SWAP.replace(
-  '<label id=lb for=c1 style="display:inline-block;width:120px;height:32px;background:#ddd">선택</label>',
-  '<label id=lb for=c1><span id=sp role=button tabindex=0 style="display:inline-block;width:120px;height:32px;background:#ddd">선택</span></label>',
-).replace('lb.addEventListener("mousedown"', 'sp.addEventListener("mousedown"').replace('lb.setAttribute("aria-label", "닫기");', 'sp.setAttribute("aria-label", "닫기");').replace("lb.removeAttribute(\"aria-label\");", "sp.removeAttribute(\"aria-label\");");
-const HXPOST = HXGET.replace('hx-get="/edit/A"', 'hx-post="/records/A"').replace('b.setAttribute("hx-get", "/edit/"', 'b.setAttribute("hx-post", "/records/"');
 
 const show = (callId) => ({ click: "Show options", ...(callId ? { callId } : {}) });
 const dismiss = { click: "Dismiss" };
@@ -249,14 +92,16 @@ async function sentClickArgs(h) {
     .map((c) => c.function.arguments);
 }
 
+const noStop = (r) => !r.logs.some((l) => l.includes("hop:spin") || l.includes("same_failure"));
+
 export default [
   {
-    name: "같은 대상이 같은 원인으로 거듭 실패하면 두 번째 결과에 안내, 세 번째에 멈춘다(사이에 다른 대상 성공)",
+    name: "같은 대상이 같은 원인으로 거듭 실패하면 두 번째 결과부터 안내하고, 멈추지 않는다(사이에 다른 대상 성공)",
     pages: { "/p": PAGE },
     async run(h) {
       await h.settings(settings);
       const r = await h.turn(
-        [findC, show("call_s"), findC, dismiss, findC, show("call_s"), findC, dismiss, findC, show("call_s"), { text: "보내면 안 됨" }],
+        [findC, show("call_s"), findC, dismiss, findC, show("call_s"), findC, dismiss, findC, show("call_s"), { text: "끝까지 감" }],
         { path: "/p" },
       );
       expect(clickFails(r) === 3, `Show 실패 3번(${clickFails(r)})`);
@@ -265,24 +110,26 @@ export default [
       const opened = r.tools.some((t) => t.name === "find_clickables" && JSON.stringify(t.result ?? "").includes("Hide options"));
       expect(opened, "그 사이 찾기에 열린 이름(Hide options)으로 나온다");
       const { body, tools } = await lastToolMessages(h);
-      expect(body.tool_choice === "none", `마무리 요청은 도구 없이(${JSON.stringify(body.tool_choice)})`);
+      expect(body.tool_choice !== "none", `도구 없이 답하는 마무리 요청이 없다(${JSON.stringify(body.tool_choice)})`);
       const s = tools.filter((t) => t.id === "call_s");
       expect(s.length === 3, `Show 결과 3개(${s.length})`);
       expect(s[0].data.repeated === undefined, `첫 결과는 그대로(${JSON.stringify(s[0].data).slice(0, 200)})`);
       expect(typeof s[1].data.repeated === "string" && s[1].data.repeated.includes("같은 도구(click_element)") && s[1].data.repeated.includes("2번 실패"), `두 번째 결과에 안내(${s[1].data.repeated})`);
       expect(typeof s[2].data.repeated === "string" && s[2].data.repeated.includes("3번 실패"), `세 번째 결과에 안내(${s[2].data.repeated})`);
+      expect(!s[2].data.repeated.includes("멈춥니다"), "멈춘다는 말은 없다");
       const args = await sentClickArgs(h);
       expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `Show는 같은 인자로 세 번(${args.join(" | ")})`);
       const repeatLogs = r.logs.filter((l) => l.includes("hop:repeat_fail"));
       expect(repeatLogs.length === 2 && repeatLogs.every((l) => /hop:repeat_fail\W+click_element ×[23]\s*$/.test(l)), `로그는 도구 이름과 수만(${repeatLogs.join(" | ")})`);
-      expect(r.logs.some((l) => l.includes("hop:spin") && l.includes("same_failure · click_element ×3")), "같은 실패 멈춤 로그");
-      expect(!r.logs.some((l) => l.includes("|t:") || l.includes("blocked:")), "원인 코드·대상 회차는 로그에 없다");
-      expect(!JSON.stringify(await reqs(h)).includes("|t:"), "원인 코드는 모델 요청에 없다");
+      expect(noStop(r), "같은 실패로 멈추지 않는다");
+      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+      expect(!r.logs.some((l) => l.includes("blocked:")), "원인 코드는 로그에 없다");
+      expect(!JSON.stringify(await reqs(h)).includes("blocked:"), "원인 코드는 모델 요청에 없다");
       await noSecret(h, r);
     },
   },
   {
-    name: "한 응답에 [같은 실패, 다른 성공]이 함께 와도 세 번째 같은 실패에서 멈추고 남은 호출은 실행하지 않는다",
+    name: "한 응답에 [같은 실패, 다른 성공]이 함께 와도 안내하고, 모든 호출을 실행한다",
     pages: { "/p": PAGE },
     async run(h) {
       await h.settings(settings);
@@ -296,22 +143,45 @@ export default [
           { clickMany: [{ text: "Show options", callId: "call_s" }, { text: "Dismiss", callId: "call_d2" }] },
           findC,
           { clickMany: [{ text: "Show options", callId: "call_s" }, { text: "Dismiss", callId: "call_d3" }] },
-          { text: "보내면 안 됨" },
+          { text: "끝까지 감" },
         ],
         { path: "/p" },
       );
       expect(clickFails(r) === 3, `Show 실패 3번(${clickFails(r)})`);
       const dismissed = await h.tab.evaluate(() => window.__dismiss);
-      expect(dismissed === 2, `마지막 응답의 Dismiss는 실행하지 않음(${dismissed})`);
-      const { body, tools } = await lastToolMessages(h);
-      expect(body.tool_choice === "none", "마무리 요청은 도구 없이");
+      expect(dismissed === 3, `Dismiss는 모두 실행(${dismissed})`);
+      const { tools } = await lastToolMessages(h);
       const s = tools.filter((t) => t.id === "call_s");
       expect(s.length === 3 && s[0].data.repeated === undefined && s[1].data.repeated && s[2].data.repeated, `Show 결과 안내(${s.map((x) => !!x.data.repeated).join(",")})`);
-      const d2 = tools.find((t) => t.id === "call_d2");
-      expect(d2 && d2.data.result && !d2.data.error, `둘째 응답의 Dismiss는 실행(${JSON.stringify(d2?.data).slice(0, 120)})`);
-      const d3 = tools.find((t) => t.id === "call_d3");
-      expect(d3 && d3.data.error === "interrupted", `셋째 응답의 Dismiss는 미실행 결과(${JSON.stringify(d3?.data)})`);
-      expect(r.logs.some((l) => l.includes("same_failure · click_element ×3")), "같은 실패 멈춤 로그");
+      for (const id of ["call_d2", "call_d3"]) {
+        const d = tools.find((t) => t.id === id);
+        expect(d && d.data.result && !d.data.error, `${id} 실행(${JSON.stringify(d?.data).slice(0, 120)})`);
+      }
+      expect(noStop(r), "같은 실패로 멈추지 않는다");
+    },
+  },
+  {
+    name: "한 응답 안에서 호출 id가 겹치면 뒤의 것에 새 id를 주어 실행하고, 다음 요청·다음 턴도 짝이 맞는다",
+    pages: { "/p": PAGE },
+    async run(h) {
+      await h.settings(settings);
+      await h.turn(
+        [findC, show(), findC, dismiss, findC, { clickMany: [{ text: "Show options", callId: "call_x" }, { text: "Dismiss", callId: "call_x" }] }, { text: "정리 답" }],
+        { path: "/p" },
+      );
+      const dismissed = await h.tab.evaluate(() => window.__dismiss);
+      expect(dismissed === 2, `겹친 id의 Dismiss도 실행(${dismissed})`);
+      // 공통 짝 검사(run.mjs의 __badToolIds)가 다음 요청의 호출·결과 짝을 확인한다.
+      const { body, tools } = await lastToolMessages(h);
+      const lastCalls = (body.messages ?? []).filter((m) => m.role === "assistant" && m.tool_calls?.length).at(-1).tool_calls.map((c) => c.id);
+      expect(lastCalls.length === 2 && lastCalls[0] === "call_x" && lastCalls[1] !== "call_x", `겹친 id는 뒤의 것만 새 id(${lastCalls.join(",")})`);
+      const first = tools.find((t) => t.id === lastCalls[0]);
+      const second = tools.find((t) => t.id === lastCalls[1]);
+      expect(first?.data.result?.error && typeof first.data.repeated === "string", `첫째는 Show 실패 + 안내(${JSON.stringify(first?.data).slice(0, 160)})`);
+      expect(second?.data.result && !second.data.error, `둘째는 Dismiss 실행 결과(${JSON.stringify(second?.data).slice(0, 160)})`);
+      expect((await panelBody(h)).includes("정리 답"), "답을 받는다");
+      await h.turn([{ text: "다음 턴 답" }], { path: "/p", noReload: true });
+      expect((await panelBody(h)).includes("다음 턴 답"), "다음 턴 답");
     },
   },
   {
@@ -335,269 +205,20 @@ export default [
     },
   },
   {
-    name: "같은 버튼 노드를 글자가 같은 다른 행으로 옮겨 다시 쓰면 같은 id로 다시 눌러도(다시 찾지 않음) 같은 실패로 세지 않는다",
-    pages: { "/rows": ROWS },
-    async run(h) {
-      await h.settings(settings);
-      const again = (text) => ({ clickAgain: text });
-      const r = await h.turn(
-        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
-        { path: "/rows" },
-      );
-      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), `반복·헛돌기 로그 없음(${r.logs.filter((l) => l.includes("hop:")).slice(-3).join(" | ")})`);
-      const text = await h.panel.locator("body").innerText();
-      expect(text.includes("끝까지 감"), `마지막 예정 응답까지 감(${text.slice(-80)})`);
-      await noSecret(h, r);
-    },
-  },
-  {
-    name: "버튼 말고 글자가 없는 두 행 사이로 같은 버튼 노드를 옮겨도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
-    pages: { "/bare": BARE_ROWS },
-    async run(h) {
-      await h.settings(settings);
-      const again = (text) => ({ clickAgain: text });
-      const r = await h.turn(
-        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
-        { path: "/bare" },
-      );
-      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-    },
-  },
-  {
-    name: "행 표시가 없는 일반 div 행(글자 없음) 사이로 같은 버튼 노드를 옮겨도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
-    pages: { "/divs": DIV_ROWS },
-    async run(h) {
-      await h.settings(settings);
-      const again = (text) => ({ clickAgain: text });
-      const r = await h.turn(
-        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
-        { path: "/divs" },
-      );
-      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-    },
-  },
-  {
-    name: "같은 버튼 노드가 제출 목적지(formaction)만 바꾼 다른 동작은(다시 찾음) 같은 실패로 세지 않는다",
-    pages: { "/fa": FORMACTION, "/edit/A": "<p>A</p>", "/edit/B": "<p>B</p>", "/edit/C": "<p>C</p>" },
-    async run(h) {
-      await h.settings(settings);
-      const open = { click: "열기" };
-      const r = await h.turn(
-        [findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { text: "끝까지 감" }],
-        { path: "/fa", approve: true },
-      );
-      expect(clickFails(r) === 3, `세 동작 실패(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
-    },
-  },
-  {
-    name: "같은 버튼 노드가 제출 값(name=value)만 바꾼 다른 레코드는(다시 찾음) 같은 실패로 세지 않는다",
-    pages: { "/sv": SUBMITVAL, "/detail": "<p>d</p>" },
-    async run(h) {
-      await h.settings(settings);
-      const open = { click: "열기" };
-      const r = await h.turn(
-        [findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { text: "끝까지 감" }],
-        { path: "/sv", approve: true },
-      );
-      expect(clickFails(r) === 3, `세 동작 실패(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
-    },
-  },
-  {
-    name: "같은 버튼 노드가 요청 주소(hx-get)만 바꾼 다른 동작은(다시 찾음) 같은 실패로 세지 않는다",
-    pages: { "/hx": HXGET, "/edit/A": "<p>A</p>", "/edit/B": "<p>B</p>", "/edit/C": "<p>C</p>" },
-    async run(h) {
-      await h.settings(settings);
-      const open = { click: "열기" };
-      const r = await h.turn(
-        [findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { text: "끝까지 감" }],
-        { path: "/hx", approve: true },
-      );
-      expect(clickFails(r) === 3, `세 동작 실패(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
-    },
-  },
-  {
-    name: "같은 버튼 노드가 목적지를 확인할 수 없는 요청(hx-post)이면 같은 실패로 세지 않는다(셈에서 뺌)",
-    pages: { "/hp": HXPOST, "/edit/A": "<p>A</p>", "/edit/B": "<p>B</p>", "/edit/C": "<p>C</p>" },
-    async run(h) {
-      await h.settings(settings);
-      const open = { click: "열기" };
-      const r = await h.turn(
-        [findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { delayMs: 500, ...findC }, dismiss, findC, open, { text: "끝까지 감" }],
-        { path: "/hp", approve: true },
-      );
-      expect(clickFails(r) === 3, `세 동작 실패(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "목적지가 다른 동작은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
-    },
-  },
-  {
-    name: "버튼을 두 겹 래퍼째 글자 없는 일반 div 행 사이로 옮겨도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
-    pages: { "/wrapped": WRAPPED_ROWS },
-    async run(h) {
-      await h.settings(settings);
-      const again = (text) => ({ clickAgain: text });
-      const r = await h.turn(
-        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
-        { path: "/wrapped" },
-      );
-      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-    },
-  },
-  {
-    name: "열린 shadow root 안의 버튼 호스트를 글자 없는 두 행 사이로 옮겨도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
-    pages: { "/shadow": SHADOW_ROWS },
-    async run(h) {
-      await h.settings(settings);
-      const again = (text) => ({ clickAgain: text });
-      const r = await h.turn(
-        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
-        { path: "/shadow" },
-      );
-      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-    },
-  },
-  {
-    name: "같은 버튼의 slot 속성만 바꿔 shadow 안의 다른 행에 배치해도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
-    pages: { "/slot": SLOT_ROWS },
-    async run(h) {
-      await h.settings(settings);
-      const again = (text) => ({ clickAgain: text });
-      const r = await h.turn(
-        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
-        { path: "/slot" },
-      );
-      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-    },
-  },
-  {
-    name: "닫힌 shadow root에서 slot 속성만 바꿔 다른 행에 배치해도 같은 id로 다시 누른 실패를 같은 실패로 세지 않는다",
-    pages: { "/cslot": CLOSED_SLOT_ROWS },
-    async run(h) {
-      await h.settings(settings);
-      const again = (text) => ({ clickAgain: text });
-      const r = await h.turn(
-        [findC, { click: "열기" }, { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { delayMs: 500, clickAgain: "Dismiss" }, again("열기"), { text: "끝까지 감" }],
-        { path: "/cslot" },
-      );
-      expect(clickFails(r) === 3, `열기 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `열기는 같은 id로 세 번(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 행은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-    },
-  },
-  {
-    name: "한 응답 안에서 호출 id가 겹쳐도 멈출 때 남은 호출마다 미실행 결과를 하나씩 채운다",
-    pages: { "/p": PAGE },
-    async run(h) {
-      await h.settings(settings);
-      await h.turn(
-        [
-          findC,
-          show("call_s"),
-          findC,
-          dismiss,
-          findC,
-          show("call_s"),
-          findC,
-          dismiss,
-          findC,
-          { clickMany: [{ text: "Show options", callId: "call_x" }, { text: "Dismiss", callId: "call_x" }] },
-          { text: "보내면 안 됨" },
-        ],
-        { path: "/p" },
-      );
-      const dismissed = await h.tab.evaluate(() => window.__dismiss);
-      expect(dismissed === 2, `마지막 응답의 Dismiss는 실행하지 않음(${dismissed})`);
-      // 겹친 id는 받을 때 뒤의 것에 새 id를 준다(streamReply) — 마무리 요청의 호출·결과 짝이 맞아 거절되지 않는다(공통 짝 검사가 확인).
-      const { body, tools } = await lastToolMessages(h);
-      expect(body.tool_choice === "none", "마무리 요청은 도구 없이");
-      const lastCalls = (body.messages ?? []).filter((m) => m.role === "assistant" && m.tool_calls?.length).at(-1).tool_calls.map((c) => c.id);
-      expect(lastCalls.length === 2 && lastCalls[0] === "call_x" && lastCalls[1] !== "call_x", `겹친 id는 뒤의 것만 새 id(${lastCalls.join(",")})`);
-      const first = tools.find((t) => t.id === lastCalls[0]);
-      const second = tools.find((t) => t.id === lastCalls[1]);
-      expect(first?.data.result?.error && typeof first.data.repeated === "string", `첫째는 Show 실패 + 안내(${JSON.stringify(first?.data).slice(0, 160)})`);
-      expect(second?.data.error === "interrupted", `둘째는 미실행(${JSON.stringify(second?.data)})`);
-      expect((await panelBody(h)).includes("정리"), "마무리 답을 받는다");
-      // 다음 요청도 같은 대화로 이어진다(기록의 짝이 맞음).
-      await h.turn([{ text: "다음 턴 답" }], { path: "/p", noReload: true });
-      expect((await panelBody(h)).includes("다음 턴 답"), "다음 턴 답");
-    },
-  },
-  {
-    name: "같은 노드를 다시 쓰며 접근성 이름만 바꾼 다른 대상은(다시 찾아 다른 이름을 봄) 같은 실패로 세지 않는다",
-    pages: { "/renamed": RENAMED },
-    async run(h) {
-      await h.settings(settings);
-      const r = await h.turn(
-        [findC, { click: "A 열기" }, { delayMs: 500, ...findC }, dismiss, findC, { click: "B 열기" }, { delayMs: 500, ...findC }, dismiss, findC, { click: "C 열기" }, { text: "끝까지 감" }],
-        { path: "/renamed" },
-      );
-      expect(clickFails(r) === 3, `세 대상 실패(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "이름이 다른 대상은 안내 없음");
-      expect(!r.logs.some((l) => l.includes("hop:repeat_fail") || l.includes("hop:spin")), "반복·헛돌기 로그 없음");
-      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
-    },
-  },
-  {
     name: "찾기 모드를 번갈아 써도(list → items → list) 같은 버튼의 같은 실패를 이어 센다",
     pages: { "/items": ITEMS },
     async run(h) {
       await h.settings(settings);
       const r = await h.turn(
-        [findC, { click: "펼치기" }, findC, dismiss, itemsFind, { clickItem: "레코드 2", target: "펼치기" }, findC, dismiss, findC, { click: "펼치기" }, { text: "보내면 안 됨" }],
+        [findC, { click: "펼치기" }, findC, dismiss, itemsFind, { clickItem: "레코드 2", target: "펼치기" }, findC, dismiss, findC, { click: "펼치기" }, { text: "끝까지 감" }],
         { path: "/items" },
       );
       expect(clickFails(r) === 3, `펼치기 실패 3번(${clickFails(r)})`);
       const args = await sentClickArgs(h);
       expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
       const fails = clickResults(r).filter((t) => t.result?.error);
-      expect(fails.length >= 2 && fails[0].repeated === undefined && typeof fails[1].repeated === "string", `두 번째(항목 모드)에 안내(${fails.map((t) => !!t.repeated).join(",")})`);
-      expect(r.logs.some((l) => l.includes("same_failure · click_element ×3")), "세 번째(목록 모드)에서 멈춤");
+      expect(fails.length === 3 && fails[0].repeated === undefined && typeof fails[1].repeated === "string" && typeof fails[2].repeated === "string", `두·세 번째에 안내(${fails.map((t) => !!t.repeated).join(",")})`);
+      expect(noStop(r), "멈추지 않는다");
     },
   },
   {
@@ -605,39 +226,11 @@ export default [
     pages: { "/t": TITLE_TOGGLE },
     async run(h) {
       await h.settings(settings);
-      const r = await h.turn([findC, show(), findC, dismiss, findC, show(), findC, dismiss, findC, show(), { text: "보내면 안 됨" }], { path: "/t", approve: true });
+      const r = await h.turn([findC, show(), findC, dismiss, findC, show(), findC, dismiss, findC, show(), { text: "끝까지 감" }], { path: "/t", approve: true });
       expect(clickFails(r) === 3, `Show 실패 3번(${clickFails(r)})`);
       const fails = clickResults(r).filter((t) => t.result?.error);
-      expect(fails.length >= 2 && fails[0].repeated === undefined && typeof fails[1].repeated === "string", `두 번째에 안내(${fails.map((t) => !!t.repeated).join(",")})`);
-      expect(r.logs.some((l) => l.includes("same_failure · click_element ×3")), "세 번째에서 멈춤");
-    },
-  },
-  {
-    name: "같은 label이 for만 바꿔 다른 숨은 checkbox를 가리키면 같은 실패로 세지 않는다",
-    pages: { "/lb": LABEL_SWAP },
-    async run(h) {
-      await h.settings(settings);
-      const sel = { click: "선택" };
-      const r = await h.turn([findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { text: "끝까지 감" }], { path: "/lb", approve: true });
-      expect(clickFails(r) === 3, `선택 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 컨트롤은 안내 없음");
-      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
-    },
-  },
-  {
-    name: "label 안의 자식 요소를 누를 때 label이 for만 바꿔 다른 checkbox를 가리키면 같은 실패로 세지 않는다",
-    pages: { "/lc": LABEL_CHILD },
-    async run(h) {
-      await h.settings(settings);
-      const sel = { click: "선택", role: "button" };
-      const r = await h.turn([findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { delayMs: 500, ...findC }, dismiss, findC, sel, { text: "끝까지 감" }], { path: "/lc", approve: true });
-      expect(clickFails(r) === 3, `선택 실패 3번(${clickFails(r)})`);
-      const args = await sentClickArgs(h);
-      expect(args.length === 5 && args[0] === args[2] && args[2] === args[4], `같은 id(${args.join(" | ")})`);
-      expect(clickResults(r).every((t) => t.repeated === undefined), "다른 컨트롤은 안내 없음");
-      expect((await panelBody(h)).includes("끝까지 감"), "마지막 예정 응답까지 감");
+      expect(fails.length === 3 && fails[0].repeated === undefined && typeof fails[1].repeated === "string" && typeof fails[2].repeated === "string", `두·세 번째에 안내(${fails.map((t) => !!t.repeated).join(",")})`);
+      expect(noStop(r), "멈추지 않는다");
     },
   },
   {
@@ -669,12 +262,12 @@ export default [
     },
   },
   {
-    name: "한도 카드에 같은 호출 반복 실패 줄을 보이고, 이어 가면 같은 턴으로 이어 센다",
+    name: "한도 카드에 같은 호출 반복 실패 줄을 보이고, 이어 가면 같은 턴으로 이어 세되 안내만 한다",
     pages: { "/p": PAGE },
     async run(h) {
       await h.settings({ ...settings, maxToolHops: 6, maxToolHopsVersion: 2 });
       const seen = [];
-      const r = await h.turn([findC, show(), findC, dismiss, findC, show(), findC, dismiss, findC, show(), { text: "보내면 안 됨" }], {
+      const r = await h.turn([findC, show(), findC, dismiss, findC, show(), findC, dismiss, findC, show(), { text: "끝까지 감" }], {
         path: "/p",
         onCard: async (card) => {
           seen.push(await card.innerText());
@@ -684,7 +277,8 @@ export default [
       expect(r.cards === 1, `한도 카드 1번(${r.cards})`);
       expect(seen[0].includes("같은 호출 반복 실패: 누르기 2번"), `카드에 반복 실패 줄(${seen[0]})`);
       expect(!seen[0].includes(SECRET), "카드에 입력값 없음");
-      expect(r.logs.some((l) => l.includes("same_failure · click_element ×3")), "이어 간 뒤 세 번째에서 멈춤");
+      expect(r.logs.some((l) => /hop:repeat_fail\W+click_element ×3/.test(l)), "이어 간 뒤 세 번째에도 이어 센다");
+      expect(noStop(r) && (await panelBody(h)).includes("끝까지 감"), "멈추지 않고 마지막 예정 응답까지 감");
     },
   },
 ];

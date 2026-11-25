@@ -203,13 +203,6 @@ export interface ClickData {
   href: string;
   effectToken: string;
   trusted?: TrustedPrepare;
-  // 실제 입력 준비 때 승인한 대상 기술·항목 글자의 지문(#318, 내부 전용 — 모델 결과에 넣지 않는다). 같은 id가 다른 행을 가리키면 달라진다.
-  bindingKey?: string;
-}
-
-// 누른 뒤 실패의 원인 코드에 대상 지문을 붙인다(#318). 원인 코드나 지문이 없으면 null(같은 실패 반복 판정에서 뺀다).
-function withBinding(data: ClickData, code: string | null): string | null {
-  return code && typeof data.bindingKey === "string" && data.bindingKey ? `${code}|t:${data.bindingKey}` : null;
 }
 
 export type ClickInput = "trusted" | "script";
@@ -230,7 +223,7 @@ export class PressedClickError extends Error {
     readonly href: string,
     // 가드가 막은 경우의 이유와 첫 차단 기록(#316). clickTool이 관측 뒤 문구를 다시 만든다(누르기 전달 + 관측 구간 변화).
     readonly blocked: { reason: string; first?: FirstBlock } | undefined,
-    // 원인 코드(#318 같은 실패 반복 판정 — 실패를 식별한 분기의 고정 값 + 대상 지문, 페이지 글자 없음). 모르면 null.
+    // 원인 코드(#318 같은 실패 반복 안내 — 실패를 식별한 분기의 고정 값, 페이지 글자 없음). 모르면 null.
     readonly code: string | null,
   ) {
     super(message);
@@ -425,7 +418,7 @@ async function pressIn(
     throw new PressedClickError(describeBlockedClick(status.reason, status.firstBlock), data.effectToken, data.text, data.href, {
       reason: status.reason,
       ...(status.firstBlock ? { first: status.firstBlock } : {}),
-    }, withBinding(data, blockedFailCode(status.code, status.firstBlock)));
+    }, blockedFailCode(status.code, status.firstBlock));
   }
   await cancel("입력이 도착하지 않음");
   // 원인을 좁힌다: 다른 프레임이 받았는지(가드를 떼며 막은 수를 읽는다), 점이 화면 밖인지, 이 문서가 무엇을 받았는지.
@@ -443,11 +436,11 @@ async function pressIn(
     `tab ${tabId} · 점 (${point.x}, ${point.y}) · 화면 ${status.viewport?.width}×${status.viewport?.height} · ${why}${frames ? ` · ${frames}` : ""}`,
     "warn",
   );
-  throw new PressedClickError(describePressedFailure(`실제 입력 클릭이 대상에 도착하지 않았습니다(${why})`), data.effectToken, data.text, data.href, undefined, withBinding(data, "not_delivered"));
+  throw new PressedClickError(describePressedFailure(`실제 입력 클릭이 대상에 도착하지 않았습니다(${why})`), data.effectToken, data.text, data.href, undefined, "not_delivered");
 }
 
 // 누르기 뒤의 다른 실패(#241): 진단 줄을 남기고 관측을 붙일 오류로 만든다.
 function pressedFail(data: ClickData, what: string, stage: string, code: PressedFailCode): PressedClickError {
   debugLog("input:pressed_fail", `${stage} · 대상 '${data.text.length > 60 ? data.text.slice(0, 59) + "…" : data.text}'`, "warn");
-  return new PressedClickError(describePressedFailure(what), data.effectToken, data.text, data.href, undefined, withBinding(data, code));
+  return new PressedClickError(describePressedFailure(what), data.effectToken, data.text, data.href, undefined, code);
 }

@@ -11,7 +11,6 @@ import {
   fingerprint,
   summarizeRuns,
   REPEAT_FAILURE_NOTE_AT,
-  REPEAT_FAILURE_STOP_AT,
   repeatedFailureCount,
   withRepeatNote,
 } from "../src/lib/hopGuard.ts";
@@ -195,7 +194,6 @@ const dismissOk = () => run("click_element", { id: "c2-x" });
 
 test("repeatedFailureCount: 다른 대상 클릭 성공·찾기가 끼어도 같은 호출의 같은 원인 실패를 이어 센다", () => {
   assert.equal(REPEAT_FAILURE_NOTE_AT, 2);
-  assert.equal(REPEAT_FAILURE_STOP_AT, 3);
   const r = [findOk(), showFail("a"), findOk(), dismissOk(), findOk(), showFail("b")];
   assert.equal(repeatedFailureCount(r), 2);
   assert.equal(repeatedFailureCount(r, 1), 1);
@@ -203,7 +201,7 @@ test("repeatedFailureCount: 다른 대상 클릭 성공·찾기가 끼어도 같
   assert.equal(detectSpin(r), null);
   r.push(findOk(), dismissOk(), findOk(), showFail("c"));
   assert.equal(repeatedFailureCount(r), 3);
-  assert.equal(detectSpin(r), null, "same_failure는 detectSpin이 아니라 호출마다 판정한다");
+  assert.equal(detectSpin(r), null, "같은 실패 셈은 멈춤 판정(detectSpin)을 바꾸지 않는다(안내만)");
 });
 
 test("repeatedFailureCount: 같은 호출이 성공하면 0부터(정당한 재시도), 다른 인자는 다른 묶음", () => {

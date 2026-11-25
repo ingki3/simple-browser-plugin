@@ -640,26 +640,6 @@ export async function installMockModel(sw) {
         const t = it?.targets?.find((x) => !step.target || (x.text ?? "").includes(step.target));
         out = { tool: "click_element", args: { id: t ? t.id : "c-missing" } };
       }
-      else if (step?.clickAgain) {
-        // 다시 찾지 않고 앞서 본 찾기 결과의 id로 누른다(#318 — 가장 최근 결과부터 글자가 같은 항목). 저장해 둔 id로 재시도하는 모델 흉내.
-        let id = "c-missing";
-        for (const m of [...msgs].reverse()) {
-          if (m.role !== "tool") continue;
-          let r = null;
-          try {
-            r = JSON.parse(m.content).result;
-          } catch {
-            /* ignore */
-          }
-          const items = Array.isArray(r) ? r : Array.isArray(r?.items) ? r.items : [];
-          const hit = items.find((x) => x?.text === step.clickAgain && typeof x.id === "string");
-          if (hit) {
-            id = hit.id;
-            break;
-          }
-        }
-        out = { tool: "click_element", args: { id } };
-      }
       else if (step?.clickMany) {
         // 한 응답에 여러 클릭(#318): 직전 찾기 결과에서 글자마다 id를 찾는다. callId: 모델이 줄 호출 id(없으면 call<n>).
         out = {

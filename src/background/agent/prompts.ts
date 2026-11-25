@@ -233,8 +233,8 @@ export const LIMIT_NO_ANSWER_NOTE =
 
 // 같은 호출(도구·인자)이 같은 종류로 거듭 실패했을 때 그 도구 결과에 붙이는 안내(#318). 도구 이름과 수만 넣는다
 // (인자·대상 이름·오류 글자는 넣지 않음 — 인자에는 입력값이 있을 수 있다, #43).
-export function repeatFailureNote(tool: string, count: number, stopAt: number): string {
-  return `[확장 안내 — 사용자 글 아님] 이번 요청에서 같은 도구(${tool})를 같은 인자로 불러 같은 방식으로 ${count}번 실패했습니다. 같은 호출을 되풀이하지 마세요. 화면을 다시 관측해 다른 대상이나 다른 방법을 쓰고, 방법이 없으면 도구를 멈추고 사용자에게 무엇이 막혔는지 알린 뒤 그 단계를 직접 해 달라고 부탁하세요. 같은 호출이 같은 방식으로 ${stopAt}번째 실패하면 확장이 도구 사용을 멈춥니다.`;
+export function repeatFailureNote(tool: string, count: number): string {
+  return `[확장 안내 — 사용자 글 아님] 이번 요청에서 같은 도구(${tool})를 같은 인자로 불러 같은 방식으로 ${count}번 실패했습니다. 같은 호출을 되풀이하지 마세요. 화면을 다시 관측해 다른 대상이나 다른 방법을 쓰고, 방법이 없으면 도구를 멈추고 사용자에게 무엇이 막혔는지 알린 뒤 그 단계를 직접 해 달라고 부탁하세요.`;
 }
 
 export function spinStopNote(what: string): string {

@@ -78,7 +78,6 @@ import {
   detectSpin,
   fingerprint,
   REPEAT_FAILURE_NOTE_AT,
-  REPEAT_FAILURE_STOP_AT,
   repeatedFailureCount,
   summarizeRuns,
   withRepeatNote,
@@ -1977,21 +1976,21 @@ export class ChatAgent {
 
   // 같은 호출의 같은 실패 반복(#318): 방금 기록한 호출이 같은 도구·같은 인자로 같은 종류의 실패를 거듭했으면, 이 호출이 남긴
   // 도구 결과 메시지(historyBefore 뒤에 더해진 것 중 이 호출 id의 마지막)에 방법을 바꾸라는 안내를 붙인다. 모델 호출 id는
-  // 순환마다 겹칠 수 있어 이번 호출 뒤 구간에서만 찾는다. 반복이면 그 도구 이름과 수를 돌려준다(멈춤 판정은 부르는 쪽).
+  // 순환마다 겹칠 수 있어 이번 호출 뒤 구간에서만 찾는다. 안내만 한다 — 이 셈으로 호출을 막거나 턴을 끝내지 않는다(다른 대상을 같은
+  // 호출로 세는 오판이 나도 비용은 안내 한 줄).
   // 원인 코드는 등록된 도구 실행(runAuthorized)에서만 생기지만, 모델이 만든 이름이 문구에 들어가지 않게 등록된 이름인지 다시 본다.
-  private noteRepeatedFailure(runs: readonly ToolRunRecord[], historyBefore: number, modelCallId: string): { tool: string; count: number } | null {
+  private noteRepeatedFailure(runs: readonly ToolRunRecord[], historyBefore: number, modelCallId: string): void {
     const count = repeatedFailureCount(runs);
     const last = runs[runs.length - 1];
-    if (count < REPEAT_FAILURE_NOTE_AT || !last || !Object.hasOwn(TOOL_POLICY, last.tool)) return null;
+    if (count < REPEAT_FAILURE_NOTE_AT || !last || !Object.hasOwn(TOOL_POLICY, last.tool)) return;
     for (let i = this.history.length - 1; i >= historyBefore; i -= 1) {
       const m = this.history[i];
       if (m.role !== "tool" || m.tool_call_id !== modelCallId || typeof m.content !== "string") continue;
-      m.content = withRepeatNote(m.content, repeatFailureNote(last.tool, count, REPEAT_FAILURE_STOP_AT));
+      m.content = withRepeatNote(m.content, repeatFailureNote(last.tool, count));
       break;
     }
-    // 로그에는 도구 이름과 수만(원인 코드·대상 회차는 내부 비교용).
+    // 로그에는 도구 이름과 수만(원인 코드는 내부 비교용).
     debugLog("hop:repeat_fail", `${last.tool} ×${count}`, "warn");
-    return { tool: last.tool, count };
   }
 
   private async streamLoop(
@@ -2084,25 +2083,13 @@ export class ChatAgent {
         return true;
       }
 
-      for (const [callIndex, fc] of functionCalls.entries()) {
+      for (const fc of functionCalls) {
         if (this.isStale(turn)) return false;
         const runsBefore = runs.length;
         const historyBefore = this.history.length;
         if (!(await this.handleCall(fc, turn, turnTab, record, reads))) return false;
-        // 같은 호출의 같은 실패 반복(#318): 호출마다 판정한다(응답 하나에 [같은 실패, 다른 성공]이 함께 와도 놓치지 않게).
-        const same = runs.length === runsBefore + 1 ? this.noteRepeatedFailure(runs, historyBefore, fc.id) : null;
-        if (same && same.count >= REPEAT_FAILURE_STOP_AT && !this.isStale(turn)) {
-          debugLog("hop:spin", `same_failure · ${same.tool} ×${same.count}`, "warn");
-          // 남은 호출은 실행하지 않는다 — 이 응답에서 아직 실행하지 않은 호출마다 미실행 결과를 채운다(호출 id가 한 응답 안에서
-          // 겹쳐도 하나씩 — id로 응답 여부를 보는 closeDanglingToolCalls는 겹친 id를 이미 답한 것으로 본다).
-          for (const rest of functionCalls.slice(callIndex + 1)) {
-            this.history.push({ role: "tool", tool_call_id: rest.id, name: rest.function.name, content: JSON.stringify({ error: "interrupted" }) });
-          }
-          const what = `${same.tool}를 같은 인자로 불러 같은 방식으로 ${same.count}번 실패했습니다.`;
-          this.send({ kind: "info", title: "같은 동작이 되풀이되어 멈춤", message: `${what} 단계를 더 쓰지 않고 지금까지의 결과로 답합니다.` });
-          await this.finishWithoutTools(apiKey, model, systemPrompt, turn, spinStopNote(what));
-          return false;
-        }
+        // 같은 호출의 같은 실패 반복(#318): 호출마다 그 결과에 안내만 붙인다(응답 하나에 [같은 실패, 다른 성공]이 함께 와도).
+        if (runs.length === runsBefore + 1) this.noteRepeatedFailure(runs, historyBefore, fc.id);
         // 원격 대화에서 승인이 필요해 거절했으면 남은 호출을 하지 않고 도구 없이 답을 마무리한다.
         if (this.remoteRefusedTurn === turn) break;
       }

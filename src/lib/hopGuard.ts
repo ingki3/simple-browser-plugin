@@ -23,23 +23,18 @@ export interface ToolRunRecord {
   // 패널 결과 카드에 보인 한 줄(이어 가기 카드의 요약에 쓴다).
   summary: string;
   // 실패 원인 코드(#318, 실패일 때만). 도구가 원인을 식별한 분기에서 정한 고정 값(예: 실제 입력 클릭의 가드 차단 단계).
-  // 오류 글자에서 뽑지 않는다. 없으면 원인을 구분할 수 없는 실패라 같은 실패 반복 규칙에서 세지 않는다.
+  // 오류 글자에서 뽑지 않는다. 없으면 원인을 구분할 수 없는 실패라 같은 실패 반복 안내에서 세지 않는다.
   failCode?: string;
 }
 
-// 같은 호출(도구·인자)이 같은 종류로 이만큼 실패하면 도구 결과에 방법을 바꾸라는 안내를 붙인다(#318).
+// 같은 호출(도구·인자)이 같은 종류로 이만큼 실패하면 도구 결과에 방법을 바꾸라는 안내를 붙인다(#318). 안내만 한다 — 멈추지 않는다.
 export const REPEAT_FAILURE_NOTE_AT = 2;
-// 안내를 받고도 같은 호출이 같은 종류로 이만큼 실패하면 멈춘다(#318).
-export const REPEAT_FAILURE_STOP_AT = 3;
 
 export type SpinVerdict =
   // 같은 도구·같은 인자·같은 결과, 화면 변화 없음이 count번 연속.
   | { kind: "repeat"; tool: string; count: number }
   // 한 도구가 사이에 그 도구의 성공 없이 count번 실패(다른 도구 호출이 끼어도 이어서 셈).
-  | { kind: "failure"; tool: string; count: number }
-  // 같은 도구·같은 인자가 그 호출의 성공 없이 같은 원인 코드로 count번 실패(다른 대상·다른 도구의 성공이 끼어도 이어서 셈, #318).
-  // detectSpin은 내지 않는다 — streamLoop가 호출마다 repeatedFailureCount로 판정한다(응답 하나에 [같은 실패, 다른 성공]이 와도 잡게).
-  | { kind: "same_failure"; tool: string; count: number };
+  | { kind: "failure"; tool: string; count: number };
 
 // index번 기록이 코드 있는 실패(비취소)면, 그 호출(같은 도구·같은 argsKey)이 이번 요청에서 마지막으로 성공한 뒤 같은 failCode로
 // 몇 번 실패했는지(자기 포함, #318). 취소는 건너뛰고, 다른 코드·코드 없는 실패는 세지도 끊지도 않는다. 다른 대상·다른 도구의
