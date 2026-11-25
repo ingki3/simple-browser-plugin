@@ -139,7 +139,7 @@ export default [
       const [, d2] = await finds(h);
       expect(!resultsOf(f1)[0].applied && has(resultsOf(f1)[0], MSG_INPUT), `첫 시도 안내(${show(resultsOf(f1)[0])})`);
       const b2 = d2.result.find((f) => f.label === "Domain");
-      expect(b2 && b2.hasValue === false, `다시 찾으면 비어 있음(${show(b2)})`);
+      expect(b2 && b2.hasValue === false, `다시 찾으면 비어 있음(칸 있음 ${!!b2}, hasValue ${b2?.hasValue})`);
       expect(resultsOf(f2)[0]?.applied === true && !f2.error, `같은 인자 재채우기 통과(${show(f2)})`);
       const ev = await events(h);
       expect(ev.b.input === 2 && ev.b.change === 1, `이벤트(${show(ev.b)})`);
@@ -203,7 +203,7 @@ export default [
         await h.turn([findF, FILL3T, { text: "끝" }], { path: `/t?m=${m}` });
         const f1 = (await fills(h)).at(-1);
         const [ra, rb] = resultsOf(f1);
-        expect(ra && rb, `${m}: 채우기 결과(${show({ f1, finds: (await finds(h)).at(-1) })})`);
+        expect(ra && rb, `${m}: 채우기 결과 칸 수 ${resultsOf(f1).length}, 오류 ${!!f1?.error}`);
         expect(!ra.applied && has(ra, OLD_GUARD) && !has(ra, MSG_INPUT) && !ra.refillOnce, `${m}: 지금 문구(${show(ra)})`);
         expect(has(rb, OLD_HALTED), `${m}: 남은 칸 지금 문구(${show(rb)})`);
         const ev = await events(h);
