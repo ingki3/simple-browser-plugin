@@ -317,3 +317,18 @@ test("도구 호출 id: 겹친 영숫자 id는 같은 길이의 영숫자 새 id
   assert.notEqual(b, a);
   assert.match(b, /^[A-Za-z0-9]{9}$/);
 });
+
+test("도구 호출 id: 짧은 id를 다 써도 멈추지 않고, 아주 긴 id도 예외 없이 새 id를 준다(#318)", () => {
+  const many = Array.from({ length: 70 }, (_, index) => d({ tool_calls: [{ index, id: "a", function: { name: "describe_page", arguments: "{}" } }] }));
+  const ids = run(many).result.functionCalls.map((c) => c.id);
+  assert.equal(ids.length, 70);
+  assert.equal(new Set(ids).size, 70, "모두 다른 id");
+  const long = "x".repeat(70_000);
+  const two = run([
+    d({ tool_calls: [{ index: 0, id: long, function: { name: "describe_page", arguments: "{}" } }] }),
+    d({ tool_calls: [{ index: 1, id: long, function: { name: "describe_page", arguments: "{}" } }] }),
+  ]).result.functionCalls.map((c) => c.id);
+  assert.equal(two[0], long);
+  assert.notEqual(two[1], long);
+  assert.ok(two[1].length < 100);
+});

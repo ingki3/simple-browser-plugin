@@ -25,15 +25,19 @@ export interface ReplyAccumulator {
 }
 
 // 겹친 호출 id를 대신할 새 id: 원래 id와 같은 길이의 영숫자(일부 로컬 모델 템플릿은 정해진 길이의 영숫자 id만 받는다 — 예: 9자).
-// 원래 id에 영숫자가 아닌 글자가 있거나 길이가 0이면 UUID.
+// 원래 id가 영숫자가 아니거나 너무 길거나(SAME_SHAPE_MAX), 정해진 시도 안에 겹치지 않는 id를 못 만들면(아주 짧은 id) UUID — 멈추거나
+// 예외로 끝나지 않는다.
+const SAME_SHAPE_MAX = 64;
+const SAME_SHAPE_TRIES = 16;
 function sameShapeId(original: string, used: ReadonlySet<string>): string {
-  if (!/^[A-Za-z0-9]+$/.test(original)) return crypto.randomUUID();
+  if (original.length > SAME_SHAPE_MAX || !/^[A-Za-z0-9]+$/.test(original)) return crypto.randomUUID();
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  for (;;) {
+  for (let i = 0; i < SAME_SHAPE_TRIES; i += 1) {
     const bytes = crypto.getRandomValues(new Uint8Array(original.length));
     const id = Array.from(bytes, (b) => chars[b % chars.length]).join("");
     if (!used.has(id)) return id;
   }
+  return crypto.randomUUID();
 }
 
 export function createReplyAccumulator(cb: { onText: (text: string) => void; onThought: (text: string) => void }): ReplyAccumulator {
