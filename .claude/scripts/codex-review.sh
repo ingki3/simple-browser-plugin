@@ -21,13 +21,10 @@ BASE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --spec)
-      if [ $# -lt 2 ]; then
-        echo "--spec 다음에 확정 사항 파일 경로를 주세요." >&2
-        exit 3
-      fi
+      # 값이 없으면 빈 경로로 두어 아래에서 이전 PASS를 지운 뒤 멈추게 한다.
       SPEC_SET=1
-      SPEC_FILE="$2"
-      shift 2
+      SPEC_FILE="${2:-}"
+      shift $(( $# < 2 ? 1 : 2 ))
       ;;
     *)
       if [ -n "$BASE" ]; then
