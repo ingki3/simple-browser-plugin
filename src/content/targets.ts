@@ -10,6 +10,7 @@ import {
   describeDifference,
   onlyRowDiffers,
   rowDriftDiag,
+  rowGrew,
   sameApproved,
   sameApprovedInFlight,
   sameBase,
@@ -1191,6 +1192,9 @@ function stampConsent(info: TargetInfo, callId: string): TargetInfo {
 // 승인 뒤 위험(개인정보·제출 주소·이름 등)이 새로 생겨 멈췄다는 표시. 묶음 입력은 남은 칸도 멈춘다.
 export class RiskAddedError extends Error {}
 
+// 입력 도중 쓰기 전 확인이 막혔고 그 차이가 "비교한 칸 자신은 그대로, 행 글자만 더해짐"이라는 표시(#317 — 안내 문구만 바꾼다, 판정 같음).
+export class RowGrewError extends Error {}
+
 // 실행 직전: 이 호출에서 승인한 기술과 지금 요소가 같을 때만 요소를 돌려준다. 승인은 한 번만 쓴다.
 // inFlight: 같은 승인 묶음의 앞 칸에 이미 입력 이벤트를 보낸 뒤면 입력 도중의 비교(sameApprovedInFlight)를 쓴다.
 export function takeApproved(
@@ -1217,6 +1221,8 @@ export function takeApproved(
     // (묶음 입력의 남은 칸도 멈춘다).
     if ((now.sensitive ?? null) !== (approved.info.sensitive ?? null)) throw new RiskAddedError(msg);
     if (riskAdded(entry.kind, el, approved.info)) throw new RiskAddedError(msg);
+    // 입력 도중(묶음 뒤 칸의 쓰기 전)이고 위험이 아니며 행 글자만 더해졌으면 그 까닭을 구조 표시로 싣는다(#317 — 흐름·판정은 그대로).
+    if (inFlight && rowGrew(approved.info, now)) throw new RowGrewError(msg);
     throw new Error(msg);
   }
   const added = riskAdded(entry.kind, el, approved.info) ?? triggerRiskAdded(entry.kind, approved.relation, approved.info);
@@ -1419,19 +1425,33 @@ export function recheckApproved(
   // 항목 모드로 찾은 대상의 목록 항목 결합(#161). 누르기 직전에도 항목이 그대로여야 한다.
   item?: ItemBinding,
 ): string | null {
-  if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return "대상이 페이지에서 사라짐";
+  return recheckApprovedDetail(kind, el, info, relation, inFlight, afterWrite, item).reason;
+}
+
+// recheckApproved와 같은 판정·같은 순서·같은 호출(reason이 그 값). grew는 기술이 달라 곧바로 돌려주는 그 자리에서만, 이미 만든 두 기술로
+// 정한다(rowGrew — DOM 조회를 더하지 않으므로 위험 검사 등의 부작용·다음 호출의 판정에 영향이 없다, #317). 안내 문구를 고르는 데만 쓴다.
+export function recheckApprovedDetail(
+  kind: TargetKind,
+  el: HTMLElement,
+  info: TargetInfo,
+  relation: Relation | null = null,
+  inFlight = false,
+  afterWrite = false,
+  item?: ItemBinding,
+): { reason: string | null; grew: boolean } {
+  if (!el.isConnected || !getAccessibleDocs().includes(el.ownerDocument)) return { reason: "대상이 페이지에서 사라짐", grew: false };
   const pinned = inFlight ? pinnedRowOf(el) : null;
   const now = fullInfo(kind, el, pinned, inFlight ? inFlightSubstitute(el, info, pinned) : undefined);
   const sameNow = inFlight ? sameApprovedInFlight(now, info) : sameApproved(now, info);
-  if (!sameNow) return describeDifference(info, now);
+  if (!sameNow) return { reason: describeDifference(info, now), grew: rowGrew(info, now) };
   const added = riskAdded(kind, el, info, afterWrite) ?? triggerRiskAdded(kind, relation, info);
-  if (added) return added;
+  if (added) return { reason: added, grew: false };
   const relationMoved = relationChanged(kind, el, relation);
-  if (relationMoved) return relationMoved;
+  if (relationMoved) return { reason: relationMoved, grew: false };
   const itemMoved = itemDifference(item, el);
-  if (itemMoved) return itemMoved;
-  if (kind.requireVisible && !kind.visible(el)) return "대상이 화면에서 사라짐";
-  return null;
+  if (itemMoved) return { reason: itemMoved, grew: false };
+  if (kind.requireVisible && !kind.visible(el)) return { reason: "대상이 화면에서 사라짐", grew: false };
+  return { reason: null, grew: false };
 }
 
 // 승인된 대상이 아직 같은지 실행 없이 확인만 한다(여러 칸을 채우기 전에 모두 확인).
